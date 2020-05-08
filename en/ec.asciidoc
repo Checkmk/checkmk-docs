@@ -1,0 +1,2616 @@
+= The event console
+:revdate: 2017-04-25
+[.seealso][#monitoring_basics] [#wato_rules] [#livestatus]MT:Processing logs and SNMP traps in (CMK)
+MD:Whether it's syslog, forwarded text logs, or traps over SNMP, this article will show you how to handle these events in checkmk.
+
+
+== Introduction
+
+
+=== Events are not states
+
+So far in this handbook it has always been a matter of the active monitoring of _States_.
+Every monitored service will always have one of the states (OK), (WARN), (CRIT) or (UNKNOWN).
+Through regular polling the monitoring continuously updates its picture of the current situation.
+
+A quite different type of monitoring is that of working with _Events_.
+An example of an event is an ‘Exception’ that occurs in an application.
+The application may possibly continue running correctly and still have the ‘OK’
+state as before – but _something has happened_.
+
+=== The event console
+
+With its *Event Console* (EC) (CMK) has a fully-integrated system for
+the monitoring of events from sources such as Syslog, SNMP Traps, Windows Event Logs,
+Log Files and user's applications.
+With this, not only are events simply used to generate states – they form their
+own category, and from (CMK) Version VERSION[1.4.0i2] are even
+included in the [.guihints]#Tactical Overview# display.
+
+image::bilder/tactical_overview_events.png[align=center,width=280]
+
+Internally, events are not processed by the monitoring core, but rather by their
+own service – the Event Daemon (`mkeventd`).
+
+The Event Console has an archive in which it can research past events.
+However, this is no substitute for a real log archive.
+The Event Console's task is to intelligently filter a _limited_ number
+of _relevant_ messages from a large stream. It is optimised for simplicity,
+robustness and throughput – not for the storage of large data volumes.
+
+Here are a few facts concerning the EC:
+
+* It can receive messages _directly_ per Syslog or SNMP. A configuration of the corresponding Linux system service is thus unnecessary.
+* With the aid of the (CMK)-Agents it can also evaluate text-based log files and Windows Event Logs.
+* It classifies messages according to a chain of user-defined rules.
+* It can correlate, combine, count, annotate and transcribe messages, and also take their chronological contexts into account.
+*  It can execute automated actions and send notifications over (CMK) [notifications|Notifications].
+*  It is fully integrated into (CMK)'s interface.
+*  It is included with every current (CMK)-System and ready for immediate use.
+
+
+
+=== Terms and definitions
+
+The Event Console receives *Messages*. A message is a line of text with a sequence
+of possible additional attributes – for example, a time stamp, a host name, etc.
+If the message is relevant an *Event* with the same attributes will
+be directly generated from it, but:
+
+* An event will be created from a message only if an applicable rule exists.
+* Rules can alter the text and other attributes of messages.
+* Multiple messages can be combined into an event.
+* Messages can [ec#cancelling|cancel] current events.
+* 'Artificial' events can be created if particular messages [ec#expect|do not] come.
+
+An event can process through several *Phases*:
+
+<table class=left>
+<tr>
+<th style="width:17%">open</th>
+<td>The ‘normal’ state: something has occurred which needs attention from the operator.</td>
+</tr>
+
+<tr>
+<th>acknowledged</th>
+<td>The problem has been acknowledged – this is analogue to host and service problems
+in status-based monitoring.</td>
+</tr>
+
+<tr>
+<th>counting</th>
+<td>The required count of particular messages has not been reached – the situation is
+unproblematic. The event will thus not (yet) be reported to the operator.</td>
+</tr>
+
+<tr>
+<th>delayed</th>
+<td>An error message has been received, but the Event Console is waiting on an
+OK-message being received within a defined time. The event will be reported to
+the operator after this time has expired.</td>
+</tr>
+
+<tr>
+<th>closed</th>
+<td>The event has been closed by the operator, or automatically, and is now only in the archive.</td>
+</tr>
+
+[cols=, ]
+|===
+
+In addition, an event has a *State*. To be precise, here the state of the event
+itself is not meant, rather it applies to the service or device that sent the message.
+Analogous to status-based monitoring, an event will be classified as (OK), (WARN),
+(CRIT) or (UNKNOWN).
+
+
+[#setup]
+== Setting up the Event Console
+
+Setting up the Event Console is very simple. In fact no initial extra
+configuration is required since from Version VERSION[1.2.8]
+of (CMK) the Event Console is always automatically active.
+
+If you nevertheless want to receive Syslog messages or SNMP-Traps
+over the network, you must activate these separately.
+The reason for this is that both services respectively need to open a UDP-Port
+with a specifically nominated port number. Since only one (CMK)-Instance
+can do this per system, reception via the network is deactivated by default.
+The port numbers are:
+
+<table class=small>
+<tr>
+<th>Protocol</th>
+<th>Port</th>
+<th>Service</th>
+</tr>
+
+<tr>
+<td>UDP</td>
+<td>162</td>
+<td>SNMP Traps</td>
+</tr>
+
+<tr>
+<td>UDP</td>
+<td>514</td>
+<td>Syslog</td>
+</tr>
+
+<tr>
+<td>TCP</td>
+<td>514</td>
+<td>Syslog via TCP</td>
+</tr>
+
+[cols=, ]
+|===
+
+Syslog via TCP is only rarely used, but it has the advantage that the transmission
+of messages is assured. With UDP it is never garanteed that packets really arrive.
+And neither Syslog nor SNMP Traps provide acknowledgements or a similar protection
+against lost messages. In order that you can use Syslog via TCP, the sending
+system must of course be also capable of sending messages over this port.
+
+In the (CMK)-Appliance you can activate the reception of Sylog/SNMP-Traps in
+the instance configuration. Otherwise simply use `omd config`.
+The required setting may be found under [.guihints]#Addons}}:# 
+
+image::bilder/ec_omd_config.png[align=center,width=300]
+
+In `omd start` it can be seen which external interface your EC has open:
+
+[source,bash]
+----
+OM:omd start
+Starting mkeventd (builtin: <b class=hilite>syslog-udp,snmptrap*)...OK
+Starting Livestatus Proxy-Daemon...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting Check_MK Micro Core...OK
+Starting dedicated Apache for site stable...OK
+Initializing Crontab...OK
+----
+
+
+
+== First steps with the Event Console
+
+[#rules]
+=== Rules, rules, rules
+
+At the beginning it was mentioned that the EC serves to ‘fish out’ _relevant_
+messages and to issue notifications. It is unfortunately the case that most
+messages – regardless of whether they come from Text files, the Windows Event Log
+or the Syslog – are pretty unimportant. It is also not much help when messages
+have already been classified by their source.
+
+To illustrate: in Syslog and in the Windows Eventlog messages are classified
+in a similar way to OK, WARN und CRIT. But what WARN and CRIT actually mean
+has been subjectively decided by the respective programmer. And it is not
+even clear whether the application producing the message is even important
+on this computer. In short: there is no alternative but to define your own
+configuration of which messages represent a problem for you, and which can
+simply be discarded.
+
+As usual in (CMK) the configuration is achieved using _rules_,
+which for every incoming EC message will be processed according to the
+‘first match’-principle. The first rule that is applicable to an incoming
+message decides the messages's fate. If no rule is applicable the message
+will simply be silently discarded.
+
+Since over time and under the conditions a large number of rules can be built
+in the EC, the rules are generally organised into _Packets_ there.
+The processing takes place packet after packet, und from top to bottom within a packet.
+For this reason the sequence of the packets is important.
+
+=== Creating a simple rule
+
+Not surprisingly, the EC's configuration is found in the
+ICON[icon_mkeventd.png] [.guihints]#Event Console# WATO module. This is delivered empty
+ – i.e., it contains no rules. As previously mentioned,
+incoming messages will simply be discarded and not logged. The module looks like this:
+
+image::bilder/ec_wato_module.jpg[]
+
+To start, first create a new rule packet with ICON[button_new_rule_pack.png]:
+
+image::bilder/ec_new_rule_pack.png[]
+
+As always, the ID serves as an internal reference and cannot be changed later.
+Once saved the first entry will be found in the list of your rule packets:
+
+image::bilder/ec_rule_pack_list.png[]
+
+Here, using ICON[button_mkeventd_rules.png] you can select this so far empty packet
+and create a new rule with ICON[button_new_rule.png].
+Simply fill out the first submenu [.guihints]#Rule Properties}}:# 
+
+image::bilder/ec_first_rule.jpg[]
+
+The only essentials here are a unique [.guihints]#Rule-ID# and a description. This ID will
+later be found in the log files and it will be saved with the generated events.
+It is also very useful to assign the IDs systematically. All other fields are optional.
+This apples particularly for the conditions.
+
+Important: The new rule is initially only for testing and for now is applied to
+_every_ event. Therefore it is also important that it be later
+deleted or deactivated! Otherwise the Event Console will be flooded with every
+imaginable message of no earthly use and thus be fairly useless.
+
+==== Activating the changes
+
+As always in (CMK) the changes must first be activated before they can take
+effect. This is not a disadvantage, since in this way you can decide precisely
+when changes affecting multiple interrelated rules should actually go ‘live’.
+You can also use the Rule Simulator in advance to test if everything works.
+
+However, since the events are not processed by the monitoring core,
+but rather by their own (`mkeventd`) process, the EC has its own
+‘Activate Changes’ which is found directly in the WATO-Modul:
+
+image::bilder/ec_activate_changes.jpg[]
+
+Click on the ICON[button_reload_config.png] button to activate the changes.
+The Event Console is so constructed that this action proceeds absolutely
+_uninterruptedly_. The reception of incoming messages is at all times
+assured – thus no messages can be lost.
+
+Only administrators are permitted to activate changes in the EC.
+This is controlled using the [.guihints]#Activate changes for event console# [wato_user#roles|Permission]. 
+
+From Version VERSION[1.4.0] the activation of changes for the Event Console
+is bundled with other changes in WATO and is no longer processed separately.
+
+==== Testing the new rule
+
+To test, you can of course send messages through Syslog or SNMP.
+You should also do this later. For a first test the EC's built-in [.guihints]#Event Simulator}}# 
+is however more practical:
+
+image::bilder/ec_simulator.png[]
+
+Here you have two possibilities: [.guihints]#Try out# evaluates, based on the simulated
+message, which rules would match. If you find yourself on the highest level of
+the EC's WATO module, the rules Packets will be so marked. Should be you be
+within a rule packet the individual rules will be marked. Every packet,
+or respectively rule, will be flagged with one of the following three symbols:
+
+[cols=, ]
+|===
+
+
+<td width="5%">ICON[icon_rulematch.png]
+|This rule is the first to assess the message, and consequently decides its fate.
+
+
+<td width="5%">ICON[icon_rulepmatch.png]
+|This rule would apply, but the message has already been
+processed by a preceeding rule.
+
+
+<td width="5%">ICON[icon_rulenmatch.png]
+|This rule does not apply. Very practical: When you hover the mouse cursor
+over the grey ball icon, a pop-up will explain why the rule does not apply.
+
+|===
+
+Clicking on [.guihints]#Generate event# works in almost the same way as [.guihints]#Try out}},# 
+except that with this the message will *really be generated*.
+Possible defined [ec#actions|Actions] will actually be executed.
+The event will in fact appear in the monitoring's list of open events.
+The generated message's source text will be visible in the verification:
+
+image::bilder/ec_event_generated.png[]
+
+An event generated in this way appears in the Status-GUI in the [.guihints]#Event Console => Events}}# 
+view:
+
+image::bilder/ec_one_open_event.png[]
+
+==== Creating test messages manually
+
+For a first real test over the network you can simply send a Syslog message from
+another Linux computer. Since the protocol is so simple, a special program is not even
+required, just use `netcat` or `nc` to simply send the data via UDP.
+The UDP-Packet's content consists of a single line of text. When this conforms to
+a particular structure the components will be cleanly dissected by the Event Console:
+
+[source,bash]
+----
+UP:echo '<78>Dec 18 10:40:00 myserver123 MyApplication: It happened again.' | nc -w 0 -u 10.1.1.94 514
+----
+
+You can just send _anything_. The EC will nevertheless accept it and
+simply evaluate it as a message text. Additional information, such as e.g.,
+the application, the priority, etc., is of course absent.
+To be on the safe side, the status (CRIT) will be assumed:
+
+[source,bash]
+----
+UP:echo 'This is no syslog message' | nc -w 0 -u 10.1.1.94 514
+----
+
+Within the (CMK)-Instance on which the EC is running, there is a _named Pipe_
+in which you can write the text messages locally using `echo`.
+This is a very simple method for tethering a local application, and likewise a facility
+for testing the processing of messages:
+
+[source,bash]
+----
+OM:echo 'Local application says hello' > tmp/run/mkeventd/events
+----
+
+Incidentally, here it is also possible to send using the Syslog format,
+in order that all of the event's fields can be filled-in cleanly.
+
+
+[#globalsettings]
+=== Event Console global settings
+
+The Event Console has its own global settings which are not found in those of other
+modules, rather they are accessed via the ICON[context_button_settings.png]
+button found in the EC-Module's main menu:
+
+image::bilder/ec_settings.png[align=center,width=500]
+
+The functions of the individual settings can be learned as usual in the online help
+ICON[icon_help.png], and in the respective section of this article.
+
+Access to these settings is protected by the [.guihints]#Configuration of Event Console}}# 
+permission which by default is held by the `admin` role.
+
+
+[#permissions]
+=== Permissions
+
+The Event Console also has its own [wato_user#roles|Roles and Permissions] section.
+We will take a closer look at some of the permissions in the relevant parts
+of this article.
+
+image::bilder/ec_permissions.png[align=center,width=500]
+
+
+[#operating]
+== The Event Console in the operations
+
+
+=== Event views
+
+Events generated by the Event Console are displayed similarly to hosts and services in
+the Status Overview. This display is accessed via the [.guihints]#Event Console => Events# view.
+This view can be customised in exactly the same way as with all of the other views.
+Displayed events can be filtered, commands executed, etc. If you create new event
+views, events and [ec#archive|event history] are available as data sources. Detailed information
+covering this can be found in the [views|Views] article:
+
+image::bilder/ec_open_events.jpg[]
+
+Clicking on the Event's ID (here e.g., `27`) will open its details:
+
+image::bilder/ec_event_details.jpg[]
+
+As can be seen, an event has many data fields whose functions will be explained
+one at a time in this article.
+I would like to briefly touch on the most important fields here:
+
+[cols=25, options="header"]
+|===
+
+|Field
+|Function
+
+
+|{{State (severity of event)}}
+|As mentioned in the introduction, every event is classified as (OK),
+(WARN), (CRIT) or (UNKNOWN). Events with an (OK) status are rather uncommon,
+since the EC has really been conceived to only filter out _problems_.
+There are however situations in which an (OK)-Event can make sense.
+
+
+|{{Text/Message of the event}}
+|The event's actual content: A text message.
+
+
+|{{Hostname}}
+|The name of the host that sent the message.
+It is not essential that the host be one that is actively monitored by (CMK).
+If a host with this name really exists in the monitoring, the EC automatically
+establishes a connection.
+In such a case the {{Host alias}}, {{Host contacts}} and {{Host icons}} fields
+are filled out and the host appears in the same style as in the active monitoring.
+
+
+|{{Rule-ID}}
+|The ID of the rule which created this event. Clicking on the ID will directly
+open the rule's details. Incidentally, the ID will still be retained even if in the
+meantime the rule itself no longer exists.
+
+|===
+
+As mentioned at the beginning, from Version VERSION[1.4.0i2] of
+(CMK) events will be displayed directly in the [.guihints]#Tactical Overview}}:# 
+
+image::bilder/tactical_overview_events.png[align=center,width=280]
+
+Here three numbers can be seen:
+
+* [.guihints]#Events# – All open and acknowledged events (corresponds to the [.guihints]#Event Console => Events# view).
+* [.guihints]#Problems# – only those of which that have one of the (WARN) / (CRIT) / (UNKNOWN) states.
+* [.guihints]#Unhandled# – only those of which that have not yet been acknowledged (more on this shortly).
+
+
+[#commands]
+=== Commands and workflow in events
+
+Events will be displayed by a simple workflow analogue to those for hosts and services.
+As usual, this is achieved via [commands|commands] – accessed using the small
+hammer ICON[commands.png] icon. With the ICON[checkboxes.png] checkboxes you can
+also execute a command on multiple events simultaneously. As a special feature,
+the often-used _‘Archive a single event’_ function is available directly via the
+ICON[button_delete.png] symbol.
+
+For every command there is a [wato_user#roles|Permission] in the
+[.guihints]#Event Console# section, with which you can control the commands permitted for each role.
+For members of the `admin` and `user` roles all commands are activated by default.
+
+image::bilder/ec_commands.png[]
+
+The following commands are available:
+
+==== Update & Acknowledge
+
+Using the [.guihints]#Update# button, with a single action you can hang a comment on an event,
+nominate a contact person and acknowledge the event.
+The [.guihints]#Change contact# field is intentionally a free text. Here you can also enter
+things such as telephone numbers. In particular, the field has no effect on the event's
+visibility in the GUI – it is purely a comment field.
+
+The [.guihints]#‘Set event to acknowledged’# checkbox leads to an event passing from the
+[.guihints]#open# phase to [.guihints]#acknowledged}},# and from then on it is considered as
+[.guihints]#handled}}.# This is analogue to the [basics_ackn|acknowledgement] of host
+and service problems.
+
+A later execution of the command without the checkbox being selected
+_removes_ the acknowledgement.
+
+==== Changing a state
+
+The [.guihints]#Change state# button allows an event to be reclassified manually –
+from (CRIT) to (WARN) for example.
+
+==== Executing actions
+
+With the [.guihints]#Custom Actions# you can allow the execution of freely-definable
+[ec#actions|actions] on events.
+Initially only the [.guihints]#Send monitoring notification# action is available.
+This sends a (CMK)-notification that will be processed in exactly the same way
+as a notification from an actively-monitored service.
+This passes through the [notifications|notification rules] and, as appropriate,
+generates emails, SMS or whatever has been configured.
+More information concerning notifications through the EC will be explained [ec#notifications|below].
+
+==== Archiving is almost like deleting
+
+The [.guihints]#Archive event# button finally deletes the event from the open events list.
+Since all actions on events – including this deletion – will also be logged in the
+[ec#archive|Archive], all of this information can be accessed later at any time.
+For this reason we don't speak of deletion, rather of archiving.
+
+The archiving of individual events is also easily performed from the event list
+by using the ICON[button_delete.png] symbol.
+
+
+[#visibility]
+=== Visibility of Events
+
+==== The problem of visibility
+
+(CMK) uses the [wato_user#contact_groups|Contact groups] for the visibility of
+hosts and services in the Status-GUI for normal users.
+These are assigned to the hosts and services by WATO by rule or folder configuration.
+
+In the Event Console the situation is so that an assignment of events to
+contact groups does not exist at first – since in advance it is not actually known
+which messages can even be received at all.
+Not even the list of hosts is known, as the sockets for Syslog and SNMP are
+accessible from everywhere. For this reason there are a couple of specifics
+connected with the visibility in the Event Console:
+
+==== All are permitted to see everything initially
+
+When configuring the [wato_user#roles|user roles] the
+[.guihints]#Event Console => Seeall events# permission is given at first.
+This is active by default, so that *normal users are also permitted to see all
+events!* This is conciously set like this so that if the configuration is faulty
+important error messages don't inadvertently fall by the wayside.
+The first step to a more precise control of the visibility is therefore the removal
+of this permission from the `user` role.
+
+[#hostmatching]
+==== Assigning to hosts
+
+So that the visibility of events is as consistent as possible with the rest
+of the monitoring, the event console attempts as best it can to assign the
+hosts from which it receives events to the hosts configured using WATO.
+This sounds simple but the details are tricky, as sometimes the host name
+information is absent in an event and only the IP-address is known.
+In other cases the host name is coded differently to the version in WATO.
+
+In practice, an assignment is processed as follows:
+
+* If no host name has been identified in an event, its IP-Address will be used as the host name.
+* The event's host name will then – _without case sensitivity_ – be compared with all host names, host aliases and IP-adresses of hosts in the monitoring.
+* If such a host is found its contact contact groups will be adopted for the event and used for controlling the visibility.
+* If the host is not *not* found, the contact groups – [ec#contactgroups|if configured there] – will be adopted from the rule that generated the event.
+* If groups have also not been assigned, the user will only be permitted to see the event if they have the [.guihints]#Event Console => Seeevents not related to a known host# permission.
+
+You can influence the assignment at one position:
+If contact groups have been defined in the rule set *and* the host
+could be assigned, the assignment normally has priority.
+
+In Version VERSION[1.2.8] you can change this with the
+[.guihints]#Global settings => Userinterface => Precedenceof contact groups of events}}# 
+setting:
+
+image::bilder/ec_contact_group_precedence.png[align=center,width=500]
+
+From Version VERSION[1.4.0i2], instead of the value in the global option
+a setting can be made directly in the rule.
+This enables a configuration that varies from case to case:
+
+image::bilder/ec_outcome_contact_groups.jpg[]
+
+
+=== Troubleshooting
+
+==== Which rule takes effect, and how often?
+
+With the rule packets...
+
+image::bilder/ec_pack_hits.png[]
+
+... as well as with the individual rules...
+
+image::bilder/ec_rule_hits.png[]
+
+... in the [.guihints]#Hits# column you will find the counter for how many times the packet,
+or respectively, the rule has been matched to a message.
+On the one hand this can aid you in the elimination or repair of ineffective rules,
+and on the other hand this count can also be interesting for rules that very often match.
+For optimum EC performance these rules should be located at the beginning of
+the rule chain if possible. In this way the number of rules that the EC must test
+against every single message can be reduced.
+
+The counter can be reset at any time with the ICON[context_button_reset_counters.png]
+button.
+
+==== Debugging rule evaluation
+
+In the preceeding chapter we saw how to test the evaluation of your rules using the simulator.
+Similar information can be received for the runtimes for _all_
+messages, if in the [ec#globalsettings|Settings for the EC] you switch
+the [.guihints]#Debug rule execution# to [.guihints]#on}}.# 
+
+The log file from the Event Console is found under `var/log/mkeventd.log`.
+For every rule that is tested but does not take effect, here the reason can be found:
+
+.var/log/mkeventd.log
+
+----[1481020022.001612] Processing message from ('10.40.21.11', 57123): '<22>Dec  6 11:27:02 myserver123 exim[1468]: Delivery complete, 4 message(s) remain.'
+[1481020022.001664] Parsed message:
+ application:    exim
+ facility:       2
+ host:           myserver123
+ ipaddress:      10.40.21.11
+ pid:            1468
+ priority:       6
+ text:           Delivery complete, 4 message(s) remain.
+ time:           1481020022.0
+[1481020022.001679] Trying rule test/myrule01...
+[1481020022.001688]   Text:   Delivery complete, 4 message(s) remain.
+[1481020022.001698]   Syslog: 2.6
+[1481020022.001705]   Host:   myserver123
+[1481020022.001725]   <b class=hilite>did not match because of wrong application 'exim' (need 'security')*
+[1481020022.001733] Trying rule test/myrule02n...
+[1481020022.001739]   Text:   Delivery complete, 4 message(s) remain.
+[1481020022.001746]   Syslog: 2.6
+[1481020022.001751]   Host:   myserver123
+[1481020022.001764]   <b class=hilite>did not match because of wrong text*
+----
+
+It goes without saying that such intensive logging should be used with care
+and only if necessary – in a more complex environment _a huge volume_ of data can
+be generated!
+
+
+[#rules]
+== The whole power of the rules
+
+
+=== The criteria
+
+The most important part of an EC-rule is of course the _criteria_
+[.guihints]#(Matching criteria)}}.# Only if a message satisfies all of the criteria
+in the rule can the actions defined by the rule be executed and the
+evaluation of the message completed.
+
+image::bilder/ec_matching_criteria.png[]
+
+==== General information on text comparison
+
+For all criteria associated with text fields, the comparison text is
+fundamentally treated as a [regexes|regular expression].
+The comparison here is always without _without case sensitivity_.
+This latter is in fact an exception to what is usual in (CMK).
+This does make the rule's formulation more robust. Even host names in events
+are not necessarily consistent in their format if these have not been centrally
+configured, but rather configured on each host itself.
+This exception therefore makes good sense.
+
+Furthermore, an _Infix match_ can always be used – a verification of the
+_containment_ of a search text.
+A `.*` at the beginning or end of the search text is thus not necessary.
+
+There is however an *exception*:
+If *no regular expression* is used to match with the host name, but instead a
+*fixed host name*, this will be checked for an *exact* agreement and
+*not* for containment. Attention: If the text includes a point '.' it will be
+treated as a regular expression and an infix search is enacted. `myhost.de`
+will then also match `notmyhostide` for example!
+
+[#matchgroups]
+==== Match groups
+
+The concept of [regexes#matchgroups|Match groups] in the [.guihints]#Text to match}}# 
+field is very important and useful here. This refers to sections of text
+that agree when matched with bracketed expressions in regular expressions.
+
+Assume that you wish to monitor the following type of message in a database's log file:
+
+.
+
+----Database instance WP41 has failed
+----
+
+`WP41` is of course variable and you certainly won't want to have to formulate
+a separate rule for every possible instance. Thus in the regular expression you can
+use `.*` – which represents any character string:
+
+`Database instance .* has failed`
+
+If you now enclose the variable part in parentheses the Event
+Console will *note* this exact value when matching for subsequent actions:
+
+`Database instance *(.*)* has failed`
+
+Following a successful match the first match group will now be set to the
+`WP41` value (or whichever instance produced the error).
+
+These match groups can be seen in the rule simulator when you hover the
+mouse cursor over the green icons:
+
+image::bilder/ec_match_groups_1.png[]
+
+The groups can also be seen in the details for the generated event:
+
+image::bilder/ec_match_groups_2.png[]
+
+The match groups can also be used in, among others:
+
+* The rewriting of events ([ec#rewriting|Rewriting])
+* The automatic cancelling of events ([ec#cancelling|Cancelling])
+* The counting of messages ([ec#counting|Counting])
+
+Here is another tip: There are situations in which a string needs to be grouped
+within a regular expression, but through which *no* match group should be created.
+This can be achieved by using a `?:` directly following the opening parenthesis.
+Example: The `one (.*) two (?:.*) three` expression creates only the
+`123` match group when matching against `one 123 two 456 three`.
+
+==== IP-Addresses
+
+Here you can match a message to the sender's IPv4-Address.
+Enter either an exact address or a network in the
+X.X.X.X/Y format – thus, for example, `192.168.8.0/24`, in order to
+match all of the addresses in the `192.168.8.`X network.
+
+Please note that the match to the IP-Address only works if the systems being
+monitored send directly to the event console. If the message is forwarded
+by another intermediate syslog server, this intermediate's address will appear
+as the sender's address in the message.
+
+
+[#syslogfacility]
+==== Syslog priority and facility
+
+These two fields were originally defined by syslog as standardised information.
+Internally, the 8-bit-field is composed of 5 bits for the Facility
+(allowing 32 possibilities) and 3 bits for the Priority (8 possibilities).
+
+The 32 predefined Facilities were conceived for something such as an application.
+At the time the selection was not made very forward-looking. One of the Facilities,
+for example, is `uucp` - a protocol that was rarely used even in
+the '90s of the last milleneum.
+
+The fact is however, that every message received via syslog carries one of
+the Facilities. These can to some extent be freely assigned, in order to be
+able to filter them in a targeted way later. This is quite useful.
+
+The use of facility and priority also has a performance aspect.
+When defining a rule that in any event only applies to messages that all have
+the same facility or priority, these should be added to the rules as well.
+The event console can then go around these rules very efficiently when a
+message with divergent values is received. The more these filters are used
+in rules, fewer rule comparisons will then be required.
+
+
+==== Inverting matches
+
+The [.guihints]#Negate match: Execute this rule if the upper conditions are not fulfilled# checkbox
+causes the rule to take effect precisely when all of the conditions have _not _ been met.
+This is actually only useful in conjunction with these two types of rule:
+
+* [.guihints]#Do not peform any action, drop this message, stop processing}}# 
+* [.guihints]#Skip this rule pack, continue rule execution with next pack}}# 
+
+For more on the rule packs, see [ec#rulepacks|later below].
+
+
+[#outcome]
+=== Outcomes of the rules
+
+==== Rule type: interrupt or generate event
+
+When a rule finds a match it determines what should be done with the message.
+This is specified in the [.guihints]#Outcome & Action# menu:
+
+image::bilder/ec_outcome.png[]
+
+With [.guihints]#Rule type# the evaluation can be interrupted at this point – completely,
+or only the current rule packet.
+The first option should be used with a few targeted rules right at the
+beginning in order to eliminate a great deal of useless “noise”. The other
+options in this menu will then really only be needed to evaluate “normal” rules.
+
+
+==== Defining the status
+
+The rule decides the event's monitoring status with [.guihints]#State}}.# 
+This will generally be (WARN) or (CRIT). Rules that generate (OK)-Events can be
+interesting in exceptional cases in order to show certain events for
+purely informational purposes. This can be interesting when used in combination
+with an automatic [ec#expire|Expiration] of the event.
+
+Alongside the deciding of an explicit state there are two further more dynamic options.
+The [.guihints]#(set by syslog)# setting adopts the classification from the syslog-priority.
+This however only functions if the message has already been usably classified by the sender.
+Messages that are received directly via syslog have one of eight priorities
+predefined by RFC – these are indicated as follows:
+
+[cols=, options="header"]
+|===
+
+
+|Priority
+|ID
+|State
+|Definition according to Syslog
+
+
+|`emerg`
+|`0`
+|(CRIT)
+|The system is unusable
+
+
+|`alert`
+|`1`
+|(CRIT)
+|Immediate action is required
+
+
+|`crit`
+|`2`
+|(CRIT)
+|Critical state
+
+
+|`err`
+|`3`
+|(CRIT)
+|Error
+
+
+|`warning`
+|`4`
+|(WARN)
+|Warning
+
+
+|`notice`
+|`5`
+|(OK)
+|Normal, but important information
+
+
+|`info`
+|`6`
+|(OK)
+|Purely informational
+
+
+|`debug`
+|`7`
+|(OK)
+|Debugging message
+
+|===
+
+As well as syslog-messages, messages from the Windows eventlog, and messages from
+text files that will have already been classified by the (CMK)-Logwatch plug-in on
+the target system produce prepared states. SNMP-traps unfortunately don't produce these.
+
+A completely different method is to classify the message yourself according to the
+text. This is achieved using the [.guihints]#(set by message text)# setting:
+
+image::bilder/ec_state_by_text.png[]
+
+The match with the text configured at this point will be performed only
+after [.guihints]#Text to match# and the other rules have been evaluated.
+This must therefore not be repeated here.
+
+If none of the configured patterns is found the event takes the (UNKNOWN) state.
+
+
+==== Service level
+
+The idea behind the Service Level is that within an operation,
+every host and service has a specific importance.
+With this a concrete service level agreement can then be formulated.
+In (CMK) using [wato_rules|Rules] you can assign such levels to your hosts
+and services and then, for example, make the notifications or self-defined dashboards
+dependent on these.
+
+Since events are at first not necessarily correlated with hosts or Services,
+the Event Console likewise allows you to assign a service level to an event
+using rules. You can then later filter the event view according to this level.
+
+As standard (CMK) has four predefined levels – 0 (None), 10 (Silver), 20 (Gold)
+and 30 (Platinum). This selection can be altered as desired in the
+[.guihints]#Global settings => Notifcations => Servicelevels}}.# Decisive here is the level's number,
+since the levels will be sorted according to these numbers and checked against
+the importance as well.
+
+[#contactgroups]
+==== Contact groups
+
+The contact groups are also used for the [ec#visibility|visibility], and from Version
+VERSION[1.4.0] also used for event
+[ec#notifications|Notification]. Here you can assign contact groups explicitly
+by using Rule Events. Details for this can be found in the [ec#visibility|section on operation].
+
+
+==== Actions
+
+Actions are very similar to the [alert_handlers|alert handlers] for hosts and services.
+Here when opening an event you can allow your own defined script to be executed.
+All of the detailed information concerning actions can be found further below in its own
+[ec#actions|section].
+
+
+==== Automatic deletion
+
+The automatic deletion (= Archive), which you can specify with {{Delete event
+immediately after the actions}},# ultimately makes an event no longer visible
+in the operation. This is then useful if you simply want to trigger automatic
+actions or when you wish to only archive particular events for later research.
+
+
+[#rewriting]
+=== Automatic text rewriting
+
+With [.guihints]#Rewriting}},# an EC-rule can automatically rewrite text fields
+in a message and add also comments to them. This is configured in its own menu:
+
+image::bilder/ec_rewriting.png[]
+
+With the rewriting, the [ec#matchgroups|Matchgroups] described above are
+particularly important. These allow you to insert elements of the original
+message into the new text.
+When making the substitutions you can access the groups as follows:
+
+[cols=, ]
+|===
+
+
+<td style="width:10%" class=tt>\1
+|Will be replaced by the original message's _first_ matchgroup.
+
+
+<td style="width:10%" class=tt>\2
+|Will be replaced by the original message's _second_ matchgroup (etc.).
+
+
+<td style="width:10%" class=tt>\0
+|Will be replaced by the _complete_ original message
+
+|===
+
+In the above screenshot the new message text will be replaced by `Instance \1 has been shut down.`
+This will of course only work if the [.guihints]#Text to match# in the *same* rule as the regular search expressions also contains at least one bracket term. An example of such a case would be:
+
+image::bilder/ec_rewrite_match.png[]
+
+
+A few more tips on rewriting:
+
+* The rewriting is done _after_ the matching and _before_ actions are executed.
+* Match, rewrite and actions always occur in the same rule. It is not possible to rewrite a message in order to then process it with a later rule.
+* The `\1`, `\2`, etc., expressions can be used in all text fields, not just in [.guihints]#Message text}}.# 
+
+
+[#cancelling]
+=== Automatic event cancelling
+
+Some applications or devices are nice enough to send an appropriate OK-message
+once they have recovered from a problem.
+The EC can be configured so that in such a case the event generated by
+the problem can be automatically closed. This is referred to as [.guihints]#Cancelling}}.# 
+
+The following image shows a rule in which messages with the
+text `ABC Instance (.*) failed` will be searched for.
+The expression `(.*)` allows for any character string that
+is captured by one member of a [ec#matchgroups|matchgroup].
+The expression `ABC Instance (.*) recovered` which is configured in
+the [.guihints]#Text to cancel event(s)# field in the same rule ensures an automatic
+closure of events generated by this rule when an appropriate message is received:
+
+image::bilder/ec_cancelling.png[]
+
+The automatic cancellation then functions precisely when:
+
+* a message is received that matches with the text [.guihints]#Text to cancel event(s)}}# 
+* The value captured in the `(.*)` group is _identical_ to the matchgroup that generated the original message
+* both messages came from the same host
+* it deals with the same application (Field [.guihints]#Application}})# 
+
+The principle of the matchgroups is very important here. It would not really make
+very much sense if the message `ABC Instance TEST recovered` cancelled an
+event that was started by the message `ABC Instance PROD failed` would it?
+
+Please don't make the mistake of using the placeholder `\1` in [.guihints]#Text to cancel events(s)}}.# 
+This does _not_ work! This placeholder only functions with [ec#rewriting|rewriting].
+
+
+==== Executing actions when cancelling
+
+When cancelling an event you can also allow [ec#automatic_actions|actions]
+to execute automatically. For this reason it is important to know that when
+cancelling an event a number of the event's data fields will be overwritten by values
+from the OK-message before the actions are executed!
+In these way the OK-message's data is fully available in the action script.
+The event's state is also flagged as (OK) during this phase.
+In this manner an action script can recognise a cancellation, and you can use the
+same script for errors and OK-messages (e.g., when linking to a ticket system).
+
+The following fields will be overwritten with data from an OK-message:
+
+* The message text
+* The timestamp
+* The time of the last occurrence
+* The Syslog-priority
+
+All other fields remain unchanged – including the Event-ID.
+
+
+==== Cancellation in combination with rewriting
+
+If you work with rewriting and [ec#cancelling|cancelling] in the same rule,
+you should be cautious when rewriting the host name or the application.
+When cancelling, the EC always checks whether the cancellation message corresponds
+to the open event's host name and application. If these were to be overwritten however,
+the cancellation would never work.
+
+Before a cancellation the Event Console therefore simulates a rewriting of the
+host name and application in order to compare the relevant texts.
+This is probably also what you would expect.
+
+This behaviour can be made use of if the [.guihints]#Application}}-field# in the error
+message and the subsequent OK-message are not the same!
+In such a case simply change the application field to a known fixed value,
+which will result in the field being ignored during a cancellation.
+
+
+==== Cancellation on the basis of the Syslog-priority
+
+There are (unfortunately) situations in which the error's text and OK-message
+are absolutely identical. In most such cases the real state is not coded in the text,
+rather it is found in the Syslog-priority.
+
+Additionally there is the [.guihints]#Syslog priority to cancel event# option.
+Here, for example, enter the range `debug` ... `notice`.
+All priorities within this range will normally be evaluated as an OK-state.
+When using this option you should _nevertheless_ enter an appropriate text
+in the [.guihints]#Text to cancel event(s)# field – otherwise the rule will match to all
+OK-messages that apply to the same applications.
+
+
+[#counting]
+=== Counting messages
+
+The ‘Counting of similar messages’ option can be found in the [.guihints]#Counting & Timing# submenu.
+The idea is that some messages first become relevant when they
+occur _too often_ or _too rarely_.
+
+
+==== Too frequent messages
+
+Checking for messages that occur too frequently is activated with the
+[.guihints]#Count messages in defined interval# option:
+
+image::bilder/ec_counting.png[]
+
+In this menu you first enter a time span in “{{Time period for counting}}”# and,
+in “{{Count until triggered}}”,# the number of messages to be reached in order
+to trigger the opening of an event. As an example, in the above illustration it
+can be seen that these values have been set to ten messages per hour.
+Of course not just any message will be counted – only those specified for matching
+in the rule.
+
+It is also normally not useful to simply count all matching messages,
+rather only those triggered by the same ‘cause‘.
+In order to be able to control this, there are three check boxes with the title
+“{{Force separate events for different ...}}”.# These are predefined to count only
+messages that match:
+
+* Host
+* Application
+* [ec#matchgroups|Match groups]
+
+With these you can formulate rules like _“If from the same host,
+the same application, and there the same instance more than 10 messages
+per hour are received, then...”_. It is thereby also possible that multiple
+events can be generated on the basis of the single rule.
+
+If you select, for example, all three check boxes, the counting will be
+conducted globally and altogether the rule can open only a single event!
+
+Incidentally, it can actually be sensible to enter a message-count of ‘1’!
+With this value you can effectively keep a grip on an ‘event storm’.
+If for example, 100 messages of the same type arise within a short time,
+by using this value only a single event will however be generated.
+In the event's details you will then see:
+
+* The time at which the first message appeared
+* The time of the latest message
+* The total count of messages accumulated to generate the event
+
+Once the case has been ‘closed’, to specify when subsequent new messages
+should open a new event can be decided via two check boxes.
+Normally an acknowledgement of an event resets the counter so that subsequent
+messages begin a new count. This can be deactivated in the
+[.guihints]#‘Continue counting when event is acknowledged’# option.
+
+The [.guihints]#Discontinue counting after time has elapsed# option
+(From Version VERSION[1.4.0]) ensures that for every comparison
+period a separate event will always be opened. In the above example we
+have defined a threshold of ten messages per hour. If this option has been
+activated, for an already opened event a maximum of one hour's messages
+can be accumulated in total. As soon as this time period has expired
+(if a sufficient number of messages have been received) a new event will be opened.
+
+If the count is set to ‘1’, for example, and the time interval to one day,
+then this message type will open a maximum of one event per day.
+
+The [.guihints]#Algorithm# setting is possibly surprising at first sight.
+But seriously, what is actually meant by “ten messages per hour”?
+WHICH hour is meant by this? Always full hours during the day?
+It can happen that nine messages are received in the last minute of an hour,
+and a further nine messages are received in the first minute of the following hour.
+This means that eighteen messages will have been received in two minutes,
+which is nonetheless fewer than ten per hour, so that the rule will not trigger an event.
+That doesn't sound very useful...
+
+Since there is no single solution for this (CMK) provides three different
+definitions of what “ten messages per hour” should actually mean:
+
+[cols=20, options="header"]
+|===
+
+
+|Algorithm
+|Function
+
+
+|{{Interval}}
+|The timing interval begins when the first applicable message is received.
+An event in the {{counting}} phase will be generated. Should the defined
+time period expire before the defined count limit is reached the event will
+be silently deleted. If however the count limit is reached before the time
+period has expired, then the event will be opened _immediately_
+(triggering any possibly configured action).
+
+
+|{{Token Bucket}}
+|This algorithm does not work with fixed time periods, rather it implements
+a procedure that is often used for Trafficshaping in networks.
+
+Let us assume that ten messages per hour have been configured.
+That is an average of six per minute. If an applicable message is received,
+an event in the {{counting}} phase will be generated and its count set to ‘1’.
+Every subsequent message will increment this count by one. And every six minutes
+the counter will be _reduced_ by one – regardless of whether a message has
+been received or not. If with this procedure the counter returns to zero
+the event will be deleted.
+
+The trigger will thus be pulled when the _average_ rate that messages
+are received persistently remains at over ten per hour.
+
+
+|{{Dynamic Token Bucket}}
+|This is a variant of the {{Token Bucket}} algorithm in which the counter
+is reduced more slowly as it becomes lower. In the above example the counter
+with a count of 5 will be reduced every _twelve_ minutes rather than every six.
+
+The result is that message rates that are only just above the permitted
+rate open an event (and thus create a notification) noticibly quicker.
+
+|===
+
+Which algorithm should you choose then?
+
+* [.guihints]#Interval# is the easiest to understand and is simpler to replicate if you later want to precisely check statistics in the Syslog archive.
+* [.guihints]#Token Bucket# is in comparison more intelligent and ‘softer’. It creates fewer anomalies on the margins of intervals.
+* [.guihints]#Dynamic Token Bucket# makes a system more reactive and generates alarms more quickly.
+
+Events that have not yet reached the defined count are latently present,
+but not automatically visible to the operator.
+They are in the [.guihints]#counting# phase. Such events can be made visible in
+the Events View with the [.guihints]#Phase# filter:
+
+image::bilder/ec_phase_filter_counting.png[align=center,width=320]
+
+[#expect]
+==== Too rare or absent messages
+
+Just as with the receipt of a particular message, an *absence* can also
+indicate a problem. It is possible that a particular job should issue at
+least one message per day. Should this message not have been received however,
+the job has probably not been run and thus an investigation is urgently needed.
+
+You can configure something like this under
+[.guihints]#Counting & Timing => Expectregular messages}}:# 
+
+image::bilder/ec_expect_messages.png[]
+
+The same as for the counting submenu – in this case enter a time period within
+which the message(s) are expected. Here however, a quite different,
+much more suitable algorithm is used. Namely, the time period is always
+targeted exactly at defined locations.
+So, for example, the [.guihints]#Hour# interval always begins with zero minutes and seconds.
+The following options are available:
+
+[cols=25, options="header"]
+|===
+
+
+|Interval
+|Orientation
+
+
+|{{10 seconds}}
+|With a second count divisible by 10
+
+
+|{{minute}}
+|To the full minute
+
+
+|{{5 minutes}}
+|At 0:00, 0:05, 0:10, etc.
+
+
+|{{15 minutes}}
+|At 0:00, 0:15, 0:30, 0:45, etc.
+
+
+|{{hour}}
+|At the start of every full hour
+
+
+|{{day}}
+|Exactly at 00:00, but only in a configurable time zone. With this you can also specify that a message is expected between 12:00 on one day and 12:00 on the following day. If, for example you yourself are located in the {{UTC+1}} time zone, enter {{UTC-11}} here.
+
+
+|{{two days}}
+|To begin a full hour. Here you can enter a time zone offset from 0 to 47, which is referenced to
+1970-01-01 00:00:00 UTC.
+
+
+|{{week}}
+|At 00:00 on Thursday morning in the time zone UTC, plus the offset
+in hours. Thursday because the 1.1.1970 – the start of the ‘Epoch’ – was a Thursday.
+
+|===
+
+Why is this all so complicated? The intention is to minimise false alarms.
+Is, for example one message per day expected from a backup? There are probably
+slight variations in the backup's duration, so that the messages will not be
+issued exactly twenty-four hours apart. If a message is expected, for example,
+at around midnight plus/minus one or two hours, an interval of from 12:00 to 12:00
+is much more robust than from 00:00 to 00:00. This will mean however that a
+notification event will be not be generated until 12:00 if the message is absent.
+
+
+==== Multiple occurrences of the same problem
+
+The [.guihints]#Merge with open event# option is predefined so that if an expected message
+repeatedly fails to appear the existing open event will be updated.
+As an alternative this can be switched so that multiple new events will be opened.
+
+
+[#timing]
+=== Timing
+
+Under [.guihints]#Counting & Timing# there are two options which can influence the
+opening, or respectively the automatic closing of events.
+
+The [.guihints]#Delay event creation# option is useful if you work with
+automatic [ec#cancelling|cancelling] of events. Set a delay of
+5 minutes for example, so that an event generated by an error message
+pauses for five minutes in the [.guihints]#delayed# status in the hope that
+within this time an OK-message will be received which will automatically
+close the event without a cancellation being needed, and thus the event
+doesn't impinge on the operation. If this time limit expires the event
+will be opened and a possible defined action will be executed:
+
+image::bilder/ec_delay.png[align=center,width=530]
+
+The [.guihints]#Limit event lifetime# option performs more or less an opposite function.
+With this events can be be permitted to close automatically at the end of
+a specified time. This is useful, for example, for informative events with
+an (OK)-status which should be displayed, but which should not generate
+activities in the operation. With the automatic ‘aging’ function you can
+be spared the manual deletion of such messages:
+
+image::bilder/ec_limit_livetime.png[align=center,width=530]
+
+With an acknowledgement the aging will initially be stopped. This behaviour
+can however be adjusted using the two check boxes.
+
+[#rulepacks]
+=== Rule packs
+
+Rule packs are not just intended to lay things out more clearly, but rather to
+considerably simplify the configuration of multiple similar rules and
+simultaneously to accelerate evaluations.
+
+Let us assume that you have a set of twenty rules, all of which revolve around
+the Windows Event Log [.guihints]#Security}}.# All of these rules share the condition of
+checking for a specific text in the application field (this logfile's name
+will be coded as an [.guihints]#Application# in the messages by the EC).
+In such a situation, proceed as follows:
+
+. Create a rulepack for these rules.
+. Create the 20 rules for [.guihints]#Security# in this pack, or move them here (the selection list [.guihints]#Move to pack...# on the right in the rule table).
+. Remove the condition for the application from all of these rules.
+. *As the first rule* in the pack, create a rule that allows the event to simply bypass the pack if the application is _not_ [.guihints]#Security}}.# 
+
+This exclusion rule is coded as follows:
+
+* [.guihints]#Matching criteria => Matchsyslog application (tag)# to `Security`
+* [.guihints]#Matching criteria => Invertmatching# to [.guihints]#Negate match: Execute this rule if the upper conditions are not fulfilled.}}# 
+* [.guihints]#Outcome & action => Ruletype# to [.guihints]#Skip this rulepack, continue rule execution with next rulepack}}# 
+
+Every message that does not come from the Security-Log will thus be ‘rejected’
+by the first rule in this pack. This not only simplifies the subsequent rules
+in this pack, it also accelerates the processing since in most cases checking
+will no longer be necessary.
+
+
+[#actions]
+== Executing actions
+
+=== Types of action
+
+The Event Console provides three types of action – which can be executed either
+manually, or when opening or [ec#cancel|cancelling] events:
+
+* Executing your own self-coded shell scripts
+* Sending your own self-defined emails
+* Creation of (CMK)-[ec#notifications|notifications]
+
+
+=== Shell scripts and emails
+
+Emails and scripts must first be defined in the Event
+Console's settings. These can be found under [.guihints]#Actions (Emails & Scripts)}}:# 
+
+image::bilder/ec_add_action.png[]
+
+==== Executing shell scripts
+
+Create a new action with the [.guihints]#Add new action# button. The following example
+shows how to create a simple shell script as an [.guihints]#Execute shell script# type
+of action. In the script you can include placeholders such as
+`$ID$` or `$HOST$` that will be replaced by real values from
+the event before the script is executed. A complete list of the available
+placeholders can be found in the ICON[icon_help.png] online help.
+
+image::bilder/ec_define_action.png[]
+
+Please be aware: under some circumstances it is possible that an attacker
+could infiltrate commands into scripts using their own content in event texts.
+This is particularly so for the `$TEXT$` field.
+This is due to the placeholder being substituted *before* the
+script is executed.
+
+In future there will be an extension in (CMK) that as an alternative
+will enable the values to be delivered via environment variables
+(similarly to the scripts in the [notifications#methods|notification methods]).
+Since these are then evaluated by the shell itself, this risk can be avoided
+with correct use. Thus, only utilise the existing variants with placeholders
+if you can prevent attackers from infiltrating events.
+
+The example script seen in the screenshot creates the `tmp/test.out` file
+in the instance folder, and there writes a text with the concrete values for
+the variables from each latest event:
+
+.
+
+----cat << EOF > $OMD_ROOT/tmp/test.out
+Something happened:
+
+Event-ID: $ID$
+Host: $HOST$
+Application: $APPLICATION$
+Message: $TEXT$
+EOF
+----
+
+The scripts will be executed in the following environment:
+
+* `/bin/bash` will be used as the interpreter
+* The script runs as an instance user with the instance's home folder (e.g. `/omd/sites/mysite`)
+* When the script is running processing of further events is paused!
+
+Should your script include waiting times, with the help of
+the Linux `at`-spooler you can allow it to run asynchronously.
+For this, create the script in its own file `local/bin/myaction`,
+and start it with the `at`-command – e.g.:
+
+.
+
+----echo "$OMD_ROOT/local/bin/myaction '$HOST$' '$TEXT$' | at now
+----
+
+
+==== Sending emails
+
+The action type [.guihints]#Send email# sends a simple text mail.
+This can in fact be indirectly achieved via a script,
+for example, by working with the `mail` command
+in the command line. The first-mentioned option is however easier.
+Please note that placeholders are also allowed in the [.guihints]#Recipient email address}}# 
+and [.guihints]#Subject# fields.
+
+image::bilder/ec_define_action_email.png[]
+
+
+[#notifications]
+=== Notifications via (CMK)
+
+Alongside the execution of scripts and the sending of (simple) emails,
+the EC can perform a third type of action – the sending of notifications
+over the (CMK)-[notifications|notifications system].
+EC-generated notifications are processed in the same way as the
+host and service alarms from the active monitoring.
+The advantages over the simple emails as described above are obvious:
+
+* The notifications for active and event-based monitoring are configured together in a central location.
+* Functions like [notifications#bulk|bulk notifications], HTML-emails and other useful things are available for use.
+* User-defined notification rules, cancelling of notifications, and so on, function in the usual way.
+
+The action type [.guihints]#Send monitoring notification# that performs this is
+as standard always available for use, and needs no special configuration.
+
+Since events by their very nature are somewhat differerent to ‘normal’
+hosts or services, there are a few special characteristics with their
+notifications which we will now take a closer look at:
+
+==== Assigning to existing hosts
+
+Events can originate from any host – regardless of whether they are
+configured in an active monitoring or not.
+The Syslog and SNMP-Port are, after all, open to all hosts in the network.
+If a host sends information without having been asked,
+the sender address reveals little about the sender itself,
+and at first we don't know if we have a file of further information
+concerning the host, thus any extended host attributes such as alias,
+host attributes, contacts, etc. are at first 'unknown'.
+In particular this means that _conditions_ in notification rules
+do not not necessarily function as expected.
+
+From Version VERSION[1.4.0], when handling notifications the EC
+attempts to find a host in the active monitoring that matches the event.
+For this it makes use of the same procedure as with the
+[ec#visibility|visibility of events]. If such a host can be found,
+the following data will be extracted from it:
+
+* The correct spelling of the host's name
+* The host alias
+* The primary IP-address as configured in (CMK)
+* The host tags
+* The WATO-folder
+* The list of contacts and contact groups
+
+It can thereby happen that the host name in the notification is not
+identical to the  host name in the original message. The adaption of this to
+conform with that of the active monitoring however simplifies the formulation
+of standardised notification rules which contain conditions for the host names.
+
+The assignment occurs in realtime with a livestatus query to the monitoring core
+running in the same instance as the EC which received the message.
+This can of course only function if the syslog messages, SNMP-Traps, etc.,
+are only sent to the (CMK)-instance on which the host is actively monitored!
+
+If the query fails, the host cannot be found, or you are using
+(CMK) Version VERSION[1.2.8], substitute data will be assumed:
+
+[cols=, ]
+|===
+
+
+<td style="width:25%">{{Hostname}}
+|The host name from the event
+
+
+|{{Hostalias}}
+|The host name will be used as an alias
+
+
+|{{IP-Address}}
+|The IP-Address field contains the host name – if this has the format of
+an IP-Address, and is otherwise empty. But Version VERSION[1.4.0] will
+insert the message's original sender-address here.
+
+
+|{{Host attributes}}
+|The host receives no tag. If you have tag groups with blank tags,
+the host there takes these attributes, otherwise it has no tag from the group.
+Please be aware of this if in notification rules you define conditions via tags.
+
+
+|{{WATO-Folder}}
+|No folder. All conditions going to a specific folder are thus
+unrealisable – even if it concerns the main folder.
+
+
+|{{Contacts}}
+|The list of the contacts is empty. From Version VERSION[1.4.0]
+the fallback-contacts will be inserted here.
+
+|===
+
+If the host cannot be assigned in active monitoring,
+this can of course lead to problems with notifications.
+On the one hand it is possible that the conditions can no longer be applied,
+on the other hand the contact selection will be affected.
+In such cases you can customise the notification rules so that notifications
+from the event console can be treated using their own targeted rule.
+This has its own condition with which you can either make a positive match only
+to EC-notifications, or conversely, exclude them:
+
+image::bilder/ec_notification_condition.png[]
+
+
+==== Remaining notification fields
+
+So that notifications from the EC can be processed by the active monitoring's
+notification system, the EC must conform to the system's schema.
+In the process the typical data fields in a monitoring notification will be
+filled as sensibly as possible. How the host's data is identified has just been
+described. Further fields are:
+
+[cols=, ]
+|===
+
+
+<td style="width:25%">{{Alarmtyp}}
+|EC-notifications are always treated as a _Service notification_
+
+
+|{{Service description}}
+|Here the {{Application}} field from the event will be inserted.
+If this is empty, up to (CMK) Version VERSION[1.2.8] ‘`Unset`’ will be inserted,
+from (CMK) Version VERSION[1.4.0] ‘`Event Console`’ will be inserted.
+
+
+|{{Notification number}}
+|This has a fixed value of `1`. No escalation is possible from this value.
+Even multiple sequential events of the same type appear independent from each other.
+The EC does not currently support recurring notifications in the case of an event
+not being acknowledged.
+
+
+|{{Date / Time}}
+|With events, the [ec#counting|counting], is the time of the _last_
+occurrence of a message associated with an event.
+
+
+|{{Plug-in output}}
+|The text content of an event
+
+
+|{{Service state}}
+|The event's state, i.e., (OK), (WARN), (CRIT) or (UNKNOWN)
+
+
+|{{Previous state}}
+|Since events have no previous states, normal events will always be (OK) here,
+and cancelled events will always receive a (CRIT) entry. This rule comes the closest to
+what one needs to have for a notification rule that is conditional on the exact change of state!
+
+|===
+
+
+==== Configuring contact groups manually
+
+As described above, it may not be possible to determine the applicable
+contacts for an event automatically. For such cases, from (CMK)
+Version VERSION[1.4.0], you can specify the contact groups to be
+used for the notification directly in the EC-rule.
+Important – don't forget the [.guihints]#Use in notifications# check box:
+
+image::bilder/ec_set_contact_groups.png[,]
+
+*Attention*: the similar setting in Version VERSION[1.2.8] applies
+exclusively to the visibility, NOT to the notification!
+
+
+==== Global switch for notifications
+
+In the [.guihints]#Master Control# element there is a central switch for notifications.
+From (CMK) Version VERSION[1.4.0] this also affects notifications
+that are relayed from the EC:
+
+image::bilder/master_control_notifications_off.png[align=center,width=280]
+
+As with the host allocation, an enquiry to the switch from the EC requires a
+livestatus access on the local monitoring core.
+A successful request can be seen in the Event Console's logfile:
+
+.var/log/mkeventd.log
+
+----[1482142567.147669] Notifications are currently disabled. Skipped notification for event 44
+----
+
+
+==== Hosts in scheduled downtimes
+
+From Version VERSION[1.4.0] the event console recognises hosts
+that are currently in a [basics_downtimes|scheduled downtime] and issues no
+notification in such a situation. Its logfile entry will look like this:
+
+.var/log/mkeventd.log
+
+----[1482144021.310723] Host myserver123 is currently in scheduled downtime. Skipping notification of event 433.
+----
+
+The prerequisite of course is successfully finding the host in the active monitoring.
+If this is not successful it will be assumed that the host is _not_ in maintenance,
+and the notification will definitely be generated.
+
+
+==== Auxiliary macros
+
+If you code your own [notifications#scripts|notification scripts],
+especially with notifications from the event console, you have a number
+of additional variables available that describe the original event
+(access as usual with the `NOTIFY_` prefix):
+
+[cols=, ]
+|===
+
+
+|`EC_ID`
+|Event-ID
+
+
+|`EC_RULE_ID`
+|ID of the rule that generated the event
+
+
+|`EC_PRIORITY`
+|Syslog priority as a number from `0` (`emerg`) to `7` (`debug`).
+
+
+|`EC_FACILITY`
+|Syslog facility – likewise a number. The range of values is from `0` (`kern`) to `32` (`snmptrap`).
+
+
+|`EC_PHASE`
+|Phase of the event. Since only open events can trigger actions, `open` should be present here. A manual notification of an already acknowledged event, will `ack` will be seen here
+
+
+|`EC_COMMENT`
+|The event's comment field
+
+
+|`EC_OWNER`
+|The {{Owner}} field
+
+
+|`EC_CONTACT`
+|The comment field with the contact information
+
+
+|`EC_PID`
+|The process-ID of the process that sent the message (bei Syslog-Events)
+
+
+|`EC_MATCH_GROUPS`
+|The match groups from matches in the rule
+
+
+|`EC_CONTACT_GROUPS`
+|The optional contact groups defined manually in the rule
+
+|===
+
+[#automatic_actions]
+=== Executing actions
+
+We have already seen the manual execution of actions by the operator in
+[ec#commands|Commands]. More interesting is the automatic execution of
+actions, which in EC-rules can be configured in the [.guihints]#Outcome & Action# submenu:
+
+image::bilder/ec_rule_actions.png[]
+
+Here you can choose one or more actions that will always be executed when,
+according to the rule, an event will be _opened_ or [ec#cancel|cancelled].
+With the latter, via the [.guihints]#Do Cancelling-Actions when# check box you can define
+whether the action should be executed if the cancelled event is already in the [.guihints]#open# phase.
+With the use of [ec#counting|counting] or
+[ec#delay|delay] it can occur that events
+are cancelled which were in a ‘wait’ status and not yet visible to the user.
+
+The execution of actions will be logged in the `var/log/mkevent.log`
+logfile:
+
+.var/log/mkeventd.log
+
+----[1481120419.712534] Executing command: ACTION;1;omdadmin;test
+[1481120419.718173]   Exitcode: 0
+----
+
+These will also be noted in the event archive.
+
+[#snmp]
+== SNMP-Traps
+
+=== Setting up the reception of SNMP-Traps
+
+Since the Event Console has its own built-in SNMP-Engine, setting up the reception
+of SNMP-Traps is very simple. No `snmptrapd` from the operating system is needed!
+Should you already have one running, please stop it.
+
+As described in the section on [ec#setup|setting up] the Event Console,
+now activate the trap receiver in this instance with `omd config`:
+
+image::bilder/ec_config_traps.png[align=center,width=300]
+
+Because the UDP-Port for the traps can only be used by one process on a server,
+it may only be setup for a single (CMK)-instance per computer.
+When starting the instance you can control whether the trap receiver is active:
+
+[source,bash]
+----
+OM:omd start
+Starting mkeventd (builtin: <b class=hilite>snmptrap*)...OK
+Starting Livestatus Proxy-Daemon...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting Check_MK Micro Core...OK
+Starting dedicated Apache for site mysite...OK
+Initializing Crontab...OK
+----
+
+For SNMP-Traps to function, the sender and receiver must agree in
+specific [.guihints]#Credentials}}.# In the cases of SNMP Version 1 and 2c it is a
+simple password, referred to here as ‘Community’. With Version 3 a few
+more details are required. These credentials are configured in the event console's
+settings under [.guihints]#Credentials for processing SNMP traps}}.# 
+Various different credentials can be set up with the [.guihints]#Add new element# button
+which are then available to the devices for alternate uses:
+
+image::bilder/ec_trap_credentials.png[]
+
+By far the most time-consuming part is of course the entering of the target
+addresses for the traps on all of the target devices to be monitored,
+as well as to configure the credentials there.
+
+*Tip*: Up until (CMK) Version VERSION[1.2.8] traps with the
+`public` community were always automatically accepted, regardless of any
+further configured credentials. From VERSION[1.4.0] this is no longer
+the case – here only explicitly-configured credentials are permitted.
+
+=== Testing
+
+Unfortunately, few devices offer effective testing capabilities.
+At least you can test the reception of traps by the event console quite simply
+by sending a test trap – ideally from another Linux system.
+This is done with the `snmptrap` command.
+The following example sends a trap to `192.168.178.11`. Your chosen
+host name is entered after `.1.3.6.1` and it must be resolvable
+or entered as an IP-Address (here `192.168.178.30`):
+
+[source,bash]
+----
+UP:snmptrap -v 1 -c public 192.168.178.11 .1.3.6.1 192.168.178.30 6 17 '' .1.3.6.1 s "Just kidding"
+----
+
+If the [.guihints]#Log level# in the settings has been set to [.guihints]#Verbose logging}},# 
+the reception and evaluation of the traps will be visible in the EC's logfile:
+
+.var/log/mkeventd.log
+
+----[1482387549.481439] Trap received from 192.168.178.30:56772. Checking for acceptance now.
+[1482387549.485096] Trap accepted from 192.168.178.30 (ContextEngineId "0x80004fb8054b6c617070666973636816893b00", ContextName "")
+[1482387549.485136] 1.3.6.1.2.1.1.3.0                        = 329887
+[1482387549.485146] 1.3.6.1.6.3.1.1.4.1.0                    = 1.3.6.1.0.17
+[1482387549.485186] 1.3.6.1.6.3.18.1.3.0                     = 192.168.178.30
+[1482387549.485219] 1.3.6.1.6.3.18.1.4.0                     =
+[1482387549.485238] 1.3.6.1.6.3.1.1.4.3.0                    = 1.3.6.1
+[1482387549.485258] 1.3.6.1                                  = Just kidding
+----
+
+If the credentials are false only a single line will be displayed:
+
+.var/log/mkeventd.log
+
+----[1482387556.477364] Trap received from 192.168.178.30:56772. Checking for acceptance now.
+----
+
+An event generated by such a trap will look like this:
+
+image::bilder/ec_trap_event.png[]
+
+=== From numbers come texts, but also: translating traps
+
+SNMP is a binary protocol and it is very economical with its textual descriptions
+of messages. Which type of traps are involved is communicated internally by
+a sequence of numbers in so-called OIDs. These are shown as strings of numbers
+separated by periods (e.g. `1.3.6.1.6.3.18.1.3.0`).
+
+With the help of so-called MIB-files (Management Information Base) the
+event console can translate these number sequences into texts. So for example,
+from `1.3.6.1.6.3.18.1.3.0`, the text `SNMPv2-MIB::sysUpTime.0`
+will be derived.
+
+The translation of the traps is activated in the event console's settings:
+
+image::bilder/ec_translate_traps.png[]
+
+The above test trap now generates a somewhat different event:
+
+image::bilder/ec_trap_event_translated.png[]
+
+If the [.guihints]#Add OID descriptions# option has been activated, the result will be
+significantly more comprehensive – and more complicated.
+Is does however help to better understand exactly what a trap means:
+
+image::bilder/ec_trap_event_translated2.png[]
+
+=== Uploading your own MIBs
+
+Unfortunately the advantages of Open Source for the authoring of MIB-files haven't
+become common knowledge yet, and thus at the (CMK) project we are regrettably
+not in the position of being able to provide vendor-specific MIB-files.
+Only a small collection of free basic-MIBs is preinstalled to handle,
+e.g., a translation of `sysUpTime`.
+
+But, in the event console, with the ICON[context_button_snmp_mibs.png] button,
+you can upload your own MIB-files, as has been done here by the
+_Lieber Corporation_ with its own MIBs:
+
+image::bilder/ec_mibs_for_translation.jpg[]
+
+Tips for MIBs:
+
+* The uploaded files are stored in `local/share/snmp/mibs`. You can also store them there manually if the method using the GUI is too involved for you.
+* Instead of individual files, you can upload ZIP-archives with collected MIBs all in one go.
+* MIBs have dependencies among themselves. Missing MIBs will be reported by (CMK).
+* The uploaded MIBs will also be used on the `cmk --snmptranslate` command line.
+
+
+[#logwatch]
+== Monitoring log files
+
+The (CMK)-Agent is able to evaluate log files using the [.guihints]#Logwatch}}-plug-in.# 
+First of all, this plug-in provides its own monitoring of log files
+(independently from the event console), which includes a small GUI integrated in
+(CMK) for viewing and acknowledging of found messages.
+There is also the possibility of forwarding messages found by the plug-in
+to the event console on a one-to-one basis.
+
+Log file monitoring is fully integrated in the Windows agent –
+in the form of a plug-in for evaluating text files, and another for the
+Windows-Eventlogs. For Linux and Unix the `mk_logwatch` plug-in written
+in Python is available. All three can be installed and/or configured using the
+[wato_monitoringagents#bakery|Agent Bakery]. Use the following rule sets for these:
+
+* [.guihints]#Text logfiles (Linux)}}# 
+* [.guihints]#Text logfiles (Windows)}}# 
+* [.guihints]#Finetune Windows Eventlog monitoring}}# 
+
+The precise configuration of the logwatch plug-in is not the subject of this article.
+It is nonetheless still important that in the logwatch plug-in itself you prepare
+the best possible prefiltering of the messages, and not simply send the complete
+contents of a text file to the event console.
+
+Please don't confuse this with the _subsequent_ reclassification via
+the [.guihints]#Logwatch patterns# rule set. This can only change the status of messages
+that have already been sent by agents. If you have already set up these patterns
+however, and simply wish to switch from logwatch to the event console you can
+still retain the patterns. Additionally, included in the forwarding there is the
+[.guihints]#Reclassify messages before forwarding them to the EC# option.
+In this scenario all messages pass through alltogether *three* rule chains:
+on the agents, through the reclassification, and in the Event Console!
+
+Now change the logwatch over so that the messages found by the plug-ins
+are no longer monitored by the normal Logwatch-Check, rather they are
+forwarded one-to-one to the event console for processing. This forwarding
+service is performed by the {{Parameters for discovered services|Applications,
+Services & Processes => LogwatchEvent Console Forwarding# rule set:
+
+image::bilder/ec_logwatch_forwarding.png[]
+
+A few helpful tips concerning forwarding:
+
+If you have a distributed environment in which not every instance runs its own
+event console (first possible from Version VERSION[1.4.0]),
+the remote instances must redirect the messages to the central console via syslog.
+UDP is the default for this procedure. This however is not a secure protocol.
+It is better to use syslog via TCP, which must of course be activated in the
+processing centre (`omd config`).
+
+When forwarding specify any [.guihints]#Syslog facility}}.# With the help of this you can
+easily recognise the forwarded messages in the event console.
+`local0` to `local7` are well suited for this.
+
+With [.guihints]#List of expected logfiles# you can monitor the list of found logfiles,
+and will be warned when particular expected files cannot be found.
+
+Important: Just saving the rules achieves nothing. This rule only becomes active
+through a service dicovery. Not until this has been executed will the existing
+logwatch services be removed, and replaced in each host by a newly-created
+_single_ new service with the name [.guihints]#Log Forwarding}}.# 
+
+image::bilder/ec_log_forwarding_check.png[]
+
+This check will also display possible problems with forwarding to the
+event console in the future.
+
+== Conforming host names on receipt
+
+The host names used by your devices in messages are unfortunately not always
+consistent. As we have already seen, when sending notifications (CMK) attempts
+as far as possible to automatically assign the host names from events in
+active monitoring when assigning the event's checks, and when displaying the
+events in the operation. At the same time upper and lower case use will be
+standardised, and the alias as well as the IP-address will be tested as host names.
+
+If that is not sufficient, you can already rewrite host names directly on receipt
+of messages with the [.guihints]#Hostname translation for incoming messages# EC-setting.
+There are numerous possibilities for this:
+
+image::bilder/ec_hostname_translation.png[]
+
+The most flexible method is to use [regexes|regular expressions], which
+allow quasi-intelligent ‘find and replace’ actions in the host names.
+In cases where that won't do you can also provide a table of individual names
+and their corresponding new versions.
+
+*Important*: The name conversion is performed *before* processing the
+rule conditions, and thus long before a possible rewriting of the host names
+through a rule action [.guihints]#Rewrite hostname}}.# 
+
+
+== Viewing event states in active monitoring
+
+When you also wish to see which hosts in the active monitoring currently have
+open problem events, in each host you can add an active check which summarises
+the current event states.
+For a host currently without open events, it will look like this:
+
+image::bilder/ec_events_check_none.png[]
+
+If only events with an (OK) state are present, the check will show the
+number of events, but remain green:
+
+image::bilder/ec_events_check_ok.png[]
+
+Here is a situation with open events in a (CRIT) state:
+
+image::bilder/ec_events_check_crit.png[]
+
+This active check is generated using a rule in the
+[.guihints]#Host & Service Parameters => EventConsole => Checkevent state in Event Console}}# 
+rule set.
+When using this rule you can also specify whether already-acknowledged events should,
+or should not be added to the state:
+
+image::bilder/ec_events_check.png[]
+
+With the [.guihints]#Application (regular expression)# option you can restrict the check
+to events that have a specific text in the application field. In this case it can also
+make sense to have more than one events check on a host, and to separate the checks
+according to application. So that these services are distinguishable by name,
+you will additionally need the [.guihints]#Item (used in service description)# option,
+which will insert your predefined text into the service's name.
+
+If your event console is not running on the same (CMK)-instance that is monitoring
+the host, you will need a remote access via TCP through [.guihints]#Access to Event Console}}:# 
+
+image::bilder/ec_check_remote.png[]
+
+For this to function the event console must permit an access via TCP.
+This can be configured in the settings of the EC that will be accessed:
+
+image::bilder/ec_remote_access.png[]
+
+
+[#archive]
+== The Archive
+
+=== Fundamentals of operation
+
+The event console maintains a protocol of the changes that an event goes through.
+This can be found via two precedures:
+
+* In the global overview [.guihints]#Event Console => Recentevent history}}.# 
+* In the details of an event using the [.guihints]#History of Event# button.
+
+In the global overview a filter that only shows the events for the last
+24 hours is used. As usual the filter can be customised.
+
+The following image shows the history of event 5976, which experienced a
+total of four changes. The event was initially generated (`NEW`),
+then its state was manually changed from (OK) to (CRIT) (`CHANGESTATE`),
+the event was then acknowledged and a comment was added (`UPDATE`),
+and finally the event was archived/deleted (`DELETE`):
+
+image::bilder/ec_history.png[]
+
+The following types of entry are found in the archive:
+
+[cols=20, options="header"]
+|===
+
+
+|Entry
+|Meaning
+
+
+|`NEW`
+|The event has been newly created (by a message, or by a rule
+which is missing an expected message).
+
+
+|`UPDATE`
+|The event was edited by the operator (a change to comments,
+contact info, acknowledgement).
+
+
+|`DELETE`
+|The event has been archived.
+
+
+|`CANCELLED`
+|The event was automatically [ec#cancelling|cancelled]
+following an OK-message.
+
+
+|`CHANGESTATE`
+|The event's state was changed by the operator.
+
+
+|`ARCHIVED`
+|The event has been automatically archived – since no rule was invoked,
+and the {{Force message archiving}} option was activated in the global settings.
+
+
+|`ORPHANED`
+|The event was automatically archived as the applicable rule was
+deleted while the event was in the {{counting}} phase.
+
+
+|`COUNTREACHED`
+|The event was changed from {{counting}} to {{open}} because the
+configured count of messages had been reached.
+
+
+|`COUNTFAILED`
+|The event has been automatically archived because in the {{counting}}
+phase the required message count had not been reached.
+
+
+
+|`NOCOUNT`
+|The event has been automatically archived because during the {{counting}}
+phase, the applicable rule has been altered so that it no longer counts the
+messages.
+
+
+|`DELAYOVER`
+|The event was opened because the [ec#delay|delay] configured
+in the rule has expired.
+
+
+|`EXPIRED`
+|The event was automatically archived because its configured
+[ec#expire|lifetime] had expired.
+
+
+|`EMAIL`
+|An email has been sent.
+
+
+|`SCRIPT`
+|An automatic action (script) has been executed.
+
+
+|`AUTODELETE`
+|The event was automatically archived directly and immediately after
+opening because this action was configured in the applicable rule.
+
+|===
+
+=== Location of the archive
+
+As mentioned at the beginning, the event console has not been conceived as a
+comprehensive syslog archive. In order to make the implementation and
+administration as simple as possible it does without a database backend.
+Instead of this the archive is written as simple text data. Each entry consists
+of a single line of text divided into columns by tabs. The file is located
+in `var/mkeventd/history`:
+
+[source,bash]
+----
+OM:ll var/mkeventd/history/
+total 1328
+-rw-rw-r-- 1 stable stable     131 Dez  4 23:59 1480633200.log
+-rw-rw-r-- 1 stable stable 1123368 Dez  5 23:39 1480892400.log
+-rw-rw-r-- 1 stable stable  219812 Dez  6 09:46 1480978800.log
+----
+
+By default a new file is opened every day. Its rotation can be customised
+in [ec#globalsettings|Settings for the EC].
+The [.guihints]#Event history logfile rotation# setting enables the rotation to be
+set to weekly.
+
+The file's name corresponds to the Unix-timestamp from the time of the creation
+of the file (Seconds since the 1.1.1970 UTC).
+
+These files will be retained for 365 days, unless otherwise altered in the
+[.guihints]#Event history lifetime# setting. The files will additionally be included
+in (CMK)'s central disk space-management, which can be configured in the
+global settings under [.guihints]#Site management}}.# The respective _shorter_ preset
+time limit applies here. The global management has the advantage that if disk
+space becomes tight, starting from the oldest records it can delete historic
+data from all files in an *evenly distributed* manner.
+
+If you run into space problems the files in the catalogue can be simply deleted
+or moved to another location by hand. Do not however store zipped or any other
+files in this catalogue.
+
+
+=== Automatic archiving
+
+Despite the limitations imposed by text files it is theoretically possible
+to archive a great number of messages. The writing to the archive's text files
+is very efficient – though at the cost of any subsequent searches.
+Since the files have only the time range for the query as an index,
+every query requires all relevant files to be read and searched sequentially.
+
+The EC will normally only write those messages to the archive for which an
+event was actually opened.
+This function can be extended to _all_ events in two ways:
+
+. Create a rule to match all other events, and in [.guihints]#Outcome & actions# activate the [.guihints]#Delete event immediately after the actions# option.
+. In the [ec#globalsettings|EC's global settings], activate the [.guihints]#Force message archiving# option.
+
+This latter point ensures that messages to which no rule applies nonetheless
+go to the archive (flagged as `ARCHIVED`).
+
+
+[#tuning]
+== Peformance and tuning
+
+=== Processing of messages
+
+Even in these days of servers with 64 bit cores and 2 TB main storage, software
+performance still plays a role. Especially when processing events, in extreme
+cases inadequate performance can lead to the loss of incoming messages.
+
+The reason for this is that none of the protocols in use (Syslog, SNMP-Traps,
+etc.) provide a flow control. If 1000 hosts simultaneously send a message every
+second the recipient has no chance of coping with such a flow.
+
+For this reason, in larger environments it is important to keep an eye on the
+processing time for a message. This of course basically depends on how
+many rules have been defined and how those rules have been constructed.
+
+==== Measuring performance
+
+For measuring performance there is a separate element for the
+[user_interface#sidebar|Side bar] named {{Event Console Performance}}.
+This can be integrated as usual with ICON[button_sidebar_addsnapin.png]:
+
+image::bilder/ec_performance.png[align=center,width=280]
+
+The values shown here are mean values over the last minute or so.
+An ‘event storm’ that only lasts a couple of seconds cannot be read directly
+here, but in this way the numbers have been somewhat ‘smoothed’ and are thus
+easier to read.
+
+To test for the achievable maximum performance, a storm of unclassified messages
+can be artificially generated (but please, only in a test system!),
+in which for example, you can continuously code the contents of a text file as
+a loop in a shell in the Events-Pipe:
+
+[source,bash]
+----
+OM:while true ; do cat /etc/services > tmp/run/mkeventd/events ; done
+----
+
+The performance values from the performance element have the following meanings:
+
+[cols=30, options="header"]
+|===
+
+
+|Wert
+|Meaning
+
+
+|{{Received messages}}
+|Count of the current incoming messages per second.
+
+
+|{{Rule hits}}
+|The number of rules currently _being applied_ per second. These can also be rules
+that delete messages or simply only count. Thus not every rule match results in an event.
+
+
+|{{Rule tries}}
+|The count of rules being tested. This provides valuable information on the efficiency of
+the rule chain – especially in conjunction with the following parameter:
+
+
+|{{Rule hit ratio}}
+|The proportion of {{Rule tries}} to {{Rule hits}}. In other words – how many rules
+must the EC try before one (finally) applies. In the example shown in the screenshot the
+rate is questionably low.
+
+
+|{{Created events}}
+|The count of events being generated each second. Because the event console should really only
+show _relevant problems_ (and is thus comparable to host and service problems in monitoring),
+in practice the number *3.77/s* in the illustration is of course far too high!
+
+
+|{{Processing time per message}}
+|Here the time required for processing a message can be read.
+Attention: this is generally *not* the inverse of {{Received messages}} – since
+it doesn't include the times when the event console is idle when no
+messages are incoming. Here only the actual elapsed time required from the receipt
+of a message to the time its processing has finished is measured.
+In this you can roughly see the maximum number of messages that the
+EC _can_ process in a given time range.<br><br>
+Please also note that this is not a measure of _CPU-time_, rather it is _real_ time.
+In a system with enough free CPUs these times will be around the same.
+But if the system is under such a load that not every process is allocated a CPU,
+then the real time can be noticibly longer.
+
+|===
+
+==== Tuning tips
+
+The approximate number of messages the event console can process per second can be
+be seen in [.guihints]#Processing time per message}}.# This time generally depends on how
+many rules must be tested before a message can be processed.
+There are a number of options for optimisation:
+
+* Rules that exclude many messages should be placed at the front of the rule chain if possible
+* Work with [ec#rulepacks|rulepacks] to bundle related rules. The first rule in each pack should immediately exit the pack if the common basic condition is not satisfied
+
+Furthermore, there is an optimisation in the EC based on the syslog priority
+and facility. Here an internal rule chain will be constructed for every combination
+of priority and facility, which will only include rules that are relevant to
+messages in these combinations.
+
+Any rule with a condition for priority or facility – or ideally both – will no
+longer be included in ALL of the rule chains, rather for optimisation
+in only a single rule chain. This means that the rule will not need to be
+tested for messages with another syslog classification.
+
+Following a restart an overview of all optimised rule chains will be
+shown in `var/log/mkeventd.log`:
+
+.var/log/mkeventd.log
+
+----[8488808306.233330]  kern        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233343]  user        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233355]  mail        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233367]  daemon      : emerg(120) alert(89) crit(89) err(89) warning(89) notice(89) info(89) debug(89)
+[8488808306.233378]  auth        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233389]  syslog      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233408]  lpr         : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233482]  news        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233424]  uucp        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233435]  cron        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233446]  authpriv    : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233457]  ftp         : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233469]  (unused 12) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233480]  (unused 13) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233498]  (unused 13) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233502]  (unused 14) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233589]  local0      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233538]  local1      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233542]  local2      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233552]  local3      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233563]  local4      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233574]  local5      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233585]  local6      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233595]  local7      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233654]  snmptrap    : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+----
+
+In the above example 67 rules can be seen that must be checked for every case.
+For messages from the `daemon` facility there are 89 relevant rules,
+and 120 rules must be checked only for the `daemon`/`emerg` combination.
+Any rule that receives a condition for priority or facility reduces
+the count by a further 67.
+
+Of course these conditions can only be set if it is certain that they will also
+be satisfied by the relevant messages!
+
+
+=== Count of current events
+
+The count of actual current events can also influence the EC's performance –
+especially when they are clearly out of control. As already mentioned, the EC
+should not be seen as a substitute for a syslog archive, rather to merely
+display ‘ongoing problems’. The event console can in fact deal with several thousand
+problems, but that is not really the point.
+
+Once the count of current events exceeds around 5000, performance will become
+noticibly degraded. On the one hand this will be seen in the GUI which will
+respond more slowly to queries – and on the other hand the processing will also
+slow down, since in some cases messages must be compared against all active events.
+Memory consumption can also be problematic.
+
+For performance reasons the event console alsways holds all active events in RAM.
+These will be logged once per minute (customisable), and at clean completion, in the
+`var/mkeventd/status` file.
+If this file becomes very large (e.g. over 50 megabytes), this procedure will
+likewise continue slowing down. The actual size can be quickly checked with `ll` (alias for `ls -alF`):
+
+[source,bash]
+----
+OM:ll -h var/mkeventd/status
+-rw-r--r-- 1 mysite mysite <b class=hilite>386K* Dez 14 13:46 var/mkeventd/status
+----
+
+If due to a clumsy rule (e.g., a rule that matches everything) far too many current
+events are generated, manual deletions via the GUI are quite impractical.
+In such a situation simply deleting the status file helps:
+
+[source,bash]
+----
+OM:omd stop mkeventd
+Stopping mkeventd...killing 17436......OK
+OM:rm var/mkeventd/status
+OM:omd start mkeventd
+Starting mkeventd (builtin: syslog-udp)...OK
+----
+
+
+*Attention*: Naturally _all_ current events will be lost, likewise
+the stored rule counts and other states.
+In particular, new events will begin again with the ID 1.
+
+
+[#overflow]
+==== Automatic overflow protection
+
+From Version VERSION[1.4.0i2] the event console has an automatic protection
+against ‘flooding’. This limits the number of current events per host, per rule,
+and globally. In this way not only are open events counted, but also those in other
+phases, such as, for example, [.guihints]#delayed# or [.guihints]#counting}}.# 
+Archived events are not counted.
+
+This protects you in situations in which, due to a systemic problem in the
+network, thousands of critical events could stream in and ‘jam’ the event console.
+On the one hand this averts a performance breakdown in the event console while
+it tries to contain too many events in main memory – on the other hand the
+overview remains (just) manageable for the operator, and events that are not a
+part of the storm remain visible.
+
+
+Once a limit has been reached, one of the following actions will take place:
+
+* The creation of new events will be stopped (for this host, this rule, or globally)
+* Like the preceeding, but an ‘overflow event’ will also be generated
+* Like the preceeding, but an appropriate contact person will also be notified
+* Alternatively to the preceeding three options, you can allow the respective oldest event to be deleted in order to make space for a newer
+
+
+The limits, and likewise the associated consequence of a limit being reached
+can be set in [.guihints]#Generic => Limit amount of current events}}.# 
+The following image shows the default setting:
+
+image::bilder/ec_limit_open_events.jpg[]
+
+If you have activated the [.guihints]#create overflow event# option, when the limit has
+been reached _an artificial_ event will be generated which will inform the
+operator of the error situation:
+
+image::bilder/ec_overflow_event.png[]
+
+If you have additionally activated the [.guihints]#notify contacts...# option,
+relevant contact personnel will be notified via (CMK)-Alarm.
+The notification runs through (CMK)'s [notifications|notification rules].
+These rules do not absolutely have to use the exact contact selection specified
+in the event console, but they can modify it. The following table shows which
+contacts will be selected if you have set the {{Notify all contacts of the
+notified host or service# option (the default):
+
+
+[cols=15, options="header"]
+|===
+
+
+|Limit
+|Contact list
+
+
+|per Host
+|The host contacts, which are identified in exactly the same way as with the
+[ec#notifications|notification of events] in (CMK).
+
+
+|per Rule
+|Here the field for the host name will be left empty. If the rule defines contact groups, these will be selected – otherwise the fallback- contacts will apply.
+
+
+|Global
+|The fallback-contacts.
+
+|===
+
+
+=== Archive too large
+
+
+As shown [ec#archive|above] the event console has an archive of all events and
+their processing steps. For reasons of simple implementation and administration
+these are stored as simple text files.
+
+Text files are unbeatable for performance when it comes to the _writing_
+of data – not even by the world's fastest database. This is due to,
+among other factors, the optimisation of this type of access through Linux, and
+the complete storage hierarchy of hard drives and SANs. This is however to the
+detriment of the read access – since text files have no indexes, searching in the
+files requires the complete file to be read.
+
+As an index the event console at least uses the log file's name for the _time_ of
+the event. The narrower the time range for the query, the faster the search can be
+processed.
+
+It is nonetheless very important that the archive doesn't get too large.
+If you simply use the event console to process genuine error messages,
+this can't really happen. But if it is used as a substitute for a real syslog
+archive, it can certainly result in a very large file being produced.
+
+If you find yourself in the situation in which the archive has gotten too large,
+you can simply delete older files in `var/mkeventd/history/`.
+You can also apply a general limit to data lifetimes in [.guihints]#Event history lifetime}},# 
+thus predefining future deletions. By default the data will be saved for
+365 days. You may well get by with much less.
+
+
+=== Measuring performance over time
+
+From Version VERSION[1.4.0], for every active instance on the event
+console (CMK) automatically provides a new service which displays the
+performance data in curves, and which also warns of [ec#overflow|overflow].
+
+As long as at least one Linux agent of this version is installed on the
+monitoring core itself, the Check will be automatically found and set up as usual:
+
+image::bilder/ec_check.png[]
+
+
+The Check provides very many interesting performance data, for example, the count
+of incoming messages over a time range, and how many of these are discarded:
+
+image::bilder/ec_graph_message_rate.png[align=center,width=550]
+
+
+The efficiency of your rule chain will be displayed through a comparison of
+rules tested with those that have taken effect:
+
+image::bilder/ec_graph_rule_efficiency.png[align=center,width=550]
+
+This graph shows the average time for processing a message:
+
+image::bilder/ec_graph_processing_time.png[align=center,width=550]
+
+
+As well as those shown here, there are numerous further diagrams.
+
+
+
+== Distributed monitoring
+
+
+How to implement the event console in an installation with multiple
+(CMK)-instances can be learned about in the
+[distributed_monitoring#ec|article on distributed monitoring].
+
+
+
+== The status interface
+
+Via the `tmp/run/mkeventd/status` Unix-Socket, as well as access to the
+internal status, the event console enables the execution of commands.
+The protocol used here is a greatly-restricted subset of [livestatus|Livestatus].
+
+Up until Version VERSION[1.2.8] the [user_interface|GUI] used this socket
+to display the open and archived events, and to execute commands on events.
+From Version VERSION[1.4.0] the monitoring core acts as a substitute on
+the interface, and passes the data to the GUI to make both a
+[distributed_monitoring|distributed monitoring] and the event console possible.
+
+
+
+The following restrictions apply to the event console's simplified live status:
+
+* The only permitted headers are `Filter:` and `OutputFormat:`.
+* For this reason keep alive is not possible. Only a single query per connection is possible.
+
+
+The following tables are available:
+
+[cols=, ]
+|===
+
+
+|`events`
+|List of all current events
+
+
+|`history`
+|Access to the [ec#archive|archive]. A query to this table directs to an access of the archive's text data.
+Definitely use a filter for the time range of the desired entry to avoid a full accessing all of the files.
+
+
+|`status`
+|Status and performance data for the EC. This table always has exactly one line.
+
+|===
+
+
+With the help of `unixcat` commands can be written to the socket using a very simple syntax:
+
+[source,bash]
+----
+OM:echo "COMMAND RELOAD" | unixcat tmp/run/mkeventd/status
+----
+
+
+The following commands are available:
+
+[cols=, ]
+|===
+
+
+|`DELETE`
+|Archives an event. Argument: Event-ID and username.
+
+
+|`RELOAD`
+|Refreshes the configuration
+
+
+|`SHUTDOWN`
+|Shuts the event console down
+
+
+|`REOPENLOG`
+|Reopens the Log file. This command is required by the Log file rotation.
+
+
+|`FLUSH`
+|Deletes all current and archived events!
+
+
+|`SYNC`
+|Initiates an immediate update of the `var/mkeventd/status` file.
+
+
+|`RESETCOUNTERS`
+|Resets the hits counters (corresponds to the ICON[context_button_reset_counters.png] button in WATO.
+
+
+|`UPDATE`
+|Updates an event. The arguments are in the sequence – event-ID,
+user-ID, acknowledgement (0/1), comments, contact info.
+
+
+|`CHANGESTATE`
+|Changes the states (OK) / (WARN) / (CRIT) / (UNKNOWN) for an event. Arguments are event-ID, user-ID and state number (`0`/`1`/`2`/`3`)
+
+
+|`ACTION`
+|Executes a user-defined action on an event. Arguments are event-ID, user-ID and actions-ID. The special
+`@NOTIFY` ID corresponds to a [ec#notifications|notification] over (CMK).
+
+|===
+
+
+== Files and directories
+
+[cols=50, options="header"]
+|===
+
+
+|File path
+|Meaning
+
+
+|`var/mkeventd`
+|The Event-Daemon's working directory
+
+
+|`var/mkeventd/status`
+|The complete current state of the event console. This primarily includes all current open events (and those intermediate states like  {{counting}}..). In the case of a configuration error that produces very many open events this file can be huge and it can drastically reduce the EC's performance. In such a case you can stop the `mkeventd` service, delete the file, and restart the service, in order to delete all open events with one action.
+
+
+|`var/mkeventd/history/`
+|The [ec#archive|EC-Archive's] storage location
+
+
+|`etc/check_mk/mkeventd.d/wato/global.mk`
+|WATO stores the event console's global settings in Python-syntax.
+
+
+|`etc/check_mk/mkeventd.d/wato/rules.mk`
+|All of your configured rule packs and rules in Python-syntax.
+
+
+|`tmp/run/mkeventd/events`
+|A Named-Pipe in which with `echo` or other commands you can write messages directly in order to pass them to the EC. Please ensure that only a single application writes in this pipe at any point in time, otherwise the messages' texts can become mixed together.
+
+
+|`tmp/run/mkeventd/eventsocket`
+|A Unix-socket that performs the same function as the pipe, but which makes simultaneous writing by multiple applications possible. To write to it the `unixcat` or `socat` commands are needed.
+
+
+|`tmp/run/mkeventd/pid`
+|The current process-ID of the event daemon when it is running.
+
+
+|`tmp/run/mkeventd/status`
+|A Unix-socket that enables the querying of the current state, and the sending of commands. Up to (CMK) Version VERSION[1.2.8] the GUI uses this socket to display the views and the execution of commands. From Version VERSION[1.4.0i2]
+the GUI's queries go to the monitoring core which then connects itself to the socket.
+
+
+|`local/share/snmp/mibs`
+|Your uploaded MIB-files for the translation of SNMP-traps
+
+|===

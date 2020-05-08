@@ -1,0 +1,424 @@
+= Benutzerverwaltung mit LDAP/Active Directory
+:revdate: 2017-09-19
+MT:(CMK) an LDAP oder AD anbinden
+MD:Benutzer und Kontakgruppen können auch über LDAP oder Microsofts Active Directory synchronisiert werden. Dieses Feature wird in diesem Artikel beschrieben.
+[.seealso][#kerberos] [#omd_https] [#wato_user]
+
+== Einleitung
+
+Da eine händische Einrichtung von Benutzern nur bis zu einem gewissen Grad
+skaliert, bietet (CMK) die Möglichkeit, LDAP-basierte Dienste für die
+Benutzerverwaltung zu nutzen. Sie sind damit in der Lage, automatisiert
+Benutzer aus diesen zentralen Verzeichnissen zu synchronisieren und
+ihnen, ebenfalls automatisiert, Kontaktgruppen, Rollen andere Attribute in
+(CMK) zuzuweisen. (CMK) ist dabei nicht auf eine einzelne LDAP-Quelle
+eingeschränkt und kann die Benutzer bei Bedarf auch an andere verbundene
+Sites weiterverteilen.
+
+
+[#connect]
+== Konfiguration einer LDAP Verbindung
+
+=== Verbindung zum Server
+
+Um zu einem LDAP-fähigen Server eine Verbindung herzustellen, benötigen
+Sie zunächst einen Benutzer, welcher Leserechte auf dem Server besitzt. Er
+muss mindestens Lesezugriff auf die Personen und Gruppen haben, welche er
+synchronisieren soll. In den folgenden Beispielen heißt dieser Benutzer
+_check_mk_.
+
+Unter [.guihints]#WATO => Users => LDAP Connections => NewConnection# können Sie nun eine neue
+Verbindung anlegen. In der Eingabemaske vergeben Sie zunächst eine beliebige [.guihints]#ID# für
+die Verbindung in
+den [.guihints]#General Properties}}.# Optional können Sie hier unter [.guihints]#Description}}# 
+einen leicht lesbaren Titel vergeben. Die [.guihints]#ID# muss wie immer eindeutig
+sein und kann später nicht mehr geändert werden.
+
+image::bilder/ldap_general.png[]
+
+Unter [.guihints]#LDAP Connection# werden nun der LDAP-Server und -- falls vorhanden --
+einer oder mehrere Failover-Server definiert. Sie müssen nun noch den
+[.guihints]#Directory Type# auswählen und die Benutzerdaten für den Lesezugriff
+unter [.guihints]#Bind Credentials# definieren. Achten Sie darauf, dass der Benutzer
+mit seinem vollständigen LDAP-Pfad angegeben wird. Groß-/Kleinschreibung
+muss nicht beachtet werden. Ihre Konfiguration sollte nun etwa so aussehen:
+
+image::bilder/ldap_connection.png[]
+
+(CMK) unterstützt nicht nur Active Directory. Um das Verzeichnis z.B. auf
+OpenLDAP zu ändern, wählen Sie es entsprechend in dem Feld [.guihints]#Directory Type}}# 
+aus. Die weitere Konfiguration ändert sich dabei für Sie nur an
+wenigen Stellen.
+
+Die [.guihints]#Failover Servers# werden benutzt, wenn der eigentliche Server
+nicht erreichbar ist oder eine Zeitbeschränkung überschritten wurde. Das
+ist sinnvoll, wenn Sie lokal über keinen eigenen Server verfügen, aber
+die Verbindung redundant aufbauen möchten.
+
+*Wichtig:* Standardmäßig nutzt (CMK) persistente Verbindungen,
+sofern die Option nicht mittels [.guihints]#No persistent connection# deaktiviert
+wird. (CMK) nutzt bei einer persistenten Verbindung immer denselben Server,
+sofern dieser erreichbar ist und wechselt erst bei einen Timeout oder anderem
+Problem. Das Gleiche gilt auch nach dem Wechsel: Die Verbindung wird erst
+dann wieder zurück zum eigentlich konfigurierten Server wechseln,
+wenn der Failoverserver nicht erreicht werden kann.
+
+
+[#user_filter]
+=== Benutzer definieren
+
+Als Nächstes werden die Pfade zu den Benutzern und Gruppen bestimmt und Filter
+gesetzt. Geben Sie in [.guihints]#User Base DN# zunächst den Pfad an, unter dem die
+Benutzer zu finden sind. Achten Sie hier darauf, die _Operational
+Unit_ (OU) so zu setzen, dass möglichst alle gewünschten Benutzer, aber
+möglichst wenig andere enthalten sind. Je mehr Benutzer abgefragt
+werden, desto langsamer wird die Synchronisation am Ende sein.
+
+Danach setzen Sie die Option [.guihints]#Search Scope}}.# Sie können hier rekursiv
+nach allen Benutzern filtern, die sich in der OU und in den Units darunter
+befinden oder die Suche auf diejenigen einschränken, die sich nur direkt in
+dieser OU befinden. Falls Sie in dem Pfad einen Benutzer direkt angegeben
+haben, sollten Sie [.guihints]#Search only the entry at the base DN# auswählen. Es
+wird dann nur dieser Benutzer erfasst.
+
+Sie können nun mithilfe der Option [.guihints]#Search Filter# die Auswahl der
+importierte Benutzer weiter einschränken. Wollen Sie z.B. nur Benutzer
+synchronisieren, welche einer bestimmten Gruppe angehören, so setzen
+Sie hier eine LDAP-Abfrage ein, wie in dem folgenden Screenshot zu
+sehen. Voraussetzung dabei ist, dass die Benutzer über das Attribut
+`memberof` verfügen. Wie Sie ohne dieses Attribut nach einer
+Gruppenzugehörigkeit filtern, erfahren Sie weiter [ldap#filter_group|unten]:
+
+image::bilder/ldap_userfilter_01.png[]
+
+Sie können den Standardfilter auch mit dem `memberof` oder anderen
+Filtern kombinieren:
+
+image::bilder/ldap_userfilter_filter.png[]
+
+Wie Sie unter [.guihints]#Users# sehen können, gibt es noch weitere Optionen bei
+der Benutzersuche. So ist es möglich mit der Option [.guihints]#User-ID Attribute}}# 
+zu bestimmen, welches Attribut der Benutzer als Login ID in (CMK) benutzt
+wird. Mit diesem Login werden sich die Benutzer später anmelden. In der
+Regel wird dies bei Active Directory das Attribut _sAMAccountName_ sein,
+welches auch als Standard in (CMK) genutzt wird. Unter OpenLDAP ist dies
+oft das Attribut [.guihints]#uid}}.# 
+
+Mit der Option [.guihints]#Lower Case User-IDs# können Sie die synchronisierten
+IDs in Kleinbuchstaben umwandeln. Das ist unter Umständen sinnvoll,
+da, wie bereits erwähnt, Active Directory/LDAP nicht nicht zwischen
+Groß- und Kleinschreibung unterscheidet, (CMK) allerdings
+schon. Das kann zu Verwirrung führen, die durch diese Option gelöst wird.
+
+Die Option [.guihints]#Translate Umlauts in User-Ids# ist nur noch aus
+Kompatibilitätsgründen vorhanden und sollte nicht mehr verwendet/verändert
+werden.
+
+image::bilder/ldap_userfilter_02.png[]
+
+
+[#filter_group]
+==== Filter Group
+
+Die Option [.guihints]#Filter Group# sollte nur verwendet werden, wenn der LDAP-Server
+kein Active Directory ist und in den Benutzerdaten das dynamische Attribut
+_memberof_ nicht verfügbar ist. Die Filterung der Benutzer erfolgt
+in diesem Fall in (CMK) selbst. Es werden dabei unter Umständen viele
+Benutzer abgefragt, welche später wieder verworfen werden. Ein
+solches Szenario kann das LDAP-Modul in (CMK) stark ausbremsen.
+
+Sind Sie jedoch auf diese Option angewiesen, so wird hier der komplette Pfad
+zu der Gruppe eingetragen, nach der gefiltert werden soll:
+
+image::bilder/ldap_userfilter_03.png[]
+
+
+[#groupfilter]
+=== Gruppen definieren
+
+Falls Sie bei den Benutzern nach einer Gruppe filtern, richten Sie noch den
+Pfad zu der Gruppe ein, damit ein Abgleich stattfinden kann. Sie können
+hier in gleicher Weise vorgehen, wie bei den Benutzern: Wird eine Gruppe
+direkt angegeben, so kann unter [.guihints]#Search Scope# die Option
+[.guihints]#Search only the entry at the base DN# genommen werden. Ansonsten wird
+entweder in der OU direkt gesucht, oder die Units darunter werden ebenfalls einbezogen.
+
+Und auch hier ist es mithilfe der Option [.guihints]#Search Filter# möglich zu
+bestimmen, wie der Name der Gruppe in (CMK) festgelegt wird. Zusätzlich
+können Sie angeben, wie das Attribut heißt ({{Member Attribute}}),# in
+dem die Mitglieder der Gruppe hinterlegt sind. Standardmäßig verwendet
+(CMK) [.guihints]#member}}.# Unter OpenLDAP kann dies aber auch [.guihints]#uniqueMember}}# 
+sein. Ändern Sie die Option dann entsprechend ab.
+
+image::bilder/ldap_groupfilter_01.png[]
+
+
+[#config_test]
+=== Testen der Konfiguration
+
+Sie haben nun bereits die erste Einrichtung abgeschlossen und können zur
+Diagnose die Konfiguration speichern und testen:
+
+image::bilder/ldap_conn_test.png[]
+
+Sie müssen keine Gruppen angeben, um eine funktionierende Konfiguration zu
+erhalten. Sofern sich aber in der OU nur Benutzer für (CMK) befinden,
+ist es sinnvoll die Auswahl über eine oder mehrere Gruppen einzuschränken.
+
+
+===  Das Synchronisierungsintervall
+
+Als Letztes können Sie noch definieren, wie oft die Benutzer automatisch
+synchronisiert werden sollen. In einer Umgebung, in der sich selten etwas ändert,
+ist der Standardwert vielleicht etwas zu eng gewählt. Das Zeitfenster
+sollte allerdings auch nicht zu weit gesetzt werden, damit Änderungen
+auch zeitnah in (CMK) abgebildet werden können.
+
+image::bilder/ldap_sync.png[]
+
+Sie können die Synchronisation auch jederzeit manuell in [.guihints]#WATO => Users}}# 
+über den Button ICON[button_sync_users.png] anstoßen. Zusätzlich wird ein
+Benutzer auch bei Bedarf synchronisiert, wenn er versucht sich einzuloggen,
+aber noch nicht synchronisiert ist.
+
+
+== Automatische Zuordnung von Attributen
+
+[#contact_groups]
+=== Kontaktgruppen
+
+Es bringt leider nichts alle Benutzer automatisch anzulegen, wenn man
+diese danach manuell den Kontaktgruppen zuordnen muss. (CMK) bietet die
+Möglichkeit, die Gruppen des LDAP-Servers zu nutzen, um eine Zuordnung
+zu den Kontaktgruppen zu ermöglichen. Aktivieren Sie dafür die Option
+[.guihints]#Attribute Sync Plugins => ContactgroupMembership}}:# 
+
+image::bilder/ldap_attribute_contact.png[]
+
+Damit eine Zuordnung klappt, muss der Name (cn) der Gruppe auf dem
+LDAP-Server identisch mit dem in (CMK) sein, das heißt, die Kontaktgruppe
+_oracle_admins_ wird nur korrekt einem Benutzer zugeordnet, wenn dieser
+auch im LDAP in der Gruppe _oracle_admins_ ist. Ist er stattdessen
+in der Gruppe _oracle-admins_ oder _ORACLE_admins_, so wird die
+Zuordnung nicht funktionieren. Achten Sie also auf die korrekte Schreibweise,
+falls es an dieser Stelle zu Problemen kommt.
+
+[#nested_groups]
+==== Nested Groups
+
+(CMK) bietet -- im Moment nur für Active Directory -- die Möglichkeit,
+auch vererbte Gruppen zu nutzen. Aktivieren Sie diese Option, wenn z.B. Ihr
+Benutzer in der Gruppe _oracle_admins_ ist und diese Gruppe wiederum
+Mitglied in _cmk-user_ .
+
+==== Gruppen aus anderen Verbindungen
+
+Wenn in (CMK) mehrere LDAP-Verbindungen eingerichtet wurden, können
+Sie auch Gruppen aus anderen Quellen benutzen, um eine Zuordnung zu
+ermöglichen. Das kann sinnvoll sein, wenn Sie eine allgemeine Verbindung
+konfiguriert haben und in den anderen nur auf bestimmte Gruppen filtern.
+
+=== Rollen
+
+Auch die Rollen sind in einer ähnlichen Weise automatisch zuordenbar,
+und die Funktion [ldap#nested_groups|Nested Groups] kann hier ebenfalls
+genutzt werden. Für jede Rolle können eine oder mehrere Gruppen
+definiert werden. Wählen Sie dafür die Rolle aus, zu der Sie eine
+Verknüpfung einrichten wollen und geben Sie den vollständigen Pfad zu
+der Gruppe an. Standardmäßig wird in den Gruppen gesucht, welche vom
+[ldap#groupfilter|Gruppenfilter] gefunden wurden. Sie können aber auch andere
+Verbindungen und die darüber gefundenen Gruppen nutzen.
+Wählen Sie dafür in dem Dropdown-Menü die entsprechende Verbindung aus.
+
+image::bilder/ldap_roles.png[]
+
+Alle Benutzer aus der angegebenen Gruppe werden nun der
+Rolle [.guihints]#Administrator# zugeordnet, sofern Sie durch den
+[ldap#user_filter|Benutzerfilter] auch synchronisiert werden. Wie Sie in
+dem Screenshot sehen können, können Sie auch selbst konfigurierte Rollen
+auswählen und mit Gruppen aus dem LDAP verknüpfen.
+
+
+[#other_attr]
+=== Weitere Attribute
+
+Für die Synchronisation von weiteren Benutzerinformationen braucht es in der
+Regel nur die die Aktivierung des jeweiligen Plugins unter [.guihints]#Attribute Sync Plugins}}# 
+und eventuell der Angabe des Attributs, welches die Information
+bereitstellt. Nachfolgend eine Tabelle der Plugins, genutzen Attributen
+(wenn nicht manuell gesetzt) und Kurzbeschreibungen:
+
+[cols=35,55, options="header"]
+|===
+
+
+|Plugin
+|Attribut
+|Beschreibung
+
+
+|{{Alias}}
+|cn
+|Normalerweise der Vor- und Nachname des Benutzers
+
+
+|{{Authentication Expiration}}
+|pwdlastset
+|Wann ein Benutzer ausgeloggt oder gesperrt wird
+
+
+|{{Email address}}
+|mail
+|Die Email Adresse des Benutzers
+
+
+|{{Pager}}
+|mobile
+|Eine hinterlegte Telefon-/Pagernummer
+
+
+|{{Disable Notifications}}
+|start_url
+|Deaktiviert *alle* Benachrichtungen an den Benutzer
+
+
+|{{Start-URL to display in main frame}}
+|start_url
+|Welche View im rechten Frame angezeigt werden soll
+
+
+|{{Visibility of Hosts/Services}}
+|start_url
+|Nur Hosts/Services anzeigen, für die man Kontakt ist
+
+|===
+
+
+[#distr_wato]
+== LDAP in verteilten Umgebungen
+
+Bei der Einrichtung einer [distributed_monitoring|verteilten Umgebung] mit einer
+[distributed_monitoring#distr_wato|zentralen Konfiguration] können
+Sie bestimmen, ob und welche LDAP-Verbindungen von der Slave Site aus
+synchronisiert werden sollen. Wenn Sie nichts ändern, wird der Slave alle
+Benutzer aus den konfigurierten Verbindungen selbst synchronisieren. Auf diese
+Weise werden Änderungen automatisch auf jeder Site innerhalb des definierten
+Intervalls abgebildet und müssen nicht erst vom Master zum Slave kopiert
+werden. Sie können die Synchronisation aber auch auf bestimmte Verbindungen
+einschränken oder ganz abschalten. In letzterem Fall werden die Benutzer
+auf dem Master aus den LDAP-Verbindungen abgerufen und bei einem
+[.guihints]#Activate Changes# auf die Slave Sites kopiert.
+
+Sie können die Einstellungen in [.guihints]#WATO => Distributed Monitoring# bei den
+Eigenschaften einer Verbindung unter [.guihints]#Configuration Replication (Distributed WATO)}}# 
+konfigurieren. Hier ein Beispiel, bei dem die oben eingerichtete
+Verbindung ausgewählt wird.:
+
+image::bilder/ldap_distributed.png[]
+
+Bis einschließlich Version VERSION[1.2.8] galt die zuletzt
+beschriebene Option (Synchronisation nur auf dem Master) als das
+Standardverhalten. Es konnte unter
+[.guihints]#WATO => Global Settings => UserManagement => AutomaticUser Synchronization# geändert werden, aber
+eine Einschränkung auf bestimmte LDAP-Verbindungen war hier noch nicht
+möglich. Wenn Sie diese Einstellung verändert und ein Update auf die Version
+VERSION[1.4.0] durchgeführt haben, werden sie an
+dem neuen Ort übernommen.
+
+
+[#ssl]
+== LDAP mit SSL absichern
+
+Um die LDAP-Verbindung mit SSL abzusichern, aktivieren Sie lediglich in
+den Verbindungsdaten das Häkchen [.guihints]#Use SSL# und passen noch
+den [.guihints]#TCP Port# an (bei LDAP über SSL üblicherweise `636`).
+Sofern der oder die LDAP-Server ein Zertifikat nutzen,
+welches von einer vertrauenswürdigen Zertifizierungstelle signiert wurde,
+ist damit bereits alles Nötige getan, um eine verschlüsselte
+Verbindung aufzubauen.
+
+image::bilder/ldap_ssl.png[]
+
+Wenn Sie ein selbstsigniertes Zertifikat nutzen, wird der Verbindungsaufbau
+nur dann funktionieren, wenn Sie dieses noch in Ihren Zertifikatsspeicher
+importieren. Erst dann wird es als vertrauenswürdig eingestuft und die
+Verbindung aufgebaut.
+
+Unter RHEL/CentOS importieren Sie das Zertifikat `ldapserver01.pem`
+folgendermaßen:
+
+[source,bash]
+----
+RP:certutil -A -d /etc/openldap/certs -n "My LDAP Server Readable Name" -t CT,, -a -i /path/to/cert/file/ldapserver01.pem
+RP:systemctl restart httpd
+----
+
+Unter Debian/Ubuntu kopieren Sie das Zertifikat in das angegebene Verzeichnis
+und erneuern dann Ihren Zertifikatsspeicher. Falls das Zielverzeichnis noch
+nicht existiert, erstellen Sie es:
+
+[source,bash]
+----
+RP:mv /path/to/cert/file/ldapserver01.crt /usr/share/ca-certificates/ldapserver01.crt
+RP:update-ca-certificates
+Updating certificates in /etc/ssl/certs... 1 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d....
+done.
+Importing into legacy system store:
+I already trust 174, your new list has 175
+Certificate added: C=DE, S=bavaria, L=munich, O=check_mk, OU=monitoring, CN=myremoteldap.mycompany.org, E=check_mk
+1 new root certificates were added to your trust store.
+Import process completed.
+RP:systemctl restart apache2
+----
+
+Achten Sie darauf, dass das Zertifikat bei RHEL/CentOS auf `pem` und
+bei Debian/Ubuntu auf `crt` endet. Der Neustart des Webservers kann
+auf älteren Systemen noch über das Kommando `service` laufen. Ändern
+Sie das dann entsprechend ab.
+
+
+== Fehlerdiagnose
+
+Eine Fehlerdiagnose ist in der [ldap#config_test|Konfigurationseinrichtung]
+direkt implementiert. Auch nach der Einrichtung kann hier überprüft werden,
+woher ein Problem kommen könnte. Zusätzlich werden Fehlermeldungen auch
+in das `web.log` geschrieben. Diese Meldungen können ebenfalls auf
+die Fehlerquelle hinweisen:
+
+.~/var/log/web.log
+
+----2017-09-19 16:03:17,155 [40] [cmk.web 31797] /ldaptest/check_mk/wato.py Internal error: Traceback (most recent call last):
+  File "/omd/sites/ldaptest/share/check_mk/web/htdocs/wato.py", line 6563, in mode_edit_ldap_connection
+    state, msg = test_func(connection, address)
+  File "/omd/sites/ldaptest/share/check_mk/web/htdocs/wato.py", line 6506, in test_group_count
+    connection.connect(enforce_new = True, enforce_server = address)
+  File "/omd/sites/ldaptest/share/check_mk/web/plugins/userdb/ldap.py", line 274, in connect
+    ('\n'.join(errors)))
+MKLDAPException: LDAP connection failed:
+ldap://myldap.mycompany.org: Can't contact LDAP server
+----
+
+
+== Dateien und Verzeichnisse
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|`etc/check_mk/multisite.d/wato/user_connections.mk`
+|In dieser Datei werden alle über WATO konfigurierten LDAP Verbindungen festgehalten.
+
+
+|`etc/check_mk/multisite.d/wato/users.mk`
+|Alle Benutzer werden hier definiert.
+
+
+|`var/log/web.log`
+|Die Logdatei, in der Verbindungsfehler aufgezeichnet werden. Es ist damit eine der ersten Quellen bei Problemen.
+
+|===

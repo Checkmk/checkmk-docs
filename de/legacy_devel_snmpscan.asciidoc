@@ -1,0 +1,190 @@
+= SNMP auto detection
+MD:Checkmk supports automatic detection of services on SNMP devices, which works much the same as for the agent based checks.
+:revdate: outdated
+[.seealso][#writing_checks] [#snmp]== The SNMP scan function
+Checkmk supports automatic detection of services on SNMP devices. From the
+point of view of the user this works much the same as for the agent based
+checks. After adding the host tag `snmp`, a simple
+
+[source,bash]
+----
+RP:cmk -I HOSTNAME
+----
+
+does the job. The main difference lies in the implementation. Where the
+TCP based agent alwas sends its complete data set, with SNMP this is
+not possible. In theory we _could_ do an SNMP walk over the complete
+MIB of the device. In practice this can take up to several hours and thus
+is no option.
+
+This problem is resolved with a trick: the _SNMP scan function_. Each
+SNMP based check can define such a function. The task of the scan function
+is to fetch _one_ or at least only a few single OIDs in order to
+determine, if an inventory of that check type would be promising on that device.
+
+So when the user does a `cmk -I` on an SNMP host, the first step
+is to run then scan functions of _all_ checks. Those checks whose
+scan functions return `True` are then selected for inventory.
+
+If the user explicitely specifies check types - as in `cmk --checks=snmp_info`,
+then the scan function is skipped and the inventory forced.
+
+What if an SNMP check has no scan function? Then inventory will try this
+check always. While this is convenient it is also slow. The more checks without
+scan function - the slower the inventory will work.
+
+== How to write a scan function
+The scan function is a simple Python function. It gets one parameter: a function
+for retrieving a single OID. This parameter is usually called `oid` and
+can be used as function. The `oid` function can be called with a *numeric* OID
+as an argument and returns the value of that OID as string - or `None` if
+that OID cannot be retrieved.
+
+The scan function shall return `True` if an inventory on that device
+shall be tried and `False` otherwise.
+
+The scan function must then be declared in the array
+`check_info`.  As an example here is the scan function of
+the check `steelhead_status`: It uses the OID `sysObjectID.0`,
+which contains a hint to a vendor specific OID:
+
+.steelhead_status
+
+----check_info["steelhead_status"] = {
+    'check_function':          check_steelhead_status,
+    'inventory_function':      inventory_steelhead_status,
+    'service_description':     'Status',
+    'snmp_info':               ('.1.3.6.1.4.1.17163.1.1.2', [2, 3]),
+    'snmp_scan_function':      \
+     lambda oid: oid(".1.3.6.1.2.1.1.2.0").startswith(".1.3.6.1.4.1.17163."),
+----
+
+Do you wonder what `lambda` means? It creates a temporary function without
+a name. The following code does exactly the same, but give the function the
+name `steelhead_scan_function`:
+
+.steelhead_status
+
+----def steelhead_scan_function(oid):
+    return oid(".1.3.6.1.2.1.1.2.0").startswith(".1.3.6.1.4.1.17163.")
+
+check_info["steelhead_status"] = {
+    'check_function':          check_steelhead_status,
+    'inventory_function':      inventory_steelhead_status,
+    'service_description':     'Status',
+    'snmp_info':               ('.1.3.6.1.4.1.17163.1.1.2', [2, 3]),
+    'snmp_scan_function':      steelhead_scan_function,
+----
+
+The `lambda` way is the preferred one in Checkmk, since it is
+more terse and you do not need to think of a name for your function.
+
+In many cases a look into the system description is sufficient. Here
+is the scan function of `h3c_lanswitch_cpu`:
+
+.h3c_lanswitch_cpu
+
+----# just a rough match that will handle most devices.
+    "snmp_scan_function" : lambda oid: oid(".1.3.6.1.2.1.1.1.0").lower().startswith('3com s')
+----
+
+Here is a table of OIDs frequently used by check functions:
+
+[cols=, ]
+|===
+<th>OID</th><th>name</th><th>description</th><td class=tt>.1.3.6.1.2.1.1.1.0</td><td class=tt>sysDescr</td><td>Description of the system, operating system, vendors name etc.</td><td class=tt>.1.3.6.1.2.1.1.2.0</td><td class=tt>sysObjectID.0</td><td>Hint to vendor specific MIB</td>|===
+
+=== Checking for the existence of OIDs
+Sometimes you do not want to check the value of a SNMP variable but just check
+whether it exists on that device. The `oid` function returns `None`
+for non-existing OIDs. Here is an example from `printer_pages`:
+
+.printer_pages
+
+----    "snmp_scan_function" : lambda oid: oid(".1.3.6.1.2.1.43.10.2.1.4.1.1") != None
+----
+
+== Disabling the SNMP scan
+A check can decide to disable the SNMP scan completely. That way it
+will be invisible for `cmk -I` but still available as manual check
+or for `cmk --checks=foobar -I`. This is simply done by the
+scan function returning `False` in any case. An example is
+`snmp_uptime`:
+
+.snmp_uptime
+
+----# Do not use this check per default
+    "snmp_scan_function" : lambda oid: False
+----
+
+== Useful Python functions
+The following Python functions can be useful in scan functions:
+[cols=, ]
+|===
+<th>Function</th><th>Description</th><th>Example</th><td class=tt>S.startswith(T)</td><td>string S starts with the string T</td><td class=tt>".1.3.6.1".startswith(".1.3") -> True</td><td class=tt>S.endswith(T)</td><td>string S ends with the string T</td><td class=tt>".1.3.6.1".endswith(".6.1") -> True</td><td class=tt>S.lower()</td><td>S converted to lower case</td><td class=tt>"3COM Super".lower() -> "3com super"</td><td class=tt>T in S</td><td>The string T is contained in S</td><td class=tt>"COM" in "3COM Super" -> True</td><td class=tt>T in S.lower()</td><td>The same, but ignoring case</td><td class=tt>"com" in "3COM Super".lower() -> True</td>|===
+
+== Making the SNMP scan fast and precise
+We already mentioned that the scan function is optional. SNMP check without
+scan function will always be executed during inventory. The problem here is:
+speed. An inventory will surely need to fetch several trees via an SNMP walk.
+This takes time - even if the device does not provide the queried data.
+So please make sure that your check _does_ provide a scan function.
+
+Also wisely choose the OIDs you query. Keep in mind that on each `cmk -I`
+_every_ scan function is executed and all OIDs of those functions will
+be queried. This must be done in separated calls to `snmpget`. The good
+news: OIDs queried by several scan functions will be cached by Checkmk and
+only retrieved once.
+
+From that follows that you should always try to base your scan functions
+on standard OIDs like `sysDescr` (OID: `.1.3.6.1.2.1.1.1.0`), which
+are already used by many existing check functions. If the `sysDescr` is
+not precise enough, you can fetch a second OID *after* having checks the
+first one. Let's look at the following example:
+
+.cisco_temp_perf
+
+----    "snmp_scan_function" : lambda oid: "cisco" in oid(".1.3.6.1.2.1.1.1.0").lower() and \
+                oid(".1.3.6.1.4.1.9.9.13.1.3.1.3.1") != None
+----
+
+This scan function first retrieves `.1.3.6.1.2.1.1.1.0` (`sysDescr`). If
+this contains the word `cisco` (ignoring case). Only if that is the case
+it fetches the vendor-specific OID `.1.3.6.1.4.1.9.9.13.1.3.1.3.1`. So this
+additional check will only be fetched on CISCO devices - not an all.
+
+Please also make sure - on the other hand - that your scan function is not
+_too_ tight. It must never return `False` on devices where the
+check would indeed be possible.
+
+== <b class=new>1.1.11i1* Missing or partially unknown OIDs
+There are a few cases where the OID we want to check for is not fixed. One example
+can be found in `if64`. The problem is, that in order to check
+for the 64 bit counters needed for `if64`, the scan function wants
+to check the counter for the first interface. The first counter does not always
+have an index of 1. `1`.
+
+A check for `oid(".1.3.6.1.2.1.31.1.1.1.6.1")` will work in
+most cases but not in _all_. As of version <b class=new>1.1.11i1*
+it is possible to attach a `.*` to the OID. This will make
+the `oid()` function return the first OID beginning such. Look
+at the scan function of `if64`:
+
+.checks/if64
+
+----     "snmp_scan_function" : lambda oid: oid(".1.3.6.1.2.1.31.1.1.1.6<b class=hilite>.**") != None
+----
+
+This will check for the first OID beginning with `.1.3.6.1.2.1.31.1.1.1.6`.
+
+The asterisk can also replace more than one OID component. The following _fictive_
+scan function would trigger on all SNMP devices with the vendor id `232`:
+
+.
+
+----    "snmp_scan_function" : lambda oid: oid(".1.3.6.1.4.1.232.*") != None
+----
+
+Do not forget - however - that the preferred way is to use the standard OIDs
+`sysDescr` and `sysObjectID` in any possible case - at least
+as a precondition.

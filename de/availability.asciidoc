@@ -1,0 +1,878 @@
+= Verfügbarkeit (Availability)
+:revdate: 2017-03-23
+[.seealso][#sla] [#reporting] [#timeperiods]MT:Verfügbarkeiten auswerten und beurteilen
+MD:Checkmk berechnet nach Bedarf die Verfügbarkeit eines Objekts, seitdem es ihm bekannt ist. Erfahren Sie hier alles darüber, wie sie Auswertungen benutzen.
+
+== Grundprinzip
+
+=== Der Blick in die Vergangenheit
+
+image::bilder/icon_availability.png[align=float,left]
+
+Da (CMK) alle Hosts und Services in regelmäßigen Intervallen
+kontinuierlich überwacht, schafft es damit eine hervorragende Grundlage
+für spätere Auswertungen über deren Verfügbarkeit. Und nicht nur das --
+Sie können berechnen lassen, welchen Anteil der Zeit ein Objekt in einem
+bestimmten Zustand war, wie oft dieser Zustand aufgetreten ist, wie lange
+er am längsten angehalten hat und vieles mehr.
+
+Jeder Berechnung liegen dabei eine _Auswahl von Objekten_ und
+ein bestimmter _Zeitraum der Vergangenheit_ zugrunde. (CMK)
+rekonstruiert dann für diesen Zeitraum den Verlauf des Zustands für jedes
+der ausgewählten Objekte.  Pro Zustand werden die Zeiten aufsummiert und
+in einer Tabelle dargestellt.  Das Ergebnis kann dann z.B. sein, dass der
+Zustand eines bestimmten Services zu 99.95% (OK) war und und zu 0.005% (WARN).
+
+Dabei rechnet (CMK) auch Dinge wie Wartungszeiten, Servicezeiten, nicht
+überwachte Zeiträume und andere Besonderheiten korrekt ab, erlaubt das
+Zusammenfassen von Zuständen, das Ignorieren von „kurzen Aussetzern“ und
+noch etliche weitere Anpassungsmöglichkeiten. Auch eine Verfügbarkeit von
+[availability#bi|BI-Aggregationen] ist möglich.
+
+
+[#states]
+=== Mögliche Zustände
+
+Durch die Einbeziehung von Wartungszeiten und ähnlichen Sonderzuständen gibt
+es theoretisch eine sehr große Zahl von möglichen Zustandskombinationen,
+wie z.B. (CRIT) + In Wartungszeit + In der Servicezeit + Flapping. Da die
+meisten dieser Kombinationen nicht sehr nützlich sind, reduziert (CMK)
+sie auf eine kleine Zahl und geht dabei nach einem Prinzip von Prioritäten
+vor.  Da in obigem Beispiel der Service in einer Wartungszeit war, gilt als
+Zustand einfach [.guihints]#in scheduled downtime# und der eigentliche Status wird
+ignoriert. Das reduziert die Anzahl der möglichen Zustände auf die Folgenden:
+
+image::bilder/avail_states.png[]
+
+Diese Grafik zeigt auch die Reihenfolge, nach der Zustände priorisiert
+werden. Später werden wir zeigen, wie Sie manche der Zustände ignorieren
+oder zusammenfassen können.  Hier die Zustände noch einmal im Detail:
+
+[cols=30,13, options="header"]
+|===
+
+
+|Zustand
+|Abkürzung
+|Bedeutung
+
+
+|{{unmonitored}}
+|N/A
+|Zeiträume, während derer das Objekt nicht überwacht wurde.
+Dafür gibt es zwei mögliche
+Ursachen: Das Objekt war nicht Teil der Monitoringkonfiguration
+oder, das Monitoring selbst
+ist für diesen Zeitraum nicht gelaufen.
+
+
+|{{out of service period}}
+|
+|Das Objekt war außerhalb seiner
+ICON[icon_outof_serviceperiod.png] Serviceperiode -- also in einem
+Zeitraum, in dem die Verfügbarkeit „egal“ war. Mehr zu den Serviceperioden
+erfahren Sie [availability#serviceperiod|weiter unten].
+
+
+|{{in scheduled downtime}}
+|{{Downtime}}
+|Das Objekt war innerhalb einer geplanten ICON[icon_downtime.png]
+[basics_downtimes|Wartungszeit]. Bei
+Services wird dieser Zustand auch dann angenommen, wenn Ihr Host in einer
+ICON[icon_hostdowntime.png] Wartung ist.
+
+
+|{{on down host}}
+|{{H.Down}}
+|Diesen Zustand gibt es nur bei Services -- und zwar wenn der Host
+des Services (DOWN) ist. Eine Überwachung des Services zu so einem
+Zeitpunkt ist nicht möglich. Bei den meisten Services ist dies gleichbedeutend
+damit, dass der Service (CRIT) ist -- aber nicht bei allen! Zum Beispiel ist der
+Zustand eines Dateisystems ({{Filesystem}}-Check) sicher unabhängig davon,
+ob der Host erreichbar ist.
+
+
+|{{flapping}}
+|
+|Phasen, in denen Zustand ICON[icon_flapping.png]
+[monitoring_basics#flapping|unstetig] ist -- also
+viele Zustandswechsel in kurzer Zeit erfahren hat.
+
+
+|(UP) (DOWN) (UNREACH)
+|
+|Monitoringzustand von Hosts.
+
+
+|(OK) (WARN) (CRIT) (UNKNOWN)
+|
+|Monitoringzustand von Services und BI-Aggregaten.
+
+|===
+
+
+== Availability aufrufen
+
+=== Von der Ansicht zur Auswertung
+
+Das Erstellen einer Verfügbarkeitsauswertung ist sehr einfach. Rufen
+Sie zunächst eine beliebige [views|Ansicht] von Hosts, Services
+oder [bi|BI-Aggregaten] auf. Dort finden Sie oben den Knopf
+ICON[context_button_availability.png], welcher Sie direkt zur Berechnung
+der Verfügbarkeit der ausgewählten Objekte bringt. Diese wird tabellarisch
+angezeigt:
+
+image::bilder/avail_screenshot.png[]
+
+Die Tabelle zeigt die gleichen Objekte, die auch in der vorherigen Ansicht
+sichtbar waren. In jeder Spalte wird dargestellt, welchen Anteil des
+Abfragezeitraums das Objekt im besagten Zustand war. Die Darstellung ist
+per Default in Prozent mit zwei Kommastellen, aber das können Sie leicht
+[availability#format_time_range|umstellen].
+
+Den Anfragezeitraum können Sie in der mit dem Symbol
+ICON[avail_button_options.png] aufrufbaren Option
+[availability#option_timerange|Time range] ändern. Dazu weiter unten mehr &nbsp;&#8230;
+
+Sie haben die Möglichkeit, die Ansicht als PDF zu exportieren (nur (CEE)).
+Auch ein Download der Daten in CSV-Format ist möglich [.guihints]#(Export as CSV)}}.# 
+Das sieht dann für obiges Beispiel so aus:
+
+.Check_MK-Availability-2017-03-14_11-54-16.csv
+
+----Host;Service;OK;WARN;CRIT;UNKNOWN;Flapping;H.Down;Downtime;N/A
+Lastrechner;Filesystem /;83.52%;16.30%;0.16%;0.00%;0.00%;0.01%;0.00%;0.00%
+Lastrechner;Filesystem /bauwelt;95.15%;0.87%;3.97%;0.00%;0.00%;0.01%;0.00%;0.00%
+Lastrechner;Filesystem /chroots;99.44%;0.18%;0.37%;0.00%;0.00%;0.01%;0.00%;0.00%
+Lastrechner;Filesystem /boot;99.99%;0.00%;0.00%;0.00%;0.00%;0.01%;0.00%;0.00%
+Lastrechner;Filesystem /opt/omd;95.61%;4.15%;0.22%;0.00%;0.00%;0.01%;0.00%;0.00%
+Summary;;94.74%;4.30%;0.94%;0.00%;0.00%;0.01%;0.00%;0.00%
+----
+
+Mithilfe eines [wato_user#automation|Automationsusers], der sich über die URL
+authentifizieren kann, können Sie so die Daten auch skriptgesteuert abrufen
+(z.B. mit `wget` oder `curl`) und automatisiert verarbeiten.
+
+
+[#timeline]
+=== Zeitleistendarstellung
+
+image::bilder/button_timeline.png[align=float,left]
+
+In jeder Zeile finden Sie das Symbol ICON[button_timeline.png]. Dies bringt
+Sie zu eine Zeitleistendarstellung des entsprechenden Objekts, in der genau
+aufgeschlüsselt ist, welche Zustandswechsel es im Anfragezeitraum gab
+(hier gekürzt):
+
+image::bilder/avail_timeline.png[]
+
+Dazu einige Hinweise:
+
+* Fahren Sie mit der Maus in der Zeitleistengrafik über einen Abschnitt, so wird dieser in der Tabellendarstellung hervorgehoben.
+* Auch in der Zeitleiste können Sie mit ICON[avail_button_options.png] die [availability#options|Optionen] für die Darstellung und Auswertung anpassen.
+* Mit dem Symbol ICON[button_annotation.png] erstellen Sie eine Anmerkung [.guihints]#(Annotation)# zu dem gewählten Abschnitt. Hier können Sie auch nachträglich Wartungszeiten angeben (mehr dazu gleich im nächsten Abschnitt).
+* Bei der Verfügbarkeit von BI-Aggregaten können Sie mit dem ICON[button_timewarp.png] Zauberstabsymbol eine Zeitreise zu dem Zustand des Aggregats im besagten Abschnitt machen. Mehr dazu [availability#bi|weiter unten].
+* Mit dem Knopf ICON[context_button_timeline.png] in der Hauptansicht können Sie die Zeitleisten von allen gewählten Objekten in einer einzigen langen Seite ansehen.
+
+
+[#annotations]
+=== Anmerkungen und nachträgliche Wartungszeiten
+
+Wie gerade erwähnt, bietet die Zeitleiste über das Symbol
+ICON[button_annotation.png] die Möglichkeit, für einen Zeitabschnitt eine
+Anmerkung zu hinterlegen.  Dahinter finden Sie ein vorausgefülltes Formular,
+in dem Sie einen Kommentar eingeben können:
+
+image::bilder/avail_anno_1.png[]
+
+Dabei können Sie den Zeitraum auch anders festlegen und erweitern. Das
+ist z.B. praktisch, wenn Sie einen größeren Abschnitt anotieren möchten,
+der mehrere Statuswechsel erlebt hat.  Wenn Sie die Angabe eines Services
+weglassen, erzeugen Sie eine Anmerkung für einen Host. Diese bezieht sich
+automatisch auch auf alle Services des Hosts.
+
+In jeder Verfügbarkeitsansicht werden automatisch alle Anmerkungen sichtbar,
+die zum Zeitraum und den Objekten passen, die dargestellt werden.
+
+Ab Version VERSION[1.4.0] haben die Annotationen noch eine weitere
+Funktion. Sie können damit nachträglich Wartungszeiten eintragen oder
+umgekehrt auch entfernen. Die Verfügbarkeitsberechnung berücksichtigt
+diese Korrekturen wie ganz normale Wartungszeiten. Es gibt für so etwas
+mindestens zwei legitime Gründe:
+
+* Während des Betriebs kann es passieren, dass geplante Wartungszeiten nicht korrekt eingetragen wurden. Das sieht für die Verfügbarkeit natürlich schlecht aus. Durch nachträgliches Eintragen dieser Zeiten können Sie den Bericht richtigstellen.
+* Es gibt Benutzer, die bei einem spontanen Ausfall Wartungszeiten missbrauchen um eine Alarmierung abzustellen. Das verfälscht später die Auswertungen. Durch nachträgliches _Entfernen_ der Wartungszeit können Sie das korrigieren.
+
+Zum Umklassifizieren von Wartungszeiten wählen Sie einfach die Checkbox
+[.guihints]#Reclassify downtime of this period}}:# 
+
+image::bilder/avail_anno_2.png[]
+
+
+=== Monitoringhistorie anzeigen
+
+image::bilder/button_history.png[align=float,left]
+
+In der Verfügbarkeitstabelle finden Sie neben dem Symbol für die Zeitleiste
+noch ein weiteres Symbol: ICON[button_history.png]. Dieses bringt Sie zur
+[views|Ansicht] der Monitoringhistorie mit einem vorausgefüllten Filter
+für das entsprechende Objekt und den Anfragezeitraum. Dort sehen Sie nicht
+nur die Ereignisse, auf denen die Verfügbarkeitsberechnung basiert (die
+Zustandswechsel), sondern auch die zugehörigen Alarmierungen und ähnliche
+Ereignisse:
+
+image::bilder/avail_history.jpg[]
+
+Was Sie hier nicht sehen, ist der Zustand des Objekts am _Anfang_ des
+Abfragezeitraums. Die Berechnung der Verfügbarkeit geht dazu noch weiter
+in die Vergangenheit zurück, um den Anfangszustand zuverlässig zu ermitteln.
+
+
+[#options]
+== Auswertungen anpassen
+
+image::bilder/avail_button_options.png[align=float,left]
+
+Sowohl die Berechnung als auch die Darstellung der Verfügbarkeit können
+Sie durch zahlreiche Optionen beeinflussen. Sie finden diese Optionen hinter
+dem Symbol ICON[avail_button_options.png], welches Sie auf der Seite links
+oben finden.
+
+Nachdem Sie die Optionen geändert und mit ICON[button_apply.png] bestätigt
+haben, wird die Verfügbarkeit neu berechnet und dargestellt. Alle geänderten
+Optionen werden für Ihr Benutzerprofil als Default hinterlegt, so dass Sie
+beim nächsten Aufruf wieder die gleichen Einstellungen vorfinden.
+
+Gleichzeitig sind die Optionen in der URL der aktuellen Seite kodiert.
+Wenn Sie also jetzt ein _Lesezeichen_ auf die Seite speichern (z.B.
+mit dem praktischen [.guihints]#Bookmarks}}-Element),# dann sind die Optionen Teil von
+diesem und werden bei einem späteren Klick darauf genau so wieder hergesellt.
+
+
+[#option_timerange]
+=== Auswahl des Zeitbereichs
+
+image::bilder/avoption_time_range2.png[align=float,left]
+
+Die wichtigste und erste Option jeder Verfügbar&shy;keits&shy;auswertung ist
+natürlich der Zeitbereich, der betrachtet wird. Bei [.guihints]#Date range# können
+Sie einen exakten Zeitbereich mit Anfangs- und Enddatum festlegen. Dabei
+ist der letzte Tag bis 24:00 Uhr mit eingeschlossen.<br><br>
+
+image::bilder/avoption_time_range.png[align=float,left]
+
+Viel praktischer sind die relativen Zeitangaben wie z.B. [.guihints]#Last week}}.# Welcher
+Zeitraum genau angezeigt wird, hängt dabei (gewollt) vom Zeitpunkt ab,
+zu dem die Berechnung angestellt wird. Eine Woche geht hier übrigens immer
+von Montag 00:00 Uhr bis Sonntag 24:00 Uhr.<br><br><br><br>
+
+
+=== Optionen, die die Darstellung betreffen
+
+Viele Optionen betreffen die Art, wie die Daten präsentiert werden, andere
+wiederum beeinflussen die Berechnungsmethode. Zunächst ein Blick
+auf die Darstellung:
+
+
+==== Zeilen mit 100% Verfügbarkeit ausblenden
+
+image::bilder/avoption_only_outages.png[align=float,left]
+
+Die Option [.guihints]#Only show objects with outages# begrenzt die Darstellung auf
+solche Objekte, die überhaupt Ausfälle hatten (also Zeiten, zu denen der
+Zustand nicht (OK) bzw. (UP) war). Das ist nützlich, wenn Sie bei einer
+großen Zahl von Services nur die paar wenigen rauspicken wollen, bei denen
+es ein Problem ab.<br>
+
+
+==== Beschriftungsoptionen
+
+image::bilder/avoption_labelling.png[align=float,left]
+
+Die [.guihints]#Labelling options# erlauben es, verschiedene Beschriftungsfelder
+ein- oder umgekehrt auszu&shy;schalten. Manche der Optionen sind vor allem
+für das [reporting|Reporting] interessant. Zum Beispiel ist bei einem Bericht,
+der sowieso nur über einen Host geht, die Spalte mit dem Hostnamen
+eventuell überflüssig.
+
+Die alternativen Anzeigenamen [.guihints]#(alternative displaynames)# von Services
+können Sie über eine [wato_rules|Regel] festlegen und damit z.B. wichtigen
+Services einen für den Leser Ihres Berichts aussagekräftigen Namen geben.
+
+
+[#thresholds]
+==== SLAs mit Schwellwerten farbig darstellen
+
+image::bilder/avoption_visual_levels.png[align=float,left]
+
+Mit den [.guihints]#Visual levels# können Sie Objekte optisch hervorheben, die
+eine bestimmte Verfügbarkeit im Anfragezeitraum unterschritten haben.
+Das betrifft ausschließlich die Spalte für den (OK)-Zustand. Diese ist
+normalerweise immer grün eingefärbt. Bei Unterschreitung der eingestellten
+Schwellen ändert sich die Farbe dieser Zelle dann auf Gelb bzw. Rot.
+Man kann das als sehr einfache SLA-Auswertung bezeichnen.
+
+
+==== Anzahl und Dauer der einzelnen Ausfälle anzeigen
+
+image::bilder/avoption_outage_statistics.png[align=float,left]
+
+Die Option [.guihints]#Outage statistics# liefert zusätzliche Informationsspalten
+in der Verfügbarkeitstabelle. In der Abbilung wurden die Informationen
+[.guihints]#max. duration# und [.guihints]#count# für die Statusspalte [.guihints]#Crit/Down}}# 
+aktiviert. Das bedeutet, dass Sie zu Ausfällen vom Status (CRIT)/(DOWN)
+jeweils die Anzahl der Vorfälle sowie die Dauer des längesten Vorfalls
+sehen.
+
+image::bilder/avoption_count_max.png[align=left,width=300]
+
+In der Tabelle entstehen so zusätzliche Spalten.
+<br><br><br><br><br><br><br><br><br><br>
+
+
+[#format_time_range]
+==== Darstellung von Zeitangaben
+
+image::bilder/avoption_format_time.png[align=float,left]
+
+Nicht immer ist es sinnvoll, (Nicht-)Verfügbarkeiten in Prozent anzugeben.
+Die Option [.guihints]#Format time ranges# erlaubt das Umstellen auf eine Darstellung,
+in der Zeiträume in absoluten Zahlen gezeigt werden. Damit können Sie die
+Gesamtlänge der Ausfallszeiten auf die Minute genau sehen. Die Darstellung
+zeigt sogar Sekunden, aber bedenken Sie, dass das nur dann Sinn macht,
+wenn Sie die Überwachung auch im Sekundenraster durchführen und nicht wie
+üblich mit einem Check pro Minute.
+Auch die Genauigkeit der Angabe (Kommastellen in den Prozentwerten) können
+Sie hier bestimmen.
+
+image::bilder/avoption_format_timestamps.png[align=float,left]
+
+Die Formatierung von Zeitstempeln betrifft Angaben in der Zeitleiste
+[.guihints]#(Timeline)}}.#  Die Umstellung auf UNIX-Epoch (Sekunden seit dem 1.1.1970)
+erleichtert die Zuordnung von Zeitbereichen zu den entsprechenden Stellen
+in den Logdateien der Monitoringhistorie.
+
+
+==== Anpassen der Zusammenfassungszeile
+
+image::bilder/avoption_summary_line.png[align=float,left]
+
+Die Zusammenfassung in der letzten Zeile der Tabelle können Sie hiermit
+nicht nur ein- und ausschalten. Sie können sich auch zwischen Summe und
+Durchschnitt entscheiden. Bei Spalten, die Prozentwerte enthalten, wird
+auch bei der Einstellung [.guihints]#Summe# ein Durchschnitt angezeigt, da es wenig
+sinnvoll ist, Prozentwerte zu addieren.
+
+
+==== Kleine Zeitleiste einblenden
+
+image::bilder/avoption_timeline.png[align=float,left]
+
+Diese Option fügt eine Miniaturversion der [availability#timeline|Zeitleiste]
+direkt in die Ergebnistabelle ein. Sie entspricht dem grafischen Balken
+in der detaillierten Zeitleiste, ist aber kleiner und direkt in die Tabelle
+integriert. Außerdem ist sie maßstabsgetreu, damit Sie mehrere Objekte in
+der gleichen Tabelle vergleichen können.
+
+
+==== Gruppierung nach Host, Hostgruppe oder Servicegruppe
+
+image::bilder/avoption_group.png[align=float,left]
+
+Unabhängig von der Darstellung der Ansicht, von der Sie kommen, zeigt die
+Verfügbarkeit immer alle Objekte in einer gemeinsamen Tabelle. Sie können
+mit dieser Option eine Gruppierung nach Host, Hostgruppe oder Servicegruppe
+festlegen. Damit bekommen Sie auch pro Gruppe eine eigene [.guihints]#Summary}}-Zeile.# 
+
+Beachten Sie, dass bei einer Gruppierung nach Servicegruppe Services
+_mehrfach_ auftreten können. Das liegt daran, dass Services in mehreren
+Gruppen gleichzeitig enthalten sein können.
+
+
+==== Nur die Verfügbarkeit anzeigen
+
+image::bilder/avoption_availability.png[align=float,left]
+
+Die Option [.guihints]#Availability# sorgt dafür, dass als einzige Spalte
+diejenige für den Status (OK) bzw. (UP) ausgegeben wird und diese den
+Titel [.guihints]#Avail.# bekommt.  Damit wird ausschließlich die eigentliche
+Verfügbarkeit angezeigt. Sie können das mit den weiter unter
+gezeigten Möglichkeiten kombinieren, andere Zustände (z.B. (WARN)) auch dem OK-Zustand
+zuzurechnen und damit als verfügbar zu werten.
+
+
+=== Statusgruppierung
+
+Die in der Einleitung beschriebenen [availability#states|Zustände] können
+auf verschiedeneste Arten angepasst und verdichtet werden. Auf diese Weise
+werden flexibel sehr unterschiedliche Arten von Auswertungen erstellt. Dafür
+gibt es verschiedene Optionen.
+
+
+==== Behandlung von WARN, UNKNOWN und Host Down
+
+image::bilder/avoption_status_grouping.png[align=left,float]
+
+Die Option [.guihints]#Service status grouping# bietet die Möglichkeit, verschiedene
+„Zwischenzustände“ auf andere abzubilden. Ein häufiger Fall ist,
+dass man (WARN) zu (OK) hinzuschlägt (wie in der Abbildung zu sehen). Wenn
+Sie an der eigentlichen _Verfügbarkeit_ eines Service interessiert
+sind, kann dies durchaus sinnvoll sein. Denn (WARN) bedeutet ja meist,
+dass es noch kein wirkliches Problem gibt, dies aber bald der Fall sein
+_könnte._  So betrachtet muss dann (WARN) noch als verfügbar gelten.
+Bei Netzwerkdiensten wie einem HTTP-Server ist es sicherlich sinnvoll, Zeiten,
+in denen der Host (DOWN) ist, ebenso zu behandeln wie wenn der Service selbst
+(CRIT) ist.
+
+Die durch die Umgruppierung weggefallenen Zustände fehlen dann natürlich
+auch in der Ergebnistabelle, welche dann weniger Spalten hat.
+
+image::bilder/avoption_host_status_grouping.png[align=float,left]
+
+Die Option [.guihints]#Host status grouping# ist sehr ähnlich, betrifft aber
+Auswertungen der Verfügbarkeiten von Hosts. Der Status (UNREACH) bedeutet
+ja, dass ein Host aufgrund von Netzwerkproblemen nicht von (CMK)
+über&shy;wacht werden konnte. Sie können hier entscheiden, ob Sie das
+zum Zwecke der Verfügbarkeitsauswertung lieber als als (UP) oder (DOWN)
+werten möchten. Default ist, dass (UNREACH) als eigener Status gewertet wird.
+
+
+==== Behandlung von nicht überwachten Zeiträumen und Flapping
+
+image::bilder/avoption_status_classification.png[align=float,left]
+
+In der Option [.guihints]#Status classification# werden weitere Zusammenfassungen
+vorgenommen. Die Checkbox [.guihints]#Consider periods of flapping states# ist per
+Default an, womit Phasen häufiger Zustandswechsel einen eigenen Status bilden:
+ICON[icon_flapping.png] unstetig. Die Idee dahinter ist, dass man gut sagen
+kann, dass der betroffene Dienst während solcher Zeiten zwar immer wieder (OK)
+ist, aber durch die häufigen Ausfälle trotzdem nicht nutzbar. Deaktivieren
+Sie diese Option, so wird das Konzept „flapping“ komplett ignoriert und
+der jeweils eigentliche Status kommt wieder zum Vorschein. Und die Spalte
+[.guihints]#flapping# wird aus der Tabelle entfernt.
+
+Das Entfernen der Option [.guihints]#Consider times where the host is down# wirkt
+ähnlich. Sie schaltet das Konzept von [.guihints]#Host down# ab. Diese Option macht
+nur bei der Verfügbarkeit von Services Sinn. In Phasen, in denen der Host
+nicht (UP) ist, wird bei der Verfügbarkeit trotzdem der eigentliche Status
+des Services zugrunde gelegt -- genauer gesagt der Status vom letzten Check
+bevor der Host unerreichbar wurde. Dies kann sinnvoll sein bei Services,
+bei denen es nicht um die Erreichbarkeit über das Netzwerk geht.
+
+Ähnlich ist auch die Option [.guihints]#Include unmonitored time}}.# Stellen Sie sich
+vor, Sie machen eine Auswertung über den Februar und ein bestimmter Service
+ist erst am 15. Februar überhaupt in das Monitoring aufgenommen worden. Hat
+dieser deswegen eine Verfügbarkeint von nur 50 Prozent? In der Defaulteinstellung
+(Option gesetzt) ist dies tatsächlich der Fall. Die fehlenden 50 Prozent aber nicht
+als Ausfall gewertet, sondern in einer eigenen Spalte mit dem Titel [.guihints]#N/A}}# 
+aufsummiert. Ohne die Option beziehen sich 100 Prozent auf die Zeit vom 15. bis zum
+28. Februar. Das bedeutet dann allerdings auch, dass eine Stunde Ausfall
+bei _diesem_ Service prozentual doppelt so stark zu Buche schlägt
+wie der Ausfall eines Services, der den ganzen Monat über vorhanden war.
+
+
+==== Behandlung von geplanten Wartungszeiten
+
+image::bilder/avoption_downtimes.png[align=float,left]
+
+Mit der Option [.guihints]#Scheduled Downtimes# können Sie einstellen, wie sich
+[basics_downtimes|Wartungszeiten] in der Ver&shy;fügbarkeitsauswertung
+auswirken:<br><br><br><br><br><br>
+
+* [.guihints]#Honor scheduled downtimes# ist der Default. Hier werden Wartungszeichen als eigener Zustand in einer eigenen Spalte aufsummiert. Mit [.guihints]#Treat phases of UP/OK as non-downtime# können Sie die Zeiten, in denen der Service trotz Wartungszeit (OK) war, von der Wartungszeit abziehen.
+* [.guihints]#Ignore scheduled downtimes# ist, als wären überhaupt keine Wartungszeiten eingetragen gewesen. Ausfälle sind Ausfälle. Punkt. Aber natürlich auch nur dann, wenn es tatsächlich einen Ausfall gegeben hat.
+* [.guihints]#Exclude scheduled downtimes# sorgt dafür, dass die Wartungszeiten einfach aus dem Berechnungs&shy;zeitraum ausgeschlossen werden. Die prozentuale Verfügbarkeit bezieht sich dann nur auf die Zeiten außerhalb der Wartung.
+
+
+==== Zusammenfassen gleicher Phasen
+
+image::bilder/avoption_phase_merging.png[align=float,left]
+
+Durch das Umbiegen von Zuständen auf andere (z.B. aus (WARN) wird (OK)) kann
+es sein, dass aufeinanderfolgende Abschnitte der Zeitleiste eines Objekts den
+gleichen Zustand bekommen. Diese Abschnitte werden dann normalerweise zu einem
+einzigen zusammengefasst.  Das ist meistens gut so und übersichtlich, hat aber
+Auswirkungen auf die Darstellung der Details in der Zeitleiste und eventuell
+auch auf die Zählung von Eregnissen mit der Option [.guihints]#Outage statistics}}.# 
+Daher können Sie das Verschmelzen mit
+[.guihints]#Do not merge consecutive phases with equal state# abschalten.
+
+
+[#softstates]
+=== Ignorieren kurzer Störungen
+
+Manchmal werden Sie Überwachungen haben, die oft kurzzeitig ein Problem
+melden, das aber im Normalfall beim nächsten Check (nach einer Minute) schon
+wieder (OK) ist. Und Sie finden keinen Weg durch Anpassen von Schwellwerten
+oder Ähnlichem, das sauber in den Griff bekommen.  Eine häufige Lösung ist
+dann das Setzen der
+[monitoring_basics#max_check_attempts|{{Maximum number of check attempts}}]
+von 1 auf 3, um mehrere Fehlversuche zu erlauben, bevor eine Alarmierung
+stattfindet.  Dadurch ergibt sich das Konzept von [.guihints]#Soft states# -- 
+die Zustände (WARN), (CRIT) und (UNKNOWN) vor Ablauf aller Versuche.
+
+Von Anwendern, die dieses Feature einsetzen, werden wir gelegentlich gefragt,
+warum das Availability-Modul von (CMK) keine Funktion hat, um für die
+Berechnung nur [.guihints]#Hard states# zu verwenden.  Der Grund ist: Es gibt eine
+bessere Lösung! Denn würde man die Hard states als Grundlage nehmen,
+
+* würden Ausfälle aufgrund der erfolglosen Versuche 1 und 2 zwei Minuten zu kurz gewertet, und 
+* man könnte das Verhalten bei kurzen Ausfällen nicht _nachträglich_ nachjustieren.
+
+image::bilder/avoption_short_times.png[align=float,left]
+
+Die Option [.guihints]#Short time intervalls# ist viel flexibler und gleichzeitig
+sehr einfach.  Sie legen schlicht eine Zeitdauer fest, unterhalb derer
+Zustände nicht gewertet werden.
+
+Nehmen Sie an, Sie setzen den Wert auf 2,5 Minuten (150 Sekunden). Ist nun
+ein Service die ganze Zeit auf (OK), geht dann 2 Minuten lang auf (CRIT)
+und dann wieder auf (OK), so wird das kurze (CRIT)-Intervall einfach als
+(OK) gewertet!  Das gilt allerdings auch umgekehrt! Ein kurzes (OK) innerhalb
+einer langen (WARN)-Phase wird dann ebenfalls als (WARN) gewertet.
+
+Allgemein gesagt, werden kurze Abschnitte, bei denen _vorher und nachher
+der gleiche Zustand herrscht_, mit diesem gleichgesetzt. Bei einer Abfolge
+(OK), dann 2 Minuten (WARN), dann (CRIT), bleibt das (WARN) bestehen, auch
+wenn dessen Dauer unterhalb der eingestellten Zeit liegt!
+
+Bedenken Sie beim Festlegen der Zeit das bei (CMK) übliche Checkintervall
+von einer Minute.  Dadurch dauert jeder Zustand _etwa_ das Vielfache
+einer Minute. Da die Antwortzeiten der Agenten leicht schwanken, können das
+auch leicht mal 61 oder 59 Sekunden sein. Daher ist es sicherer, wenn Sie
+als Wert keine ganze Minutenzahl eintragen, sondern einen Puffer einbauen
+(daher das Beispiel mit den 2,5 Minuten).
+
+
+[#serviceperiod]
+=== Einfluss von Zeitperioden
+
+Eine wichtige Funktion der Verfügbarkeitsberechnung von (CMK) ist, dass
+Sie diese von [timeperiods|Zeitperioden] abhängig machen können. Damit
+können Sie für jeden Host oder Service indiviuelle Zeiten definieren. In
+diesen Zeiten wird der Host/Service als verfügbar erwartet und der Zustand
+dann zur Auswertung genutzt.  Dafür hat jedes Objekt das Attribut
+[.guihints]#Service period}}.# Das Vorgehen ist wie folgt:
+
+* Definieren Sie für Ihre Servicezeiten eine Zeitperiode.
+* Weisen Sie diese über den Regelsatz [.guihints]#Host & Service parameters => Monitoringconfiguration => Serviceperiod for hosts# bzw. [.guihints]#... for services# den Objekten zu.
+* Aktivieren Sie die Änderungen.
+* Nutzen Sie die Availability-Option [.guihints]#Service time}},# um das Verhalten zu beeinflussen.
+
+image::bilder/avoption_service_time.png[align=float,left]
+
+Hier gibt es drei einfache Möglichkeiten. Der Default
+[.guihints]#Base report only on service times# blendet die Zeiten außerhalb der
+definierten Servicezeit komplett aus. Diese zählen damit auch nicht zu den
+100 Prozent. Es werden nur die Zeiträume innerhalb der Servicezeiten
+betrachtet. In der Zeitleistendarstellung sind die übrigen Zeiten grau
+dargestellt.
+
+[.guihints]#Base report only on none-service times# macht das Gegenteil und berechnet
+quasi die inverse Darstellung: Wie gut war die Verfügbarkeit _außerhalb_
+der Servicezeiten?
+
+Und die dritte Option [.guihints]#Include both service and non-service times}}# 
+deaktiviert das ganze Konzept der Servicezeiten und zeigt die Auswertungen
+wieder für alle Zeiten von Montag bis Sonntag und 00:00 Uhr bis 24:00 Uhr.
+
+Übrigens: Wenn ein Host nicht in der Servicezeit ist, heißt das für
+(CMK) _nicht_ automatisch, dass das auch für die Services auf dem
+Host gilt. Sie benöigen für Services immer eine eigene Regel in
+[.guihints]#Service period for services}}.# 
+
+
+==== Die Alarmierungsperiode
+
+image::bilder/avoption_notification_period.png[align=float,left]
+
+Es gibt übrigens noch eine etwas verwandte Option: [.guihints]#Notification period}}.# 
+Hier können Sie auch die _Alarmierungsperiode_ für die
+Auswertung heran&shy;ziehen. Diese ist aber eigentlich nur dafür gedacht, in
+bestimmten Zeiten keine Alarme über Probleme zu erzeugen und deckt sich nicht
+unbedingt mit der Servicezeit. Die Option wurde zu einer Zeit eingeführt,
+als die Software noch keine Servicezeit kannte und ist nur noch aus
+Kompatiblitätsgründen vorhanden. Sie sollten Sie am besten nicht verwenden.
+
+
+=== Begrenzung der Berechnungszeit
+
+Bei der Berechnung der Verfügbarkeit muss die komplette Vergangenheit der
+gewählten Objekte aufgerollt werden. Wie das im einzelnen geht, erfahren
+Sie [availability#technical|weiter unten]. Vor allem in der (CRE) kann die
+Auswertung etwas Zeit beanspruchen, da Nagios keinen Cache für die benötigten
+Daten hat und die textbasierten Logdateien durchsucht werden müssen.
+
+Damit eine allzu komplexe Anfrage -- die eventuell aus Versehen aufgerufen
+wurden -- nicht über sehr lange Zeit einen Apache-Prozess lahmlegt, CPU
+verbraucht und dabei „hängt“, gibt es zwei Optionen, welche die Dauer
+der Berechnung begrenzen. Beide sind per Default aktiviert:
+
+image::bilder/avoption_query_time_limit.png[align=float,left]
+
+Das [.guihints]#Query time limit# begrenzt die Dauer der zugrundeliegenden Abfrage an
+den Monitoringkern auf eine bestimmte Zeit. Diese ist auf eine halbe Minute
+voreingestellt. Wird diese überschritten, wird die Auswertung abgebrochen
+und ein Fehler angezeigt. Wenn Sie sicher sind, dass die Auswertung länger
+dauern darf, können Sie dieses Timeout einfach hochsetzen.
+
+image::bilder/avoption_limit_data.png[align=float,left]
+
+Die Option [.guihints]#Limit processed data# schützt Sie vor Auswertungen mit zu
+vielen Objekten. Hier wird ein Limit eingezogen, das analog zu dem in den
+[views#limit|Ansichten] funktioniert. Wenn die Anfrage an den Monitoringkern
+mehr als 5000 Zeitabschnitte liefern würde, wird die Berechnung mit einer
+Warnung abgebrochen. Die Limitierung wird bereits im Kern durchgeführt --
+do wo die Daten beschafft werden.
+
+
+[#bi]
+== Availability bei Business Intelligence
+
+=== Grundprinzip
+
+Ein starkes Feature der Verfügbarkeitsberechnung von (CMK) ist die
+Möglichkeit, die Verfügbarkeit von [bi|BI-Aggregationen] zu berechnen. Der
+Knüller dabei ist, dass (CMK) dazu _nachträglich_ anhand des
+Verlaufs der einzelnen Zustände von Hosts und Services Schritt für Schritt
+rekonstruiert, wie der Zustand des jeweilgen Aggregats zu einem bestimmte
+Zeitpunkt genau war.
+
+Warum der ganze Aufwand? Warum nicht einfach das BI-Aggregat mit einem
+aktiven Check abfragen und dann dessen Verfügbarkeit anzeigen? Nun, der
+Aufwand hat für Sie eine ganze Menge Vorteile:
+
+* Sie können den Aufbau von BI-Aggregaten nachträglich anpassen und die Verfügbarkeit dann neu berechnen lassen.
+* Die Berechnung ist genauer, da nicht durch den aktiven Check eine Ungenauigkeit von +/- einer Minute entsteht.
+* Sie haben eine exzellente Analysefunktion, mit der Sie nachträglich untersuchen können, was denn damals genau zu einem Ausfall geführt hat.
+* Nicht zuletzt müssen Sie nicht extra einen Check einrichten.
+
+
+=== Verfügbarkeit aufrufen
+
+Das Aufrufen der Verfügbarkeitsansicht geht erstmal analog zu den Hosts und
+Services. Sie wählen eine Ansicht mit einem oder mehreren BI-Aggregaten
+und drücken den Knopf ICON[context_button_availability.png]. Es gibt
+aber hier noch einen zweiten Weg: Jedes BI-Aggregat hat über das Symbol
+ICON[button_availability.png] einen direkten Weg zu dessen Verfügbarkeit:
+
+image::bilder/avail_bi_icon.png[]
+
+Die Auswertung an sich ist erst einmal analog zu der bei Services -- allerdings
+ohne die Spalten [.guihints]#Host down# und [.guihints]#flapping}},# da es diese Zustände bei
+BI nicht gibt:
+
+image::bilder/avail_bi_table.png[]
+
+
+=== Die Zeitreise
+
+Der große Unterschied kommt in der ICON[button_timeline.png]
+Zeitleistenansicht.  Folgendes Beispiel zeigt ein Aggregat von unserem
+Demoserver, welches für einen sehr kurzen Abschnitt von gerade mal einer
+Sekunde (CRIT) war (das wäre eines gutes Beispiel für die Option
+[.guihints]#Short time intervals}}).# 
+
+image::bilder/avail_bi_timeline.png[]
+
+Wollen Sie wissen, was hier der Grund für den Ausfall war? Ein einfacher
+Klick auf den ICON[button_timewarp.png] Zauberstab genügt. Er ermöglicht
+eine Zeitreise zu genau dem Zeitpunkt, an dem der Ausfall auftrat und öffnet
+eine Darstellung des BI-Aggregats zu jenem Zeitpunkt -- in der folgenden
+Abbildung bereits an der richtigen Stelle aufgeklappt:
+
+image::bilder/avail_bi_timewarp.png[]
+
+
+== Verfügbarkeit in Berichten
+
+Sie können Verfügbarkeitsansichten in [reporting|Berichte] einbinden.
+Der einfachste Weg ist über das Symbol ICON[icon_menu.png] am unteren Ende
+der Seite:
+
+image::bilder/avail_addto.png[]
+
+Das Berichtselement [.guihints]#Availability table# fügt in den Bericht eine
+Verfügbarkeitsauswertung ein. Die ganzen oben genannten Optionen finden Sie
+dabei direkt als Parameter des Elements -- wenn auch in einer optisch etwas
+anderen Darstellung:
+
+image::bilder/avail_reporting_options.png[]
+
+Eine Besonderheit ist die allerletzte Option:
+
+image::bilder/avail_reporting_elements.png[]
+
+Hier können Sie festlegen, welche Darstellung in den Bericht übernommen
+werden soll:
+
+* Die Tabelle der Verfügbarkeiten
+* Die grafische Darstellung der Zeitleiste
+* Die detaillierte Zeitleiste mit den einzelnen Abschnitten
+
+Anders als bei der normalen interaktiven Ansicht, können Sie also hier im
+Bericht Tabelle und Zeitleiste _gleichzeitig_ einbinden.
+
+Eine zweite Besonderheit ist die fehlende Angabe für den Auswertungszeitraum; sie
+fehlt hier, weil sie automatisch vom Bericht vorgegeben wird.
+
+Die Auswahl der Objekte wird wie bei allen Berichtselementen entweder vom
+Bericht übernommen oder im Element direkt festgelegt.
+
+
+[#technical]
+== Technische Hintergründe
+
+=== Wie die Berechnung funktioniert
+
+Zur Berechnung der Verfügbarkeit greift (CMK) auf die Monitoringhistorie
+zurück.  Es orientiert sich dabei an den _Zustandswechseln._ Wenn ein
+Service z.B.  am 17.3.2017 um 9:40 Uhr auf (CRIT) geht und um 9:50 Uhr wieder auf
+(OK), dann wissen Sie, dass er während dieser Zeitspanne 10 Minuten den
+Zustand (CRIT) hatte.
+
+Diese Zustandswechsel sind in Form von Logeinträgen im Monitoringlog
+enthalten, haben den Typ `HOST ALERT` oder `SERVICE ALERT`
+und sehen z.B. so aus:
+
+.var/check_mk/core/history
+
+----[1488890421] SERVICE ALERT: myserver123;Filesystem /var/webshop;CRITICAL;HARD;1;CRIT - 91.9% used (198.40 of 215.81 GB), (warn/crit at 80.00/90.00%), trend: 0.00 B / 24 hours
+----
+
+Dabei gibt es immer eine aktuelle Logdatei, die die Einträge der letzten
+Stunden oder Tage beinhaltet und ein Verzeichnis mit einem Archiv der früheren
+Zeiträume. Der Ort ist je nach verwendetem Monitoringkern unterschiedlich:
+
+[cols=20,40, options="header"]
+|===
+
+
+|Core
+|aktuelle Datei
+|ältere Dateien
+
+
+|ICON[CRE.png] Nagios
+|`var/log/nagios.log`
+|`var/nagios/archive/`
+
+
+|ICON[CEE.png] [cmc|CMC]
+|`var/check_mk/core/history`
+|`var/check_mk/core/archive`
+
+|===
+
+Dabei greift die [user_interface|Benutzeroberfläche] nicht direkt auf diese
+Dateien zu, sondern fragt sie mittels einer [livestatus|Livestatus]-Abfrage
+vom Monitoringkern ab. Das ist unter anderem wichtig, weil in einem
+[distributed_monitoring|verteilten Monitoring] die Dateien mit der Historie
+gar nicht auf dem gleichen System liegen wie die GUI.
+
+Die Livestatus-Abfrage benutzt dabei die Tabelle `statehist`. Im
+Gegensatz zur Tabelle `log`, welche einen „nackten“ Zugriff auf
+die Historie bietet, wird hier die Tabelle `statehist` verwendet, weil
+sie bereits erste aufwendige Berechnungsschritte durchführt. Sie übernimmt
+unter anderem das Zurücklaufen in die Vergangenheit zur Ermittlung des
+Anfangszustands und das Berechnen von Zeitabschnitten gleichen Zustands mit
+Anfang, Ende und Dauer.
+
+Das Verdichten der Zustände nach dem am Anfang beschriebenen Schema macht
+dann das Verfügbarkeitsmodul in der Benutzeroberfläche.
+
+
+=== Der Availabilitycache im CMC
+
+==== Funktionsweise des Caches
+
+[CEE] Bei Anfragen, die weit in die Vergangenheit zurückreichen, müssen
+entsprechend viele Logdateien abgearbeitet werden. Das wirkt sich natürlich
+negativ auf die Dauer der Berechnung aus. Aus dem Grund gibt es im (CMK)
+Micro Core einen sehr effizienten Cache der Monitoringhistorie, welcher alle
+wichtigen Informationen über die Zustandswechsel von Objekten bereits
+direkt beim Start aus den Logdateien ermittelt, fest im RAM behält und
+im laufenden Monitoring ständig aktualisiert. Folge ist, dass *alle*
+Verfügbarkeitsanfragen direkt und sehr effizient aus dem RAM beantwortet
+werden können und kein Dateizugriff mehr nötig ist.
+
+Das Parsen der Logdateien ist sehr schnell und erreicht bei ausreichend
+schnellen Platten bis zu 80 MB/s! Damit das Erstellen des Caches den Start
+des Monitorings nicht verzögert, geschieht dies zudem asynchron -- und zwar
+von der Gegenwart in Richtung Vergangenheit. Sie werden also eine kurze
+Verzögerung lediglich dann festellen, wenn Sie _direkt nach dem Start_
+der (CMK)-Instanz sofort eine Verfügbarkeitsanfrage über einen längeren
+Zeitraum machen. Dann kann es sein, dass der Cache noch nicht weit genug in die
+Vergangenheit zurückreicht und die GUI eine kleine Denkpause einlegen muss.
+
+Bei einem [.guihints]#Activate changes# bleibt der Cache erhalten! Er muss nur bei
+einem echten (Neu-)Start von (CMK) neu berechnet werden -- z.B. nach einem
+Booten des Servers oder nach einem Update von (CMK).
+
+
+==== Cache-Statistik
+
+Wenn Sie neugierig sind, wie lange das Berechnen des Caches dauert, finden
+Sie eine Statistik in der Logdatei `var/log/cmc.log`. Hier ist ein
+Beispiel von einem kleineren Monitoringsystem:
+
+image::bilder/avail_statehist_cache.png[align=center,width=550]
+
+
+==== Tunen des Caches
+
+Um den Speicherbedarf des Caches in Grenzen zu halten, ist dieser auf einen
+Horizont von 730 Tagen in die Vergangenheit limitiert. Dieses Limit ist
+definitiv -- Anfragen, die weiter in die Vergangenheit gehen sind somit nicht
+nur langsamer, sondern ganz unmöglich. Sie können das mit der
+globalen Einstellung [.guihints]#Monitoring Core => In-memorycache for availability data# leicht anpassen:
+
+image::bilder/avail_histcache.png[]
+
+Neben dem Horizont für die Auswertung gibt es hier noch eine zweite
+interessante Einstellung: [.guihints]#Ignore core restarts shorter than...}}.# Denn ein
+Neustart des Cores (z.B. zum Zwecke eines Updates oder Server-Neustarts) führt
+ja faktisch zu Zeitabschnitten, die als [.guihints]#unmonitored# gelten. Auszeiten
+von bis zu 30 Sekunden werden dabei einfach ignoriert. Diese Zeit können
+Sie hier hochsetzen und auch längere Zeiten einfach ausblenden. Die
+Verfügbarkeitsauswertung geht dann davon aus, dass alle Hosts und Services
+den jeweils letzten ermittelten Zustand die ganze Zeit beibehalten haben.
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+[cols=50, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|`var/check_mk/core/history`
+|Aktuelles Logfile der Monitoringhistorie beim CMC.
+
+
+|`var/check_mk/core/archive/`
+|Vereichnis mit den älteren Logdateien der Historie.
+
+
+|`var/log/cmc.log`
+|Logdatei des CMC, in dem die Statistik des Availabilitycaches zu sehen ist.
+
+
+|`var/nagios/nagios.log`
+|Aktuelles Logfile der Monitoringhistorie von Nagios.
+
+
+|`var/nagios/archive/`
+|Vereichnis mit den älteren Logdateien bei Nagios.
+
+
+|`var/check_mk/availability_annotations.mk`
+|Hier werden die [availability#annotations|Anmerkungen] und nachträglich angepassten
+Wartungszeiten zu Ausfällen gespeichert. Die Datei hat Python-Format und kann von
+Hand editiert werden.
+
+|===

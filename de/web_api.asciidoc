@@ -1,0 +1,412 @@
+= Konfiguration via HTTP-API
+:revdate: 2017-12-14
+[.seealso][#web_api_references] [#wato_user] [#wato]MT:(CMK) über eine API verwalten
+MD:Die API in checkmk ermöglicht eine Verwaltung der wichtigsten Konfigurationsdaten über HTTP(S). Dieser Artikel ist eine Einführung in die Nutzung dieser API.
+
+
+== Einleitung
+
+Die Web-API ermöglicht Ihnen, Konfigurationsaufgaben, die Sie normalerweise
+manuell in der [wato|Weboberfläche von WATO] durchführen, über HTTP-Aufrufe
+zu automatisieren. Zwar ist aktuell nicht die komplette Funktionalität
+von WATO via API verfügbar, doch die Schnittstelle wird ständig weiter
+ausgebaut und die wichtigsten Dinge, wie die Verwaltung von Hosts,
+Ordnern, Intanzen, Benutzern, Gruppen und etlichem mehr ist bereits
+möglich.  Eine vollständige Liste aller API-Funktionen finden Sie
+[web_api_references|hier].
+
+Die meisten Anwender verwenden die Web-API zur Anbindung von bestehenden
+CMDBs oder zur automatischen Aufnahme von Hosts, die in einer dynamischen
+Umgebung automatisch entstehen.
+
+Beim Lesen dieses Artikels sind grundlegende Kenntnisse in Python und dessen
+[web_api#format|Datenstrukturen] nötig. Natürlich ist der Artikel dennoch so einfach wie
+möglich geschrieben, um das Thema auch Einsteigern verständlich zu beschreiben.
+
+
+== Grundlagen und Voraussetzungen
+
+[#automation]
+=== Der Automationsbenutzer
+
+Damit Sie die Web-API nutzen können, benötigen Sie zunächst einen
+[wato_user#automation|Automationsbenutzer]. Nur dieser ist berechtigt
+Aktionen über die Web-API auszuführen. Bei einer neu erstellten Site ist
+der Benutzer [.guihints]#automation# bereits angelegt und in diesem Artikel wird immer
+dieser Benutzer als Beispiel genommen. Sie finden ihn, wie andere Benutzer
+auch, unter [.guihints]#WATO => Users}}.# 
+
+Wenn die Site mit der Version VERSION[1.2.8] oder älter erstellt
+wurde, legen Sie einen solchen Automationsbenutzer an. Sie können dann
+prinzipiell ein beliebiges Passwort als [.guihints]#Automation secret for machine accounts}}# 
+vergeben oder (CMK) eines mit dem ICON[button_random.png]
+Würfel erstellen lassen.
+
+image::bilder/automation_user.png[]
+
+Die Rollen und damit verbundenen Berechtigungen lassen sich für einen
+Automationsbenutzer ebenso wie für normale Benutzer anpassen. Achten Sie
+bei einer eigenen Rolle darauf, dass die Berechtigung [.guihints]#Access to Web-API}}# 
+### MK: Auch in (CMK) selbst muss Web-API in Web-API umbenannt werden.
+gesetzt ist.
+
+image::bilder/web_api_access.png[]
+
+
+[#url]
+=== Der Aufbau der URL
+
+Die folgenden Beispiele beziehen sich immer auf das Kommandozeilenprogramm
+`curl`, um die generelle Syntax der Aufrufe zu verdeutlichen. Sofern
+Sie andere Technologien nutzen, passen Sie die Aufrufe entsprechend an.
+
+Zu der eigentlichen URL `http://myserver/mysite/check_mk/webapi.py`
+benötigen Sie noch verschiedene Parameter. Diese enthalten die
+Zugangsdaten für den Automationsbenutzer und die Information darüber,
+was getan werden soll. Falls sich der Aufruf auf ein bestimmtes Element in
+(CMK) beziehen soll, werden zusätzlich noch folgende Daten als _payload_
+übergeben:
+
+[cols=25, options="header"]
+|===
+
+
+|Parameter
+|Bedeutung
+
+
+|`_username`
+|Der Anmeldename des Automationsbenutzers.
+
+
+|`_secret`
+|Das Automatisierungspasswort.
+
+
+|`action`
+|Legt fest, was durchgeführt werden soll.
+
+
+|`request_format`
+|Die Syntax der `request`-Daten. Möglich sind `python` und `json`.
+
+
+|`output_format`
+|Die Syntax der Antwort. Auch hier sind  `python` und  `json` möglich.
+
+
+|`request`
+|Die zu übertragenden Daten, falls die `action` welche benötigt.
+
+|===
+
+Die ersten fünf Parameter können bei `curl` direkt in der URL
+übergeben werden. Sie werden mit einem `?` eingeleitet und mit einem
+`&` verknüpft. Die Reihenfolge ist dabei egal:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_all_hosts&_username=automation&_secret=mysecret&request_format=python&output_format=python"
+{'result': {'myserver123': {'attributes': {'ipaddress': '192.168.0.42'}, 'hostname': 'myserver123', 'path': ''}, 'myserver456': {'attributes': {'ipaddress': '192.168.0.73'}, 'hostname': 'myserver456', 'path': 'windows'}},# 'result_code': 0}
+----
+
+[#result_code]
+In der Antwort bekommen Sie zum einen den `result_code`, welcher
+angibt, ob ein Fehler bei der Abfrage aufgetreten ist. War die Abfrage
+erfolgreich, bekommen sie den Wert 0 zurück, bei einem Fehler den Wert
+1. Zum anderen gibt es das Resultat (`result`) selbst, in dem die
+Antwort der Site steht. Diese Antwort kann eine Fehlermeldung sein, wenn
+die Abfrage fehlgeschlagen ist, oder die gewünschten Daten enthalten,
+wenn die Abfrage erfolgreich war. Haben Sie ein Kommando an den (CMK)-Server 
+geleitet, so bleibt das `result`-Feld unter Umständen leer
+beziehungsweise gibt den Wert `None` zurück.
+
+Manche Befehle benötigen den Parameter `request`. Dieser enthält die
+benötigten Daten, um z.B. die Konfiguration eines bestimmten Hosts abzurufen.
+Um diese Daten zu übergeben, wird bei der Schalter `-d` benutzt:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_host&_username=automation&_secret=mysecret&request_format=python&output_format=python" -d 'request={'hostname':'myserver123'}'
+{'result': {'myserver123': {'attributes': {'ipaddress': '192.168.0.42'}, 'hostname': 'myserver123', 'path': ''}},# 'result_code': 0}
+----
+
+*Wichtig:* In den folgenden Beispielen und der
+[web_api_references|Befehlsreferenz]
+werden Eingabe und Antwort oft noch einmal über mehrere Zeilen dargestellt,
+um Lesbarkeit und Übersicht zu verbessern. In der Praxis wird
+es sowohl in der Eingabe als auch in der Antwort keine Zeilenumbrüche geben.
+
+[#format]
+=== Datenformat der Eingabe und Antwort
+
+### MA: Auch wenn man sich auf Python konzentriert und JSON als "deprecated"
+### MA: bezeichnet, ist es unheimlich schwer einem Benutzer zu erklären, weshalb
+### MA: JSON denn das Standardformat ist, wenn es ganz oft gar nicht funktioniert und
+### MA: "experimentell" ist. Wenn immer Python genutzt werden soll, weshalb ist es
+### MA: dann nicht einfach Standard? Gerade auf die Fehlerbehandlung wirkt sich das
+### MA: aus, weil man hier in Erklärungsnot gerät.
+
+Die API kennt zwei Parameter, um das Datenformat der Eingabe oder Antwort
+festzulegen. Mit `request_format` wird das Eingabeformat bestimmt, während
+`output_format` das Format der Antwort festlegt. Werden diese Parameter
+nicht benutzt, so nimmt die API an, dass es sich bei den Formaten um JSON
+handelt.
+
+Die Unterstützung von JSON ist in (CMK) inzwischen aber generell
+experimentell/veraltet. Auch wenn es bei der Verwendung von JSON bei vielen
+Befehlen keine Fehlermeldung gibt, sollten Sie das Eingabe- und Antwortformat immer
+auf Python setzen. Nachfolgend ein praktisches Beispiel, in dem z.B. Tupel
+in der Antwort verwendet werden:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_host&_username=automation&_secret=myautomationsecret&output_format=python" -d 'request={"hostname":"myserver123"}'
+{'result': {'myserver123': {'attributes': {'ipaddress': '192.168.0.42', 'management_snmp_community': ('authPriv', 'md5', 'myuser', 'mypassword', 'DES', 'myprivacypassword')}, 'hostname': 'myserver123', 'path': ''}},# 'result_code': 0}
+----
+
+JSON und Python haben aber noch weitere Unterschiede in ihren
+Datenformaten. Diese sind:
+
+* Der Nullwert ist bei JSON `null` und bei Python `None`.
+* Tupel gibt es, wie bereits erwähnt, bei JSON nicht. Sie werden bei einigen Befehlen der API genutzt und unter JSON in einfache Listen umgewandelt. Wenn aber bei der Weiterverarbeitung eine Liste statt eines Tupels übergeben wird, ist die Datenintegrität in (CMK) nicht mehr gewährleistet und die Übergabe einer Konfiguration wird mit einer Fehlermeldung abgebrochen.
+* JSON akzeptiert ausschließlich doppelte Anführungszeichen, während bei Python lediglich die zusammenhängenden Anführungszeichen gleich sein müssen.
+* Boolsche Werte (True und False) werden unter Python groß und unter JSON klein geschrieben.
+
+
+[#test]
+=== Die API lokal testen
+
+Um Befehle der Web-API direkt vom (CMK)-Server aus zu testen, bietet
+es sich an, als Instanzbenutzer zu arbeiten. Sie können dann auf lokale
+Variablen zurückgreifen und auch das Passwort des Automationsbenutzers direkt
+auslesen. In dem folgenden Beispiel werden die Variablen `$OMD_SITE`
+und `$OMD_ROOT` benutzt, welche auf den Namen der Site und ihr
+Homeverzeichnis verweisen. Das Passwort wird dann mittels `cat`
+direkt ausgelesen:
+
+[source,bash]
+----
+OM:curl "http://localhost/$OMD_SITE/check_mk/webapi.py?action=get_all_hosts&_username=automation&_secret=$(cat $OMD_ROOT/var/check_mk/web/automation/automation.secret)"
+----
+
+Sofern der Benutzer `automation` vorhanden ist, wird dieser Aufruf
+auf jeder Site funktionieren. Sie können das Beispiel einfach kopieren und
+bei sich ausprobieren. Das funktioniert natürlich nur, wenn der Befehl auf
+dem (CMK)-Server als Instanzbenutzer ausgeführt wird.
+
+
+
+[#requests]
+== Befehle verwenden
+
+(CMK) verfügt über einige Befehle, um Konfiguration
+von Hosts, Regel und vielem mehr zu steuern. Schauen Sie in die
+[web_api_references|Befehlsreferenz], um eine Beschreibung zu allen Befehlen
+zu erhalten.
+
+Den Umgang mit der API zeigt ein einfaches Beispiel:
+Sie erstellen einen Host mit seinen Services über die Web-API mit nur
+drei Befehlen. Prinzipiell gehen Sie dabei genauso vor, wie auch im WATO
+von (CMK):
+
+* Erstellen Sie einen Host.
+* Führen Sie eine Serviceerkennung auf dem Host durch.
+* Aktivieren Sie die Änderungen.
+
+
+==== Einen Host erstellen
+
+Mit dem Befehl [web_api_references#hosts|`add_hosts`]
+können Sie einen Host in (CMK) erstellen. Sie geben dabei mindestens den
+Hostnamen und das Verzeichnis, in dem er abgelegt werden soll, an. Zusätzlich
+können Sie auch die verfügbaren Attribute, wie z.B. die IP-Adresse eines
+Hosts, explizit setzen. Der `request`-Teil sieht dann z.B. so aus:
+
+[source,bash]
+----
+{'hostname': 'myserver123',
+ 'folder': '',
+ 'attributes': {'ipaddress': '192.168.0.42',
+                'site': 'mysite',
+                'tag_agaent': 'cmk-agent'}}# 
+----
+
+In dem Beispiel wird der Host `myserver123` im Hauptverzeichnis
+angelegt. Diesem wird dabei eine IP-Adresse zugewiesen und weiter definiert,
+dass es sich hierbei um einen Host handelt, welcher seine Daten über
+einen (CMK)-Agenten bekommt und der Instanz `mysite` zugeordnet
+ist. Zum Testen auf der Kommandozeile kann man den Host nun folgendermaßen
+anlegen -- tauschen Sie die Platzhalter entsprechend durch Ihre echten Daten aus:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_host&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123","folder":"","attributes":{"ipaddress":"192.168.0.42","site":"mysite","tag_agent":"cmk-agent"}}'# 
+----
+
+
+==== Eine Serviceerkennung durchführen
+
+Nachdem der Host erstellt wurde, können die Services hinzugefügt
+werden. Hier geben Sie den Hostnamen an und bestimmen bei Bedarf
+[web_api_references#discover_services|die Art der Serviceerkennung].
+Wenn Sie nichts angeben, werden lediglich die
+neu erkannten Services hinzugefügt:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=discover_services&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123"}'
+----
+
+
+==== Änderungen aktivieren
+
+Zuletzt werden die Änderungen, wie im WATO auch, aktiviert:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?_secret=myautomationsecret&_username=automation&action=activate_changes" -d 'request={"sites":["mysite"]}'
+----
+
+
+== Die Web-API absichern
+
+Da der Zugriff über die Web-API sensible Daten enthalten kann und je nach
+Berechtigung des Automationsbenutzers berechtigt ist, umfassende Änderungen an
+(CMK) durchzuführen, möchten Sie wahrscheinlich den Zugriff entsprechend
+absichern. Hier ein paar der Möglichkeiten:
+
+* [omd_https|(CMK) über HTTPS]: Nutzen Sie die Web-API ausschließlich über HTTPS, da Benutzername, Password und auch Konfigurationsdaten sonst im Klartext im Netz übertragen werden.
+* Geben Sie dem Automationsbenutzer ein Passwort mit einer ausreichenden Länge. Da dieses in der Regel nur einmal in einem Skript hinterlegt wird, kann problemlos ein sehr langes vergeben werden.
+* Achten Sie besonders auf das Berechtigungskonzept zu den Skripten. Dort können sensible Daten, wie Konfigurationsstandards, Passwörter usw. enthalten sein. Stellen Sie daher sicher, dass ausschließlich berechtigte Benutzer und Gruppen diese Skripten lesen können.
+
+
+== Fehlerbehandlung
+
+Wie bereits weiter [web_api#result_code|oben] beschrieben, gibt die Anfrage
+einen Fehlercode zurück, wenn sie nicht erfolgreich war. Dieser ist in
+dem `result_code` hinterlegt. Eine Beschreibung des Fehlers ist dann
+in dem `result` selbst enthalten. Sie ist ein guter ein Einstieg in die
+Analyse des Problems.
+
+Prüfen Sie zusätzlich, ob die folgenden Bedingungen erfüllt sind:
+
+* Der Automationsbenutzer hat die nötigen Berechtigungen, um Konfigurationsdaten zu lesen und zu setzen.
+* Die einzelnen Parameter wurden mit einem `?` eingeleitet und mit einem `&` verknpüft. Beachten Sie auch, dass `_username` und `_secret` mit einem Unterstrich anfangen.
+* Die Syntax des `request`-Teils ist korrekt.
+
+==== Berechtigungen
+
+Wie bereits erwähnt, ist die Berechtigung des Automationsbenutzers eine
+Fehlerquelle, wenn z.B. Konfigurationsdaten abgerufen werden sollen. Der von
+(CMK) mitgelieferte Benutzer [.guihints]#automation# hat die Rolle [.guihints]#Administrator}}# 
+und darf somit alles sehen und bearbeiten. Da Sie dem Automationsbenutzer
+aber prinzipiell jede verfügbare [wato_user#roles|Rolle] zuweisen können, müssen
+gegebenenfalls auch die [wato_user#wato_permissions|Kontaktgruppen] angepasst
+werden, um bestimmte Hosts abrufen oder bearbeiten zu können. Prüfen Sie
+im Fehlerfall, ob diese Berechtigungen für den entsprechenden Automationsbenutzer
+passen.
+
+
+==== Syntax in Befehlen
+
+Beim Testen mit `curl` wird es in dem `request`-Teil schnell
+unübersichtlich. Prüfen Sie daher immer (auch, wenn Sie nicht `curl`
+verwenden), ob die Syntax korrekt ist.
+
+Eine gute Methode kann es sein, sich den `request`-Teil in eine Datei
+zu schreiben und damit zu visualisieren:
+
+.~/home/myuser/pattern.txt
+
+----{"users": {"myuser": {"alias": "My User",
+                      "email": "myuser@mycompany.org",
+                      "language": None,
+                      "pager": "01374-12233456",
+                      "password": "mypassword"}}}# 
+----
+
+Sie können diese Zeilen auch in einen Python-Prompt kopieren und mit dem
+Befehl `print` in einer Zeile ausgeben lassen:
+
+[source,bash]
+----
+RP:python
+>>> print {"users": {"myuser": {"alias": "My User",
+...                       "email": "myuser@mycompany.org",
+...                       "language": None,
+...                       "pager": "01374-12233456",
+...                       "password": "mypassword"}}}# 
+{'users': {'myuser': {'alias': 'My User', 'password': 'mypassword', 'pager': '01374-12233456', 'email': 'myuser@mycompany.org', 'language': None}}}# 
+----
+
+Die Leerzeichen können Sie in dem `curl`-Befehl übrigens behalten:
+
+[source,bash]
+----
+OM:curl "http://localhost/$OMD_SITE/check_mk/webapi.py?action=add_users&_username=automation&_secret=$(cat $OMD_ROOT/var/check_mk/web/automation/automation.secret)&output_format=python&request_format=python" -d "request={'users': {'myuser': {'alias': 'My User', 'password': 'mypassword', 'pager': '01374-12233456', 'email': 'myuser@mycompany.org', 'language': None}}}"# 
+{'result': None, 'result_code': 0}
+----
+
+== Dateien und Verzeichnisse
+
+[cols=, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|etc/check_mk/conf.d/wato/
+|Alle hier angelegten Verzeichnisse stellen die im WATO sichtbaren
+Verzeichnisse dar.
+
+
+|etc/check_mk/conf.d/wato/.wato
+|Attribute und Titel eines Verzeichnisses werden in dieser Datei
+festgelegt. Sie befindet sich in jedem Verzeichnis unterhalb von
+`wato`.
+
+
+|etc/check_mk/conf.d/wato/hosts.mk
+|Hier wird die Konfiguration der Hosts festgelegt, welche dem entsprechenden
+Verzeichnis zugeordnet wurden. Auch diese Datei gibt es in jedem Verzeichnis
+unterhalb von `wato`.
+
+
+|etc/check_mk/conf.d/wato/group.mk
+|Alle definierten Gruppen befinden sich hier. Dazu gehören Kontakt-,
+Service- und Hostgruppen. Diese Datei gibt es nur einmal.
+
+
+|etc/check_mk/multiside.d/wato/users.mk
+|Benutzereinstellungen in (CMK) werden in dieser Datei definiert.
+
+
+|etc/check_mk/conf.d/wato/rules.mk
+|In dieser Datei werden zu jedem Verzeichnis unterhalb von `wato`
+die definierten Regeln festgehalten.
+
+
+|etc/check_mk/multisite.d/wato/hosttags.mk
+|Alle Hosttags und Auxiliarytags sind hier definiert.
+
+
+|etc/check_mk/multisite.d/sites.mk
+|Hier werden alle Sites mit ihren Eigenschaften eingetragen. Auch die
+lokale Site wird hier festgehalten.
+
+
+|var/check_mk/agents/
+|Erstellte/gebackene Agenten werden hier abgelegt. Für jeden Host
+ist ein Link zu dem Agenten angelegt, welcher auf sein Installationspaket
+verweist.
+
+
+|var/check_mk/web/myuser/user_custom_graphs.mk
+|Selbst erstellte Graphen werden bei dem jeweiligen Benutzer abgelegt. In
+dem Beispiel ist das der Benutzer „myuser“.
+
+|===
+

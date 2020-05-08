@@ -1,0 +1,151 @@
+= Service Dependencies
+:revdate: outdated
+KW:servicedependency,configuration,service,dependency
+[.seealso][#hosttags]== Nagios' concept of Service Dependencies
+Nagios allows you to define dependencies between services. With
+the object type `servicedependency` you can define that
+service A depends on service B. Why? It allows you to reduce
+the number of redundant notifications.
+
+If B breaks and A depends on B, A will also break (well - that
+is what "dependent" _means_). Without a dependency definition
+Nagios will send out two notifications: one for A and one for B.
+In extreme cases one broken service (for example a database intance)
+can result in dozens of other broken services (for example that database
+instance's table spaces).
+
+But if Nagios knows about the dependencies it can suppress the notification
+of all dependent services and only notify about the real cause of the problem.
+
+Unfortunately that nice feature of Nagios is rarely used. The main
+reason is that the dependencies are tedious to configure. For each
+pair of dependent services you have to write a separate definition:
+
+.
+
+----define servicedependency {
+    use                           default
+    host_name                     host123
+    service_description           Service_B
+    dependent_host_name           host123
+    dependent_service_description Service_A
+}
+----
+
+== Service Dependencies in check_mk
+Since version 1.0.33 check_mk greatly simplifies the definition of service dependencies, as
+long as you can live with the following restrictions:
+<ul>
+<li>Only dependencies on the same host can be defined.</li>
+<li>Only services of check_mk can be used for dependencies.</li>
+<li>No legacy_checks can be used</li>
+<li>The dependencies can only be used for suppressing notifications -
+not for suppressing the checks.</li>
+</ul>
+
+Of course you can manually define further dependencies directly in Nagios.
+
+The configuration is done in one single variable: `service_dependencies`.
+It is a configuration very similar to `service_groups`. You may use
+[hosttags|host tags] in this list. The following example makes all services with the
+description `NIC eth0 parameters` dependent on the service
+`NIC eth0 link` on all hosts:
+.main.mk
+
+----service_dependencies = [
+ ( "NIC eth0 link", ALL_HOSTS, [ "NIC eth0 parameter" ] ),
+]
+----
+The rightmost tuple argument is the list of dependent services.
+So in one single line can define several dependencies. Let's
+make `NIC eth0 counters` also dependent on the link state:
+.main.mk
+
+----service_dependencies = [
+ ( "NIC eth0 link", ALL_HOSTS, ["NIC eth0 parameter","NIC eth0 counters"]),
+]
+----
+
+
+=== Matching and referring to substrings
+Now what about `eth1` and all other network interfaces? Making
+one definition for each possible interface would be possible. Easier
+is doing it with regular expressions: Each dependent service may contain
+one regex group in brackets - usually `(.*)`. The service in
+the first tuple argument must contain exactly one `%s`:
+
+.main.mk
+
+----service_dependencies = [
+ ( "NIC %s link", ALL_HOSTS, ["NIC (.*) parameter","NIC (.*) counters"]),
+]
+----
+Now that rule deals with all possible NIC names at once!
+
+== Nagios template
+The `servicedependency` definitions that check_mk creates (while `-S` or `-U`),
+all use the template `check_mk`:
+.check_mk_objects.cfg
+
+----define servicedependency {
+    *use                           check_mk*
+    host_name                     localhost
+    service_description           NIC eth0 link
+    dependent_host_name           localhost
+    dependent_service_description NIC eth0 parameters
+}
+----
+You have to make sure that a `servicedependency`-template
+with the name `check_mk` is defined.
+The sample template file which you find in the documentation
+directory (usually `/usr/share/doc/check_mk`)
+defines such a template:
+./usr/share/doc/check_mk/check_mk_templates.cfg
+
+----define servicedependency {
+  name                            check_mk
+  register                        0
+  notification_failure_criteria   u,c
+  inherits_parent                 1
+}
+----
+
+== Advanced aspects of service dependencies
+
+=== Service aggregation
+Service dependencies cannot be used for aggregated services.
+Only the base services can depend upon each other. That
+does not mean, that you cannot use service aggregation
+together with dependencies.
+
+=== Missing services
+When you use regular expressions and substrings as shown above,
+situations might arise where A depends on B but B does
+not exist. Checkmk will ignore such dependencies silently.
+
+Here is one example: If you are using Linux' ethernet bridges you
+might have an ethernet interface `eth0` and a bridge
+`br0`. Since the later is just a logical interface, it does not
+have a link state, but it does have counters.  So `NIC br0
+counters` exists but `NIC br0 link` does not
+exist. Nevertheless you can make `NIC (.*) counters` dependent
+on `NIC %s link` on all hosts without running into an error.
+
+=== Cyclic dependencies and check order
+If A depends on B then B cannot depend on A - at least not in
+check_mk. The reason for that is that check_mk orders all checks of a
+host such, that if A depends on B than B is always checked before A.
+Why?
+
+Consider what would happen if this wasn't that way:
+A depends on B, but A is checked before B. Now A fails.
+Nagios does not yet know about B going to fail, too, in
+a couple of milliseconds. It looks at its current
+state of B - which is that of the previous check cycle.
+B is in an OK state from that point of view and the service
+dependency is not fireing (at least not if you have set
+`max_check_attempts` to `1`).
+
+If you have cycles in your dependency then check_mk
+cannot find a valid order for the checks and aborts
+the creation of the configuration files.

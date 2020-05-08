@@ -1,0 +1,1795 @@
+= Befehlsreferenz der HTTP-API
+:revdate: draft
+[.seealso][#web_api] [#cmk_commandline] [#livestatus]MT:Alle Befehle, um (CMK) zu verwalten
+MD:Alle Möglichkeiten checkmk per API zu konfigurieren, sind in diesem Artikel beschrieben. Er ist damit eine Erweiterung des einführenden Artikels zur Web-API.
+
+
+Dieser Artikel enhält eine Beschreibung zu jedem der in der Web-API
+verfügbaren Befehle. Eine generelle Kenntnis der Syntax der API und andere
+Grundlagen, wie sie in dem [web_api|Hauptartikel] beschrieben sind,
+werden vorausgesetzt.
+
+
+[#activate_changes]
+== Änderungen aktivieren
+
+Alle Änderungen, die Sie an dem (CMK)-Server durchführen, können Sie mit
+dem Befehl `activate_changes` aktivieren. In dem `request`-Teil
+können Sie bei Bedarf zusätzlich verschiedene Optionen setzen:
+
+* `mode`: Mit dieser Option teilen Sie bei Bedarf mit, dass Sie nur bestimmte Instanzen aktivieren möchten. In diesem Fall übergeben Sie hier den Wert `specific`.
+* `sites`: Falls Sie den `mode` auf `specific` geändert haben, geben Sie hier die Instanzen an, welche aktiviert werden sollen.
+* `allow_foreign_changes`: Manchmal haben zwischenzeitlich andere Benutzer ebenfalls Änderungen vorgenommen. Mit dieser Option können Sie explizit angeben, ob Sie diese ebenfalls aktivieren wollen (0 für „nein“ und 1 für „ja“).
+* `comment`: Fügen Sie hier wie aus dem Webinterface bekannt einen Kommentar zu der Aktivierung hinzu.
+
+[source,bash]
+----
+{"mode": "dirty",
+ "sites": [ "master", "slave_1", "slave_2" ],
+ "allow_foreign_changes": "0",
+ "comment: "Änderungen aus der WebAPI."}
+----
+
+Ein solcher Befehl kann dann z.B. so aussehen:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?_secret=myautomationsecret&_username=automation&action=activate_changes" -d 'request={"sites":["mysite"],"allow_foreign_changes":"0"}'
+{"result": {"sites": {"mysite": {"_time_updated": 1507118620.897177, "_status_details": "Started at: 14:03:33. Finished at: 14:03:40.", "_phase": "done", "_status_text": "Success", "_pid": 10633, "_state": "success", "_time_ended": 1507118620.897177, "_expected_duration": 10.0, "_time_started": 1507118613.630956, "_site_id": "mysite", "_warnings": []}}},# "result_code": 0}
+----
+
+
+[#hosts]
+== Hostbefehle
+
+Für Hosts können Sie die folgenden Befehle über die API ausführen:
+
+* `get_host`
+* `add_host`
+* `edit_host`
+* `delete_host`
+* `delete_hosts`
+* `get_all_hosts`
+* `discover_services`
+
+[#get_host]
+=== get_host
+
+Sie können diesen Befehl nutzen, um die Konfiguration eines einzelnen
+Host abzurufen. Übergeben wird dabei lediglich der Name des abzurufenden
+Hosts. Die Ausgabe ist in diesem Beispiel für Menschen lesbar gemacht. In
+der Praxis wird die Ausgabe immer einzeilig sein:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_host&_username=automation&_secret=myautomationsecret&output_format=python&request_format=python" -d 'request={"hostname":"myserver123"}'
+{'result': {'attributes': {'alias': u'someAlias', 'tag_agent': 'cmk-agent', 'tag_criticality': 'prod', 'management_address': '192.168.1.42', 'contactgroups': {'use_for_services': False, 'recurse_perms': False, 'recurse_use': False, 'use': True, 'groups': ['ad_admins']}, 'management_protocol': 'snmp', 'ipaddress': '192.168.0.42', 'site': 'prod', 'tag_address_family': 'ip-v4-only', 'management_snmp_community': 'public'}, 'hostname': 'myserver123', 'path': ''}, 'result_code': 0}
+----
+
+Die Antwort wird wie in dem Beispiel in Python formatiert, wenn die
+Weiter&shyverarbeitung ebenfalls in Python erfolgen soll. Das Eingabeformat
+ist in JSON wie Python identisch und muss aus dem Grund nicht angepasst werden.
+### MK: Diesen Abschnitt verstehe ich nicht.
+### MK: Kann es sein, dass du hier das passive "wird" wieder als Ersatz für
+### MK: einen Imperativ verwendest? Ich würde das wirklich vermeiden. Passiv
+### MK: "wird" impliziert für mich was, was automatisch passiert.
+
+Lesbar strukturiert kann die Antwort dann wie folgt aussehen:
+
+[source,bash]
+----
+{'result':
+    {'attributes': {
+        'alias': u'My Server Alias',
+                    'contactgroups': {'groups': ['ad_admins'],
+                                      'recurse_perms': False,
+                                      'recurse_use': False,
+                                      'use': True,
+                                      'use_for_services': False},
+                    'ipaddress': '192.168.0.42',
+                    'management_address': '192.168.1.42',
+                    'management_protocol': 'snmp',
+                    'management_snmp_community': 'public',
+                    'site': 'prod',
+                    'tag_address_family': 'ip-v4-only',
+                    'tag_agent': 'cmk-agent',
+                    'tag_criticality': 'prod'},
+     'hostname': 'myserver123',
+     'path': ''}
+ 'result_code': 0}
+----
+
+Beachten Sie, dass in der Antwort nur die Felder ausgegeben werden, welche
+in WATO explizit bei dem Host definiert sind. Werte, die den Default beinhalten oder von
+einem Verzeichnis geerbt wurden, werden hier nicht ausgegeben. Eine Antwort,
+welche nur die nötigsten Felder enthält, würde demnach wie folgt aussehen:
+### MK: Was heißt "nötigsten"?
+
+[source,bash]
+----
+{'result':
+    {'attributes': {},
+     'hostname': 'myserver123',
+     'path': ''},
+ 'result_code': 0}
+----
+
+[#effective_attributes]
+Sie können dieses Verhalten ändern, indem Sie den Parameter
+`effective_attributes` übergeben und auf „1“ setzen. Die Ausgabe
+### MK: Warum hier 1 in Quotes? Oh. Sehe, dass das als URL-Variable
+### MK: gemacht wird. Ich verstehe überhaupt nicht, warum das nicht
+### MK: im Request selbst passiert...
+würde dann alle Attribute enthalten -- diese sind in dem Beispiel nicht noch
+einmal aufgeführt:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_host&_username=automation&_secret=myautomationsecret&effective_attributes=1" -d 'request={"hostname":"myserver123"}'
+----
+
+[#add_host]
+=== add_host
+
+Um einen Host hinzuzufügen, müssen Sie in dem Befehl mindestens den Hostnamen
+und das Verzeichnis definieren. Soll der Host im Hauptverzeichnis liegen,
+so werden einfach zwei leere Anführungszeichen gesetzt. Optional können
+Sie auch die Attribute setzen, sofern sie verfügbar sind, Nodes angeben,
+wenn Sie einen Clusterhost anlegen wollen oder das automatische Erstellen
+von Verzeichnissen unterdrücken. Für die Attribute können Sie sich an der
+Ausgabe von dem Befehl `get_host` orientieren, so dass die Konfiguration
+z.B. so aussehen kann:
+
+[source,bash]
+----
+{'hostname': 'myserver123',
+ 'folder': 'munich/network',
+ 'attributes': {'ipaddress': '192.168.0.42',
+                'site': 'prod',
+                'tag_agent': 'cmk-agent'},
+ 'create_folders': '0'}
+----
+
+Der Befehl wird dann wie üblich ausgeführt. In dem Beispiel wird über die
+Option `create_folders` verhindert, dass neue Verzeichnisse angelegt
+werden. Wenn Sie nichts angeben, wird angenommen, dass das Anlegen von noch
+nicht existierenden Verzeichnissen erlaubt ist.
+Die Attribute werden in geschweiften Klammern (als _Dictionary_)
+aufgelistet. Hier können Sie auch Hosttags setzen. Um auf diese zuzugreifen,
+nehmen Sie die ID der Tag-Gruppe und setzen ein `tag_` als Präfix
+davor.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_host&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123","folder":"munich/network","attributes":{"ipaddress":"192.168.0.42","site":"prod","tag_agent":"cmk-agent"},"create_folders":"0"}'
+{"result": null, "result_code": 0}
+----
+
+
+[#edit_host]
+=== edit_host
+
+Mit diesem Befehl können Sie Attribute eines Hosts anpassen oder mit
+`unset_attributes` auf seinen Standardwert zurücksetzen.
+
+[source,bash]
+----
+{'hostname': 'myserver123',
+ 'unset_attributes': [ 'site', 'alias' ],
+ 'attributes': {'parents': [ 'myRouter1', 'myRouter2' ],
+                'tag_agent': 'cmk-agent'}
+}
+----
+
+Verpflichtend ist hier nur die Angabe des Hostnamens. Achten Sie darauf,
+dass die Attribute, welche zurückgesetzt werden sollen, in einer Liste
+angegeben werden.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=edit_host&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123","unset_attributes":["site","alias"],"attributes":{"parents":["myRouter1","myRouter2"],"tag_agent":"cmk-agent"}}'# 
+{"result": null, "result_code": 0}
+----
+
+
+[#delete_host]
+=== delete_host
+
+Um einen Host zu löschen, müssen Sie lediglich seinen Namen in dem
+request-Teil  übergeben, da dieser ja in (CMK) immer eindeutig sein muss:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=delete_host&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123"}'
+{"result": null, "result_code": 0}
+----
+
+
+[#delete_hosts]
+=== delete_hosts
+
+Ab Version VERSION[1.5.0] können Sie diesen Befehl nutzen, wenn
+Sie mehrere Hosts gleichzeitig löschen wollen. Achten Sie auf die korrekte
+Schreibweise des Schlüssels und, dass die Hosts hier in einer Liste übergeben
+werden:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=delete_hosts&_username=automation&_secret=myautomationsecret" -d 'request={"hostnames":["myserver123","myserver234"]}'
+{"result": null, "result_code": 0}
+----
+
+
+[#get_all_hosts]
+=== get_all_hosts
+
+Dieser Befehl ist der einzige auf die Hosts bezogene, welcher keine
+Übergabe weiterer Daten benötigt. Er gibt ganz einfach alle Hosts in
+(CMK) aus. Ebenso wie bei [web_api#get_host|`get_host`] können
+Sie auch hier bestimmen, ob in der Ausgabe nur die explizit gesetzten
+oder [web_api#effective_attributes|alle Attribute] ausgegeben werden
+sollen. Beachten Sie, dass das unter Umständen eine sehr umfangreiche
+Antwort geben kann. Aus dem Grund wird auch auf die Ausgabe der Antwort in
+dem Beispiel verzichtet.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_all_hosts&_username=automation&_secret=myautomationsecret"
+----
+
+
+[#discover_services]
+=== discover_services
+
+Mit diesem Befehl können Sie alle Services eines Hosts erkennen und
+hinzufügen lassen. Die Syntax des `request`-Befehls gestaltet sich analog
+zu `get_host`, in der Antwort wird allerdings eine Zusammenfassung des
+Ergebnisses ausgegeben:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=discover_services&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123"}'
+{'result': 'Service discovery successful. Added 7, Removed 0, Kept 52, New Count 59', 'result_code': 0}
+----
+
+Zusätzlich können Sie über `mode` wie in WATO bestimmen, wie
+mit den erkannten und bereits konfigurierten Services umgegangen
+werden soll. Die möglichen Optionen sind:
+
+* `new`: Nur neue Services hinzufügen. Das ist auch die Standardeinstellung, wenn Sie nichts angeben.
+* `remove`: Entfernt nur nicht mehr vorhandene Services.
+* `fixall`: Entfernt nicht mehr vorhandene Services und fügt neue hinzu.
+* `refresh`: Entfernt alle Services und fügt danach alle Services neu hinzu.
+
+Der Parameter wird dann zusätzlich zum Hostnamen übergeben:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=discover_services&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myserver123","mode":"refresh"}'
+{"result": "Service discovery successful. Added 6, Removed 5, Kept 48, New Count 54", "result_code": 0}
+----
+
+
+== Verzeichnisbefehle
+
+Um die Verzeichnisse im WATO zu verwalten, bietet (CMK) ab Version <b
+class=new>1.5.0* die folgenden Kommandos:
+
+* `get_folder`
+* `add_folder`
+* `edit_folder`
+* `delete_folder`
+* `get_all_folders`
+
+
+[#get_folder]
+=== get_folder
+
+Das Abrufen der Konfiguration eines Verzeichnisses ist nicht so verschieden von
+dem eines [web_api#get_host|Hosts]. Sie geben den Namen des Verzeichnisses
+an und lassen sich gegebenenfalls [web_api#effective_attributes|alle Attribute]
+ausgeben. In dem Beispiel ist das `output_format`
+auf Python umgestellt und es werden alle Attribute des Verzeichnisses
+ausgegeben. Beachten Sie, dass in der Antwort alle Tupel in Listen umgewandelt
+würden, wenn die Ausgabe in JSON formatiert wäre.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_folder&_username=automation&_secret=myautomationsecret&output_format=python&effective_attributes=1" -d 'request={"folder":"munich/network"}'
+{'result': {'attributes': {'network_scan': {'scan_interval': 86400, 'exclude_ranges': [], 'run_as': u'automation', 'ip_ranges': [], 'time_allowed': ((0, 0), (24, 0))}, 'tag_agent': 'cmk-agent', 'snmp_community': None, 'ipv6address': '', 'alias': '', 'management_protocol': None, 'site': 'heute', 'tag_room': 'weisses_haus', 'tag_criticality': 'prod', 'contactgroups': (True, []), 'network_scan_result': {'start': None, 'state': None, 'end': None, 'output': ''}, 'parents': ['heute'], 'tag_address_family': 'ip-v4-only', 'management_address': '', 'tag_networking': 'lan', 'ipaddress': '', 'management_snmp_community': None}, 'configuration_hash': '7001db7f20eee1cae51f9c696cddff42'}, 'result_code': 0}
+----
+
+Wie in dem Beispiel zu sehen, muss ein Verzeichnis immer relativ
+zum Hauptverzeichnis angegeben werden, da immer nur sein Pfad, nicht aber
+der Name eindeutig ist.
+
+Lesbar sieht die Antwort dann so aus (da einige der übergebenen Information
+vorerst nicht relevant sind, ist das Beispiel hier entsprechend gekürzt
+worden):
+
+[source,bash]
+----
+{'result': {'attributes': {'alias': '',
+                           'contactgroups': (True, []),
+                           'network_scan': {'exclude_ranges': [],
+                                            'ip_ranges': [],
+                                            'run_as': u'automation',
+                                            'scan_interval': 86400,
+                                            'time_allowed': ((0, 0),
+                                                             (24, 0))},
+                           'network_scan_result': {'end': None,
+                                                   'output': '',
+                                                   'start': None,
+                                                   'state': None},
+                           'parents': [],
+                           'site': 'prod',
+                           'snmp_community': None,
+                           'tag_address_family': 'ip-v4-only',
+                           'tag_agent': 'cmk-agent',
+                           'tag_criticality': 'prod',
+                           'tag_networking': 'lan'},
+            'configuration_hash': '7001db7f20eee1cae51f9c696cddff42'}
+ 'result_code': 0}
+----
+
+Das Attribut „alias“ wird in der Ausgabe immer leer sein. Da Verzeichnisse nur
+einmal angelegt und intern niemals umbenannt werden, kann man später über
+dieses Attribut den Anzeigename in WATO anpassen. Beachten Sie also, dass
+der Name in WATO nicht unbedingt mit dem echten Namen übereinstimmen muss!
+
+Den `configuration_hash` können Sie verwenden, wenn das Verzeichnis
+[web_api#edit_folder|bearbeitet] werden soll.
+
+[#add_folder]
+=== add_folder
+
+Auch das Hinzufügen von Verzeichnissen funktioniert ähnlich wie das
+Hinzufügen von [web_api#get_host|Hosts]. Sie benötigen mindestens den Namen
+und die Attribute. Letztere können aber auch leer sein, wie in dem Beispiel:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_folder&_username=automation&_secret=myautomationsecret" -d 'request={"folder":"munich/network/router","attributes":{}}'# 
+{"result": null, "result_code": 0}
+----
+
+Wie Sie sehen, wird der Pfad hier ebenfalls immer relativ zum
+Hauptverzeichnis angegeben. Falls ein Elternverzeichnis nicht vorhanden
+ist, wird es angelegt. Sie können dieses Verhalten unterdrücken,
+indem Sie -- analog zu [web_api#add_host|`add_host`] -- die Option
+`create_parent_folders` hinzufügen und auf „0“ setzen.
+
+[#edit_folder]
+=== edit_folder
+
+Um ein Verzeichnis zu editieren, benötigen Sie
+mindestens seinen Namen. Zusätzlich können Sie die unter
+[web_api#get_folder|`get_folder`] beschriebenen Attribute anpassen. Mit
+dem optionalen `configuration_hash` wird sichergestellt, dass die
+Konfiguration des Verzeichnisses nicht zwischenzeitlich verändert wurde. Ist
+der Hash nicht identisch, wird (CMK) die Änderung an dem Verzeichnis
+nicht durchführen. In dem Beispiel wird das Ergebnis aus `get_folder`
+verwendet, um die Konfiguration anzupassen. Achten Sie darauf, dass Python
+als `request_format` verwendet wird, da bei den Einstellungen zu dem
+Netzwerkscan Tupel vorkommen:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_folder&_username=automation&_secret=myautomationsecret&request_format=python" -d 'request={"folder":"munich/network","attributes":{"network_scan":{"time_allowed":"((18,0),(24,0))"}},"configuration_hash":"7001db7f20eee1cae51f9c696cddff42"}'# 
+{"result": null, "result_code": 0}
+----
+
+
+[#delete_folder]
+=== delete_folder
+
+Das Löschen eines Verzeichnisses ist sehr einfach. Sie geben dazu lediglich
+den Namen an. Wie immer bei Verzeichnissen ist das der relative Pfad:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=delete_folder&_username=automation&_secret=myautomationsecret -d 'request={"folder":"munich/network"}'
+{"result": null, "result_code": 0}
+----
+
+[#get_all_folders]
+=== get_all_folders
+
+Ebenso einfach ist auch die Ausgabe aller Verzeichnisse. Das geschieht
+ähnlich zu [web_api#get_all_hosts|`get_all_hosts`]. Beachten Sie,
+dass das Ausgabeformat wie bei [web_api#get_folder|`get_folder`]
+auf Python stehen sollte:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_all_folders&_username=automation&_secret=myautomationsecret&output_format=python"
+{'result': {'': {}, 'munich/windows': {}, 'munich/network': {'network_scan': {'run_as': 'automation', 'exclude_ranges': [], 'ip_ranges': [('ip_network', ('192.168.20.0', 24))], 'scan_interval': 86400, 'time_allowed': ((20, 0), (24, 0))}, 'tag_agent': 'snmp-only'}, 'munich': {}, 'berlin': {'tag_networking': 'dmz'}, 'berlin/databases': {'tag_criticality': 'critical'}, 'essen': {'tag_networking': 'wan'}, 'essen/linux': {}},# 'result_code': 0}
+----
+
+Lesbar sieht die Ausgabe dann folgendermaßen aus. Sie unterscheidet sich
+von der Abfrage eines einzelnen Verzeichnisses nur in Details. Die oberste
+Zeile mit dem leeren Namen ist das Hauptverzeichnis.
+
+[source,bash]
+----
+{'result': {'': {},
+            'berlin': {'tag_networking': 'dmz'},
+            'berlin/databases': {'tag_criticality': 'critical'},
+            'essen': {'tag_networking': 'wan'},
+            'essen/linux': {},
+            'munich': {},
+            'munich/network': {'network_scan': {'exclude_ranges': [],
+                                                'ip_ranges': [('ip_network',
+                                                               ('192.168.20.0',
+                                                                24))],
+                                                'run_as': 'automation',
+                                                'scan_interval': 86400,
+                                                'time_allowed': ((20, 0),
+                                                                 (24, 0))},
+                               'tag_agent': 'snmp-only'},
+            'munich/windows': {}},# 
+ 'result_code': 0}
+----
+
+== Gruppenbefehle
+
+Über die Web-API können Sie Kontakt-, Host- und Service-Gruppen in (CMK)
+anlegen, editieren, löschen und natürlich auch abrufen. Dafür stehen die
+folgenden Befehle zur Verfügung:
+
+* `add_contactgroup`
+* `edit_contactgroup`
+* `delete_contactgroup`
+* `get_all_contactgroups`
+* `add_servicegroup`
+* `edit_servicegroup`
+* `delete_servicegroup`
+* `get_all_servicegroups`
+* `add_hostgroup`
+* `edit_hostgroup`
+* `delete_hostgroup`
+* `get_all_hostgroups`
+
+Die Syntax unterscheidet sich nicht zwischen den Befehlen für die
+unterschiedlichen Gruppenarten. Lediglich der Befehl wird je nach Gruppe
+entsprechend angepasst. Aus diesem Grund wird jeder Befehlstyp nur einmal
+erläutert.  Die Beispiele lassen sich dann auf die jeweils anderen beiden
+Gruppenarten übertragen. Für ein besseres Verständnis, werden in den
+Beispielen jeweils unterschiedliche Gruppen verwendet.
+
+*Wichtig:* Alle Befehle müssen immer die Gruppenart enthalten. Wenn
+von `add_group` gesprochen wird und Sie eine Hostgruppe hinzufügen
+wollen, ist der benötigte Befehl `add_*host*group`.
+
+[#get_all_groups]
+=== get_all_groups
+
+Dieser Befehl wird -- wie bei ähnlichen Befehlen auch -- ohne zusätzliche
+Parameter aufgerufen. Die Antwort enthält alle Gruppen mit Namen und Alias:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_all_contactgroups&_username=automation&_secret=myautomationsecret"
+{"result": {"oracle": {"alias": "ORACLE Administrators"}, "windows": {"alias": "Windows Administrators"}, "all": {"alias": "Everything"}, "linux": {"alias": "Linux Administrators"}},# "result_code": 0}
+----
+
+Lesbar sieht die Antwort dann so aus; wie Sie hier sehen können, ist die
+Syntax sehr einfach:
+
+[source,bash]
+----
+{'result': {'all': {'alias': 'Everything'},
+            'linux': {'alias': 'Linux Administrators'},
+            'oracle': {'alias': 'ORACLE Administrators'},
+            'windows': {'alias': 'Windows Administrators'}},# 
+ 'result_code': 0}
+----
+
+
+[#add_group]
+=== add_group
+
+Um eine Gruppe hinzuzufügen, können Sie die Syntax aus
+`get_all_groups` verwenden. Es müssen hier lediglich die ID der Gruppe
+und der Alias angegeben werden. Beachten Sie, dass beim Anlegen einer neuen
+Gruppe die ID mit dem Schlüssel `groupname` übergeben wird:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_hostgroup&_username=automation&_secret=myautomationsecret" -d 'request={"groupname":"linux", "alias":"All Linux Servers"}'
+{"result": null, "result_code": 0}
+----
+
+[#edit_group]
+=== edit_group
+
+Aufgrund der geringen Komplexität des Aufrufs funktioniert das Editieren
+einer Gruppe sehr ähnlich zu dem Anlegen derselben. Einzig der Gruppenname
+(`groupname`) muss natürlich bereits existieren, um seinen Alias
+bearbeiten zu können. In dem Beispiel exisitert die Servicegruppe „cpu_util“
+noch nicht und die Antwort enthält einen Fehler. Bei einem erfolgreichen
+`curl`-Aufruf hätte es die gleiche Antwort gegeben wie bei `add_group`:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_servicegroup&_username=automation&_secret=myautomationsecret" -d 'request={"groupname":"cpu_util", "alias":"CPU utilization of all servers"}'
+{"result": "Check_MK exception: Unknown group: linux", "result_code": 1}
+----
+
+[#delete_group]
+=== delete_group
+
+Auch das Löschen einer Gruppe ist sehr einfach. Sie übergeben hier nur
+den Gruppennamen.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=delete_hostgroup&_username=automation&_secret=myautomationsecret" -d 'request={"groupname":"linux"}'
+{"result": null, "result_code": 0}
+----
+
+
+[#users]
+== Benutzerbefehle
+
+Für die Verwaltung der Benutzer können Sie die folgenden Befehle
+nutzen. Beachten Sie hierbei, dass über LDAP oder Active Directory
+synchronisierte Benutzer zwar abgerufen, aber nicht bearbeitet werden können.
+
+* `add_users`
+* `edit_users`
+* `delete_users`
+* `get_all_users`
+
+[#add_users]
+=== add_users
+
+Um einen Benutzer anzulegen benötigen Sie mindestens den Benutzernamen (ID)
+und den Alias. Damit sich der Benutzer später auch einloggen kann, ist es
+notwendig, auch ein Passwort zu setzen. Dieses wird dann verschlüsselt
+abgespeichert, so dass bei einem Abruf das Passwort nicht im Klartext
+übertragen wird. Lediglich das Passwort für die Automationsbenutzer,
+das `automation_secret`, wird nicht verschlüsselt. Alle weiteren
+Attribute des Benutzers sind optional. Um eine Übersicht zu ein paar
+möglichen Attributen zu bekommen, können Sie sich die Beispielausgabe aus
+[web_api#get_all_users|`get_all_users`] ansehen.
+
+Der `request`-Teil wird dann mit einem `users` begonnen, so
+dass Sie mit einem einzelnen Aufruf mehrere Benutzer gleichzeitig anlegen
+können. Jeder Eintrag beginnt mit der ID des neuen Benutzers:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=add_users&_username=automation&_secret=myautomationsecret" -d 'request={"users":{"hhirsch":{"alias":"Harry Hirsch","password":"myStrongPassword","pager":"+49176555999222"},"customAutomation":{"alias":"Custom Automation User","automation_secret":"mySuperStrongSecret"}}}'# 
+{"result": null, "result_code": 0}
+----
+
+
+[#edit_users]
+=== edit_users
+
+Das Editieren eines Benutzers funktioniert fast genauso wie das Anlegen
+desselben. Sie benötigen die ID des Benutzers und übergeben die Änderungen
+mit `set_attributes`. Mit `unset_attributes` können Sie
+Attribute auf ihre Standardwerte zurücksetzen. Auch bei diesem Befehl
+ist es möglich mehrere Benutzer auf einmal zu bearbeiten.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=edit_users&_username=automation&_secret=myautomationsecret" -d 'request={"users":{"hhirsch":{"set_attributes":{"email":"hhirsch@myCompany.org","contactgroups":["windows"]},"unset_attributes":["pager"]}}}'# 
+{"result": null, "result_code": 0}
+----
+
+Hier noch einmal der `request`-Teil in lesbarer Form:
+
+[source,bash]
+----
+{'users': {'hhirsch': {'set_attributes': {'contactgroups': ['windows'],
+                                          'email': 'hhirsch@myCompany.org'},
+                       'unset_attributes': ['pager']}}}# 
+----
+
+
+[#delete_users]
+=== delete_users
+
+Um einen oder mehrere Benutzer zu löschen, geben Sie unter `users`
+lediglich Benutzer-IDs an.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=edit_users&_username=automation&_secret=myautomationsecret" -d 'request={"users":["customAutomation"]}'
+{"result": null, "result_code": 0}
+----
+
+
+[#get_all_users]
+=== get_all_users
+
+Um die Konfiguration aller Benutzer abzurufen, müssen Sie keine weiteren Parameter im
+`request`-Teil übergeben. Die Antwort enthält dann alle Benutzer-IDs
+und die jeweiligen Attribute. Beachten Sie, dass manche Attribute nur
+ausgegeben werden, wenn Sie auch explizit gesetzt wurden.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_all_users&_username=automation&_secret=myautomationsecret
+----
+
+Die Ausgabe kann sehr umfangreich werden. Aus diesem Grund hier nur zwei
+Beispiele, welche Attribute unter anderem für einen Benutzer zurückkommen können:
+
+[source,bash]
+----
+{'automation': {'alias': u'Check_MK Automation - used for calling web services',
+                'automation_secret': 'myautomationsecret',
+                'contactgroups': [],
+                'disable_notifications': {},
+                'email': u'',
+                'enforce_pw_change': False,
+                'fallback_contact': False,
+                'force_authuser': False,
+                'force_authuser_webservice': False,
+                'last_pw_change': 1504517726,
+                'locked': False,
+                'notifications_enabled': False,
+                'num_failed_logins': 0,
+                'pager': '',
+                'password': '$1$508982$cA48GmuUHxRZn3w2GJUnK0',
+                'roles': ['admin'],
+                'serial': 2,
+                'start_url': 'dashboard.py'},
+ 'hhirsch': {'alias': u'Harry Hirsch',
+             'connector': 'htpasswd',
+             'contactgroups': ['windows'],
+             'disable_notifications': {'disable': True},
+             'email': u'hhirsch@myCompany.org',
+             'enforce_pw_change': True,
+             'fallback_contact': True,
+             'force_authuser': False,
+             'force_authuser_webservice': False,
+             'idle_timeout': 600,
+             'language': None,
+             'last_pw_change': 1504713006,
+             'locked': False,
+             'num_failed_logins': 1,
+             'pager': '+49176555999222',
+             'password': '$1$238168$dGIr7ja6DVn3E8rMlp1aD.',
+             'roles': ['admin', 'user'],
+             'serial': 1,
+             'start_url': 'dashboard.py'}}# 
+----
+
+
+== Regelsetbefehle
+
+(CMK) bietet ab Version VERSION[1.5.0] die Möglichkeit, auch Regeln
+über die Web-API zu setzen und abzurufen. Dafür sind eingehende Kenntnisse
+der Regelsyntax notwendig, so dass sich der Umgang mit den folgenden Befehlen
+eher für erfahrene (CMK)-Nutzer empfiehlt.
+
+* `get_ruleset`
+* `set_ruleset`
+* `get_ruleset_info`
+
+[#get_rulset]
+=== get_ruleset
+
+Es müssen Regeln in einem Regelset definiert sein, damit Sie das Regelset
+abrufen können. Als Eingabe benutzen Sie die ID des Regelsets und als
+`output_format` muss Python definiert werden, da viele Regelsets mit
+Tupeln arbeiten.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_ruleset&_username=automation&_secret=myautomationsecret&output_format=python" -d 'request={"ruleset_name":"checkgroup_paramters:filesystem"}'
+{'result': {'ruleset': {'': [{'conditions': {'host_specs': ['myserver123'], 'service_specs': [u'/media/customers$'], 'host_tags': []}, 'options': {}, 'value': {'levels': (90.0, 95.0)}},# {'conditions': {'host_specs': ['myserver123'], 'service_specs': [u'/media/meetings$'], 'host_tags': []}, 'options': {}, 'value': {'show_levels': 'onproblem', 'levels': (90.0, 95.0), 'trend_range': 24, 'trend_perfdata': True}}]},# 'configuration_hash': 'e069408225932bbfe2a485f22b9fc40e'}, 'result_code': 0}
+----
+
+Wie Sie in der folgenden, lesbarer formatierten Antwort sehen können, werden zu
+einer Regel immer nur die verwendeteten Elemente angezeigt. Außerdem werden
+die Regeln als Liste einem Verzeichnis zugeordnet:
+
+[source,bash]
+----
+{'result': {'ruleset': {'munich': [{'conditions': {'host_specs': ['myserver123'],
+                                                   'host_tags': [],
+                                                   'service_specs': [u'/media/customer$']},
+                                    'options': {},
+                                    'value': {'levels': (90.0, 95.0)}},# 
+                                   {'conditions': {'host_specs': ['myserver123'],
+                                                   'host_tags': [],
+                                                   'service_specs': [u'/media/meeting$']},
+                                    'options': {},
+                                    'value': {'levels': (90.0, 95.0),
+                                              'show_levels': 'onproblem',
+                                              'trend_perfdata': True,
+                                              'trend_range': 24}}]},# 
+            'configuration_hash': 'e069408225932bbfe2a485f22b9fc40e'}
+ 'result_code': 0}
+----
+
+Für die Abfrage braucht es immer die Kenntnis des internen
+Namens der jeweiligen Regel. Sie können sich z.B. mit dem Befehl
+[web_api#get_rulesets_info|get_rulesets_info] die internen Namen (ID) von
+allen Regelsets ausgeben lassen. Zu jedem Eintrag wird dann unter anderem
+auch der Titel angegeben, wie er in WATO zu finden ist. Arbeiten Sie mit
+solchen Mitteln, wenn Sie die ID eines Regelsets noch nicht wissen.
+
+
+[#set_ruleset]
+=== set_ruleset
+
+Auch Regelsets können Sie nur als Gesamtpaket setzen, indem Sie zu einem
+bestimmten Verzeichnis eine oder mehrere Regeln definieren. Diese Regeln
+werden in einer Liste zusammengefasst. Es bietet sich an, zuerst den aktuellen
+Stand eines Regelsets zu holen und auf dieser Basis die Anpassungen
+durchzuführen. Der Parameter `configuration_hash` steht auch hier zur
+Verfügung, um zwischenzeitliche Änderungen nachvollziehen zu können. In
+dem folgenden Beispiel wird die Antwort von oben genutzt, allerdings mit nur einer
+der beiden ausgegebenen Regeln. Achten Sie darauf, dass das `request_format`
+auf Python gesetzt ist, der `request`-Teil in doppelten
+Anführungszeichen steht:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=set_ruleset&_username=automation&_secret=myautomationsecret&request_format=python" -d "request={'ruleset_name':'checkgroup_parameters:filesystem','ruleset': {'': [{'conditions': {'host_specs': ['myserver123'], 'service_specs': [u'/media/customers$'], 'host_tags': []}, 'options': {}, 'value': {'levels': (90.0, 95.0)}}],'configuration_hash':# 'e069408225932bbfe2a485f22b9fc40e'}}"# 
+{'result': None, 'result_code': 0}
+----
+
+Lesbar sieht dann der `request`-Teil so aus:
+
+[source,bash]
+----
+request={
+    'ruleset_name':'checkgroup_parameters:filesystem',
+    'ruleset': {
+        '': [{
+            'conditions': {
+                'host_specs': ['myserver123'],
+                'service_specs': [u'/media/customers$'],
+                'host_tags': []
+            },
+            'options': {},
+            'value': {'levels': (90.0, 95.0)}
+            }],
+        'configuration_hash': 'e069408225932bbfe2a485f22b9fc40e'
+    }
+}
+----
+
+
+[#get_rulesets_info]
+=== get_rulesets_info
+
+Wenn Sie eine Übersicht haben wollen, welche Regelsets es in (CMK) gibt,
+können Sie sie mit diesem Befehl abrufen. Wie Sie sehen, ist auch hier
+Python als Ausgabeformat empfohlen:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_rulesets_info&_username=automation&_secret=myautomationsecret&output_format=python"
+----
+
+Da Sie mit diesem Befehl *alle* verfügbaren Regelsets abrufen, verzichten
+wir auf die umfangreiche Ausgabe. Sie ist ebenso aufgebaut wie sonst auch. Hier
+lesbar exemplarisch zwei Regelsets in der Ausgabe:
+
+[source,bash]
+----
+{'result': {'cmc_service_rrd_config': {'help': 'This configures how many datapoints will be stored of the performance values of services. Please note, that these settings only apply for _new_ services. Existing RRDs cannot be changed.',
+                                       'number_of_rules': 1,
+                                       'title': 'Configuration of RRD databases of services'},
+            'static_checks:ipmi':     {'help': None,
+                                       'number_of_rules': 0,
+                                       'title': 'IPMI sensors'}},# 
+ 'result_code': 0}
+----
+
+Sie können diese Information vor allem auch nutzen, wenn Sie nur den Titel
+kennen, aber nicht die ID. Das hilft in Ihren Skripten, um die Automatisierung
+mit den normalen Titeln vornehmen zu können und damit die Lesbarkeit für
+Wartungen oder Veränderungen zu verbessern.
+
+
+== Hosttagbefehle
+
+Mit den folgenden zwei Befehlen können Sie ab Version VERSION[1.5.0]
+Hosttags sowohl setzen als auch auslesen:
+
+* `get_hosttags`
+* `set_hosttags`
+
+[#get_hosttags]
+=== get_hosttags
+
+Über diesen Befehl können Sie alle Tags abrufen. Es werden sowohl die
+normalen [.guihints]#Host tag groups# als auch die [.guihints]#Auxiliary tags# ausgegeben.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_hosttags&_username=automation&_secret=myautomationsecret"
+{"result": {"aux_tags": [{"id": "snmp", "title": "monitor via SNMP"}, {"id": "tcp", "title": "monitor via Check_MK Agent"}], "tag_groups": [{"tags": [{"aux_tags": [], "id": "prod", "title": "Productive system"}, {"aux_tags": [], "id": "critical", "title": "Business critical"}, {"aux_tags": [], "id": "test", "title": "Test system"}, {"aux_tags": [], "id": "offline", "title": "Do not monitor this host"}], "id": "criticality", "title": "Criticality"}, {"tags": [{"aux_tags": [], "id": "lan", "title": "Local network (low latency)"}, {"aux_tags": [], "id": "wan", "title": "WAN (high latency)"}, {"aux_tags": [], "id": "dmz", "title": "DMZ (low latency, secure access)"}], "id": "networking", "title": "Networking Segment"}], "configuration_hash": "4c2a236ffeabb0c52d4770ea03eff48e"}, "result_code": 0}
+----
+
+In lesbarer Form ist die Antwort folgendermaßen aufgebaut:
+
+[source,bash]
+----
+{'result': {'aux_tags': [{'id': 'snmp', 'title': 'monitor via SNMP'},
+                         {'id': 'tcp', 'title': 'monitor via Check_MK Agent'}],
+            'tag_groups': [{'id': 'agent',
+                            'tags': [{'aux_tags': ['tcp'],
+                                      'id': 'cmk-agent',
+                                      'title': 'Check_MK Agent (Server)'},
+                                     {'aux_tags': ['snmp'],
+                                      'id': 'snmp-only',
+                                      'title': 'SNMP (Networking device, Appliance)'},
+                                     {'aux_tags': ['snmp'],
+                                      'id': 'snmp-v1',
+                                      'title': 'Legacy SNMP device (using V1)'},
+                                     {'aux_tags': ['snmp', 'tcp'],
+                                      'id': 'snmp-tcp',
+                                      'title': 'Dual: Check_MK Agent + SNMP'},
+                                     {'aux_tags': [],
+                                      'id': 'ping',
+                                      'title': 'No Agent'}],
+                            'title': 'Agent type'},
+                           {'id': 'criticality',
+                            'tags': [{'aux_tags': [],
+                                      'id': 'prod',
+                                      'title': 'Productive system'},
+                                     {'aux_tags': [],
+                                      'id': 'critical',
+                                      'title': 'Business critical'},
+                                     {'aux_tags': [],
+                                      'id': 'test',
+                                      'title': 'Test system'},
+                                     {'aux_tags': [],
+                                      'id': 'offline',
+                                      'title': 'Do not monitor this host'}],
+                            'title': 'Criticality'},
+                           {'id': 'networking',
+                            'tags': [{'aux_tags': [],
+                                      'id': 'lan',
+                                      'title': 'Local network (low latency)'},
+                                     {'aux_tags': [],
+                                      'id': 'wan',
+                                      'title': 'WAN (high latency)'},
+                                     {'aux_tags': [],
+                                      'id': 'dmz',
+                                      'title': 'DMZ (low latency, secure access)'}],
+                            'title': 'Networking Segment'}],
+            'configuration_hash': '32deebf233cade1d42387c6a0639ceb1'},
+ 'result_code': 0}
+----
+
+
+[#set_hosttags]
+=== set_hosttags
+
+Die Konfiguration wird, selbst wenn Sie nur einen einzelnen Eintrag
+hinzufügen oder ändern wollen, bei den Hosttags aus technischen Gründen
+immer komplett neu geschrieben. Es bietet sich aus diesem Grund hier an, mit
+Hilfe von `get_hosttags` die Konfiguration zu holen und dann erst die
+Änderungen hinzuzufügen. Die angepasste Konfiguration wird dann an (CMK)
+zurückgeschrieben.
+
+An dieser Stelle ist der `configuration_hash` nützlich. Wenn der
+Hash auf dem (CMK)-Server beim Schreiben der Konfiguration nicht mit dem
+übergebenen übereinstimmt, wird die Annahme der Daten verweigert und ein
+Fehler ausgegeben. Auf diese Weise können Sie sicherzustellen, dass die
+Konfiguration zwischenzeitlich nicht verändert wurde und Sie somit auch
+nicht versehentlich eine Änderung überschreiben/löschen.
+
+In dem folgenden Beispiel erweitern Sie die Konfiguration, welche Sie
+[web_api#get_hosttag_example|oben] als Antwort bekommen haben um das Hosttag
+„location“ mit den Auswahlmäglichkeiten „munich“, „essen“ und „berlin“,
+so dass die Konfiguration nun so aussieht:
+
+[source,bash]
+----
+{'aux_tags': [{'id': 'snmp', 'title': 'monitor via SNMP'},
+              {'id': 'tcp', 'title': 'monitor via Check_MK Agent'}],
+ 'tag_groups': [{'id': 'agent',
+                 'tags': [{'aux_tags': ['tcp'],
+                           'id': 'cmk-agent',
+                           'title': 'Check_MK Agent (Server)'},
+                          {'aux_tags': ['snmp'],
+                           'id': 'snmp-only',
+                           'title': 'SNMP (Networking device, Appliance)'},
+                          {'aux_tags': ['snmp'],
+                           'id': 'snmp-v1',
+                           'title': 'Legacy SNMP device (using V1)'},
+                          {'aux_tags': ['snmp', 'tcp'],
+                           'id': 'snmp-tcp',
+                           'title': 'Dual: Check_MK Agent + SNMP'},
+                          {'aux_tags': [],
+                           'id': 'ping',
+                           'title': 'No Agent'}],
+                 'title': 'Agent type'},
+                {'id': 'criticality',
+                 'tags': [{'aux_tags': [],
+                           'id': 'prod',
+                           'title': 'Productive system'},
+                          {'aux_tags': [],
+                           'id': 'critical',
+                           'title': 'Business critical'},
+                          {'aux_tags': [],
+                           'id': 'test',
+                           'title': 'Test system'},
+                          {'aux_tags': [],
+                           'id': 'offline',
+                           'title': 'Do not monitor this host'}],
+                 'title': 'Criticality'},
+                {'id': 'networking',
+                 'tags': [{'aux_tags': [],
+                           'id': 'lan',
+                           'title': 'Local network (low latency)'},
+                          {'aux_tags': [],
+                           'id': 'wan',
+                           'title': 'WAN (high latency)'},
+                          {'aux_tags': [],
+                           'id': 'dmz',
+                           'title': 'DMZ (low latency, secure access)'}],
+                 'title': 'Networking Segment'},
+                {'id': 'location',
+                 'tags': [{'aux_tags': [],
+                           'id': 'munich',
+                           'title': 'Munich'},
+                          {'aux_tags': [],
+                           'id': 'essen',
+                           'title': 'Essen'},
+                          {'aux_tags': [],
+                           'id': 'berlin',
+                           'title': 'Berlin'}],
+                 'title': 'Location'}],
+ 'configuration_hash': '32deebf233cade1d42387c6a0639ceb1'},
+----
+
+Diese Konfiguration können Sie in den Aufruf von `curl` einbinden
+und an den (CMK)-Server schicken:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=set_hosttags&_username=automation&_secret=myautomationsecret" -d 'request={"aux_tags":[{"id":"snmp","title":"monitor via SNMP"},{"id":"tcp","title":"monitor via Check_MK Agent"}],"tag_groups":[{"title":"Agent type","id":"agent","tags":[{"aux_tags":["tcp"],"id":"cmk-agent","title":"Check_MK Agent (Server)"},{"aux_tags":["snmp"],"id":"snmp-only","title":"SNMP (Networking device, Appliance)"},{"aux_tags":["snmp"],"id":"snmp-v1","title":"Legacy SNMP device (usingV1)"},{"aux_tags":["snmp","tcp"],"id":"snmp-tcp","title":"Dual: Check_MK Agent + SNMP"},{"aux_tags":[],"id":"ping","title":"No Agent"}]},{"title":"Criticality","id":"criticality","tags":[{"aux_tags":[],"id":"prod","title":"Productive system"},{"aux_tags":[],"id":"critical","title":"Business critical"},{"aux_tags":[],"id":"test","title":"Test system"},{"aux_tags":[],"id":"offline","title":"Do not monitor this host"}]},{"title":"Networking Segment","id":"networking","tags":[{"aux_tags":[],"id":"lan","title":"Local network (low latency)"},{"aux_tags":[],"id":"wan","title":"WAN (high latency)"},{"aux_tags":[],"id":"dmz","title":"DMZ (low latency, secure access)"}]},{"tags":[{"aux_tags":[],"id":"munich","title":"Munich"},{"aux_tags":[],"id":"essen","title":"Essen"},{"aux_tags":[],"id":"berlin","title":"Berlin"}],"id":"location","title":"Location"}],"configuration_hash":"32deebf233cade1d42387c6a0639ceb1"}'
+{"result": null, "result_code": 0}
+----
+
+
+== Sites
+
+Ab Version VERSION[1.5.0] können Sie auch auf das Distributed
+Monitoring zugreifen beziehungsweise Verbindungen zu anderen Sites herstellen
+oder löschen. Auf diese Weise lassen sich auch komplett neue Standorte
+automatisiert in (CMK) einbinden. Auf die folgenden Befehle können
+Sie zugreifen:
+
+* `get_site`
+* `set_site`
+* `delete_site`
+* `login_site`
+* `logout_site`
+
+[#get_site]
+=== get_site
+
+Eine Site abzurufen funktioniert fast identisch zu anderen Abfragen über
+die Web-API. Sie geben in dem `request`-Teil die ID der site an,
+die sie abrufen wollen. Achten Sie darauf, dass dieser Befehl Python als
+`output_format` benötigt:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_site&_username=automation&_secret=myautomationsecret&output_format=python" -d 'request={"site_id":"mySlave"}'
+{'result': {'site_id': 'mySlave', 'site_config': {'url_prefix': 'http://mySlaveServer/mySlave/', 'user_sync': None, 'user_login': True, 'insecure': False, 'disabled': False, 'replication': 'slave', 'multisiteurl': 'http://mySlaveServer/mySlave/check_mk/', 'replicate_mkps': True, 'status_host': ('heute', 'mySlave'), 'socket': ('proxy', {'params': None, 'socket': ('mySlaveServer', 6557)}), 'disable_wato': True, 'alias': u'My Slave Check_MK', 'timeout': 10, 'persist': True, 'replicate_ec': True}, 'configuration_hash': '136bd84ff62dfa4e0a4325c6431e294b'}, 'result_code': 0}
+----
+
+In lesbarer Form sieht die Antwort so aus:
+
+[source,bash]
+----
+{'result': {'site_id': 'mySlave',
+            'site_config': {'alias': u'My Slave Check_MK',
+                            'disable_wato': True,
+                            'disabled': False,
+                            'insecure': False,
+                            'multisiteurl': 'http://mySlaveServer/mySlave/check_mk/',
+                            'persist': True,
+                            'replicate_ec': True,
+                            'replicate_mkps': True,
+                            'replication': 'slave',
+                            'socket': ('proxy',
+                                       {'params': None,
+                                        'socket': ('mySlaveServer', 6557)}),
+                            'status_host': ('mysite', 'mySlave'),
+                            'timeout': 10,
+                            'url_prefix': 'http://mySlaveServer/mySlave/',
+                            'user_login': True,
+                            'user_sync': None},
+            'configuration_hash': '136bd84ff62dfa4e0a4325c6431e294b',},
+ 'result_code': 0}
+----
+
+
+[#set_site]
+=== set_site
+
+Verbindungen zu Sites können immer nur als Ganzes verändert werden, so
+dass auch bestehende Verbindungen komplett neu geschrieben werden müssen,
+wenn Sie über die Web-API eine Anpassung vornehmen wollen. Hier empfiehlt
+es sich, bei einer Anpassung vorher mit `get_site` den aktuellen
+Stand zu holen, die Änderungen in die Antwort einzupflegen und dann
+wieder an (CMK) zu schicken. Auch hier können Sie wieder, wie schon bei
+[web_api#get_folder|`get_folder`], den `configuration_hash`
+nutzen, um sicherzustellen, dass zwischenzeitlich keine Veränderung an der
+Konfiguration vorgenommen wurde.
+
+In dem folgenden Beispiel nehmen Sie die Konfiguration von oben und ändern
+lediglich den [.guihints]#Alias# (`alias`) und die [.guihints]#Persistent Connection}}# 
+(`persist`). Das `request`-Format muss in diesem Fall auf
+Python stehen und der `request`-Teil in doppelten Anführungszeichen:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=set_site&_username=automation&_secret=myautomationsecret&request_format=python" -d "request={'site_id': 'mySlave', 'site_config': {'url_prefix': 'http://mySlaveServer/mySlave/', 'user_sync': None, 'user_login': True, 'insecure': False, 'disabled': False, 'replication': 'slave', 'multisiteurl': 'http://mySlaveServer/mySlave/check_mk/', 'replicate_mkps': True, 'status_host': ('heute', 'mySlave'), 'socket': ('proxy', {'params': None, 'socket': ('mySlaveServer', 6557)}), 'disable_wato': True, 'alias': u'My Slave', 'timeout': 10, 'persist': False, 'replicate_ec': True}, 'configuration_hash': '136bd84ff62dfa4e0a4325c6431e294b'}"
+{"result": null, "result_code": 0}
+----
+
+[#delete_site]
+=== delete_site
+
+Um die Verbindung zu einer Site zu löschen, benötigen Sie nur die ID. Optional
+können Sie auch hier mit dem `configuration_hash` arbeiten.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=delete_site&_username=automation&_secret=myautomationsecret" -d 'request={"site_id":"mySlave"}'{"result": null, "result_code": 0}
+----
+
+
+[#login_site]
+=== login_site & logout_site
+
+Um eine per Web-API erstellte Verbindung zu einer Site auch direkt nutzen
+zu können, können Sie sich auf der Site auch ein- und ausloggen. Für den
+Login übergeben Sie den Benutzernamen und das Passwort zusätzlich zu der
+ID der Site.
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=login_site&_username=automation&_secret=myautomationsecret" -d 'request={"site_id":"mySlave","username":"cmkadmin","password":"cmk"}'
+{"result": null, "result_code": 0}
+----
+
+Um sich wieder auszuloggen reicht es, wenn die ID der Site angegeben wird:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=logout_site&_username=automation&_secret=myautomationsecret" -d 'request={"site_id":"mySlave"}'{"result": null, "result_code": 0}
+----
+
+
+[#bake_agents]
+== Agent Bakery Befehle
+
+[CEE]Über die API können Sie auch automatisiert Agenten backen lassen. Auf
+diese Weise können Sie die automatisch erstellten Konfigurationen direkt
+in die Agenten einfließen lassen. Lediglich die Signierung der Agenten wird
+noch manuell erledigt, so dass die Konfiguration der gebackenen Agenten noch
+einmal kontrolliert werden kann und weiterhin die volle Kontrolle darüber
+besteht, welche Agenten auch wirklich an die Hosts ausgeliefert werden.
+
+Der Aufruf ist sehr einfach und nutzt den Befehl `bake_agents`:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=bake_agents&_username=automation&_secret=myautomationsecret"
+{"result": "Successfully baked agents", "result_code": 0}
+----
+
+== Befehle zu Statusdaten
+
+[#get_graph]
+=== Metriken
+
+[CEE](CMK) bietet zwar die Möglichkeit, externe Metrik-Datenbanken
+anzubinden. Sie können prinzipiell jedoch mit dem Befehl `get_graph`
+von jeder Drittsoftware aus auf die Metrik-Daten von (CMK) zugreifen. Dabei
+sind Sie nicht nur auf die von uns vorgegebenen Graphen festgelegt, sondern
+können auch selbst angelegte Custom-Graphen abrufen. Es werden dann immer
+die Daten zu einem kompletten Graphen ausgegeben; selbst wenn dieser mehrere
+Metriken enthält.
+
+Wenn Sie einen Graphen abrufen wollen, welcher von uns direkt bereitgestellt
+wird, so ist die Syntax des `request`-Teils folgendermaßen aufgebaut:
+
+[source,bash]
+----
+{'specification': ['template',
+                   {'graph_index': 0,
+                    'host_name': 'myserver123',
+                    'service_description': 'Memory',
+                    'site': 'mysite'}],
+ 'data_range': {'time_range': [1504623158, 1504626758]}}# 
+----
+
+Beachten Sie, dass der Zeitraum in Unixzeit angegeben wird. Der
+`graph_index` gibt den Graphen an, den Sie holen möchten. In dem
+Beispiel wird der erste Graph des Services [.guihints]#Memory# abgerufen, welcher
+unter Linux bei dem Service Memory [.guihints]#RAM + Swap overview# ist. Wollen Sie
+stattdessen den Graphen [.guihints]#RAM used# abrufen, zählen Sie die Graphen von
+0 beginnend durch. Der komplette Aufruf für einen Zeitraum von 10 Minuten
+(600 Sekunden) sieht dann z.B. so aus:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_graph&_username=automation&_secret=myautomationsecret" -d 'request={"specification":["template",{"service_description":"Memory","site":"heute","graph_index":4,"host_name":"heute"}],"data_range":{"time_range":[1504626158, 1504626758]}}'# 
+{"result": {"step": 60, "start_time": 1504626180, "end_time": 1504626780, "curves": [{"color": "#80ff40", "rrddata": [3752390000.0, 3746380000.0, 3770930000.0, 3773230000.0, 3796020000.0, 3787010000.0, 3777880000.0, 3781040000.0, 3798920000.0, 3805910000.0], "line_type": "area", "title": "RAM used"}]}, "result_code": 0}
+----
+
+Die Abfrage eines selbst erstellten Graphen ist etwas einfacher,
+da dieser nicht an einen bestimmen Host, Service oder eine bestimmte
+Site gebunden ist. Bedenken Sie jedoch, dass der Automationsbenutzer
+(z.B. `automation`) einen solchen Graphen nur dann abrufen
+kann, wenn dieser für alle Benutzer freigegeben wurde:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_graph&_username=automation&_secret=myautomationsecret" -d 'request={"specification":["custom","all_disk_utilization"],"data_range":{"time_range":[1504709932, 1504710532]}}'# 
+{"result": {"step": 60, "start_time": 1504709940, "end_time": 1504710540, "curves": [{"color": "#ea905d", "rrddata": [6.2217, 0.728733, 0.7748, 0.158085, 1.90726, 15.2222, 22.6851, 7.31163, 1.96834, 0.413633], "line_type": "stack", "title": "Disk utilization sdb"}, {"color": "#a05830", "rrddata": [1.45488, 0.101608, 0.0832167, 0.0342933, 0.235585, 0.166253, 14.9513, 25.112, 11.2032, 0.400437], "line_type": "stack", "title": "Disk utilization sda"}]}, "result_code": 0}
+----
+
+[#get_sla]
+=== SLAs
+
+[CEE]SLAs können ab VERSION[1.5.0b8] mit dem Befehl `get_sla` abgerufen werden. Für eine solche Abfrage, können die folgenden Zeitdaten verwendet werden:
+
+[cols=, options="header"]
+|===
+
+
+|Zeitraum
+|ID in der Abfrage
+
+
+|Today
+|`d0`
+
+
+|Yesterday
+|`d1`
+
+
+|This week
+|`w0`
+
+
+|Last week
+|`w1`
+
+
+|This month
+|`m0`
+
+
+|Last month
+|`m1`
+
+
+|This year
+|`y0`
+
+
+|Last year
+|`y1`
+
+
+|The last...
+|`last:86400`
+
+
+|Time range
+|`range:1530271236:1530281236`
+
+|===
+
+Die eigentliche Syntax, um eine oder mehrere SLAs abzurufen ist folgendermaßen aufgebaut:
+
+[source,bash]
+----
+{'query': [[['my_sla_id1'],
+           ['w1', w0],
+           [['myhost123', 'CPU load'], ['myhost234', 'CPU load']]],
+          [['my_sla_id2'],
+           ['m0'],
+           [['myhost123', 'CPU load']]]],
+}
+----
+
+Sie können in jeder Liste beliebig viele Werte angeben und so über eine
+oder mehrere SLAs auch mehrere Host/Service-Paare und mehrere Zeitrüme
+enthalten. So würde in dem Beispiel die erste Liste vier Ergebnisse
+zurückliefern (2 Zeiträume x 2 Host/Service-Paare) und die zweite Liste ein
+Ergebnis. In dem folgenden Beispielaufruf rufen wir nur die zweite Liste ab:
+
+[source,bash]
+----
+curl "http://myserver/mysite/check_mk/webapi.py?action=get_sla&_username=automation&_secret=myautomationsecret" -d "request={'query':[[['my_sla_id2'],['m0'],[['myhost123','CPU load']]]]}"
+----
+
+Die Ausgabe in lesbarer Form ist dann folgendermaßen aufgebaut:
+
+[source,bash]
+----
+{'result': {'mysite':
+                {'myhost123':
+                    {'CPU load': {(
+                        ('myhost123', 'CPU load'),
+                        'my_sla_id2',
+                        ('sla_period_range',
+                        (0, 1)),
+                        'weekly'):
+                            {'plugin_results': [{
+                                'plugin_id': 'service_state_percentage',
+                                'timerange_sla_duration': 1000934.0,
+                                'period_results': [{
+                                    'duration': 604800.0,
+                                    'sla_broken': False,
+                                    'subresults': [{
+                                        'sla_broken': False,
+                                        'requirement': (0, 'min', 0.0),
+                                        'error_instances': [],
+                                        'deviation_info': {
+                                            'deviation': 0.0,
+                                            'limit': 0.0,
+                                            'levels': (0, 0),
+                                            'deviation_state': 2}}],# 
+                                    'statistics': {
+                                        'duration': {-1: 604800.0},
+                                        'percentage': {-1: 100.0}},# 
+                                        'timerange': (1529272800.0, 1529877600.0)},
+                                {'duration': 396134.0,
+                                'sla_broken': False,
+                                'subresults': [{
+                                    'sla_broken': False,
+                                    'requirement': (0, 'min', 0.0),
+                                    'error_instances': [],
+                                    'deviation_info': {
+                                        'deviation': 2.7202916184927326,
+                                        'limit': 0.0,
+                                        'levels': (0, 0),
+                                        'deviation_state': 0}}],# 
+                                'statistics': {
+                                    'duration': {0: 10776, -1: 385358.0},
+                                    'percentage': {0: 2.7202916184927326, -1: 97.27970838150726}},# 
+                                'timerange': (1529877600.0, 1530273734)}]}],
+                            'sla_id': 'sla_configuration_1',
+                            'sla_period': 'weekly'}}}}},# 
+ 'result_code': 0}
+----
+
+
+== Befehle für Grafana
+
+Um das Grafana-Plugin nutzen zu können, welches checkmk als _Datasource_ implementiert, gibt es spezielle Befehle. Sie können diese Befehle aber natürlich auch unabhängig von Grafana oder dem Plugin nutzen:
+
+* `get_user_sites`
+* `get_host_names`
+* `get_metrics_of_host`
+* `get_graph_recipes`
+
+
+[#get_user_sites]
+=== get_user_sites
+
+Ein Benutzer darf nicht unbedingt auf alle Instanzen zugreifen. Um herauszufinden, welche Instanzen für den Automationsbenutzer verfügbar sind, kann dieser Befehl verwendet werden. Er benötigt keine Optionen und es können auch keine optionalen angegeben werden:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_user_sites&_username=automation&_secret=myautomationsecret"
+----
+
+Die Ausgabe enthält eine Liste der Instanzen zusammen mit ihrem Alias:
+
+[source,bash]
+----
+{'result':
+    [['mysite', 'My Site Alias'],
+    ['myslave1', 'My Slave 1 Alias']]
+}
+----
+
+
+[#get_host_names]
+=== get_host_names
+
+Normalerweise zielt ein Befehl der WebAPI immer nur auf eine bestimmte
+Checkmk-Instanz. Mit diesem Befehl können Sie sich die Hostnamen aller
+verbundenen Instanzen in einer Liste ausgeben lassen. Dabei ist es egal,
+ob es sich um Slave-Instanzen handelt, die über die abegrufene konfiguriert
+werden oder es nur eine lesende Verbindung gibt. Der Befehl gibt auch nur die
+Namen der Hosts aus, welche den einzelnen Instanzen bekannt sind. Optional
+können Sie die Abfrage auf eine einzelne Instanz einschränken:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_host_names&_username=automation&_secret=myautomationsecret" -d 'request={"site_id":"mysite"}'
+----
+
+Die Ausgabe enthält dann eine einfache Liste der Hostnamen:
+
+[source,bash]
+----
+{'result':
+    ['myhost123', 'myhost234', 'myslavehost345']
+}
+----
+
+*Wichtig*:
+In der Antwort ist keinerlei Information enthalten, auf welcher Instanz der
+Host läuft. Doppelte Namen können also nicht mehr zugeordnet werden.
+
+
+[#get_metrics_of_host]
+=== get_metrics_of_host
+
+Wenn Sie Informationen benötigen, über welchen Metriken ein Host
+verfügt, können Sie diesen Befehl verwenden. Er eignet sich auch
+sehr gut als Grundlage für den schon länger vorhandenen Befehl
+[web_api_references#get_graph|`get_graph`]. Auch hier ist die Angabe
+einer bestimmten Instanz optional:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_metrics_of_host&_username=automation&_secret=myautomationsecret" -d 'request={"hostname":"myslavehost345", "site_id":"myslave1"}'
+----
+
+Da die Antwort _alle_ Services Metriken des Hosts entählt, hier nur
+ein kleiner Ausschnitt, wie so eine Ausgabe aussehen kann. Wie sie hier
+erkennen können, werden auch Services ausgegeben, welche über keine
+Metriken verfügen:
+
+[source,bash]
+----
+{'result':
+    {'CPU utilization':
+        {'check_command': 'check_mk-kernel.util',
+         'metrics':
+            {'system': {'index': 3, 'name': 'system', 'title': 'System'},
+             'user': {'index': 2, 'name': 'user', 'title': 'User'},
+             'util': {'index': 0, 'name': 'util', 'title': 'CPU utilization'},
+             'wait': {'index': 1, 'name': 'io_wait', 'title': 'I/O-wait'}
+            }
+        }
+    }
+    {'Mount options of /':
+        {'check_command': 'check_mk-mounts',
+         'metrics': {}
+        }
+    }
+}
+----
+
+
+[#get_graph_recipes]
+=== get_graph_recipes
+
+Mit diesem Befehl bekommen Sie alle nötigen Informationen zu einem konkreten Graph. So eine Graph-Definition enthält nicht nur die beteiligten Metriken, sondern auch deren Farben, Einheiten, Titel, die Auflösung, usw. Der `request`-Teil des Befehls ähnelt sich sehr stark dem von dem Befehl `get_graph`. Einen Zeitraum brauchen Sie hier aber nicht angeben, da es hier ja lediglich um die Rahmendaten geht. Hier ein Beispiel anhand des Service _CPU load_:
+
+[source,bash]
+----
+RP:curl "http://myserver/mysite/check_mk/webapi.py?action=get_graph_recipes&_username=automation&_secret=myautomationsecret" -d 'request={"specification":["template", {"service_description": "CPU load", "graph_index": 0, "host_name": "myhost123", "site": "mysite"}]}'
+----
+
+
+Und die Antwort zu der Abfrage dieses Services könnte dann so aussehen:
+
+[source,bash]
+----
+{'result': [{'consolidation_function': 'max',
+             'explicit_vertical_range': (None, None),
+             'horizontal_rules': [(20.0, '20.0', '#ffff00', u'Warning'),
+                                  (40.0, '40.0', '#ff0000', u'Critical')],
+             'metrics': [{'color': '#00d1ff',
+                          'expression': ('rrd',
+                                         'heute',
+                                         u'heute',
+                                         u'CPU load',
+                                         'load1',
+                                         None,
+                                         1.0),
+                          'line_type': 'area',
+                          'title': u'CPU load average of last minute',
+                          'unit': ''},
+                         {'color': '#428399',
+                          'expression': ('rrd',
+                                         'heute',
+                                         u'heute',
+                                         u'CPU load',
+                                         'load5',
+                                         None,
+                                         1.0),
+                          'line_type': 'line',
+                          'title': u'CPU load average of last 5 minutes',
+                          'unit': ''},
+                         {'color': '#2c5766',
+                          'expression': ('rrd',
+                                         'heute',
+                                         u'heute',
+                                         u'CPU load',
+                                         'load15',
+                                         None,
+                                         1.0),
+                          'line_type': 'line',
+                          'title': u'CPU load average of last 15 minutes',
+                          'unit': ''}],
+             'omit_zero_metrics': False,
+             'specification': ('template',
+                               {u'graph_index': 0,
+                                u'host_name': u'heute',
+                                u'service_description': u'CPU load',
+                                u'site': u'heute'}),
+             'title': u'CPU Load - 4.0  CPU Cores',
+             'unit': ''}],
+ 'result_code': 0}
+----
+
+
+== Aufrufoptionen und Befehlsübersicht
+
+
+[#list]
+=== Befehle
+
+[cols=, options="header"]
+|===
+
+
+|Befehl
+|request_format
+|output_format
+|Notwendig
+|Optional
+
+
+|---
+|---
+|---
+|---
+|---
+
+
+|Hostbefehle
+|
+|
+|
+|
+
+
+|get_host
+|-
+|-
+|hostname
+|effective_attributes
+
+
+|add_host
+|-
+|-
+|hostname, folder
+|attributes, nodes, create_folders
+
+
+|edit_host
+|-
+|-
+|hostname
+|unset_attributes, attributes, nodes
+
+
+|delete_host
+|-
+|-
+|hostname
+|-
+
+
+|delete_hosts
+|-
+|-
+|hostnames
+|-
+
+
+|get_all_hosts
+|-
+|-
+|-
+|effective_attributes
+
+
+|discover_services
+|-
+|-
+|hostname
+|mode
+
+
+|Verzeichnisbefehle
+|
+|
+|
+|
+
+
+|get_folder
+|-
+|-
+|folder
+|effective_attributes
+
+
+|add_folder
+|-
+|-
+|folder, attributes
+|create_parent_folders
+
+
+|edit_folder
+|-
+|-
+|folder
+|attributes, configuration_hash
+
+
+|delete_folder
+|-
+|-
+|folder
+|configuration_hash
+
+
+|get_all_folder
+|-
+|-
+|-
+|effective_attributes
+
+
+|Gruppenbefehle
+|
+|
+|
+|
+
+
+|add_contactgroup, add_hostgroup, add_servicegroup
+|-
+|-
+|groupname, alias, customer*
+|nagvis_maps**
+
+
+|edit_contactgroup, edit_hostgroup, edit_servicegroup
+|-
+|-
+|groupname, alias, customer*
+|nagvis_maps**
+
+
+|delete_contactgroup, delete_hostgroup, delete_servicegroup
+|-
+|-
+|groupname
+|
+
+
+|get_all_contactgroups, get_all_hostgroups, get_all_servicegroups
+|-
+|-
+|-
+|-
+
+
+|Benutzerbefehle
+|
+|
+|
+|
+
+
+|add_users
+|-
+|-
+|users
+|-
+
+
+|edit_users
+|-
+|-
+|users
+|-
+
+
+|delete_users
+|-
+|-
+|users
+|-
+
+
+|get_all_users
+|-
+|-
+|-
+|-
+
+
+|Regelsetbefehle
+|
+|
+|
+|
+
+
+|get_ruleset
+|-
+|Python
+|ruleset_name
+|-
+
+
+|set_ruleset
+|Python
+|-
+|ruleset_name, ruleset
+|configuration_hash
+
+
+|get_ruleset_info
+|-
+|-
+|-
+|-
+
+
+|Hosttagbefehle
+|
+|
+|
+|
+
+
+|get_hosttags
+|-
+|-
+|-
+|-
+
+
+|set_hosttags
+|-
+|-
+|tag_groups, aux_tags
+|configuration_hash
+
+
+|Sitebefehle
+|
+|
+|
+|
+
+
+|get_site
+|-
+|Python
+|site_id
+|-
+
+
+|set_site
+|Python
+|-
+|site_config, site_id
+|configuration_hash
+
+
+|delete_site
+|-
+|-
+|site_id
+|configuration_hash
+
+
+|login_site
+|-
+|-
+|site_id, username, password
+|-
+
+
+|logout_site
+|-
+|-
+|site_id
+|-
+
+
+|Befehle für Grafana
+|
+|
+|
+|
+
+
+|get_user_sites
+|-
+|-
+|-
+|-
+
+
+|get_host_names
+|-
+|-
+|-
+|site_id
+
+
+|get_metrics_of_host
+|-
+|-
+|hostname
+|site_id
+
+
+|get_graph_recipes
+|-
+|-
+|specification
+|-
+
+
+|Andere Befehle
+|
+|
+|
+|
+
+
+|activate_changes
+|-
+|-
+|-
+|mode, sites, allow_foreign_changes, comment
+
+
+|bake_agents
+|-
+|-
+|-
+|-
+
+
+|get_graph
+|-
+|-
+|specification, data_range
+|-
+
+
+|get_sla
+|-
+|Python
+|query
+|-
+
+|===
+
+* Nur, wenn die (CME) genutzt wird.
+
+** Nur für Befehle zu Kontaktgruppen.

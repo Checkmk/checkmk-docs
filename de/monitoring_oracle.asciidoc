@@ -1,0 +1,785 @@
+= Oracle-Datenbanken überwachen
+:revdate: 2019-06-19
+[.seealso][#agent_linux] [#wato_monitoringagents] [#check_plugins_catalog]MT:Oracle Datenbanken effizient überwachen
+MD:Mit dem Plugin fÜr Windows, Linux, Solaris und AIX überwachen Sie vollumfänglich Oracle-Datenbanken. Details zur Konfiguration erfahren Sie hier.
+
+== Einleitung
+
+(CMK) bietet Ihnen umfangreiche Möglichkeiten, Oracle-Datenbanken
+zu überwachen. So können Sie mit dem Plugin nicht nur Tablespaces
+oder die aktiven Sitzungen einer Datenbank abrufen, sondern
+zusätzlich noch viele andere Metriken. Eine vollständige
+Liste der Überwachungsmöglichkeiten können Sie in unserem
+[check_plugins_catalog|Katalog der Check-Plugins] nachlesen. Wir erweitern
+dieses Plugin regelmäßig, so dass sich ein Blick in den Katalog immer
+wieder lohnt. Unter anderem kann (CMK) die folgenden Werte überwachen (einige
+der Plugins erst ab Version VERSION[1.6.0]):
+
+* [check_oracle_recovery_status|Check Checkpoint and user managed Backup state of datafiles]
+* [check_oracle_undostat|Check Undo Retention of Oracle Instances]
+* [check_oracle_dataguard_stats|Check apply and transport lag of Oracle Data-Guard]
+* [check_oracle_rman|Check the RMAN Backup Status]
+* [check_oracle_sql|Custom SQLs for Oracle DBs]
+* [check_oracle_logswitches|Log switch activity of ORACLE database]
+* [check_oracle_sessions|Number of active sessions in ORACLE database]
+* [check_oracle_asm_diskgroup|ORACLE ASM Disk Groups]
+* [check_oracle_jobs|ORACLE Database Jobs]
+* [check_oracle_locks|ORACLE Database Locks]
+* [check_oracle_longactivesessions|ORACLE Database Long Active Sessions]
+* [check_oracle_processes|ORACLE Database Processes]
+* [check_oracle_recovery_area|ORACLE Database Recovery Area]
+* [check_oracle_rman_backups|ORACLE RMAN Backups]
+* [check_oracle_performance|ORACLE tablespaces: perfomance data]
+* [check_oracle_crs_res|Oracle Clusterware: Cluster Resources]
+* [check_oracle_crs_version|Oracle Clusterware: Version Information]
+* [check_oracle_crs_voting|Oracle Clusterware: Voting Check]
+* [check_oracle_instance|Oracle Database Instance]
+* [check_oracle_tablespaces|Various aspects of ORACLE tablespaces]
+* [check_oracle_version|Version of an ORACLE database checked by login]
+
+Um die Datenbanken überwachen zu können, brauchen Sie lediglich das
+Plugin zusätzlich zu dem Agenten auf dem Datenbankserver. Unterstützt
+werden dafür zur Zeit die Betriebssysteme Linux, AIX, Solaris, HP-UX und
+Windows. Zusätzliche Software wird weder auf der (CMK)-Instanz noch auf
+dem Datenbankserver für eine Überwachung benötigt.
+
+Im Folgenden wird die Einrichtung über Linux beschrieben. Für die
+anderen unixoiden Betriebssysteme gilt die gleiche Beschreibung.
+Grundsätzliches zu der Einrichtung unter Windows finden Sie weiter
+[monitoring_oracle#windows|unten], ebenso, wie die Einrichtung über die
+[monitoring_oracle#bakery|Agent Bakery].
+
+
+[#simple_config]
+== Erste Einrichtung
+
+Die Überwachung einer einfachen lokalen Instanz ist in nur drei Schritten
+konfiguriert. Es gibt dabei lediglich die folgenden Vorraussetzungen:
+
+*  Sie haben die Berechtigung, Benutzer in der Datenbank anzulegen.
+*  Sie haben Systemrechte auf dem zu überwachenden Server.
+
+[#dbuser]
+==== Benutzer anlegen
+
+Die Benutzer werden für jede Datenbank einzeln angelegt. Sie müssen
+also vor jedem Login die jeweilige Instanz als Environment-Variable setzen,
+z.B. für die SID [.guihints]#MYINST1}}:# 
+
+[source,bash]
+----
+RP:su - oracle
+UP(oracle@linux):export ORACLE_SID=MYINST1
+----
+
+Loggen Sie sich danach in die Instanz ein, legen Sie einen Benutzer für
+das Monitoring an und geben Sie ihm die nachfolgenden Berechtigungen. Unser
+Benutzer heißt _check_mk_, der Name ist jedoch prinzipiell egal:
+
+[source,bash]
+----
+UP(sqlplus>):create user check_mk identified by myPassword;
+UP(sqlplus>):grant select_catalog_role to check_mk;
+UP(sqlplus>):grant create session to check_mk;
+UP(sqlplus>):connect check_mk/myPassword
+UP(sqlplus>):exit
+----
+
+==== Konfigurationsdatei anlegen
+
+Danach legen Sie die Konfigurationsdatei `mk_oracle.cfg` unter
+`/etc/check_mk` an:
+
+./etc/check_mk/mk_oracle.cfg
+
+----# Syntax:
+# DBUSER='USERNAME:PASSWORD'
+DBUSER='check_mk:mypassword'
+----
+
+Achten Sie darauf, dass die Datei nur von
+`root` lesbar ist und niemand anderes darauf zugreifen kann:
+
+[source,bash]
+----
+RP:chmod 600 /etc/check_mk/mk_oracle.cfg
+----
+
+==== Skript in das Pluginverzeichnis schieben
+
+Das Plugin [.guihints]#mk_oracle# bzw. [.guihints]#mk_oracle.aix# finden Sie unter
+`share/check_mk/agents/plugins/`. Falls Sie keinen Zugriff auf die Kommandozeile
+des Monitoringservers haben, können Sie die Datei auch über
+den Browser erreichen; die Adresse: `myserver/mysite/check_mk/agents/plugins/`.
+
+Wählen Sie die für Ihren Datenbankserver richtige Version des Plugins
+aus. Das Plugin [.guihints]#mk_oracle.ps1# für Windows-Server liegt unter
+`myHost/mySite/check_mk/agents/windows/plugins/`. Bitte beachten
+Sie, dass das Plugin [.guihints]#mk_oracle.bat# veraltet ist und nicht mehr benutzt
+werden sollte.
+
+Legen Sie das Plugin auf dem Datenbankserver in dem Verzeichnis
+`/usr/lib/check_mk_agent/plugins/` ab und stellen Sie sicher, dass
+das Plugin ausführbar ist:
+
+[source,bash]
+----
+RP:cp mk_oracle /usr/lib/check_mk_agent/plugins/
+RP:cd /usr/lib/check_mk_agent/plugins
+RP:ls -lA
+-rw-r--r-- 1 root root 49743 Jan 25 11:29 mk_oracle
+RP:chmod +x mk_oracle
+RP:ls -lA
+-rwxr-xr-x 1 root root 49743 Jan 25 11:29 mk_oracle
+----
+
+In älteren Versionen des (CMK)-Agenten kann sich das Pluginverzeichnis
+auch [agent_linux#manualplugins|an einem anderen Ort] befinden.
+
+Haben Sie diese Schritte erledigt, ist die Installation bereits komplett
+und Sie können in (CMK) eine [wato_hosts#services|Serviceerkennung]
+durchführen und die neu erkannten Services aktivieren. Der Screenshot zeigt
+in diesem Fall nur eine Auswahl der Services:
+
+image::bilder/oracle_discovery.png[]
+
+
+[#advanced_config]
+== Erweiterte Konfiguration
+
+Je nach Anwendungsszenario stehen Ihnen einige weitere Möglichkeiten zur
+Verfügung um die Überwachung von Oracle-Datenbanken zu konfigurieren. Alle
+diese Optionen stehen Ihnen auch in der [monitoring_oracle#bakery|Agent Bakery]
+zur Verfügung. Für die Konfiguration des Benutzers gibt es die
+folgenden Optionen:
+
+[cols=25, options="header"]
+|===
+
+
+|Parameter
+|Beschreibung
+
+
+|`DBUSER`
+|Die Zugangsdaten für die Datenbankinstanz, wenn für alle die gleichen
+Logindaten konfiguriert wurden, bzw. als Standard für nicht explizit
+definierte SIDs.
+
+
+|`DBUSER_MYINST1`
+|Zugangsdaten für die Datenbankinstanz MYINST1. Die Logindaten werden nur für
+die angegebene SID benutzt.
+
+
+|`ASMUSER`
+|Die Zugangsdaten für das Automatic Storage Management (ASM).
+
+|===
+
+So können Sie genau bestimmen, ob Sie auf jeder Datenbank die
+gleichen Benutzerdaten anlegen oder für einzelne separate Logins
+vergeben. Für die ASM kann nur ein Benutzer angegeben werden. Rolle, Host und
+Port sind optional und können ausgelassen werden. Eine `mk_oracle.cfg`
+kann dann so aussehen:
+
+./etc/check_mk/mk_oracle.cfg
+
+----# Syntax:
+# DBUSER='myUser:mypassword:role:host:port'
+DBUSER='check_mk:myPassword'
+DBUSER_MYINST1='this_user:this_password:sysdba:localhost:1521'
+DBUSER_MYINST2='that_user:that_password::localhost'
+----
+
+Zusätzlich sind die folgenden Optionen verfügbar, mit deren Hilfe Sie
+unter anderem bestimmen, welche Daten in welcher Reihenfolge geholt werden sollen:
+
+[cols=25, options="header"]
+|===
+
+
+|Parameter
+|Beschreibung
+
+
+|`ONLY_SIDS`
+|Überwachung nur für die hier festgelegten SIDs. Alle anderen Instanzen
+werden ignoriert. 
+
+
+|`EXCLUDE_MYINST1`
+|Die Instanz MYINST1 wird bei der Überwachung ganz oder teilweise nicht
+berücksichtigt. Dies kann sinnvoll sein, wenn nur einige wenige SIDs
+ausgeschlossen werden sollen und die Zahl der zu überwachenden Instanzen
+größer ist oder einzelne Sektionen in bestimmten SIDs nicht abgefragt
+werden sollen. Mögliche Werte sind {{ALL}} oder Namen von Sektionen.
+
+
+|`SYNC_SECTIONS`
+|Sektionen sind alle SQL-Statements bzw. Funktionen in dem Plugin. Dieser
+Parameter bestimmt, welche Sektionen synchron abgefragt werden sollen. Wenn
+der Parameter nicht genutzt wird, werden die Standardwerte genommen, wie
+in dem unten stehenden Konfigurationsbeispiel zu sehen. *Wichtig:* Wenn die
+Sektionen manuell gesetzt werden, müssen alle Sektionen in {{SYNC_SECTIONS}}
+oder {{ASYNC_SECTIONS}} vorkommen. Anderfalls werden diese *nicht*
+abgefragt!
+
+
+|`ASYNC_SECTIONS`
+|Sektionen, welche asynchron abgefragt werden sollen, werden hier
+bestimmt. Der Wert wird dann eine bestimmte Zeit vorgehalten. Siehe
+{{CACHE_MAXAGE}}.
+
+
+|`SYNC_ASM_SECTIONS`
+|Siehe {{SYNC_SECTIONS}}; Gilt für Sektionen der ASM.
+
+
+|`ASYNC_ASM_SECTIONS`
+|Siehe {{ASYNC_SECTIONS}}; Gilt für Sektionen der ASM.
+
+
+|`CACHE_MAXAGE`
+|Überschreibt den Standardwert für die Vorhaltezeit der asynchron
+abgerufenen Sektionen.
+
+|===
+
+Hier ein Beispiel, wie das in der `mk_oracle.cfg` aussieht:
+
+./etc/check_mk/mk_oracle.cfg
+
+----# Syntax:
+# Variable='Wert'
+
+# Nur die zwei gegebenen Sektionen in dem Schema MYINST1 ausschließen:
+EXCLUDE_MYINST1='longactivesessions logswitches'
+
+# Alle Sektionen in der Instanz MYINST2 ausschließen:
+EXCLUDE_MYINST2='ALL'
+
+# Alle Sektionen, welche hier nicht aufgeführt werden, werden *nicht* abgeholt:
+SYNC_SECTIONS='instance performance processes sessions undostat'
+ASYNC_SECTIONS='jobs resumable rman tablespaces ts_quotas'
+
+----
+
+
+[#remote_instances]
+== Entfernte Datenbanken
+
+Mit dem `mk_oracle` Plugin können Sie unter Linux auch auf Datenbanken
+zugreifen, welche auf einem anderen Host laufen. Diese können dann sogar einem
+anderen Host in (CMK) zugeordnet werden (Piggyback). Damit der entfernte
+Zugriff funktioniert, muss entweder eine lokale Oracle-Installation vorhanden
+oder es müssen die folgenden Voraussetzungen erfüllt sein:
+
+* Die [.guihints]#Linux AIO access library# ist installiert. Unter RHEL/CentOS heißt das Paket `libaio`.
+* Der <a href="https://www.oracle.com/database/technologies/instant-client.html">Instant Client for Oracle Database</a> ist installiert.
+* SQLPlus ist in der Installation schon vorhanden oder muss ggf. als Erweiterungspaket zu dem Client installiert werden.
+
+Das Plugin wird ebenso wie oben beschrieben auf dem Host installiert. Damit
+sich das Plugin nun mit einer entfernten Datenbank verbinden kann, müssen in
+der Konfigurationsdatei die Zugangsdaten hinterlegt werden. Diese können
+Sie mit den anderen Konfigurationsmöglichkeiten kombinieren, so dass
+Sie problemslos gleichzeitig lokale und entfernte Datenbanken abfragen
+können. Die Erweiterung der Konfiguration kann z.B. so aussehen:
+
+./etc/check_mk/mk_oracle.cfg
+
+----# Syntax:
+# Variable='Wert'
+# REMOTE_INSTANCE_[ID]='myUser:myPassword:role:host:port:piggybackhost:SID:version'
+
+REMOTE_INSTANCE_1='check_mk:mypassword::myRemoteHost:1521:myOracleHost:MYINST3:11.2'
+REMOTE_ORACLE_HOME='/usr/lib/oracle/11.2/client64'
+
+REMOTE_INSTANCE_this='check_mk:mypassword::myRemoteHost:1521::MYINST1:11.2'
+REMOTE_ORACLE_HOME='/usr/lib/oracle/11.2/client64'
+----
+
+In dem Beispiel wurden Abfragen für zwei entfernte Instanzen konfiguriert. Die
+Instanz MYINST3 wird dabei in (CMK) dem Host [.guihints]#myOracleHost# über das
+Huckepackverfahren zugeordnet. Damit das funktioniert, muss der Host in
+(CMK) genauso heißen, wie in der Konfiguration angegeben. Denken Sie hier auch
+an Groß-/Kleinschreibung. Durch Auslassung dieses Konfigurationsteils rufen
+Sie die Instanz zwar von einem entfernten Host ab, ordnen die Daten aber dem
+Host zu, auf dem das Plugin läuft. Das kann von Vorteil sein, wenn Sie zwar
+Zugriff auf die Daten haben, aber der Host aufgrund mangelnder allgemeiner
+Zugriffsmöglichkeiten gar nicht in (CMK) angelegt ist.
+
+Wie Sie feststellen können, ist die Konfiguration ansonsten sehr ähnlich zu
+einer normalen Abfrage. Sie geben Benutzername und Passwort an, konfigurieren
+bei Bedarf Port und Rolle des Benutzers und setzen den Hostnamen, auf dem die
+Datenbank läuft. Zusätzlich müssen Sie hier nur noch die SID der Instanz
+angeben und die Version der Datenbank, auf dem sich diese Instanz befindet.
+
+Die Information `REMOTE_ORACLE_HOME` wird dann angegeben, wenn der
+abrufende Server keine lokale Oracle-Installation hat und nur über den Client
+verfügt. Bei diesem gibt es leider keine andere Möglichkeit an diesen Pfad
+zu kommen. In dem Beispiel wurde der reguläre Pfad für den Client angegeben.
+
+*Wichtig:* Die SIDs dürfen nicht mehrmals vorkommen, wenn Sie
+gleichzeitig lokale und entfernte Instanzen abrufen und dem gleichen Host
+zuordnen!
+
+
+== Besonderheiten bei Cluster-Instanzen
+
+=== Standby-Datenbanken ohne Data Guard
+
+Um Standby-Instanzen zu überwachen, welche nicht über _Active Data
+Guard_ verfügen, benötigt der Benutzer, mit welchem die Überwachungsdaten
+geholt werden, die SYSDBA-Rolle. Durch diese Berechtigung ist der Benutzer
+auch dann in der Lage zumindest einen Teil der Daten zu holen, wenn die
+primäre Instanz ausfällt und auf dem Standby-Server die Datenbank noch
+nicht von _MOUNTED_ auf _OPEN_ umgestellt wurde. Sie können die
+Berechtigung u.a. bei der Erstellung des Benutzers wie oben beschrieben durch
+den folgenden, zusätzlichen Befehl zuweisen:
+
+[source,bash]
+----
+UP(sqlplus>):grant sysdba to check_mk;
+----
+
+Damit die Daten im Fehlerfall von dem Standby-Server abgefragt werden können,
+wird der Benutzer auf der primären Instanz erstellt und die Passwortdatei dann
+auf den Standby-Server kopiert. Danach setzen Sie in der Konfigurationsdatei
+`mk_oracle.cfg` die Rolle des Benutzers ebenfalls auf SYSDBA:
+
+./etc/check_mk/mk_oracle.cfg
+
+----DBUSER='check_mk:myPassword:sysdba:localhost:1521'
+----
+
+Hostnamen und Port können Sie wie immer weglassen, wenn es sich um eine
+lokale Instanz mit dem Standard-Port handelt. Beachten Sie, dass das Plugin
+mit der Konfigurationsdatei auch auf dem Standby-Server konfiguriert werden
+muss, damit die Daten gegebenenfalls von dort geholt werden können.
+
+Die folgenden Services benötigen eine Konfiguration als [.guihints]#Clustered Services}}:# 
+
+* ORA .* RMAN Backup
+* ORA .* Job
+* ORA .* Tablespace
+
+*Wichtig:* Die SYSDBA-Rolle ist mit einem root-Zugriff zu
+vergleichen. Benutzen Sie daher für eine solche Konfiguration ein ausreichend
+gutes Passwort!
+
+=== Real Application Cluster (RAC)
+
+In einem RAC reicht es den Benutzer nur einmal anzulegen,
+da dieser in der gemeinsamen Datenbank abgelegt wird. Das Plugin
+mit seiner Konfigurationsdatei muss allerdings auf jedem Knoten
+[monitoring_oracle#simple_config|installiert] werden.
+
+Für das Monitoring sollten Sie nicht die SCAN Listener als Hosts in (CMK),
+sondern die Knoten selbst benutzen. Nur dadurch ist gewährleistet, dass
+der Zugriff über das Plugin funktioniert.
+
+Auch hier gibt es Services, welche eine Konfiguration als [.guihints]#Clustered Services# benötigen:
+
+* ASM Diskgroup .*
+* ORA .* Recovery Area
+* ORA .* RMAN Backup
+* ORA .* Job
+* ORA .* Tablespace
+
+
+[#wallet]
+== Verwendung der Oracle Wallet
+
+Bisher wurden die Benutzerdaten immer in der Konfigurationsdatei zu dem Plugin
+abgelegt. Das hat nicht zuletzt den Nachteil, dass die Daten unverschlüsselt
+sowohl in (CMK) als auch auf dem Datenbankserver abgelegt
+werden. Selbst wenn Sie die Rechte der Konfigurationsdatei auf dem
+Datenbankserver entsprechend anpassen, haben die Zugangsdaten dennoch den
+Server verlassen und befinden sich auf dem (CMK)-Server.
+
+Um dieses Problem anzugehen, bietet Oracle die Wallet an, in der die
+Zugangsdaten verschlüsselt abgelegt werden können. (CMK) kann diese
+Wallet nutzen, so dass die Zugangsdaten nicht mehr in der Konfigurationsdatei
+bekannt gemacht werden und auch generell nur dem Datenbankadministrator bekannt
+sein müssen. Dazu legen Sie oder der erwähnte Datenbankadministrator zuerst
+eine Wallet auf dem Datenbankserver an:
+
+[source,bash]
+----
+RP:mkstore -wrl /etc/check_mk/oracle_wallet -create
+----
+
+Auf diese Datei wird das Plugin später immer dann zugreifen, wenn eine
+Verbindung zu einer Instanz hergestellt werden soll. Damit die nötigen
+Benutzerdaten auch gefunden werden, müssen Sie einmalig in die Wallet
+eingetragen werden. In dem folgenden Beispiel fügen Sie einen Benutzer für
+die Instanz MYINST1 hinzu:
+
+[source,bash]
+----
+RP:mkstore -wrl /etc/check_mk/oracle_wallet -createCredential MYINST1 check_mk myPassword
+----
+
+Legen Sie anschließend die Datei `sqlnet.ora` an. Achten Sie dabei darauf, dass Sie den
+Parameter `SQLNET.WALLET_OVERRIDE` auf `TRUE` setzen.
+
+./etc/check_mk/sqlnet.ora
+
+----LOG_DIRECTORY_CLIENT = /var/log/check_mk/oracle_client
+DIAG_ADR_ENABLED = OFF
+
+SQLNET.WALLET_OVERRIDE = TRUE
+WALLET_LOCATION =
+ (SOURCE=
+   (METHOD = FILE)
+   (METHOD_DATA = (DIRECTORY=/etc/check_mk/oracle_wallet))
+ )
+----
+
+Damit die Verbindungen auch aufgelöst werden können, werden die SIDs
+als Alias in der `tnsnames.ora` angelegt. Beispiele zu einer
+Konfiguration finden Sie in [monitoring_oracle#files|(CMK)] und in ihrer Oracle-Installation. Die
+Konfiguration kann z.B. so aussehen:
+
+./etc/check_mk/tnsnames.ora
+
+----MYINST1
+  (DESCRIPTION =
+    (ADDRESS = (PROTOCOL = TCP)(HOST = 127.0.0.1)(PORT = 1521))
+    (CONNECT_DATA =
+      (SERVER = DEDICATED)
+      (SERVICE_NAME = MYINST1)
+    )
+  )
+----
+
+Sie müssen nun in der `mk_oracle.cfg` keine Zugangsdaten
+mehr hinterlegen und geben lediglich noch einen führenden Schrägstrich
+und eventuell die Benutzerrolle an:
+
+./etc/check_mk/mk_oracle.cfg
+
+----DBUSER='/::::'
+ASMUSER='/::SYSASM::
+----
+
+Die Zugangsdaten des Monitoringbenutzers werden nun komplett vom
+Datenbankserver und nicht mehr von dem Monitoringserver verwaltet. Der Wallet
+können Sie später auch weitere Zugangsdaten hinzufügen.
+
+
+[#bakery]
+== Konfiguration über die Agent Bakery
+
+=== Erste Einrichtung
+
+[CEE]Die Einrichtung wird unter Linux, AIX und Solaris mit
+der [wato_monitoringagents#bakery|Agent Bakery] sehr vereinfacht, da
+Syntaxfehler in den Konfigurationsdateien vermieden werden und Anpassungen
+an sich verändernde Umgebungen einfach bewerkstelligt werden können. Der
+wesentliche Unterschied zu einer manuellen Installation ist, dass Sie nur
+noch dann auf dem Oracle-Host auf der Kommandozeile arbeiten müssen, wenn
+Sie spezielle Oracle-spezifische Konfigurationen vorzunehmen möchten. Für
+die Überwachung von Oracle unter Windows gibt es im Moment noch keine
+Konfigurationsmöglichkeit in der Bakery.
+
+Für die erste Einrichtung reicht es, wenn Sie den
+[monitoring_oracle#dbuser|Datenbankbenutzer] auf dem Oracle-Host und eine
+entsprechende Regel in der Bakery anlegen. Sie finden den Regelsatz unter
+[.guihints]#WATO => Monitoring Agents => Rules}}.# In dem Suchfeld können Sie dann auch nach
+`oracle` suchen:
+
+image::bilder/monitoring_oracle_bakery.png[]
+
+Haben Sie für alle Instanzen denselben Benutzer angelegt, können Sie die
+[.guihints]#Login Defaults# nutzen. Andernfalls nutzen Sie die Option
+[.guihints]#Login for selected databases# und geben zusätzlich zu den Logindaten
+noch die SID der Instanz an:
+
+image::bilder/monitoring_oracle_login.png[]
+
+Bei der [.guihints]#Authentication Method# haben Sie die Wahl zwischen der klassischen
+Eingabe von Benutzer/Passwort und der [monitoring_oracle#wallet|Oracle Wallet].
+Bei letzterer Variante müssen Sie nichts weiter konfigurieren, da Sie das
+dann bereits alles in der Wallet hinterlegt haben.
+
+Die anderen Felder sind für den Login optional. Hier können Sie die Rolle
+als sysdba einstellen, einen spezifischen Hostnamen vergeben und den Port
+definieren.
+
+Grundsätzlich ist die Eingabemaske für Logins in dieser Regel immer gleich
+oder zumindest sehr ähnlich aufgebaut, so dass Sie sich das Eingabeschema nur
+einmal merken müssen.
+
+Ist die Regel abgespeichert und der Agente auf dem Oracle-Server aktualisiert,
+ist die anfangs beschriebene [monitoring_oracle#simple_config|erste Einrichtung]
+bereits erledigt.
+
+=== Erweiterte Optionen
+
+Sie haben auch in der Agent Bakery die Möglichkeit, das Monitoring
+Ihrer Oracle-Instanzen feingliedrig anzupassen. Die Optionen aus der
+[monitoring_oracle#advanced_config|erweiterten Konfiguration] stehen Ihnen
+auch hier zur Verfügung. Beachten Sie, dass die zu holenden Sektionen über
+die Option [.guihints]#Sections - data to collect# einmal grundsätzlich bestimmt
+werden. Wird diese Option nicht aktiviert, so verwendet (CMK) den Standard
+vom Plugin.
+
+Danach können Sie einzelne Sektionen für bestimmte Instanzen über
+die Option [.guihints]#Exclude some sections on certain instances# ausschließen.
+
+image::bilder/monitoring_oracle_exclude.png[]
+
+Auch die Überwachung [monitoring_oracle#remote_instances|entfernter Instanzen]
+kann man mit der Agent Bakery konfigurieren. Noch einmal das erste
+Beispiel von [monitoring_oracle#remote_instances|oben]: Hier haben
+Sie als ID für den Parameter die 1 verwendet. Um das hier abbilden zu
+können, muss die [.guihints]#Unique ID# entsprechend angepasst werden:
+
+image::bilder/monitoring_oracle_remote.png[]
+
+Jede entfernte Instanz muss eine eindeutige ID bekommen. Sie könnnen auch den
+Host angeben, auf dem in (CMK) die Daten angezeigt werden sollen. In diesem
+Fall wird die [.guihints]#Unique ID# auf [.guihints]#Use monitoring host name# umgestellt und
+der Hostname in der Option [.guihints]#Monitoring host this database should be mapped to}}# 
+angegeben. Andernfalls kann dieses Feld frei bleiben.
+
+
+[#windows]
+== Konfiguration in Windows
+
+### TODO: Hier muss die Beschreibung stark aufgebohrt werden.
+
+Eine genaue Beschreibung folgt demnächst. Aus dem Grund erst einmal nur
+grundlegende Informationen: Das Plugin und die Konfigurationsdatei werden
+unter dem Pfad abgelegt, wo Sie auch den Agenten installiert haben. In
+dem Beispiel ist das der Standardpfad. Informationen zu dem Inhalt der
+Konfigurationsdatei finden Sie in dem Skript selbst. Beachten Sie, dass die Pfade im alten Agenten leicht anders sind. In der Tabelle befinden sich daher die Pfade für den Windows-Agenten, wie er ab VERSION[1.6.0] (Standard), als auch für den alten Agenten (Legacy):
+
+[cols=45,35, options="header"]
+|===
+
+
+|Standard Agent:
+|
+|
+
+|Datei
+|Windows Pfad
+
+
+|mk_oracle.ps1
+|%programdata%\checkmk\agent\plugins\
+
+
+|mk_oracle_cfg.ps1
+|%programdata%\checkmk\agent\config
+
+
+|Legacy Agent:
+|
+|
+
+|Datei
+|Windows Pfad
+
+
+|mk_oracle.ps1
+|%programfiles(x86)%\check_mk\plugins\
+
+
+|mk_oracle_cfg.ps1
+|%programfiles(x86)%\check_mk\config
+
+|===
+
+Windows verhindert normalerweise die Ausführung von Skripten, die nicht
+signiert sind. Sie können dieses Problem nun sehr einfach umgehen, indem
+Sie die Richtlinien zur Ausführung von Powershell-Skripten für den Benutzer
+anpassen, welcher deni checkmk-Agenten ausführt:
+
+[source,bash]
+----
+UP(C:\Program Files (x86)\check_mk\>):Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope LocalMachine
+UP(C:\Program Files (x86)\check_mk\>):Get-ExecutionPolicy -Scope LocalMachine
+Bypass
+----
+
+Diese Option ist praktisch, wenn man kurz ein Skript oder die generelle
+Funktionalität des checkmk-Agenten testen möchte. Um die Sicherheit ihres
+Systems nicht zu gefährden, ist es für produktive Server aber besser,
+wenn man lediglich die Skripten zu den Ausnahmen hinzufügt, die zu dem
+Agenten gehören. Die Ausgabe des zweiten Befehls ist gekürzt:
+
+[source,bash]
+----
+UP(C:\Program Files (x86)\check_mk\>):Get-ExecutionPolicy -Scope LocalMachine
+RemoteSigned
+UP(C:\Program Files (x86)\check_mk\>):Unblock-File -Path .\plugins\mk_oracle.ps1
+<<<oracle_instance>>>
+<<<oracle_sessions>>>
+<<<oracle_logswitches>>>
+<<<oracle_undostat>>>
+----
+
+Achten Sie darauf, dass auch das Konfigurationsskript zu den Ausnahmen hinzugefügt wird.
+
+*Wichtig:* Für Windows besteht derzeit noch nicht die Möglichkeit, die Konfiguration
+über die Agent Bakery vorzunehmen.
+
+
+== Diagnosemöglichkeiten
+
+Um zu testen, ob die Konfiguration auf dem Oracle-Host korrekt ist, können
+Sie das Plugin mit der Option `-t` aufrufen. Dafür wird vorher der
+Pfad zu den Konfigurationsdateien der Konsolensitzung bekannt gemacht:
+
+[source,bash]
+----
+RP:export MK_CONFDIR="/etc/check_mk/"
+RP:/usr/lib/check_mk_agent/plugins/mk_oracle -t
+----
+
+Beachten Sie, dass der Pfad zu dem Plugin unter Umständen anders sein kann. Wie
+Sie den Pfad für die Plugins herausfinden, wird weiter oben bei der
+[monitoring_oracle#install_plugin|Installation des Plugins] beschrieben. Die
+Ausgabe wird bei einer erfolgreichen Verbindung etwa wie folgt aussehen:
+
+[source,bash]
+----
+<<<oracle_instance>>>
+<<<oracle_sessions>>>
+<<<oracle_logswitches>>>
+<<<oracle_undostat>>>
+<<<oracle_recovery_area>>>
+<<<oracle_processes>>>
+<<<oracle_recovery_status>>>
+<<<oracle_longactivesessions>>>
+<<<oracle_dataguard_stats>>>
+<<<oracle_performance>>>
+<<<oracle_tablespaces>>>
+<<<oracle_rman>>>
+<<<oracle_jobs>>>
+<<<oracle_ts_quotas>>>
+<<<oracle_resumable>>>
+<<<oracle_locks>>>
+<<<oracle_instance>>>
+<<<oracle_asm_diskgroup>>>
+-----------------------------------------------
+Logincheck to Instance: +ASM  Version: 12.1
+Login ok User: SYS on ora12c.local
+SYNC_SECTIONS= instance
+ASYNC_SECTIONS= asm_diskgroup
+-----------------------------------------------
+Logincheck to Instance: MYINST1  Version: 12.1
+Login ok User: CHECK_MK on ora12c.local
+SYNC_SECTIONS= instance sessions logswitches undostat recovery_area processes recovery_status longactivesessions dataguard_stats performance
+ASYNC_SECTIONS= tablespaces rman jobs ts_quotas resumable locks
+----
+
+Ist die Verbindung nicht zustande gekommen, werden Sie in der Ausgabe über
+die Ursache informiert. Ein fehlerhafter Login kann z.B. an einer falschen
+Syntax in der `mk_oracle.cfg` liegen. Dort ist besonders auf die
+Doppelpunkte zwischen den einzelnen Parametern zu achten.
+
+Den Login können Sie auch prüfen, indem Sie sich mit dem konfigurierten
+Benutzer auf dem Host in Oracle anmelden. Falls das erfolgreich ist, prüfen
+Sie auch, ob die entsprechenden Berechtigungen gesetzt sind. Beachten Sie,
+dass der Benutzer in der SQL-Abfrage großgeschrieben ist:
+
+[source,bash]
+----
+RP:export ORACLE_SID=MYINST1
+RP:sqlplus check_mk
+UP(sqlplus>):select * from user_role_privs where username='CHECK_MK'
+
+USERNAME                       GRANTED_ROLE                   ADM DEF OS_
+------------------------------ ------------------------------ --- --- ---
+CHECK_MK                       SELECT_CATALOG_ROLE            NO  YES NO
+
+UP(sqlplus):select * from user_sys_privs where username='CHECK_MK'
+
+USERNAME                       PRIVILEGE                                ADM
+------------------------------ ---------------------------------------- ---
+CHECK_MK                       CREATE SESSION                           NO
+----
+
+Generell ist es für das Debugging sehr nützlich, wenn Sie zuerst mit der
+einfachsten möglichen Konfiguration für das Oracle-Monitoring beginnen und
+die Komplexität schrittweise erhöhen. So können Sie schnell herausfinden,
+bis zu welchem Punkt es funktioniert und bei welcher Änderung die Einrichtung fehlschlägt.
+Nutzen Sie dafür auch intensiv die Konfigurationsbeispiele. Die
+Pfade finden Sie nachfolgend im nächsten Kapitel.
+
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Auf dem Oracle-Host
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|`/usr/bin/check_mk_agent`
+|Der Agent, welcher alle Daten zu dem Host sammelt.
+
+
+|`/usr/lib/check_mk/plugins/`
+|Das übliche Verzeichnis, wo die Plugins abgelegt werden.
+
+
+|`/etc/check_mk/oracle.cfg`
+|Die Konfigurationsdatei für das Plugin.
+
+
+|`/etc/check_mk/sqlnet.ora`
+|Die Konfigurationsdatei, welche für die Oracle Wallet benötigt wird.
+
+
+|`tnsnames.ora`
+|Die Konfigurationsdatei, welche einen
+Alias für ein Schema bestimmt. Beispieldateien liegen auch in der Oracle-Installation,
+aber da sich der Pfad je nach Installation unterscheidet,
+kann er nicht pauschal angegeben werden.
+
+|===
+
+=== Auf dem (CMK) Server
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|`share/check_mk/agents/cfg_examples/mk_oracle.cfg`
+|Hier befinden sich Beispiele zu der Konfigurations unter Linux, AIX oder
+Solaris. Eine solche Konfiguration benötigt das Plugin, um Daten abholen
+zu dürfen, da dort u.a. auch Zugangsdaten definiert werden können.
+
+
+|`share/check_mk/agents/windows/cfg_examples/mk_oracle.ps1`
+|Beispiele zu der Konfiguration unter Windows befinden sich hier.
+
+
+|`share/check_mk/agents/plugins/mk_oracle`
+|Das Plugin, welches auf dem Oracle-Host die Daten holt.
+
+
+|`share/check_mk/agents/plugins/mk_oracle_asm`
+|Über dieses Plugin kann die ASM-Instanz überwacht werden.
+
+
+|`share/check_mk/agents/plugins/mk_oracle_crs`
+|Dieses Plugin liefert Daten zu einem Oracle Cluster Manager.
+
+|===

@@ -1,0 +1,156 @@
+= Multisite Automation and Web Service
+:revdate: outdated
+VS:1.2.0
+[.seealso][#multisite]== Using Multisite as a Web Service
+
+Checkmk Multisite can be used in scripting environment where you want to
+<ul>
+<li>access current status data via HTTP</li>
+<li>execute commands liks setting downtimes via HTTP</li>
+</ul>
+
+Using the Multisite GUI for doing such things has some advantages over a
+direct access to the Livestatus socket, for example:
+
+<ul>
+<li>Setups with more than one site will be handled by Multisite</li>
+<li>Authorization can be done on a fine-granular base</li>
+<li>Access via HTTP is more easily securable and proxy-able</li>
+</ul>
+
+== Access to Views
+Status data can be accessed via normal views. As an alternative to HTML
+you can get either JSON or Python formatted output. You do this by
+simply appending `&output_format=json` or `&output_format=python`
+to the URL of the view. When forming the URL you can use
+all filtering possibilities that the view provides. It is also possible to
+create specialized custom views used only as a web service. In order not to
+confuse the normal GUI users you should set
+the following two options:
+
+<ul>
+<li>_Hide this view from the sidebar_</li>
+<li>_do not show a context button to this view_</li>
+</ul>
+
+WK:1714
+
+== Executing Commands
+Executing commands on hosts and services is simply done by sending the same
+URLs that the user does when doing this interactively - but with a few
+modifications. The best way to 
+generate such URL is first to switch off the sidebar by clicking on
+<img width=16 height=16 src="bilder/status_frameurl.png">.
+
+The following URL has been fetched from the browsers URL line when
+setting a 2-hours downtime on a service called `Dummy` on the host
+`localhost` (we folded the URL at `&`):
+
+<pre>
+view.py?filled_in=actions
+    &_transid=1354537808%2F207935917
+    &_do_actions=yes
+    &actions=yes
+    &filled_in=actions
+    &service=Dummy
+    &host=localhost
+    &actions=yes
+    &site=
+    &view_name=service
+    &_cusnot_comment=TEST
+    &_ack_comment=
+    &_comment=
+    &_down_2h=2+hours
+    &_down_from_date=2012-12-03
+    &_down_from_time=13%3A30
+    &_down_to_date=2012-12-03
+    &_down_to_time=15%3A30
+    &_down_minutes=60
+    &_down_duration=02%3A00
+    &_down_comment=TEST
+</pre>
+
+The first important modification you need to do is to set `transid` 
+to `-1`. The transaction ID is used to avoid multiple command
+executions when browser pages are reloaded.
+
+But this change can only be made if you authenticate as a user which is
+authenticating with an _automation secret_. Normal user accounts can
+not use `_transid=-1`.
+
+You can then further simplify the URL by removing input fields that have no influence on the command in 
+question and remove any duplicates. Here is the resulting working URL:
+
+<pre>
+view.py?_do_confirm=yes    
+    &_transid=-1    
+    &_do_actions=yes    
+    &service=Dummy    
+    &host=localhost    
+    &site=    
+    &view_name=service    
+    &_down_2h=2+hours    
+    &_down_comment=TEST
+</pre>
+
+Important variables that are needed in every automation command are:
+
+[cols=, ]
+|===
+<th>Variable</th><th>Value(s)</th><th>Meaning</th><td class=tt>_do_confirm</td><td class=tt>yes</td><td>User confirmation: must be set to `yes`.</td><td class=tt>_do_actions</td><td class=tt>yes</td><td>Indicates action: must be set to `yes`</td><td class=tt>_transid</td><td class=tt>-1</td><td>Switches off replay detection</td><td class=tt>view_name</td><td class=tt>service, hoststatus</td><td>Name of the Multisite View.</td>|===
+
+== Automation Login
+When running automation scripts using HTTP, the first thing you will run into
+is the question of authentication. If you are using basic HTTP authentication then
+the only way to go is to create a special user for the automation, set a password
+and use that password in your scripts.
+
+<img style="float: left; margin-right: 10px;" src="bilder/automationuser.png">
+
+If you are using the Checkmk login GUI then this does not work. And there is 
+a much more elegant way - especially when your scripts run on the same machine
+as your OMD site.
+
+This first step is to create an automation user. 
+Here you do not set a password but a
+_secret_. This secret will be saved in a file in _cleartext_ in
+the same directory as the user settings of that user. In OMD this is below
+the site in `var/check_mk/web/*USER*/automation.secret`. This
+file is readable only by owner and group.
+
+If your script is running on the same host then it can simply read this file
+and you do not need to hardcode or configure the secret somewhere.
+
+When calling the Multisite URL from your script you simply need to append the
+name of the automation user and this scecret in two URL variables:
+
+[cols=, ]
+|===
+<td class=tt>_username</td><td>Name of the automation user</td><td class=tt>_secret</td><td>Automation secret of that user</td>|===
+
+Here is a commandline using `curl` in order to get the current open
+problems in JSON syntax:
+
+[source,bash]
+----
+UP:curl 'http://localhost/heute/check_mk/view.py?view_name=svcproblems
+*&output_format=JSON&_username=auto&_secret=BLARBS@JQTAH@UWMBJXB'*
+[
+["host","service_description","svc_plugin_output","svc_state_age","svc_check_ag...
+["localhost","fs_/home","CRIT - 94.7% used (62.42 of 65.9 GB), (levels at 80.0/...
+["localhost","LOG /var/log/Xorg.0.log","CRIT - 2 CRIT messages (Last worst: \"t...
+["localhost","Multipath SDDN_S2A_9900_1308xxxxxxxx","CRIT - broken paths: 3:0:1...
+]
+----
+
+Here is another example calling the create snapshot function to automatically
+create a snapshot from the given backup domains.
+[source,bash]
+----
+*user@host> curl 'http://localhost/heute/check_mk/wato.py?mode=snapshot&_username=
+autouser&_secret=RPPVQD@EVYSPGBYDCKFO&snapshot_options_p_group_0_1=on
+&_create_snapshot&_transid=-1'*
+----
+This command only stores the backup domain "Automatically detected services", which are identified by the parameter snapshot_options_p_group_0_1.
+If you want to determine the correct parameter name for other backup domains, please use the developer mode of your web-browser,
+e.g. firebug, to get the correct name of each check box.

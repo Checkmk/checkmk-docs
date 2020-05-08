@@ -1,0 +1,2690 @@
+= Die Event Console
+:revdate: 2016-02-03
+[.seealso][#monitoring_basics] [#wato_rules] [#livestatus]MT:Logs und SNMP-Traps in (CMK) verarbeiten
+MD:Egal, ob Syslog, weitergeleitete Text-Logs oder Traps über SNMP - in diesem Artikel erfahren Sie, wie Sie diese Ereignisse in checkmk verarbeiten können.
+
+== Einleitung
+
+=== Ereignisse sind keine Zustände
+
+Im bisherigen Teil dieses Handbuchs ging es stets um das aktive Überwachen
+von _Zuständen._  Zu jedem Zeitpunkt hat jeder überwachte Service
+einen der Zustände (OK), (WARN), (CRIT) oder (UNKNOWN). Durch regelmäßige Abfragen
+aktualisiert das Monitoring ständig sein Bild von der Lage.
+
+Eine ganz andere Art des Monitorings ist das Arbeiten mit _Ereignissen._
+Ein Beispiel für ein Ereignis ist eine Exception, die in einer Anwendung
+auftritt. Die Anwendung läuft eventuell korrekt weiter und hat nach wie
+vor den Zustand OK -- aber irgendetwas _ist passiert._
+
+=== Die Event Console
+
+(CMK) verfügt mit der *Event Console* (kurz EC) über ein voll
+integriertes System zur Überwachung von Ereignissen aus Quellen wie
+Syslog, SNMP Traps, Windows Event Logs, Logdateien und eigenen Awendungen.
+Dabei werden aus Ereignissen nicht einfach Zustände gemacht, sondern sie
+bilden eine eigene Kategorie und werden ab Version VERSION[1.4.0i2]
+von (CMK) sogar im [.guihints]#Tactical Overview# mit angezeigt.
+
+image::bilder/tactical_overview_events.png[align=center,width=280]
+
+Intern werden Events nicht durch den Monitoringkern, sondern von einem eigenen
+Dienst verarbeitet -- dem Eventdaemon (`mkeventd`).
+
+Die Event Console verfügt auch über ein Archiv, in dem Sie über Ereignisse
+in der Vergangenheit recher&shy;chieren können. Gleich vorweg sei allerdings
+gesagt: Dies ist kein Ersatz für ein echtes Logarchiv. Die Aufgabe der
+Event Console ist das intelligente Herausfiltern einer _kleinen_ Zahl
+von _relevanten_ Meldungen aus einem großen Strom. Sie ist optimiert
+auf Einfachheit, Robustheit und Durchsatz -- nicht auf Speicherung großer
+Datenmengen.
+
+Hier ein paar Fakten zur EC:
+
+* Sie kann Meldungen per Syslog oder SNMP Traps _direkt_ empfangen. Eine Konfiguration der entsprechenden Linux-Systemdienste ist daher nicht notwendig.
+* Sie kann mithilfe der (CMK)-Agenten auch textbasierte Logdateien und Windows-Event-Logs auswerten.
+* Sie klassifiziert Meldungen anhand einer Kette von benutzerdefinierten Regeln.
+* Sie kann Meldungen korrellieren, zusammenfassen, zählen, annotieren, umschreiben und auch deren zeitliche Zusämmenhänge berücksichtigen.
+* Sie kann automatisiert Aktionen ausführen und über (CMK) [notifications|Alarme] versenden.
+* Sie ist voll in die Oberfläche von (CMK) integriert.
+* Sie ist in jedem aktuellen (CMK)-System enthalten und sofort einsatzfähig.
+
+
+=== Begriffe
+
+Die Event Console empfängt *Meldungen* ({{Messages}}).# Eine Meldung ist
+eine Zeile Text mit einer Reihe von möglichen Zusatzattributen, wie z.B. einem
+Zeitstempel, einem Hostnamen usw.  Wenn die Meldung relevant ist, wird daraus
+direkt ein *Ereignis* [.guihints]#(Event)# mit den gleichen Attributen, aber:
+
+* Nur wenn eine Regel greift, wird aus einer Meldung ein Event erzeugt.
+* Regeln können den Text und andere Attribute von Meldungen verändern.
+* Mehrere Meldungen können zu einem Event zusammengefasst werden.
+* Meldungen können aktuelle Events wieder [ec#cancelling|aufheben].
+* Künstliche Events können erzeugt werden, wenn bestimmte Meldungen [ec#expect|nicht] kommen.
+
+
+Ein Event kann verschiedene *Phasen* durchlaufen:
+
+<table class=left>
+<tr>
+<th style="width:17%">open</th>
+<td>Der „normale“ Zustand: Etwas ist passiert, der Operator soll sich kümmern.</td>
+</tr>
+
+<tr>
+<th>acknowledged</th>
+<td>Aus Problem wurde quittiert -- dies ist analog zu Host- und Serviceproblemen aus
+dem statusbasierten Monitoring.</td>
+</tr>
+
+<tr>
+<th>counting</th>
+<td>Es ist noch nicht die erforderliche Anzahl von bestimmten Meldungen eingetroffen,
+die Situation ist noch unproblematisch. Das Ereignis wird dem Operator deswegen
+noch nicht angezeigt.</td>
+</tr>
+
+<tr>
+<th>delayed</th>
+<td>Eine Störmeldung ist eingegangen aber die Event Console wartet noch, ob in
+einer konfigurieren Zeit die passende OK-Meldung eingeht. Erst danach wird das
+Event dem Operator angezeigt.</td>
+</tr>
+
+<tr>
+<th>closed</th>
+<td>Das Event wurde vom Operator oder automatisch geschlossen und ist nur noch
+im Archiv.</td>
+</tr>
+
+[cols=, ]
+|===
+
+Ein Event hat ferner einen *Zustand.* Genau genommen ist hier aber
+nicht der Zustand des Events selbst gemeint, sondern desjenigen Diensts
+oder Geräts, der/das diesen gesendet hat. Um eine Analogie zum statusbasierten
+Monitoring zu schaffen, ist auch ein Event als (OK), (WARN), (CRIT) oder
+(UNKNOWN) eingestuft.
+
+[#setup]
+== Die Event Console aufsetzen
+
+Das Einrichten der Event Console ist sehr einfach. Genaugenommen müssen
+Sie erst einmal gar nichts zusätzlich konfigurieren, denn ab Version <b
+class=new>1.2.8* von (CMK) ist die Event Console immer automatisch aktiv.
+
+Falls Sie jedoch über das Netzwerk Syslogmeldungen oder SNMP-Traps
+empfangen möchten, so müssen Sie dies separat aktivieren. Der Grund ist,
+dass beide Dienste einen UDP-Port mit einer jeweils bestimmten bekannten
+Portnummer öffnen müssen. Und da dies pro System nur eine (CMK)-Instanz
+machen kann, ist der Empfang über das Netzwerk per Default abgeschaltet.
+Die Portnummern sind:
+
+<table class=small>
+<tr>
+<th>Protokoll</th>
+<th>Port</th>
+<th>Dienst</th>
+</tr>
+
+<tr>
+<td>UDP</td>
+<td>162</td>
+<td>SNMP Traps</td>
+</tr>
+
+<tr>
+<td>UDP</td>
+<td>514</td>
+<td>Syslog</td>
+</tr>
+
+<tr>
+<td>TCP</td>
+<td>514</td>
+<td>Syslog via TCP</td>
+</tr>
+
+[cols=, ]
+|===
+
+Syslog via TCP wird nur selten verwendet, hat aber den Vorteil, dass die
+Übertragung der Nachrichten hier abgesichert wird. Bei UDP ist niemals
+garantiert, dass Pakete wirklich ankommen. Und weder Syslog noch SNMP Traps
+bieten Quittungen oder einen ähnlichen Schutz vor verlorengegangen Meldungen.
+Damit Sie Syslog via TCP verwenden können, muss natürlich auch das sendende
+System dazu in der Lage sein, Meldungen über diesen Port zu verschicken.
+
+In der (CMK)-Appliance können Sie den Empfang von Sylog/SNMP-Traps in
+der Instanzkonfiguration einschalten. Ansonsten verwenden Sie einfach `omd
+config`. Sie finden die benötigte Einstellung unter [.guihints]#Addons}}:# 
+
+image::bilder/ec_omd_config.png[align=center,width=300]
+
+Beim `omd start` sehen Sie, welche externen Schnittstellen Ihre EC
+offen hat:
+
+[source,bash]
+----
+OM:omd start
+Starting mkeventd (builtin: <b class=hilite>syslog-udp,snmptrap*)...OK
+Starting Livestatus Proxy-Daemon...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting Check_MK Micro Core...OK
+Starting dedicated Apache for site stable...OK
+Initializing Crontab...OK
+----
+
+
+== Erste Schritte mit der Event Console
+
+[#rules]
+=== Regeln, Regeln, Regeln
+
+Eingangs wurde erwähnt, dass die EC dazu dient, _relevante_ Meldungen
+herauszufischen und zu alarmieren. Nun ist es leider so, dass die meisten
+Meldungen -- egal ob aus Textdateien, dem Windows Event Log oder dem
+Syslog -- ziemlich unwichtig sind. Und da hilft es auch nichts, wenn Meldungen
+seitens des Verursachers bereits voreingestuft sind.
+
+Zum Beispiel gibt es in Syslog und im Windows Eventlog eine Klassifizierung der
+Meldungen in etwas Ähnliches wie OK, WARN und CRIT. Aber was jetzt WARN und
+CRIT ist, hat dabei der jeweilige Programmierer subjektiv festgelegt. Und es
+ist noch nicht einmal gesagt, dass die Anwendung, welche die Meldung produziert
+hat, auf diesem Rechner überhaupt wichtig ist.  Kurzum: Sie kommen nicht
+drumherum, selbst zu konfigurieren, welche Meldungen für Sie nach einem
+Problem aussehen und welche einfach verworfen werden können.
+
+Wie überall in (CMK) erfolgt auch hier die Konfiguration über
+_Regeln,_ welche bei jeder eingehenden Meldung von der EC nach dem
+„first match“-Prinzip abgearbeitet werden. Die erste Regel, die auf eine
+eingehende Meldung greift, entscheidet also über deren Schicksal. Greift
+keine Regel, so wird die Meldung einfach lautlos verworfen.
+
+Da man bei der EC mit der Zeit unter Umständen sehr viele Regeln aufbaut,
+sind die Regeln hier in _Paketen_ organisiert. Die Abarbeitung geschieht
+Paket für Paket und innerhalb eines Pakets von oben nach unten. Damit ist
+auch die Reihenfolge der Pakete wichtig.
+
+=== Anlegen einer einfachen Regel
+
+Die Konfiguration der EC finden Sie wenig überraschend im WATO-Modul
+ICON[icon_mkeventd.png] [.guihints]#Event Console}}.# Dieses ist ab Werk leer -- es
+befinden sich dort also keine Regeln. Eingehende Meldungen werden demnach,
+wie bereits erwähnt, verworfen und auch nicht geloggt. Das Modul präsentiert
+sich so:
+
+image::bilder/ec_wato_module.jpg[]
+
+Legen Sie nun mit ICON[button_new_rule_pack.png] als Erstes ein neues Regelpaket an:
+
+image::bilder/ec_new_rule_pack.png[]
+
+Wie immer gilt die ID als interne Referenz und kann später nicht mehr geändert
+werden. Nach dem Speichern finden Sie einen ersten Eintrag in der Liste Ihrer
+Regelpakete:
+
+image::bilder/ec_rule_pack_list.png[]
+
+Dort können Sie jetzt mit ICON[button_mkeventd_rules.png] in das noch leere
+Paket wechseln und mit ICON[button_new_rule.png] eine neue Regel anlegen.
+Füllen Sie hier lediglich den ersten Kasten mit der Überschrift
+[.guihints]#Rule Properties}}:# 
+
+image::bilder/ec_first_rule.jpg[]
+
+Einzig notwendig sind eine eindeutige [.guihints]#Rule-ID# und eine Beschreibung. Diese
+ID werden Sie später auch in Logdateien finden, und sie wird bei den
+erzeugten Events mit gespeichert. Es ist also nützlich, die IDs systematisch
+zu vergeben.  Alle weiteren Kästen sind optional. Das gilt insbesondere
+für die Bedingungen.
+
+*Wichtig:* Die neue Regel ist erst einmal nur zum Testen und greift vorerst auf
+_jedes_ Ereignis. Daher ist es auch wichtig, dass Sie diese später
+wieder entfernen oder zumindest deaktivieren! Andernfalls wird ihre Event
+Console mit jeder nur erdenklichen unnützen Meldung geflutet und so ziemlich
+nutzlos werden.
+
+
+==== Aktivieren der Änderungen
+
+Wie immer in (CMK), müssen Sie Änderungen erst aktivieren, damit diese
+wirksam werden. Das ist nicht von Nachteil: Denn so können Sie bei
+Änderungen, die mehrere zusammengehörige Regeln betreffen, genau festlegen,
+wann diese „live“ gehen sollen. Und Sie können mit dem Regelsimulator
+zuvor testen, ob alles passt.
+
+Da die Events allerdings nicht vom Monitoringkern, sondern von einem eigenen
+Prozess (`mkeventd`) bearbeitet werden, hat die EC ein eigenes
+„Activate Changes“ welches, Sie direkt in ihrem WATO-Modul finden:
+
+image::bilder/ec_activate_changes.jpg[]
+
+Drücken Sie hier den Knopf ICON[button_reload_config.png], um die Änderung
+zu aktivieren. Die Event Console ist so konstruiert, dass diese Aktion absolut
+_unterbrechungsfrei_ abläuft. Der Empfang von eingehenden Meldungen wird
+zu jeder Zeit sichergestellt, so dass durch den Prozess keine Meldungen verlorengehen können.
+
+Das Aktivieren von Änderungen in der EC ist nur Administratoren
+erlaubt. Gesteuert wird das über die [wato_user#roles|Berechtigung]
+[.guihints]#Activate changes for event console}}.# 
+
+Ab Version VERSION[1.4.0] ist das Aktivieren der Änderungen für
+die Event Console mit den anderen Änderungen in WATO zusammengefasst und
+erfolgt nicht mehr separat.
+
+==== Ausprobieren der neuen Regel
+
+Für das Testen könnten Sie jetzt natürlich Meldungen per Syslog oder SNMP
+senden. Das sollten Sie später auch tun.  Für einen ersten Test ist aber
+der in der EC eingebaute [.guihints]#Event Simulator# praktischer:
+
+image::bilder/ec_simulator.png[]
+
+Hier haben Sie zwei Möglichkeiten: [.guihints]#Try out# berechnet anhand der
+simulierten Meldung, welche der Regeln matchen würden. Befinden Sie sich
+in der oberesten Ebene des WATO-Moduls der EC, so werden die Regelpakete
+markiert. Befinden Sie sich innerhalb eines Regelpakets, so werden die
+einzelnen Regeln markiert. Jedes Paket bzw. jede Regel wird mit einem der
+folgenden drei Symbole gekennzeichnet:
+
+[cols=, ]
+|===
+
+
+<td width="5%">ICON[icon_rulematch.png]
+|Diese Regel ist die erste, die auf die Meldung greift und legt folglich dessen
+Schicksal fest.
+
+
+<td width="5%">ICON[icon_rulepmatch.png]
+|Diese Regel würde zwar greifen, aber die Meldung wurde schon von einer
+früheren Regel bearbeitet.
+
+
+<td width="5%">ICON[icon_rulenmatch.png]
+|Diese Regel greift nicht. Sehr praktisch: Wenn Sie mit der Maus über die
+graue Kugel fahren, bekommen Sie eine Erklärung, aus welchem Grund die Regel
+nicht greift.
+
+|===
+
+Ein Klick auf [.guihints]#Generate event# macht fast das Gleiche wie [.guihints]#Try out}},# nur wird
+jetzt die Meldung *tatsächlich erzeugt.* Eventuell definierte [ec#actions|Aktionen]
+werden tatsächlich ausgeführt. Und das Event taucht dann auch in den offenen
+Events im Monitoring auf. Den Quelltext der erzeugten Meldung sehen Sie in
+der Bestätigung:
+
+image::bilder/ec_event_generated.png[]
+
+Das so erzeugte Event taucht in der Status-GUI in der Ansicht [.guihints]#Event Console => Events}}# 
+auf:
+
+image::bilder/ec_one_open_event.png[]
+
+==== Meldungen testweise von Hand erzeugen
+
+Für einen ersten echten Test über das Netzwerk können Sie sehr einfach von einem
+anderen Linux-Rechner aus per Hand eine Syslogmeldung versenden. Da das Protokoll
+so einfach ist, brauchen Sie dafür nicht einmal ein spezielles Programm, sondern
+können die Daten einfach per `netcat` oder `nc` via UDP versenden.
+Der Inhalt des UDP-Pakets besteht aus einer Zeile Text. Wenn diese einem
+bestimmten Aufbau entspricht, werden die Bestandteile von der Event Console
+sauber zerlegt:
+
+[source,bash]
+----
+UP:echo '<78>Dec 18 10:40:00 myserver123 MyApplication: It happened again.' | nc -w 0 -u 10.1.1.94 514
+----
+
+Sie können aber auch einfach _irgendetwas_ senden. Die EC wird das dann trotzdem
+annehmen und einfach als Meldungstext auswerten. Zusatzinformation wie z.B. die Anwendung,
+die Priorität etc. fehlen dann natürlich. Als Status wird zur Sicherheit (CRIT)
+angenommen:
+
+[source,bash]
+----
+UP:echo 'This is no syslog message' | nc -w 0 -u 10.1.1.94 514
+----
+
+Innerhalb der (CMK)-Instanz, auf der die EC läuft, gibt es eine _named Pipe_,
+in die Sie Textmeldungen lokal per `echo` schreiben können. Dies ist eine
+sehr einfache Methode, um eine lokale Anwendung anzubinden und ebenfalls eine Möglichkeit,
+das Verarbeiten von Meldungen zu testen:
+
+[source,bash]
+----
+OM:echo 'Local application says hello' > tmp/run/mkeventd/events
+----
+
+Auch hier ist es übrigens möglich, im Syslogformat zu senden, damit alle Felder des Events
+sauber befüllt werden.
+
+[#globalsettings]
+=== Einstellungen der Event Console
+
+Die Event Console hat ihre eigenen globalen Einstellungen, welche Sie
+nicht bei denen der anderen Module finden, sondern über den Knopf
+ICON[context_button_settings.png] in der Hauptebene des EC-Moduls:
+
+image::bilder/ec_settings.png[align=center,width=500]
+
+Die Bedeutung der einzelnen Einstellungen erfahren Sie wie immer aus der
+ICON[icon_help.png] Onlinehilfe und an den jeweils passenden Stellen in
+diesem Artikel.
+
+Der Zugriff auf die Einstellungen ist über die Berechtigung
+[.guihints]#Configuration of Event Console# geschützt, welche per
+Default nur in der Rolle `admin` enthalten ist.
+
+
+[#permissions]
+=== Berechtigungen
+
+Auch bei den [wato_user#roles|Rollen und Rechten] hat die Event Console einen
+eigenen Abschnitt. Auf einige der Berech&shy;tigungen werden wir an passenden Stellen
+im Artikel näher eingehen.
+
+image::bilder/ec_permissions.png[align=center,width=500]
+
+[#operating]
+== Die Event Console im Operating
+
+=== Event-Ansichten
+
+Von der Event Console erzeugte Events werden analog zu Hosts und Services in
+der Statusoberfläche angezeigt. Der Einstieg dazu ist die Ansicht [.guihints]#Event Console => Events}}.# 
+Diese Ansicht können Sie genauso anpassen wie alle anderen. Sie können die angezeigten
+Events filtern, Kommandos ausführen usw. Wenn Sie neue Events-Ansichten erstellen,
+stehen Ihnen Events sowie [ec#archive|Event-Historie] als Datenquellen zur Verfügung.
+Einzelheiten erfahren Sie im Artikel über die [views|Ansichten]:
+
+image::bilder/ec_open_events.jpg[]
+
+Ein Klick auf die ID des Events (hier z.B. `27`) bringt Sie zu dessen
+Details:
+
+image::bilder/ec_event_details.jpg[]
+
+Wie Sie sehen können, hat ein Event eine ganze Menge von Datenfeldern,
+deren Bedeutung wir in diesem Artikel nach und nach erklären werden. Die wichtigsten
+Felder sollten trotzdem kurz erwähnt werden:
+
+[cols=25, options="header"]
+|===
+
+|Feld
+|Bedeutung
+
+
+|{{State (severity of event)}}
+|Wie in der Einleitung erwähnt. wird jeder Event als (OK), (WARN), (CRIT) oder (UNKNOWN)
+eingestuft. Events vom Status (OK) sind eher ungewöhnlich. Denn die EC ist gerade dafür gedacht,
+nur die _Probleme_ herauszufiltern. Es gibt aber Situationen, in denen ein (OK)-Event
+durchaus Sinn machen kann.
+
+
+|{{Text/Message of the event}}
+|Der eigentliche Inhalt des Events: Eine Textmeldung.
+
+
+|{{Hostname}}
+|Der Name des Hosts, der die Meldung gesendet hat. Dieser muss nicht unbedingt
+ein mit (CMK) aktiver überwachter Host sein. Falls ein Host dieses Namens
+jedoch im Monitoring existiert, stellt die EC automatisch eine Verknüpfung her.
+In diesem Fall sind dann auch die Felder {{Host alias}}, {{Host contacts}} und
+{{Host icons}} gefüllt und der Host erscheint in der gleichen Schreibweise wie
+im aktiven Monitoring.
+
+
+|{{Rule-ID}}
+|Die ID der Regel, welche diesen Event erzeugt hat. Ein Klick auf diese
+ID bringt Sie direkt zu den Details der Regel. Übrigens bleibt die ID auch
+dann erhalten, wenn die Regel inzwischen nicht mehr existiert.
+
+|===
+
+Wie eingangs erwähnt, werden Events ab Version VERSION[1.4.0i2] von
+(CMK) direkt in der [.guihints]#Tactical Overview# angezeigt:
+
+image::bilder/tactical_overview_events.png[align=center,width=280]
+
+Dabei sehen Sie drei Zahlen:
+
+* [.guihints]#Events# -- alle offenen und quittierten Events (entspricht der Ansicht [.guihints]#Event Console => Events}})# 
+* [.guihints]#Problems# -- davon nur diejenigen mit dem Zustand (WARN) / (CRIT) / (UNKNOWN)
+* [.guihints]#Unhandled# -- davon wiederum nur die noch nicht quittierten (dazu gleich mehr)
+
+
+[#commands]
+=== Kommandos und Workflow von Events
+
+Analog zu den Hosts und Services wird auch für Events ein einfacher Workflow
+abgebildet.  Wie gewohnt geschieht das über [commands|Kommandos],
+welche Sie mit dem kleinen ICON[commands.png] Hammerknopf erreichen. Auch
+hier können Sie mittels der ICON[checkboxes.png] Checkboxen ein Kommando auf vielen
+Events gleichzeitig ausführen.  Als Besonderheit gibt es das häufig
+gebrauchte _Archivieren_ eines einzelnen Events direkt über das Symbol
+ICON[button_delete.png].
+
+Für jedes der Kommandos gibt es eine [wato_user#roles|Berechtigung] im
+Abschnitt [.guihints]#Event Console}},# über die Sie steuern können, welcher Rolle
+das Kommando erlaubt ist. Per Default sind alle Kommandos für Mitglieder
+der Rollen `admin` und `user` freigeschaltet.
+
+image::bilder/ec_commands.png[]
+
+Folgende Kommandos stehen zur Verfügung:
+
+==== Update & Acknowledge
+
+Mit dem Knopf [.guihints]#Update# können Sie in einem einzigen Arbeitsschritt einen Kommentar
+an das Event hängen, eine Kontaktperson eintragen und das Event quittieren.
+Das Feld [.guihints]#Change contact# ist bewusst Freitext. Hier können Sie auch Dinge
+wie Telefonnummern eintragen. Das Feld hat insbesondere keinen Einfluss auf
+die Sichtbarkeit des Events in der GUI. Es ist ein reines Kommentarfeld.
+
+Die Checkbox [.guihints]#Set event to acknowledged# führt dazu, dass das Event
+von der Phase [.guihints]#open# übergeht nach [.guihints]#acknowledged# und fortan als
+[.guihints]#handled# gilt. Dies ist analog zu dem [basics_ackn|Quittieren] von Host-
+und Serviceproblemen.
+
+Ein späteres erneutes Aufrufen des Kommando mit nicht gesetzter Checkbox
+_entfernt_ die Quittierung wieder.
+
+==== Zustand ändern
+
+Der Knopf [.guihints]#Change state# erlaubt das manuelle Umklassifieren des Events --
+z.b. von (CRIT) auf (WARN).
+
+==== Aktionen ausführen
+
+Bei den [.guihints]#Custom Actions# können Sie auf Events frei definierbare [ec#actions|Aktionen] 
+ausführen lassen. Zunächst ist nur die Aktion [.guihints]#Send monitoring notification}}# 
+verfügbar. Diese sendet einen (CMK)-Alarm, der genauso behandelt wird wie ein
+Alarm von einem aktiv überwachten Service. Dieser durchläuft die [notifications|Alarmierungsregeln]
+und führt dann entsprechend zu Emails, SMS oder was auch immer Sie konfiguriert haben.
+Einzelheiten zur Alarmierung durch die EC erfahren Sie [ec#notifications|weiter unten].
+
+==== Archivieren ist fast wie Löschen
+
+Der Knopf [.guihints]#Archive event# löscht den Event endgültig aus den offenen Events. Da
+alle Aktionen auf Events -- inklusive dieses Löschvorgangs -- auch im [ec#archive|Archiv]
+aufgezeichnet werden, können Sie später immer noch auf alle Informationen des
+Events zugreifen. Deswegen sprechen wir nicht von Löschen, sondern von Archivieren.
+
+Das Archivieren von einzelnen Events erreichen Sie auch aus der Eventliste bequem
+über das Symbol ICON[button_delete.png].
+
+
+[#visibility]
+=== Sichtbarkeit von Events
+
+==== Problematik der Sichtbarkeit
+
+Für die Sichtbarkeit von Hosts und Services in der Status-GUI für normale
+Benutzer werden von (CMK) [wato_user#contact_groups|Kontaktgruppen]
+verwendet. Diese werden per WATO, Regel oder Ordnerkonfiguration den
+Hosts und Service zugeordnet.
+
+Nun ist es aber bei der Event Console so, dass so eine Zuordnung von Events
+zu Kontaktgruppen erst einmal nicht existiert. Denn im Vorhinein ist gar nicht
+bekannt, welche Meldungen überhaupt empfangen werden können. Nicht einmal die
+Liste der Hosts ist bekannt, denn die Sockets für Syslog und SNMP sind ja
+von überall aus erreichbar. Deswegen gibt es bei der Sichtbarkeit in der
+Event Console ein paar Besonderheiten:
+
+
+==== Erst einmal dürfen alle alles sehen
+
+Zunächst einmal gibt es bei der Konfiguration der
+[wato_user#roles|Benutzerollen] die Berechtigung
+[.guihints]#Event Console => Seeall events}}.# Diese ist per Default an, so dass *auch normale Benutzer alle
+Events sehen dürfen!* Dies ist bewusst so eingestellt, damit nicht aufgrund
+fehlerhafter Konfiguration wichtige Fehlermeldungen unter den Tisch fallen.
+Der erste Schritt zu einer genaueren Steuerung der Sichtbarkeit ist also das Entfernen dieser
+Berechtigung aus der Rolle `user`.
+
+[#hostmatching]
+==== Zuordnung zu Hosts
+
+Damit die Sichtbarkeit von Events möglichst konsistent mit dem übrigen
+Monitoring ist, versucht die Event Console so gut wie möglich die Hosts,
+von denen sie Events empfängt, Ihren per WATO konfigurierten Hosts
+zuzuordnen. Was einfach klingt ist trickreich im Detail. Denn teils fehlt
+im Event eine Angabe zum Hostnamen und nur die IP-Adresse ist bekannt.
+In anderen Fällen hat der Hostname eine andere Schreibweise als in WATO.
+
+Die Zurordnung erfolgt konkrekt wie folgt:
+
+* Ist im Event kein Hostname bekannt, so wird anstelle dessen seine IP-Adresse als Hostname verwendet.
+* Der Event-Hostname wird dann _ohne Berücksichtigung von Groß-/Kleinschreibung_ mit allen Hostnamen, Hostaliassen und IP-Adressen der Hosts aus dem Monitoring verglichen.
+* Wird so ein Host gefunden, werden dessen Kontaktgruppen für den Event übernommen, und darüber wird dann die Sichtbarkeit gesteuert.
+* Wird der Host jedoch *nicht* gefunden, so werden die Kontaktgruppen -- falls [ec#contactgroups|dort konfiguriert] -- aus der Regel übernommen, welche den Event erzeugt hat.
+* Sind auch dort keine Gruppen hinterlegt, so darf der Benutzer den Event nur dann sehen, wenn er die Berechtigung [.guihints]#Event Console => Seeevents not related to a known host# hat.
+
+Sie können die Zuordnung an einer Stelle beeinflussen: Falls nämlich in der
+Regel Kontaktgruppen definiert sind *und* der Host zugeordnet werden
+konnte, hat normalerweise die Zuordnung Vorrang.
+
+In Version VERSION[1.2.8] können Sie dies mit der Einstellung
+[.guihints]#Global settings => Userinterface => Precedenceof contact groups of events}}# 
+umstellen:
+
+image::bilder/ec_contact_group_precedence.png[align=center,width=500]
+
+Ab Version VERSION[1.4.0i2] tritt an die Stelle der globalen
+Option eine Einstellung direkt in der Regel. Das ermöglicht eine
+Konfiguration, die von Fall zu Fall unterschiedlich ist:
+
+image::bilder/ec_outcome_contact_groups.jpg[]
+
+
+=== Fehlersuche
+
+==== Welche Regel greift wie oft?
+
+Sowohl bei den Regelpaketen &nbsp;&#8230;
+
+image::bilder/ec_pack_hits.png[]
+
+&#8230;&nbsp; als auch bei den einzelnen Regeln &nbsp;&#8230;
+
+image::bilder/ec_rule_hits.png[]
+
+... finden Sie in der Spalte [.guihints]#Hits# die Angabe, wie oft das Paket bzw. die Regel
+schon auf eine Meldung gepasst hat. Dies hilft Ihnen zum einen dabei, unwirksame Regeln
+zu eliminieren oder zu reparieren. Aber auch bei Regeln, die sehr oft matchen, kann dies
+interessant sein. Für die optimale Performance der EC sollten diese möglichst am Anfang
+der Regelkette stehen. So können Sie die Anzahl von Regeln, die die EC bei jeder
+Meldung ausprobieren muss, reduzieren.
+
+Die Zählerstände können Sie jederzeit mit dem Knopf ICON[context_button_reset_counters.png]
+zurücksetzen.
+
+==== Regelauswertung debuggen
+
+Im vorherigen Kapitel haben Sie schon gesehen, wie Sie mit dem Simulator die Auswertungen
+Ihrer Regeln prüfen können. Ähnliche Informationen bekommen Sie zur Laufzeit für _alle_
+Meldungen, wenn Sie in den [ec#globalsettings|Einstellungen der EC] den Wert
+von [.guihints]#Debug rule execution# auf [.guihints]#on# umstellen.
+
+Die Logdatei der Event Console finden Sie unter `var/log/mkeventd.log`.
+Für jede Regel, die geprüft wird, aber nicht greift, erfahren Sie den
+genauen Grund:
+
+.var/log/mkeventd.log
+
+----[1481020022.001612] Processing message from ('10.40.21.11', 57123): '<22>Dec  6 11:27:02 myserver123 exim[1468]: Delivery complete, 4 message(s) remain.'
+[1481020022.001664] Parsed message:
+ application:    exim
+ facility:       2
+ host:           myserver123
+ ipaddress:      10.40.21.11
+ pid:            1468
+ priority:       6
+ text:           Delivery complete, 4 message(s) remain.
+ time:           1481020022.0
+[1481020022.001679] Trying rule test/myrule01...
+[1481020022.001688]   Text:   Delivery complete, 4 message(s) remain.
+[1481020022.001698]   Syslog: 2.6
+[1481020022.001705]   Host:   myserver123
+[1481020022.001725]   <b class=hilite>did not match because of wrong application 'exim' (need 'security')*
+[1481020022.001733] Trying rule test/myrule02n...
+[1481020022.001739]   Text:   Delivery complete, 4 message(s) remain.
+[1481020022.001746]   Syslog: 2.6
+[1481020022.001751]   Host:   myserver123
+[1481020022.001764]   <b class=hilite>did not match because of wrong text*
+----
+
+Es versteht sich wohl von selbst, dass Sie dieses intensive Logging nur bei Bedarf
+und mit Bedacht verwenden sollten. Bei einer nur etwas komplexeren Umgebungen
+werden _Unmengen_ von Daten erzeugt!
+
+[#rules]
+== Die ganze Mächtigkeit der Regeln
+
+=== Die Bedingung
+
+Der wichtigste Teil einer EC-Regel ist natürlich die _Bedingung_
+[.guihints]#(Matching criteria)}}.# Nur wenn eine Meldung alle in der Regel
+hinterlegten Bedingungen erfüllt, werden die in der Regel definierten
+Aktionen ausgeführt und die Auswertung der Meldung damit abgeschlossen.
+
+image::bilder/ec_matching_criteria.png[]
+
+==== Allgemeines zu Textvergleichen
+
+Bei allen Bedingungen, die Textfelder betreffen, wird der Vergleichstext
+grundsätzlich als [regexes|regulärer Ausdruck] behandelt. Der Vergleich
+findet hier immer _ohne Unterscheidung von Groß-/Kleinschreibung_
+statt. Letzters ist in der Tat eine Ausnahme von dem, was sonst in (CMK)
+üblich ist. Es macht aber das Formulieren der Regeln robuster. Auch sind
+gerade Hostnamen in Events nicht unbedingt konsistent in ihrer Schreibweise,
+falls diese nicht zentral, sondern auf jedem Host selbst konfiguriert werden.
+Daher ist diese Ausnahme hier sehr sinnvoll.
+
+Ferner gilt immer ein _Infixmatch_ -- also eine Überprüfung auf ein
+_Enthaltensein_ des Suchtextes. Ein `.*` am Anfang oder am Ende
+des Suchtexts können Sie sich also sparen.
+
+Davon gibt es allerdings eine *Ausnahme:*
+Wird beim Match auf den Hostnamen *kein regulärer Ausdruck* verwendet, sondern ein
+*fester Hostname,* so wird dieser auf *exaktes* Übereinstimmen geprüft und
+*nicht* auf ein Enthaltensein. Achtung: Sobald der Suchtext einen Punkt enthält,
+wird dieser als regulärer Ausdruck gewertet und es gilt Infixsuche. `myhost.de`
+matcht dann auch z.B. auf `notmyhostide`!
+
+[#matchgroups]
+==== Matchgruppen
+
+Sehr wichtig und nützlich ist hier das Konzept
+[regexes#matchgroups|Matchgruppen] beim Feld {{Text to match}}. Damit sind
+die Textabschnitte gemeint, die beim Matchen mit geklammerten Ausdrücken
+im regulären Ausdruck übereinstimmen.
+
+Nehmen Sie an, Sie möchten folgende Art von Meldung in der Logdatei einer
+Datenbank überwachen:
+
+.
+
+----Database instance WP41 has failed
+----
+
+Das `WP41` ist dabei natürlich variabel und Sie möchten sicher nicht
+für jede unterschiedliche Instanz ein eigene Regel formulieren. Daher verwenden
+Sie im regulären Ausdruck `.*`, was für eine beliebige Zeichenfolge steht:
+
+`Database instance .* has failed`
+
+Wenn Sie jetzt den variablen Teil in runde Klammern setzen, wird sich die Event
+Console den tatsächlichen Wert beim Matchen für weitere Aktionen *merken:*
+
+`Database instance *(.*)* has failed`
+
+Nach einem erfolgreichen Match der Regel ist jetzt die erste Matchgruppe
+auf den Wert `WP41` gesetzt (oder welche Instanz auch immer den
+Fehler produziert hat).
+
+Diese Matchgruppen können Sie im Regelsimulator sehen, wenn Sie mit
+der Maus über die grüne Kugel fahren:
+
+image::bilder/ec_match_groups_1.png[]
+
+Auch in den Details des erzeugten Events können Sie die Gruppen sehen:
+
+image::bilder/ec_match_groups_2.png[]
+
+Die Matchgruppen finden unter anderem Anwendung bei:
+
+* Umschreiben von Events ([ec#rewriting|Rewriting])
+* Automatisches Aufheben von Events ([ec#cancelling|Cancelling])
+* Zählen von Meldungen ([ec#counting|Counting])
+
+Hier noch ein Tipp: Es gibt Situationen, in denen Sie im regulären Ausdruck
+etwas gruppieren müssen, aber *keine* Matchgruppe erzeugen möchten.
+Dies können Sie durch ein `?:` direkt nach der öffnenden Klammer
+erreichen. Beispiel: Der Ausdruck `one (.*) two (?:.*) three` erzeugt
+bei einem Match auf `one 123 two 456 three` nur die eine Matchgruppe
+`123`.
+
+==== IP-Adresse
+
+Hier können Sie auf die IPv4-Adresse des Senders der Meldung matchen.
+Geben Sie entweder eine exakte Adresse an oder ein Netzwerk in der
+Notation X.X.X.X/Y, also z.B. `192.168.8.0/24`, um alle Adressen
+im Netzwerk `192.168.8.`X zu matchen.
+
+Bitte beachten Sie, dass der Match auf die IP-Adresse nur dann funktioniert,
+wenn die überwachten Systeme direkt an die Event Console senden. Ist noch
+ein anderer Syslogserver dazwischen geschaltet, der die Meldungen weiterleitet,
+wird stattdessen dessen Adresse als Absender in der Meldung erscheinen.
+
+
+[#syslogfacility]
+==== Syslog-Priorität und -Facility
+
+Diese beiden Felder sind ursprünglich von Syslog definierte, standardisierte
+Informationen. Intern wird dabei ein 8-Bit-Feld in 5 Bits für die Facility
+(ergibt 32 Möglichkeiten) und 3 Bits für die Priority (8 Möglichkeiten)
+aufgeteilt.
+
+Die 32 vordefinierten Facilities waren mal für so etwas wie
+eine Anwendung gedacht. Nur ist die Auswahl damals nicht sehr zukunftsweisend
+gemacht worden. Eine der Facilities ist z.B. `uucp` -- ein Protokoll
+das schon in den 90er Jahren des vergangenen Jahrtausends kaum noch
+verwendet wurde.
+
+Fakt ist aber, dass jede Meldung, die per Syslog kommt, eine der Facilities
+trägt. Teilweise können Sie diese beim Senden auch frei vergeben, um
+später darauf gezielt zu filtern. Das ist durchaus nützlich.
+
+Die Verwendung von Facility und Priority hat auch einen Performanceaspekt.
+Wenn Sie eine Regel definieren, die sowieso nur auf Meldungen greift, die
+alle die gleiche Facility oder Priorität haben, sollten Sie diese zusätzlich
+in den Filtern der Regel setzen. Die Event Console kann diese Regeln dann
+sehr effizient sofort umgehen, wenn eine Meldung mit abweichenden Werten
+eingeht. Je mehr Regeln diese Filter gesetzt haben, desto weniger
+Regelvergleiche werden benötigt.
+
+==== Invertieren des Matches
+
+Die Checkbox [.guihints]#Negate match: Execute this rule if the upper conditions are not fulfilled.}}# 
+führt dazu, dass die Regel genau dann greift, wenn die Bedingungen _nicht_ alle
+erfüllt sind. Dies ist eigentlich nur nützlich im Zusammenhang mit zwei Regelarten:
+
+* [.guihints]#Do not peform any action, drop this message, stop processing}}# 
+* [.guihints]#Skip this rule pack, continue rule execution with next pack}}# 
+
+Zu den Regelpaketen erfahren Sie [ec#rulepacks|weiter unten] mehr.
+
+
+[#outcome]
+=== Auswirkung der Regel
+
+==== Regeltyp: Abbrechen oder Event erzeugen
+
+Wenn eine Regel matcht, legt sie fest, was mit der Meldung geschehen
+soll. Das geschieht im Kasten [.guihints]#Outcome & Action}}:# 
+
+image::bilder/ec_outcome.png[]
+
+Mit dem [.guihints]#Rule type# kann die Auswertung an der Stelle ganz oder für das
+aktuelle Regelpaket abgebrochen werden. Gerade die erste Möglichkeit sollten
+Sie nutzen, um den größten Teil des nutzlosen „Rauschens“ durch ein
+paar gezielte Regeln ganz am Anfang loszuwerden. Nur bei den „normalen“
+Regeln werden die anderen Optionen in diesem Kasten überhaupt ausgewertet.
+
+==== Festlegen des Status
+
+Mit [.guihints]#State# legt die Regel den Monitoringstatus des Events fest. In der
+Regel wird diese (WARN) oder (CRIT) sein. Regeln, die (OK)-Events erzeugen,
+können in Ausnahmen interessant sein, um bestimmte Ereignisse rein informativ
+darzustellen. Hier ist dann eine Kombination mit einem automatischen
+[ec#expire|Herausaltern] dieser Events interessant.
+
+Neben dem Festlegen eines expliziten Status gibt es noch zwei dynamischere Möglichkeiten.
+Die Einstellung [.guihints]#(set by syslog)# übernimmt die Einstufung anhand der Syslog-Priorität.
+Dies funktioniert allerdings nur, wenn die Meldung bereits vom Absender nutzbar klassifiert wurde.
+Meldungen, die direkt per Syslog empfangen wurden, enthalten eine von acht per RFC
+festgelegten Prioritäten, die wie folgt abgebildet werden:
+
+[cols=, options="header"]
+|===
+
+
+|Priorität
+|ID
+|Zustand
+|Definition laut Syslog
+
+
+|`emerg`
+|`0`
+|(CRIT)
+|Das System ist unbrauchbar
+
+
+|`alert`
+|`1`
+|(CRIT)
+|Sofortige Aktion erforderlich
+
+
+|`crit`
+|`2`
+|(CRIT)
+|Kritischer Zustand
+
+
+|`err`
+|`3`
+|(CRIT)
+|Fehler
+
+
+|`warning`
+|`4`
+|(WARN)
+|Warnung
+
+
+|`notice`
+|`5`
+|(OK)
+|Normal, aber signifikante Information
+
+
+|`info`
+|`6`
+|(OK)
+|Reine Information
+
+
+|`debug`
+|`7`
+|(OK)
+|Debugmeldung
+
+|===
+
+Neben Syslog-Meldungen bieten auch Meldungen aus dem Windows Eventlog und Meldungen
+aus Textdateien, die bereits mit dem (CMK)-Logwatch-Plugin auf dem Zielsystem
+klassifiziert wurden, vorbereitete Zustände. Bei SNMP-Traps gibt es diese leider
+nicht.
+
+Eine ganze andere Methode ist, die Einstufung der Meldung anhand des
+Texts selbst zu machen. Dies geht mit der Einstellung [.guihints]#(set by message text)}}:# 
+
+image::bilder/ec_state_by_text.png[]
+
+Der Match auf die hier konfigurierten Texte geschieht erst, nachdem auf [.guihints]#Text to match}}# 
+und auf die anderen Regelbedingungen geprüft wurde. Diese müssen Sie also hier
+nicht wiederholen.
+
+Falls keines der konfigurierten Patterns gefunden wird, nimmt das Event den Zustand
+(UNKNOWN) an.
+
+==== Servicelevel
+
+Hinter dem Servicelevel steckt die Idee, dass jeder Host und jeder Service im
+Unternehmen eine bestimmte Wichtigkeit hat. Damit kann eine konkrete
+Servicevereinbarung verbunden sein. In (CMK) können Sie per [wato_rules|Regeln]
+Ihren Hosts und Services solche Level zuordnen und dann z.B. die Alarmierung oder
+selbstdefinierte Dashboards davon abhängig machen.
+
+Da Events erst einmal nicht unbedingt mit Hosts oder Services korrellieren, erlaubt
+die Event Console, dass Sie einem Event per Regel ebenfalls einen Servicelevel
+zuordnen. Sie können die Eventansichten dann später nach diesem Level filtern.
+
+Ab Werk definiert (CMK) die vier Level 0 (kein Level), 10 (Silber), 20 (Gold)
+und 30 (Platin). Diese Auswahl können Sie in den [.guihints]#Global settings => Notifcations => Servicelevels}}# 
+beliebig anpassen. Entscheidend sind hierbei die Zahlen der Levels, dann nach diesen
+werden sie sortiert und auch nach der Wichtigkeit verglichen.
+
+[#contactgroups]
+==== Kontaktgruppen
+
+Die Kontaktgruppen werden für die [ec#visibility|Sichtbarkeit] ab Version
+VERSION[1.4.0] auch bei der
+[ec#notifications|Alarmierung] von Events verwendet. Sie können hier per
+Regel Events explizit Kontaktgruppen zuordnen. Einzelheiten
+erfahren Sie im [ec#visibility|Abschnitt über das Operating].
+
+
+==== Aktionen
+
+Aktionen sind den [alert_handlers|Alerthandlern] für Hosts und Services sehr ähnlich.
+Hier können Sie beim Öffnen eines Events ein selbst definiertes Skript ausführen lassen.
+Alle Einzelheiten zu den Aktionen erfahren Sie weiter unten in einem eigenen
+[ec#actions|Abschnitt].
+
+
+==== Automatisches Löschen
+
+Das automatische Löschen (= Archivieren), welches Sie mit [.guihints]#Delete event immediately after the actions}}# 
+einstellen können, sorgt letztlich dafür, dass ein Event im Operating überhaupt nicht
+sichtbar wird. Das ist dann sinnvoll, wenn Sie lediglich automatisch Aktionen
+auslösen oder nur bestimmte Events archivieren möchten,
+damit Sie später danach recherchieren können.
+
+
+[#rewriting]
+=== Automatisches Umschreiben von Texten (Rewriting)
+
+Mit dem [.guihints]#Rewriting# kann eine EC-Regel Textfelder in der Meldung automatisch
+umschreiben und Anmerkungen anfügen. Dies wird in einem eigenen Kasten konfiguriert:
+
+image::bilder/ec_rewriting.png[]
+
+Beim Umschreiben sind die oben beschriebenen [ec#matchgroups|Matchgruppen] besonders
+wichtig. Denn Sie erlauben es, Teile der Originalmeldung gezielt in den neuen
+Text einzubauen. Sie können bei den Ersetzungen auf die Gruppen wie folgt zugreifen:
+
+[cols=, ]
+|===
+
+
+<td style="width:10%" class=tt>\1
+|Wird durch die _erste_ Matchgruppe der Originalmeldung ersetzt.
+
+
+<td style="width:10%" class=tt>\2
+|Wird durch die _zweite_ Matchgruppe der Originalmeldung ersetzt (usw.).
+
+
+<td style="width:10%" class=tt>\0
+|Wird durch die _komplette_ Originalmeldung ersetzt.
+
+|===
+
+In obigem Screenshot wird der neue Meldungstext auf `Instance \1 has been shut down.`
+gesetzt. Das klappt natürlich nur, wenn beim [.guihints]#Text to match# in der *gleichen* Regel
+der reguläre Suchausdruck auch mindestens einen Klammerausdruck hat. Ein Beispiel dafür
+wäre z.B.:
+
+image::bilder/ec_rewrite_match.png[]
+
+Einige weitere Hinweise zum Umschreiben:
+
+* Das Umschreiben geschieht _nach_ dem Matchen und _vor_ dem Ausführen von Aktionen.
+* Match, Umschreiben und Aktionen geschehen immer in der gleichen Regel. Es ist nicht möglich, eine Meldung umzuschreiben, um sie dann mit einer späteren Regel zu bearbeiten.
+* Die Ausdrücke `\1`, `\2` usw. können in allen Textfeldern verwendet werden, nicht nur in [.guihints]#Message text}}.# 
+
+
+[#cancelling]
+=== Automatisches Aufheben von Events (Cancelling)
+
+Manche Anwendungen oder Geräte sind so nett, nach einer Störmeldung
+später eine passende OK-Meldung zu senden, sobald das Problem wieder
+behoben ist. Sie können die EC so konfigurieren, dass in so einem
+Fall das durch die Störung geöffnete Event automatisch wieder
+geschlossen wird. Dies nennt man [.guihints]#Aufheben (Cancelling)}}.# 
+
+Folgende Abbildung zeigt eine Regel, in der nach Meldungen mit dem Text `ABC
+Instance (.*) failed` gesucht wird. Der Ausdruck `(.*)` steht
+für eine beliebige Zeichenfolge, die in einer [ec#matchgroups|Matchgruppe]
+eingefangen wird. Der Ausdruck `ABC Instance (.*) recovered`, welcher
+im Feld [.guihints]#Text to cancel event(s)# in der gleichen Regel konfiguriert ist, sorgt
+für ein automatisches Schließen von mit dieser Regel erzeugten Events,
+wenn eine passende Meldung eingeht:
+
+
+image::bilder/ec_cancelling.png[]
+
+Das automatische Aufheben funktioniert genau dann, wenn
+
+* eine Meldung eingeht, deren Text auf [.guihints]#Text to cancel event(s)# passt,
+* der hier in der Gruppe `(.*)` eingefangene Wert _identisch_ mit der Matchgruppe aus der ursprünglichen Meldung ist,
+* beide Meldungen vom gleichen Host kamen und
+* es sich um die gleiche Anwendung handelt (Feld [.guihints]#Application}}).# 
+
+Das Prinzip der Matchgruppen ist hier sehr wichtig. Denn es wäre schließlich
+wenig sinnvoll, wenn die Meldung `ABC Instance TEST recovered` ein
+Event aufheben würde, das von der Meldung `ABC Instance PROD failed`
+stammt, oder?
+
+Bitte machen Sie nicht den Fehler, in [.guihints]#Text to cancel events(s)# den Platzhalter
+`\1` zu verwenden. Das funktioniert _nicht!_ Diese Platzhalter
+funktionieren nur beim [ec#rewriting|Rewriting].
+
+==== Ausführen von Aktionen beim Aufheben
+
+Sie können beim Aufheben eines Events auch automatisch [ec#automatic_actions|Aktionen] ausführen
+lassen. Dazu ist es wichtig zu wissen, dass beim Canceln etliche Datenfelder
+des Events von Werten der OK-Meldung überschrieben werden, bevor die
+Aktionen ausgeführt werden! Auf diese Art sind im Aktionsskript dann die
+Daten der OK-Meldung vollständig verfügbar. Auch ist während dieser
+Phase der Zustand des Events als (OK) eingetragen. Auf diese Art kann ein
+Aktionsskript ein Canceln erkennen und Sie können das gleiche Skript
+für Fehler und OK-Meldung verwenden (z.B. bei der Anbindung an ein
+Ticketsystem).
+
+Folgende Felder werden aus Daten der OK-Meldung überschrieben:
+
+* Der Meldungstext
+* Der Zeitstempel
+* Die Zeit des letzten Auftretens
+* Die Syslog-Priorität
+
+Alle anderen Felder bleiben unverändert -- inklusive der Event-ID.
+
+
+==== Aufheben in Kombination mit Umschreiben
+
+Falls Sie in der gleichen Regel mit Umschreiben und [ec#cancelling|Aufheben] arbeiten,
+so sollten Sie vorsichtig sein beim Umschreiben des Hostnamens oder der
+Application. Beim Aufheben prüft die EC stets, ob die aufhebende Meldung
+zu Hostname und Anwendung des offenen Events passt. Wenn diese aber umgeschrieben
+wurden, würde das Aufheben nie funktionieren.
+
+Daher simuliert die Event Console vor dem Aufheben ein Umschreiben von
+Hostname und Anwendung, um so die relevanten Texte zu vergleichen. Das
+ist wahrscheinlich das, was Sie auch erwarten würden.
+
+Dieses Verhalten können Sie auch ausnutzen, wenn das [.guihints]#Application}}-Feld# 
+bei der Fehlermeldung und der späteren OK-Meldung nicht übereinstimmen!
+Schreiben Sie in diesem Fall einfach das Anwendungsfeld in einen bekannten
+festen Wert um. Das führt faktisch dazu, dass dieses Feld beim Aufheben
+ignoriert wird.
+
+
+==== Aufheben anhand der Syslog-Priorität
+
+Es gibt (leider) Fälle, in denen der Text der Fehler- und OK-Meldung absolut
+identisch ist. Meist ist der eigentliche Status dann nicht im Text, sondern
+in der Syslog-Priorität kodiert.
+
+Dazu gibt es die Option [.guihints]#Syslog priority to cancel event}}.# Geben Sie
+hier z.B. den Bereich `debug` ... `notice` an. Alle Prioritäten
+in diesem Bereich werden normalerweise als OK-Status gewertet. Bei Verwendung
+dieser Option sollten Sie _trotzdem_ in das Feld [.guihints]#Text to cancel event(s)}}# 
+einen passenden Text eintragen. Sonst wird die Regel auf alle OK-Meldungen
+matchen, welche die gleiche Anwendung betreffen.
+
+
+[#counting]
+=== Zählen von Meldungen
+
+Im Kasten [.guihints]#Counting & Timing# finden Sie Optionen zum Zählen von gleichartigen
+Meldungen. Die Idee ist, dass manche Meldungen erst dann relevant sind, wenn
+Sie in bestimmten Zeiträumen _zu häufig_ oder _zu selten_ auftreten.
+
+==== Zu häufige Meldungen
+
+Das Prüfen auf zu oft auftretende Meldungen aktivieren Sie
+mit der Option [.guihints]#Count messages in defined interval}}:# 
+
+image::bilder/ec_counting.png[]
+
+Hier geben Sie zunächst einen Zeitraum bei „{{Time period for counting}}“# und
+eine Anzahl von Meldungen bei „{{Count until triggered}}“# vor, die zum
+Öffnen eines Events führen sollen. Im Beispiel in der Abbildung ist
+das auf 10 Meldungen pro Stunde eingestellt. Natürlich handelt es
+sich dabei nicht um 10 beliebige Meldungen, sondern um solche,
+die von der Regel gematcht werden.
+
+Normalerweise ist es hier aber sinnvoll, nicht einfach global alle passenden Meldungen
+zu zählen, sondern nur diejenigen, die sich auf die gleiche „Ursache“
+beziehen. Um das zu steuern gibt es die drei Checkboxen mit dem Titel
+[.guihints]#Force separate events for different ...}}.#  Diese sind so voreingestellt, dass
+Meldungen nur dann zusammengezählt werden, wenn sie übereinstimmen in:
+
+* Host
+* Anwendung
+* [ec#matchgroups|Matchgruppen]
+
+Damit können Sie Regeln formulieren wie _„Wenn vom gleichen Host,
+der gleichen Anwendung und dort der gleichen Instanz mehr als 10
+Meldungen pro Stunde kommen, dann..._“. Dadurch kann es dann
+auch sein, dass aufgrund der Regel mehrere unterschiedliche Events
+aufgehen.
+
+Wählen Sie z.B. alle drei Checkboxen ab, so wird nur noch global
+gezählt und die Regel kann auch nur insgesamt ein einziges Event
+öffnen!
+
+Es kann übrigens durchaus sinnvoll sein, als Anzahl eine 1 einzutragen!
+Damit können Sie „Eventstürme“ effektiv in den Griff bekommen. Kommen
+z.B. in kurzer Zeit 100 Meldungen der gleichen Art, so wird dafür dann trotzdem
+nur ein einziges Event erzeugt. Sie sehen dann in den Eventdetails
+
+* den Zeitpunkt des Auftretens der ersten Meldung,
+* den Zeitpunkt der jüngsten Meldung und
+* die Gesamtzahl an Meldungen, die in diesem Event zusammengefasst sind.
+
+Wann der Fall dann „abgeschlossen“ ist und bei erneuten Meldungen wieder
+ein neues Event aufgemacht werden soll, legen Sie über zwei Checkboxen fest.
+Normalerweise führt eine Quittierung des Events dazu, dass bei weiteren
+Meldungen eine neue Zählung mit einem neuen Event angefangen wird.
+Das können Sie mit [.guihints]#Continue counting when event is acknowledged}}# 
+abschalten.
+
+Die Option [.guihints]#Discontinue counting after time has elapsed}}# 
+(ab Version VERSION[1.4.0]) sorgt dafür,
+dass für jeden Vergleichszeitraum immer ein separates Event geöffnet
+wird. In obigem Beispiel war eine Schwelle von 10 Meldungen pro
+Stunde eingestellt. Ist diese Option aktiviert, so werden auf ein
+bereits geöffnetes Event maximal Meldungen einer Stunde
+aufgerechnet. Sobald die Stunde abgelaufen ist, wird (bei ausreichender
+Zahl von Meldungen) wieder ein neues Event geöffnet.
+
+Setzen Sie z.B. die Anzahl auf 1 und das Zeitintervall auf einen
+Tag, so werden Sie pro Tag von diesem Meldungstyp nur noch maximal
+ein Event sehen.
+
+Die Einstellung [.guihints]#Algorithm# ist auf den ersten Blick vielleicht etwas
+überraschend. Aber mal ehrlich: Was meint man eigentlich mit „10 Meldungen
+pro Stunde“? Welche Stunde ist damit gemeint? Immer volle Stunden der
+Tageszeit? Dann könnte es sein, dass in der letzten Minute einer Stunde neun
+Meldungen kommen und in der ersten Minute der nächsten nochmal neun. Macht
+insgesamt 18 Meldungen in zwei Minuten.  Aber trotzdem weniger als 10 pro
+Stunde und die Regel würde nicht triggern. Das klingt nicht so sinnvoll &nbsp;&#8230;
+
+Weil es dazu nicht nur eine einzige Lösung gibt, bietet (CMK)
+drei verschiedene Definitionen an, was denn „10 Meldungen pro Stunde“
+genau bedeuten soll:
+
+[cols=20, options="header"]
+|===
+
+
+|Algorithmnus
+|Funktionsweise
+
+
+|{{Interval}}
+|Das Zählintervall startet bei der ersten eingehenden passenden Meldung.
+Ein Event in der Phase {{counting}} wird erzeugt. Vergeht nun die
+eingestellte Zeit, bevor die Anzahl erreicht wird, wird das Event
+stillschweigend gelöscht. Wird die Anzahl aber schon vor Ablauf
+der Zeit erreicht, wird das Event _sofort_ geöffnet (und
+eventuell konfigurierte Aktionen ausgelöst).
+
+
+
+|{{Token Bucket}}
+|Dieser Algorithmus arbeitet nicht mit festen Zeitintervallen,
+sondern implementiert ein Verfahren, das bei Netzwerken oft zum
+Trafficshaping eingesetzt wird.
+
+Angenommen, Sie haben 10 Meldungen pro Stunde konfiguriert. Das sind
+im Schnitt eine alle 6 Minuten. Wenn zum ersten Mal eine passende
+Meldung eingeht, wird ein Event in der Phase {{counting}} erzeugt und
+die Anzahl auf 1 gesetzt. Bei jeder weiteren Meldung wird diese um
+1 erhöht. Und alle 6 Minuten wird der Zähler wieder um 1
+_verringert_ -- egal, ob eine Meldung gekommen ist oder nicht.
+Fällt der Zähler wieder auf 0, wird das Event gelöscht.
+
+Der Trigger wird also dann ausgelöst, wenn die Rate der Meldungen
+_im Schnitt` dauerhaft über 10 pro Stunde liegt.
+
+
+|{{Dynamic Token Bucket}}
+|Dies ist eine Variante des {{Token Bucket}}-Algorithmus, bei der
+der Zähler umso langsamer verringert wird, je kleiner er gerade
+ist. In obigem Beispiel würde der Zähler bei Stand von 5 nur
+alle _12_ statt alle 6 Minuten verringert.
+
+Das führt insgesamt dazu, dass Meldungsraten, die nur knapp
+über der erlaubten Rate liegen, deutlich schneller einen
+Event öffnen (und damit alarmiert werden).
+
+|===
+
+Welchen Algorithmus sollten Sie also wählen?
+
+* [.guihints]#Intervall# ist am einfachstens zu verstehen und leichter nachzuvollziehen, wenn Sie später in Ihrem Syslogarchiv genau nachzählen möchten.
+* [.guihints]#Token Bucket# dagegen ist intelligenter und „weicher“. Es kommt zu weniger Anomlien an den Rändern der Intervalle.
+* [.guihints]#Dynamic Token Bucket# macht das System reaktiver und erzeugt schneller Alarme.
+
+Events, die die eingestellte Anzahl noch nicht erreicht haben,
+sind latent schon verhanden aber für den Operator nicht
+automatisch sichtbar. Sie befinden sich in der Phase [.guihints]#counting}}.# 
+Sie können solche Events mit dem Filter [.guihints]#Phase# in der Events-Ansicht
+sichtbar machen:
+
+image::bilder/ec_phase_filter_counting.png[align=center,width=320]
+
+[#expect]
+==== Zu seltene oder ausbleibende Meldungen
+
+Genauso wie das Eingehen einer bestimmten Meldung kann auch das
+*Ausbleiben* ein Problem bedeuten. Eventuell erwarten Sie pro Tag
+mindestens eine Meldung von einem bestimmten Job. Bleibt diese aus, ist der
+Job wahrscheinlich nicht gelaufen und sollte dringend repariert werden.
+
+So etwas können Sie unter [.guihints]#Counting & Timing => Expectregular messages}}# 
+konfigurieren:
+
+image::bilder/ec_expect_messages.png[]
+
+Wie beim Zählen müssen Sie auch hier einen Zeitraum angeben, in dem
+Sie die Meldung(en) erwarten. Hier kommt allerdings ein ganz anderer
+Algorithmus zur Anwendung, der an dieser Stelle viel sinnvoller ist.
+Der Zeitraum wird hier nämlich immer exakt an definierten Stellen
+ausgerichtet. So wird z.B. beim Interval [.guihints]#Stunde# immer bei Minute
+und Sekunde Null begonnen. Sie haben folgende Optionen:
+
+[cols=25, options="header"]
+|===
+
+
+|Interval
+|Ausrichtung
+
+
+|{{10 seconds}}
+|Bei einer durch 10 teilbaren Sekundenzahl
+
+
+|{{minute}}
+|Auf der vollen Minute
+
+
+|{{5 minutes}}
+|Bei 0:00, 0:05, 0:10, usw.
+
+
+|{{15 minutes}}
+|Bei 0:00, 0:15, 0:30, 0:45, usw.
+
+
+|{{hour}}
+|Auf dem Beginn jeder vollen Stunde
+
+
+|{{day}}
+|Exakt bei 00:00 Uhr, allerdings in einer konfigurierbaren Zeitzone. Damit können Sie
+auch sagen, dass Sie eine Meldung zwischen 12:00 Uhr und 12:00 Uhr am nächsten Tag erwarten.
+Wenn Sie selbst z.B. in der Zeitzone {{UTC+1}} sind, geben Sie dazu {{UTC-11}} an.
+
+
+|{{two days}}
+|Zu Beginn einer vollen Stunde. Sie können hier einen Zeitzonenoffset von 0 bis 47 angeben,
+der sich auf 1970-01-01 00:00:00 UTC bezieht.
+
+
+|{{week}}
+|Um 00:00 Uhr am Donnerstag morgen in der Zeitzone UTC plus das Offset, das Sie
+in Stunden ausgeben können. Donnerstag deswegen, weil der 1.1.1970 -- der Beginn der
+„Epoche“, an einem Donnerstag war.
+
+|===
+
+Warum ist das so kompliziert? Das soll Fehlalarme vermeiden. Erwarten Sie z.B.
+eine Meldung vom Backup pro Tag? Sicher wird es leichte Unterschiede in der
+Laufzeit des Backups geben, so dass die Meldungen nicht exakt 24 Stunden
+auseinander liegen. Ewarten Sie die Meldung z.B. ungefähr gegen Mitternacht
+plus/minus ein oder zwei Stunden, so ist ein Intervall von 12:00 bis 12:00 Uhr viel
+robuster, als eines von 00:00 bis 00:00 Uhr. Allerdings bekommen Sie dann auch
+erst um 12:00 Uhr ein Alarmevent, wenn die Meldung ausbleibt.
+
+==== Mehrfaches Auftreten des gleichen Problems
+
+Die Option [.guihints]#Merge with open event# ist so voreingestellt, dass bei einem
+mehrfahren hintereinander Ausbleiben der gewünschten Meldung, das bestehende
+Event aktualisiert wird. Dies können Sie so umschalten, dass jedes Mal ein
+neues Event aufgemacht wird.
+
+
+[#timing]
+=== Timing
+
+Unter [.guihints]#Counting & Timing# gibt es zwei Optionen, welche das Öffnen
+bzw. automatische Schließen von Events betreffen.
+
+Die Option [.guihints]#Delay event creation# ist nützlich, wenn Sie mit dem
+automatischen [ec#cancelling|Aufheben] von Events arbeiten. Setzen
+Sie z.B. eine Verzögerung von 5 Minuten, so verharrt bei einer
+Störmeldung das so erzeugte Event 5 Minuten im Zustand [.guihints]#delayed# --
+in der Hoffnung, dass in dieser Zeit die OK-Meldung eintrifft.
+Ist das der Fall, so wird das Event automatisch und ohne Aufhebens
+wieder geschlossen und schlägt nicht beim Operating auf.
+Läuft die Zeit aber ab, so wird das Event geöffnet und eventuell
+eine dafür definierte Aktionen ausgeführt:
+
+image::bilder/ec_delay.png[align=center,width=530]
+
+In etwa das Gegenteil macht [.guihints]#Limit event lifetime}}.# Damit können Sie
+Events nach einer bestimmten Zeit automatisch schließen lassen. Das ist
+z.B. nützlich für informative Events mit (OK)-Status, die Sie zwar
+anzeigen möchten, aber für die das Operating keine Aktivitäten nach
+sich ziehen soll. Durch das automatisch „Herausaltern“ sparen Sie sich
+das manuelle Löschen solcher Meldungen:
+
+image::bilder/ec_limit_livetime.png[align=center,width=530]
+
+Durch ein Quittieren wird das Herausaltern erst einmal gestoppt. Dieses Verhalten
+können Sie aber mit den beiden Checkboxen nach Bedarf justieren.
+
+
+[#rulepacks]
+=== Regelpakete
+
+Regelpakte haben nicht den Sinn, Dinge übersichtlicher zu machen, sondern können
+die Konfiguration vieler ähnlicher Regeln auch deutlich vereinfachen und gleichzeitig
+die Auswertung beschleunigen.
+
+Angenommen, Sie haben einen Satz von 20 Regeln, die sich alle um
+das Windows Eventlog [.guihints]#Security# drehen. Alle diese Regeln haben gemeinsam,
+dass sie in der Bedingung auf einen bestimmten Text im Anwendungsfeld
+prüfen (der Name dieses Logfiles wird bei den Meldungen von der EC als
+[.guihints]#Application# eingetragen). Gehen Sie in so einem Fall wie folgt vor:
+
+. Legen Sie für diese Regeln ein eigenes Regelpaket an.
+. Legen Sie die 20 Regeln für [.guihints]#Security# in diesem Paket an oder ziehen Sie sie dorthin um (Auswahlliste [.guihints]#Move to pack...# rechts in der Regeltabelle).
+. Entfernen Sie aus allen diesen Regeln die Bedingung auf die Anwendung.
+. Legen Sie *als erste Regel* in dem Paket eine Regel an, durch die  Meldungen das Paket sofort verlassen, wenn die Anwendung _nicht_ [.guihints]#Security# ist.
+
+Diese Ausschlussregel ist wie folgt aufgebaut:
+
+* [.guihints]#Matching criteria => Matchsyslog application (tag)# auf `Security`
+* [.guihints]#Matching criteria => Invertmatching# auf [.guihints]#Negate match: Execute this rule if the upper conditions are not fulfilled.}}# 
+* [.guihints]#Outcome & action => Ruletype# auf [.guihints]#Skip this rule pack, continue rule execution with next rule pack}}# 
+
+Jede Meldung, die nicht vom Security-Log kommt, wird also bereits von der ersten Regel in diesem
+Paket „abgewiesen“. Das vereinfacht nicht nur die weiteren Regeln des Pakets, sondern beschleunigt
+auch die Abarbeitungen, da diese in den meisten Fällen gar nicht mehr geprüft werden müssen.
+
+
+[#actions]
+== Ausführen von Aktionen
+
+=== Arten von Aktionen
+
+Die Event Console beitet drei Arten von Aktionen, welche Sie entweder manuell
+oder beim Öffnen oder [ec#cancel|Aufheben] von Events ausführen lassen können:
+
+* Ausführen von selbstgeschriebenen Shellskripten
+* Versenden von selbstdefinierten Emails
+* Erzeugen von (CMK)-[ec#notifications|Alarmen]
+
+
+=== Shellskripte und Emails
+
+Emails und Skripte müssen Sie zunächst in den Einstellungen der Event
+Console definieren. Sie finden diese unter dem Eintrag [.guihints]#Actions (Emails & Scripts)}}:# 
+
+image::bilder/ec_add_action.png[]
+
+==== Ausführen von Shellskripten
+
+Mit dem Knopf [.guihints]#Add new action# legen Sie eine neue Aktion an. Folgendes Beispiel zeigt,
+wie Sie ein einfaches Shellskript als Aktion vom Typ [.guihints]#Execute shell script# anlegen
+können. Im Skript können Sie Platzhalter wie `$ID$` oder `$HOST$` einflechten,
+die vor der Ausführung des Skripts durch die tatsächlichen Werte aus dem Event ersetzt
+werden. Eine vollständige Liste der verfügbaren Platzhalter erhalten Sie in der ICON[icon_help.png]
+Onlinehilfe.
+
+image::bilder/ec_define_action.png[]
+
+Bitte beachten Sie: Es kann unter Umständen möglich sein, dass
+ein Angreifer durch bestimmte Inhalte in den Texten von Events künstlich
+Befehle in das Skript einschleust. Das ist insbesondere bei dem Feld
+`$TEXT$` der Fall. Dies liegt daran, dass die Platzhalter *vor*
+der Ausführung des Skripts ersetzt werden.
+
+In Zukunft wird es eine Erweiterung von (CMK) geben, die eine Übergabe
+der Werte alternativ über Umgebungsvariablen ermöglicht (analog zu den
+Skripten bei den [notifications#methods|Alarmierungsmethoden]). Da diese
+dann von der Shell selbst ausgewertet werden, kann die Gefahr bei
+korrekter Anwendung vermieden werden. Verwenden Sie die aktuelle Variante mit
+den Platzhaltern daher nur, wenn Sie ausschließen können, dass Angreifer
+Events einschleusen können.
+
+Das Beispielskript aus dem Screenshot legt im Instanzverzeichnis die
+Datei `tmp/test.out` an und schreibt dort einen Text mit den konkreten Werten
+der Variablen zu dem jeweils letzten Event:
+
+.
+
+----cat << EOF > $OMD_ROOT/tmp/test.out
+Something happened:
+
+Event-ID: $ID$
+Host: $HOST$
+Application: $APPLICATION$
+Message: $TEXT$
+EOF
+----
+
+Die Skripte werden unter folgender Umgebung ausgeführt:
+
+* Als Interpreter wird `/bin/bash` verwendet.
+* Das Skript läuft als Instanzbenutzer mit dem Homeverzeichnis der Instanz (z.B. `/omd/sites/mysite`).
+* Während der Laufzeit des Skripts ist die Verarbeitung weiterer Events angehalten!
+
+Sollte Ihr Skript eventuell Wartezeiten enthalten, können Sie es mithilfe von Linux' `at`-Spooler
+asynchron laufen lassen. Dazu legen Sie das Skript in einer eigenen Datei `local/bin/myaction`
+an und starten es mit dem `at`-Befehl, z.B.:
+
+.
+
+----echo "$OMD_ROOT/local/bin/myaction '$HOST$' '$TEXT$' | at now
+----
+
+
+==== Versenden von Emails
+
+Der Aktionstyp [.guihints]#Send email# versendet eine einfache Textemail. Eigentlich könnten
+Sie das auch über den Umweg mit einem Skript erreichen, in dem Sie z.B. mit dem
+Kommandozeilenbefehl `mail` arbeiten. Aber so ist es komfortabler.
+Bitte beachten Sie, dass auch in den Feldern [.guihints]#Recipient email address# und [.guihints]#Subject}}# 
+Platzhalter erlaubt sind.
+
+image::bilder/ec_define_action_email.png[]
+
+
+[#notifications]
+=== Alarmierung durch (CMK)
+
+Neben dem Ausführen von Skripten und dem Versenden von (einfachen) Emails
+kennt die EC noch eine dritte Art von Aktion: Das Versenden von Alarmen über das
+(CMK)-[notifications|Alarmierungssystem]. Die dabei von der EC erzeugten
+Alarme gehen den gleichen Weg, wie die Host- und Servicealarme aus
+dem aktiven Monitoring. Die Vorteile gegenüber den oben beschriebenen
+einfachen Emails liegen auf der Hand:
+
+* Die Alarmierung wird für aktives und eventbasiertes Monitoring gemeinsam an zentraler Stelle konfiguriert.
+* Funktionen wie [notifications#bulk|Sammelalarme], HTML-Emails und andere nützliche Dinge stehen zur Verfügung.
+* Benutzerdefinierte Alarmierungsregeln, ein Abschalten der Alarme und Ähnliches funktionieren wie gewohnt.
+
+Die Aktionsart [.guihints]#Send monitoring notification}},# die das macht, steht immer
+automatisch zur Verfügung und muss nicht extra konfiguriert werden.
+
+Da Events von der Natur her einige Unterschiede zu den „normalen“ Hosts oder Services haben,
+gibt es ein paar Besonderheiten bei deren Alarmierung, welche Sie im Folgenden
+genauer kennen lernen:
+
+
+==== Zuordnung zu bestehenden Hosts
+
+Events können von beliebigen Hosts kommen -- egal, ob diese im aktiven Monitoring
+konfiguriert sind oder nicht. Schließlich steht der Syslog- und SNMP-Port
+allen Hosts im Netzwerk offen. Daher stehen die erweiterten Hostattribute wie
+Alias, Hostmerkmale, Kontakte usw. erst einmal nicht zur Verfügung. Das
+bedeutet insbesondere, dass _Bedingungen_ in Alarmierungsregeln nicht
+unbedingt so funktionieren, wie Sie das erwarten würden.
+
+Daher versucht die EC ab Version VERSION[1.4.0] bei der Alarmierung
+einen zum Event passenden Host aus dem aktiven Monitoring zu finden.
+Dabei wird das gleiche Verfahren wie bei der [ec#visibility|Sichtbarkeit von Events]
+angewandt.  Kann so ein Host gefunden werden, so werden von diesem
+folgende Daten übernommen:
+
+* Die korrekte Schreibweise des Hostnamens
+* Der Hostalias
+* Die in (CMK) konfigurierte primäre IP-Adresse
+* Die Hostmerkmale (Tags)
+* Der WATO-Ordner
+* Die Liste der Kontakte und Kontaktgruppen
+
+Dadurch kann es dazu kommen, dass der Hostname in der Alarmierung nicht exakt mit
+dem Hostnamen aus der ursprünglichen Meldung übereinstimmt. Die Anpassung auf die
+Schreibweise des aktiven Monitorings vereinfacht aber das Formulieren von
+einheitlichen Alarmierungsregeln, welche Bedingungen auf den Hostnamen enthalten.
+
+Die Zuordnung geschieht in Echtzeit durch eine Livestatus-Abfrage an den
+Monitoringkern, welcher in der gleichen Instanz wie die EC läuft, die die
+Meldung empfangen hat. Das klappt natürlich nur, wenn die Syslogmeldungen,
+SNMP-Traps usw. immer an diejenige (CMK)-Instanz gesendet werden, auf
+der der Host auch aktiv überwacht wird!
+
+Falls die Abfrage nicht klappt, der Host nicht gefunden werden kann oder Sie
+Version VERSION[1.2.8] von (CMK) verwenden, werden Ersatzdaten
+angenommen:
+
+[cols=, ]
+|===
+
+
+<td style="width:25%">{{Hostname}}
+|Der Hostname aus dem Event.
+
+
+|{{Hostalias}}
+|Als Alias wird der Hostname verwendet.
+
+
+|{{IP-Adresse}}
+|Das Feld IP-Adresse enthält den Hostnamen, falls dieser die Form
+einer IP-Adresse hat und ansonsten leer ist. Ab Version  VERSION[1.4.0] wird hier die
+original Absenderadresse der Meldung eingetragen.
+
+
+|{{Hostmerkmale}}
+|Der Host bekommt kein Tag. Falls Sie Taggruppen mit Leertags haben,
+nimmt der Host dort diese Merkmale an. Ansonsten hat er kein Tag der Gruppe.
+Bitte beachten Sie das, wenn Sie in den Alarmierungsregeln Bedingungen
+über Tags definieren.
+
+
+|{{WATO-Ordner}}
+|Kein Ordner. Sämtliche Bedingungen, die auf einen bestimmten Ordner gehen,
+sind damit unerfüllbar -- selbst wenn es sich um den Hauptordner handelt.
+
+
+|{{Kontakte}}
+|Die Liste der Kontakte ist leer. Ab Version VERSION[1.4.0]
+werden hier die Fallback-Kontakte eingetragen.
+
+|===
+
+Wenn der Host im aktiven Monitoring nicht zugeordnet werden kann, kann
+das natürlich zu Problemen bei der Alarmierung führen.  Zum einen wegen
+der Bedingungen, die dann evtl. nicht mehr greifen, zum anderen wegen der
+Kontaktauswahl. Für solche Fälle können Sie Ihre Alarmierungsregeln so
+anpassen, dass Alarme aus der Event Console mit einer eigenen Regel gezielt
+behandelt weden. Dazu gibt es eine eigene Bedingung, mit der Sie entweder
+positiv nur auf EC-Alarme matchen oder umgekehrt diese ausschließen können:
+
+image::bilder/ec_notification_condition.png[]
+
+
+==== Restliche Felder des Alarms
+
+Damit Alarme aus der EC das Alarmierungssystem des aktiven Monitorings
+durchlaufen können, muss sich die EC an dessen Schema anpassen. Dabei werden
+die typischen Datenfelder eines Monitoringalarms so sinnvoll wie möglich
+gefüllt. Wie die Daten des Hosts ermittelt werden, haben wir gerade beschrieben.
+Weitere Felder sind:
+
+
+[cols=, ]
+|===
+
+
+<td style="width:25%">{{Alarmtyp}}
+|EC-Alarme gelten immer als _Servicealarm._
+
+
+|{{Service description}}
+|Hier wird der Inhalt des Felds {{Application}} aus dem Event eingetragen.
+Falls das leer ist, wird bis Version VERSION[1.2.8] von (CMK) „`Unset`“ eingetragen,
+ab Version VERSION[1.4.0] „`Event Console`“.
+
+
+|{{Alarmierungsnummer}}
+|Diese ist fest auf `1` eingestellt. Damit ist hier auch keine Eskalation möglich. Selbst mehrere
+aufeinanderfolgende Events der gleichen Art geschehen voneinander unabhängig. Aktuell unterstützt
+die EC keine wiederholte Alarmierung für den Fall, dass ein Event nicht quittiert wird.
+
+
+|{{Datum/Uhrzeit}}
+|Bei Events, die [ec#counting|zählen], ist das der Zeitpunkt des _letzten_ Auftretens einer zum Event gehörigen Meldung.
+
+
+|{{Pluginoutput}}
+|Der Textinhalt des Events.
+
+
+|{{Servicezustand}}
+|Zustand des Events, also (OK), (WARN), (CRIT) oder (UNKNOWN).
+
+
+
+|{{Vorheriger Zustand}}
+|Da Events keinen früheren Status haben, wird hier bei normalen Events immer (OK),
+bei Aufhebungsevents (Cancelling) immer (CRIT) eingetragen. Diese Regelung
+kommt dem am nächsten, was man für Alarmierungsregeln braucht, die eine Bedingung auf den
+genauen Zustandswechsel haben!
+
+
+|===
+
+
+==== Kontaktgruppen manuell festlegen
+
+Wie oben beschrieben, können zu einem Event eventuell nicht die
+passenden Kontakte automatisch ermittelt werden. Für solche Fälle
+können Sie ab Version VERSION[1.4.0] von (CMK)
+direkt in der EC-Regel Kontaktgruppen angeben, welche für die Alarmierung
+verwendet werden sollen. Wichtig ist, dass Sie den Haken
+bei [.guihints]#Use in notifications# nicht vergessen:
+
+image::bilder/ec_set_contact_groups.png[,]
+
+*Achtung*: Die ähnliche Einstellung in Version VERSION[1.2.8]
+bezieht sich ausschließlich auf die Sichtbarkeit, nicht auf die Alarmierung!
+
+
+==== Globale Schalter für Alarme
+
+Im Element [.guihints]#Master Control# gibt es einen zentralen Schalter für Alarme.
+Ab Version VERSION[1.4.0] von (CMK) gilt dieser auch für
+Alarme, die von der EC weitergeleitet werden:
+
+image::bilder/master_control_notifications_off.png[align=center,width=280]
+
+Ebenso wie die Hostzuordnung, erfordert die Abfrage des Schalters durch die
+EC einen Livestatus-Zugriff auf den lokalen Monitoringcore. Eine erfolgreiche
+Abfrage sehen Sie im Logfile der Event Console:
+
+.var/log/mkeventd.log
+
+----[1482142567.147669] Notifications are currently disabled. Skipped notification for event 44
+----
+
+
+==== Wartungszeiten von Hosts
+
+Ab Version VERSION[1.4.0] erkennt die Event Console Hosts, die gerade in
+einer [basics_downtimes|Wartungszeit] sind und versendet in diesem Fall keine
+Alarme. Im Logfile sieht das so aus:
+
+.var/log/mkeventd.log
+
+----[1482144021.310723] Host myserver123 is currently in scheduled downtime. Skipping notification of event 433.
+----
+
+Auch das setzt natürlich ein erfolgreiches Finden des Hosts im aktiven
+Monitoring voraus. Falls dies nicht gelingt, wird angenommen, dass sich der
+Host _nicht_ in Wartung befindet und der Alarm auf jeden Fall generiert.
+
+
+==== Zusätzliche Makros
+
+Falls Sie ein eigenes [notifications#scripts|Alarmierungsskript] schreiben, haben Sie
+speziell bei Alarmen, die aus der Event Console kommen, etliche zusätzliche Variablen
+zur Verfügung, die den ursprünglichen Event beschreiben (Zugriff wie gewohnt mit
+Präfix `NOTIFY_`):
+
+
+[cols=, ]
+|===
+
+
+|`EC_ID`
+|Event-ID.
+
+
+|`EC_RULE_ID`
+|ID der Regel, die das Event erzeugt hat.
+
+
+|`EC_PRIORITY`
+|Syslogpriorität als Zahl von `0` (`emerg`) bis `7` (`debug`).
+
+
+|`EC_FACILITY`
+|Syslogfacility -- ebenfalls als Zahl. Der Wertebereich geht von `0` (`kern`) bis `32` (`snmptrap`).
+
+
+|`EC_PHASE`
+|Phase des Events. Da nur offene Events Aktionen auslösen, sollte hier `open` stehen. Bei einer manuellen
+Alarmierung eines bereits quittierten Events steht hier `ack`.
+
+
+|`EC_COMMENT`
+|Das Kommentarfeld der Events.
+
+
+|`EC_OWNER`
+|Das Feld {{Owner}}.
+
+
+|`EC_CONTACT`
+|Das Kommentarfeld mit der Kontaktinformation
+
+
+|`EC_PID`
+|Die Process-ID des Prozesses, der die Meldung gesendet hat (bei Syslog-Events).
+
+
+|`EC_MATCH_GROUPS`
+|Die Matchgruppen vom Matchen in der Regel.
+
+
+|`EC_CONTACT_GROUPS`
+|Die optional manuell in der Regel definierten Kontaktgruppen.
+
+|===
+
+
+
+[#automatic_actions]
+=== Aktionen ausführen
+
+Das manuelle Ausführen von Aktionen durch den Operator haben Sie schon weiter
+oben bei den [ec#commands|Kommandos] gesehen. Spannender ist das automatische
+Ausführen von Aktionen, welches Sie in EC-Regeln im Abschnitt [.guihints]#Outcome & Action}}# 
+konfigurieren können:
+
+image::bilder/ec_rule_actions.png[]
+
+Hier können Sie eine oder mehrere Aktionen auswählen, die immer dann ausgeführt
+werden, wenn aufgrund der Regel ein Event _geöffnet_ oder [ec#cancel|aufgehoben]
+wird. Bei Letzterem können Sie über die Auswahlbox [.guihints]#Do Cancelling-Actions when}}# 
+noch festlegen, ob die Aktion nur dann ausgeführt werden soll, wenn das aufgehobene
+Event schon die Phase [.guihints]#open# erreicht hat. Bei Verwendung von [ec#counting|Zählen] 
+oder [ec#delay|Verzögerung] kann es nämlich dazu kommen, dass Events aufgehoben
+werden, die quasi noch im Wartezustand und für den Benutzer noch nicht sichtbar
+waren.
+
+Die Ausführung von Aktionen werden in der Logdatei `var/log/mkevent.log`
+geloggt:
+
+.var/log/mkeventd.log
+
+----[1481120419.712534] Executing command: ACTION;1;omdadmin;test
+[1481120419.718173]   Exitcode: 0
+----
+
+Auch im Eventarchiv werden diese vermerkt.
+
+[#snmp]
+== SNMP-Traps
+
+=== Empfang von SNMP-Traps aufsetzen
+
+Da die Event Console eine eingebaute eigene SNMP-Engine hat, ist das Aufsetzen
+des Empfangs von SNMP-Traps sehr einfach. Sie benötigen keinen `snmptrapd` vom Betriebssystem!
+Falls Sie diesen bereits am Laufen haben, so beenden Sie ihn bitte.
+
+Wie im Abschnitt über das [ec#setup|Aufsetzen] der Event Console beschrieben,
+aktivieren Sie mit `omd config` den Trapempfgänger in dieser
+Instanz:
+
+image::bilder/ec_config_traps.png[align=center,width=300]
+
+Da auf jedem Server der UDP-Port für die Traps nur von einem Prozess verwendet
+werden kann, darf das pro Rechner nur in einer einzigen (CMK)-Instanz
+gemacht werden. Beim Start der Instanz können Sie kontrollieren, ob der
+Trap-Empfang eingeschaltet ist:
+
+[source,bash]
+----
+OM:omd start
+Starting mkeventd (builtin: <b class=hilite>snmptrap*)...OK
+Starting Livestatus Proxy-Daemon...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting Check_MK Micro Core...OK
+Starting dedicated Apache for site mysite...OK
+Initializing Crontab...OK
+----
+
+Damit SNMP-Traps funktionieren, müssen sich Sender und Empfänger auf bestimmte
+[.guihints]#Credentials# einigen. Im Fall von SNMP Version 1 und 2c ist das ein
+einfaches Passwort, was hier „Community“ genannt wird. Bei Version 3 benöigen
+Sie ein paar mehr Angaben. Diese Credentials konfigurieren Sie in den Einstellungen
+der Event Console unter [.guihints]#Credentials for processing SNMP traps}}.# 
+Dabei können Sie mit dem Knopf [.guihints]#Add new element# mehrere unterschiedliche
+Credentials einrichten, welche von den Geräten alternativ verwendet werden
+können:
+
+image::bilder/ec_trap_credentials.png[]
+
+Der weitaus aufwendigere Teil ist es jetzt natürlich, bei allen Zielgeräten, die
+überwacht werden sollen, die Zieladresse für Traps einzutragen und auch hier
+die Credentials zu konfigurieren.
+
+*Hinweis:* Bis zur Version VERSION[1.2.8] von (CMK) werden Traps
+mit der Community `public` immer automatisch angenommen, egal welche
+weiteren Credentials Sie konfiguriert haben. Dies ist ab der  VERSION[1.4.0]
+nicht mehr so. Hier werden nur explizit konfigurierte Credentials zugelassen.
+
+=== Testen
+
+Leider bieten die wenigsten Geräte sinnvolle Testmöglichkeiten.
+Immerhin können Sie den Empfang der Traps durch die Event Console selbst recht
+einfach von Hand testen, indem Sie -- am besten von einem anderen Linux-Rechner
+aus -- eine Test-Trap senden. Dies geht mit dem Befehl `snmptrap`.
+Folgendes Beispiel sendet eine Trap an `192.168.178.11`. Der eigene
+Hostname wird nach dem `.1.3.6.1` angegeben und muss auflösbar sein
+oder als IP-Adresse (hier `192.168.178.30`) angegeben werden:
+
+[source,bash]
+----
+UP:snmptrap -v 1 -c public 192.168.178.11 .1.3.6.1 192.168.178.30 6 17 '' .1.3.6.1 s "Just kidding"
+----
+
+Falls Sie in den Einstellungen das [.guihints]#Log level# auf [.guihints]#Verbose logging# eingestellt haben,
+können Sie den Empfang und die Auswertung der Traps im Logfile der EC sehen:
+
+.var/log/mkeventd.log
+
+----[1482387549.481439] Trap received from 192.168.178.30:56772. Checking for acceptance now.
+[1482387549.485096] Trap accepted from 192.168.178.30 (ContextEngineId "0x80004fb8054b6c617070666973636816893b00", ContextName "")
+[1482387549.485136] 1.3.6.1.2.1.1.3.0                        = 329887
+[1482387549.485146] 1.3.6.1.6.3.1.1.4.1.0                    = 1.3.6.1.0.17
+[1482387549.485186] 1.3.6.1.6.3.18.1.3.0                     = 192.168.178.30
+[1482387549.485219] 1.3.6.1.6.3.18.1.4.0                     =
+[1482387549.485238] 1.3.6.1.6.3.1.1.4.3.0                    = 1.3.6.1
+[1482387549.485258] 1.3.6.1                                  = Just kidding
+----
+
+Bei falschen Credentials sehen Sie nur eine einzige Zeile:
+
+.var/log/mkeventd.log
+
+----[1482387556.477364] Trap received from 192.168.178.30:56772. Checking for acceptance now.
+----
+
+Und so sieht ein Event aus, das von solch einer Trap erzeugte wurde:
+
+image::bilder/ec_trap_event.png[]
+
+=== Aus Zahlen werden Texte oder auch: Traps übersetzen
+
+SNMP ist ein binäres Protokoll und sehr sparsam mit texttuellen Beschreibungen
+der Meldungen. Um welche Art von Traps es sich handelt, wird intern durch
+Folgen von Zahlen in sogenannten OIDs übermittelt. Diese werden als durch
+Punkte getrennte Zahlenfolgen angezeigt (z.B. `1.3.6.1.6.3.18.1.3.0`).
+
+Mithilfe von sogenannten MIB-Dateien kann die Event Console diese Zahlenfolgen
+in Texte übersetzen. So wird dann aus `1.3.6.1.6.3.18.1.3.0` z.B.
+der Text `SNMPv2-MIB::sysUpTime.0`.
+
+Die Übersetzung der Traps schalten Sie in den Einstellungen der Event Console
+ein:
+
+image::bilder/ec_translate_traps.png[]
+
+Die Test-Trap von oben erzeugt jetzt einen etwas anderen Event:
+
+image::bilder/ec_trap_event_translated.png[]
+
+Haben Sie die Option [.guihints]#Add OID descriptions# aktiviert, wird das Ganze
+wesentlich umfangreicher -- und unübersichtlicher. Es hilft aber besser zu verstehen,
+was ein Trap genau bedeutet:
+
+image::bilder/ec_trap_event_translated2.png[]
+
+=== Hochladen eigener MIBs
+
+Leider haben sich die Vorteile von Open Source bei den Autoren von MIB-Dateien
+noch nicht herum&shy;gesprochen, und so sind wir vom (CMK)-Projekt leider
+nicht in der Lage, herstellerspezifische MIB-Dateien mit aus&shy;zuliefern. Nur
+eine kleine Sammlung von freien Basis-MIBs ist vorinstalliert und sorgt
+z.B. für eine Übersetzung von `sysUpTime`.
+
+Sie können aber in der Event Console mit dem Knopf ICON[context_button_snmp_mibs.png] eigene
+MIB-Dateien hochladen, wie das hier mit einigen MIBs der Firma _Lieber Corporation_
+geschehen ist:
+
+image::bilder/ec_mibs_for_translation.jpg[]
+
+Hinweise zu den MIBs:
+
+* Die hochgeladenen Dateien werden unter `local/share/snmp/mibs` abgelegt. Dort können Sie sie auch von Hand ablegen, wenn Ihnen der Weg über die GUI zu umständlich ist.
+* Anstelle von Einzeldateien können Sie auch ZIP-Dateien mit MIBs-Sammlungen in einem Rutsch hochladen.
+* MIBs haben untereinander Abhängigkeiten. Fehlende MIBs werden Ihnen von (CMK) angezeigt.
+* Die hochgeladenen MIBs werden auch auf der Kommandozeile von `cmk --snmptranslate` verwendet.
+
+
+[#logwatch]
+== Überwachen von Logdateien
+
+Der (CMK)-Agent ist in der Lage, Logdateien über das [.guihints]#Logwatch}}-Plugin# 
+auszuwerten. Dieses Plugin bietet zunächst einmal eine eigene von der
+Event Console unabhängige Überwachung von Logdateien -- inklusive einer
+kleinen in (CMK) integrierten GUI für das Ansehen und Quittieren der
+gefundenen Meldungen. Es gibt aber auch die Möglichkeit, die vom Plugin gefundenen
+Meldungen 1:1 in die Event Console weiterzuleiten.
+
+Beim Windows-Agenten ist die Logdateiüberwachung fest integriert -- in Form
+eines Plugins für die Auswertung von Textdateien und eines für die von
+Window-Eventlogs. Für Linux und Unix steht das in Python geschriebene
+Plugin `mk_logwatch` bereit. Alle drei können Sie über die
+[wato_monitoringagents#bakery|Agentenbäckerei] aufsetzen bzw. konfigurieren. Verwenden Sie
+dazu folgende Regelsätze:
+
+* [.guihints]#Text logfiles (Linux)}}# 
+* [.guihints]#Text logfiles (Windows)}}# 
+* [.guihints]#Finetune Windows Eventlog monitoring}}# 
+
+Die genaue Konfiguration des Logwatch-Plugins ist nicht Thema dieses Artikels.
+Wichtig ist allerdings, dass Sie nach wie vor im Logwatch-Plugin selbst bereits
+eine möglichst gute Vorfilterung der Meldungen vornehmen und nicht einfach
+die kompletten Inhalte der Textdateien zur Event Console senden.
+
+Bitte verwechseln Sie das nicht mit der _nachträglichen_
+Umklassifizierung über den Regelsatz [.guihints]#Logwatch patterns}}.# Diese kann
+lediglich den Status von Meldungen ändern, die bereits vom Agenten gesendet
+wurden. Sollten Sie diese Patterns aber schon eingerichtet haben und möchten
+einfach nur von Logwatch auf die Event Console umstellen, so können Sie
+die Patterns beibehalten. Dazu gibt es bei der Weiterleitung die Option
+[.guihints]#Reclassify messages before forwarding them to the EC}}.# In diesem
+Fall gehen alle Meldungen durch insgesamt *drei* Regelketten: auf
+dem Agenten, durch die Reklassifizierung und in der Event Console!
+
+Stellen Sie Logwatch nun so um, dass die von den Plugins gefunden
+Meldungen nicht mehr mit dem normalen Logwatch-Check überwacht,
+sondern einfach 1:1 in die Event Console weitergeleitet und dort
+verarbeitet werden. Dazu dient der Regelsatz
+[.guihints]#Parameters for discovered services => Applications,Serivces & Processes => LogwatchEvent Console Forwarding}}:# 
+
+image::bilder/ec_logwatch_forwarding.png[]
+
+Dazu einige Hinweise:
+
+Falls Sie eine verteilte Umgebung haben, bei der nicht in jeder Instanz eine eigene
+Event Console läuft (was erst ab Version VERSION[1.4.0] möglich ist), müssen
+die Remote-Instanzen die Meldungen an die zentrale Konsole per Syslog weiterleiten.
+Der Default dafür ist UDP. Das ist aber kein abgesichertes Protokoll. Besser ist,
+Sie verwenden Syslog via TCP, welches Sie das allerdings in der Zentrale aktivieren
+müssen (`omd config`).
+
+Bei der Weiterleitung geben Sie eine beliebige [.guihints]#Syslog facility# an. Anhand dieser
+können Sie in der EC dann leicht die weitergeleiteten Meldungen erkennen. Gut
+geeignet sind dafür `local0` bis `local7`.
+
+Mit [.guihints]#List of expected logfiles# können Sie die Liste der gefundenen Logfile
+überwachen lassen und werden so gewarnt, wenn bestimmte erwartete Dateien gar nicht
+gefunden werden.
+
+Wichtig: Das Speichern der Regeln alleine bewirkt noch nichts. Diese Regel
+wird lediglich bei der Serviceerkennung aktiv. Erst wenn Sie diese neu durchführen,
+werden die bisherigen Logwatch-Services entfernt, und anstelle dessen wird pro Host _ein_
+neuer Service mit dem Namen [.guihints]#Log Forwarding# erzeugt.
+
+image::bilder/ec_log_forwarding_check.png[]
+
+Dieser Check zeigt Ihnen später auch an, ob es beim Weiterleiten an die
+Event Console zu irgendwelchen Problemen kommen sollte.
+
+
+== Hostnamen beim Empfang anpassen
+
+Die Hostnamen, die Geräte in ihren Meldungen verwenden, sind leider nicht
+immer konsistent. Wie Sie schon gesehen haben, versucht (CMK) beim
+Versand von Alarmen, bei der Zuordnung des Events-Checks und bei der
+Ansicht der Events im Operating, die Hostnamen aus den Events denen aus dem
+aktiven Monitoring so gut es geht automatisch zuzuordnen. Dabei wird die
+Groß-/Kleinschreibung vereinheitlicht, und auch Alias und IP-Adresse werden
+als Hostnamen ausprobiert.
+
+Wenn das nicht genügt, können Sie mit der EC-Einstellung
+[.guihints]#Hostname translation for incoming messages}}# 
+Hostnamen bereits direkt beim Empfang von Meldungen umschreiben.
+Dabei haben Sie zahreiche Möglichkeiten:
+
+image::bilder/ec_hostname_translation.png[]
+
+Am flexibelsten ist die Arbeit mit [regexes|regulären Ausdrücken], welche
+quasi intelligentes Suchen und Ersetzen in den Hostnamen erlauben.
+In Fällen, wo das alles nicht genügt, können Sie noch eine Tabelle von
+einzelnen Namen und deren jeweiliger Übersetzung angeben können.
+
+*Wichtig:* Die Namensumwandlung geschieht bereits *vor* dem Prüfen
+der Regelbedingungen und somit lange vor einem möglichen Umschreiben des
+Hostnames durch die Regelaktion [.guihints]#Rewrite hostname}}.# 
+
+
+
+== Eventstatus im aktiven Monitoring sehen
+
+Wenn Sie auch im aktiven Monitoring sehen möchten, zu welchen Hosts aktuell
+problematische Events offen sind, können Sie pro Host einen aktiven
+Check hinzufügen lassen, welcher dessen aktuellen Event-Status zusammenfasst.
+Bei einem Host ohne offene Events sieht das dann so aus:
+
+image::bilder/ec_events_check_none.png[]
+
+Sind nur Events im Zustand (OK) vorhanden, so zeigt der Check deren Anzahl, bleibt
+aber immer noch grün:
+
+image::bilder/ec_events_check_ok.png[]
+
+Hier ist ein Fall mit offenen Events im Zustand (CRIT):
+
+image::bilder/ec_events_check_crit.png[]
+
+Diesen aktiven Check erzeugen Sie durch eine Regel im Regelsatz
+[.guihints]#Host & Service Parameters => EventConsole => Checkevent state in Event Console}}.# 
+Dabei können Sie auch angeben, ob bereits quittierte Events noch zum Status
+beitragen sollen oder nicht:
+
+image::bilder/ec_events_check.png[]
+
+Über die Option [.guihints]#Application (regular expression)# können Sie den Check
+auf solche Events einschränken, die einen bestimmten Text im Anwendungsfeld haben.
+In diesem Fall kann es dann Sinn machen, mehr als einen Events-Check auf einem
+Host zu haben und die Checks nach Anwendungen zu trennen. Damit sich diese
+Services vom Namen unterscheiden, benötigen Sie dabei dann noch die Option
+[.guihints]#Item (used in service description)}},# welche einen von Ihnen festgelegten Text
+in den Namen des Services einbaut.
+
+Falls Ihre Event Console nicht auf der gleichen (CMK)-Instanz läuft, von
+der auch der Host überwacht wird, brauchen Sie unter [.guihints]#Access to Event Console}}# 
+einen Remote-Zugriff per TCP:
+
+image::bilder/ec_check_remote.png[]
+
+Damit dies funktioniert, muss die Event Console den Zugriff per TCP erlauben.
+Dies können Sie in den Einstellungen der EC konfigurieren, auf die zugegriffen werden soll:
+
+image::bilder/ec_remote_access.png[]
+
+
+[#archive]
+== Das Archiv
+
+=== Funktionsweise
+
+Die Event Console führt ein Protokoll von allen Änderungen, die ein Event
+durchläuft. Dieses finden Sie über zwei Wege:
+
+* In der globalen Ansicht [.guihints]#Event Console => Recentevent history}}# 
+* Bei den Details eines Events mit dem Knopf [.guihints]#History of Event}}# 
+
+In der globalen Ansicht greift ein Filter, der nur die Ereignisse
+der letzten 24 Stunden zeigt. Sie können die Filter aber wie gewohnt anpassen.
+
+Folgende Abbildung zeigt die Historie von Event 5976, welches insgesamt
+vier Änderungen erfahren hat. Zuerst wurde das Event erzeugt (`NEW`),
+dann der Zustand manuell von (OK) auf (CRIT) geändert (`CHANGESTATE`),
+dann wurde quittiert und ein Kommentar hinzugefügt (`UPDATE`) und
+schließlich archiviert/gelöscht (`DELETE`):
+
+image::bilder/ec_history.png[]
+
+Es gibt im Archiv folgende Arten von Einträgen:
+
+[cols=20, options="header"]
+|===
+
+
+|Eintrag
+|Bedeutung
+
+
+|`NEW`
+|Das Event wurde neu erzeugt (aufgrund einer Meldung oder aufgrund einer
+Regel, welche eine Meldung erwartet, die ausgeblieben ist).
+
+
+|`UPDATE`
+|Das Event wurde durch den Operator editiert (Änderung an Kommentar, Kontaktinfo, Quittierung).
+
+
+|`DELETE`
+|Das Event wurde archiviert.
+
+
+|`CANCELLED`
+|Das Event wurde durch eine OK-Meldung automatisch [ec#cancelling|aufgehoben].
+
+
+|`CHANGESTATE`
+|Der Zustand des Events wurde durch den Operator geändert.
+
+
+|`ARCHIVED`
+|Das Event wurde automatisch archiviert, da keine Regel gegriffen hat und in der globalen
+Einstellungen {{Force message archiving}} aktiviert war.
+
+
+|`ORPHANED`
+|Das Event wurde automatisch archiviert, da, während es in der Phase {{counting}} war, die
+zugehörige Regel gelöscht wurde.
+
+
+|`COUNTREACHED`
+|Das Event wurde von {{counting}} nach {{open}} gesetzt, weil die konfigurierte Anzahl
+von Meldungen erreicht wurde.
+
+
+|`COUNTFAILED`
+|Das Event wurde automatisch archiviert, da in der Phase {{counting}} die erforderliche
+Anzahl von Meldungen nicht erreicht wurde.
+
+
+|`NOCOUNT`
+|Das Event wurde automatisch archviert, da, während es in der Phase {{counting}} war, die
+zugehörige Regel so umgestellt wurde, dass sie nicht mehr zählt.
+
+
+|`DELAYOVER`
+|Das Event wurde geöffnet, da die in der Regel konfigurierte [ec#delay|Verzögerung] abgelaufen ist.
+
+
+|`EXPIRED`
+|Das Event wurde automatisch archiviert, da seine konfigurierte [ec#expire|Lebenszeit] abgelaufen ist.
+
+
+|`EMAIL`
+|Eine Email wurde versendet.
+
+
+|`SCRIPT`
+|Eine automatische Aktion (Skript) wurde ausgeführt.
+
+
+|`AUTODELETE`
+|Das Event wurde direkt nach dem Öffnen sofort automatisch archiviert, da dies in der entsprechenden
+Regel so konfiguriert war.
+
+|===
+
+=== Speicherort des Archivs
+
+Wie eingangs erwähnt, ist die Event Console nicht als vollwertiges Syslogarchiv
+konzipiert.  Um die Implementierung und vor allem die Administration so einfach
+wie möglich zu halten, wurde auf ein Datenbank-Backend verzichtet. Anstelle
+dessen wird das Archiv in simple Textdateien geschrieben.  Jeder Eintrag
+besteht aus einer Zeile Text, welche durch Tabulatoren getrennte Spalten
+enthält.  Sie finden die Dateien in `var/mkeventd/history`:
+
+[source,bash]
+----
+OM:ll var/mkeventd/history/
+total 1328
+-rw-rw-r-- 1 stable stable     131 Dez  4 23:59 1480633200.log
+-rw-rw-r-- 1 stable stable 1123368 Dez  5 23:39 1480892400.log
+-rw-rw-r-- 1 stable stable  219812 Dez  6 09:46 1480978800.log
+----
+
+Per Default wird jeden Tag automatisch eine neue Datei begonnen. In den
+[ec#globalsettings|Einstellungen der EC] können Sie die Rotation
+anpassen. Die Einstellung [.guihints]#Event history logfile rotation# ermöglicht
+das Umstellen auf eine wöchentliche Rotation.
+
+Der Name der Dateien entspricht dem Unix-Zeitstempel vom Zeitpunkt
+der Erzeugung der Datei (Sekunden seit dem 1.1.1970 UTC).
+
+Die Dateien werden 365 Tage aufbewahrt, sofern Sie das nicht in der Einstellung
+[.guihints]#Event history lifetime# umstellen. Zudem werden die Dateien auch
+vom zentralen Plattenplatzmanagement von (CMK) erfasst, welches Sie
+in den globalen Einstellungen unter [.guihints]#Site management# konfigurieren
+können. Dabei gilt die jeweils _kürzere_ eingestellte Frist.
+Das globale Management hat den Vorteil, dass es automatisch bei Knappheit
+von Plattenplatz alle historischen Daten von (CMK) *gleichmäßig*
+von alt nach neu löschen kann.
+
+Wenn Sie in Platzprobleme laufen sollten, können Sie die Dateien
+in dem Verzeichnis auch einfach von Hand löschen oder auslagern.
+Legen Sie jedoch keine gezippten oder irgendwelche anderen Dateien
+in diesem Verzeichnis ab.
+
+
+=== Automatisches Archivieren
+
+Trotz der Limitierung durch die Textdateien ist es theoretisch möglich,
+in der Event Console sehr viele Meldungen zu archivieren. Das Schreiben
+in die Textdateien des Archivs ist sehr performant -- allerdings auf
+Kosten einer späteren Recherche. Da die Dateien als einzigen Index
+den Anfragezeitraum haben, müssen bei jeder Anfrage alle relevanten
+Dateien komplett gelesen und durchsucht werden.
+
+Normalerweise wird die EC nur solche Meldungen ins Archiv schreiben,
+für die auch wirklich ein Event geöffnet wird. Sie können das auf
+zwei verschieden Arten auf _alle_ Events ausweiten:
+
+. Sie erzeugen eine Regel, die auf alle (übrigens) Events matcht und aktiveren in [.guihints]#Outcome & actions# die Option [.guihints]#Delete event immediately after the actions}}.# 
+. Sie aktivieren in den [ec#globalsettings|globalen Einstellungen der EC] den Schalter [.guihints]#Force message archiving}}.# 
+
+Letzterer sorgt dafür, dass Meldungen, auf die keine Regel greift, trotzdem
+ins Archiv wandern (Eintragsart `ARCHIVED`).
+
+
+[#tuning]
+== Performance und Tuning
+
+=== Verarbeitung von Meldungen
+
+Auch in Zeiten, da Server 64 Kerne und 2 TB Hauptspeicher haben, spielt
+Performance von Software noch eine Rolle. Speziell bei der Verarbeitung
+von Events kommt hinzu, dass bei nicht ausreichender Leistung bei der
+Verarbeitung im Extremfall eingehende Meldungen verloren gehen können.
+
+Der Grund ist, dass keines der verwendeten Protokolle (Syslog, SNMP-Traps,
+etc.)  eine Flusskontrolle vorsieht. Wenn 1.000 Hosts gleichzeitig im
+Sekundentakt munter drauf los senden, dann hat der Empfänger keinerlei
+Chance, diese auszubremsen.
+
+Deswegen ist es in etwas größeren Umgebungen wichtig, dass Sie ein Auge darauf
+haben, wie lang die Verarbeitungszeit für eine Meldung ist. Dies hängt
+natürlich ganz wesentlich davon ab, wie viele Regeln Sie definiert haben
+und wie diese aufgebaut sind.
+
+==== Messen der Performance
+
+Zum Messen Ihrer Performance gibt es ein eigenes Element für die
+[user_interface#sidebar|Seitenleiste] mit dem Namen {{Event Console Performance}}.
+Dieses können Sie wie gewohnt mit ICON[button_sidebar_addsnapin.png] einbinden:
+
+image::bilder/ec_performance.png[align=center,width=280]
+
+Die hier dargestellten Werte sind Mittelwerte über etwa die letzte Minute.
+Einen Eventsturm, der nur ein paar Sekunden dauert, können Sie hier also
+nicht direkt ablesen, aber dadurch sind die Zahlen etwas geglättet und daher
+besser zu lesen.
+
+Um die maximale Performance zu testen, können Sie künstlich einen Sturm
+von unklassifizierten Meldungen erzeugen (bitte nur im Testsystem!), indem
+Sie z.B. in einer Shell-Schleife fortwährend den Inhalt einer Textdatei in
+die Events-Pipe schreiben:
+
+[source,bash]
+----
+OM:while true ; do cat /etc/services > tmp/run/mkeventd/events ; done
+----
+
+Die Messwerte aus dem Performancelement haben folgende Bedeutung:
+
+[cols=30, options="header"]
+|===
+
+
+|Wert
+|Bedeutung
+
+
+|{{Received messages}}
+|Anzahl der aktuell pro Sekunde eingehenden Meldungen.
+
+
+|{{Rule hits}}
+|Anzahl der Regeln, die aktuell pro Sekunde _greifen_. Dies können auch
+Regeln sein, die Meldungen verwerfen oder einfach nur zählen. Daher resultiert
+nicht aus jedem Regeltreffer auch ein Event.
+
+
+|{{Rule tries}}
+|Anzahl der Regeln, die ausprobiert werden. Dies liefert wertvolle Informationen
+über die Effizienz der Regelkette -- vor allem zusammen mit dem nächsten Parameter.
+
+
+|{{Rule hit ratio}}
+|Das Verhältnis aus {{Rule tries}} und {{Rule hits}}. Mit anderen Worten: Wie viele
+Regeln muss die EC ausprobieren, bis (endlich) eine greift. In dem Beispiel aus
+dem Screenshot ist die Rate bedenklich klein.
+
+
+|{{Created events}}
+|Anzahl der Events, die pro Sekunde neu erzeugt werden. Da die Event Console ja
+nur _relevante Probleme_ anzeigen soll (also vergleichbar mit Host- und
+Serviceprobleme aus dem Monitoring), wäre in der Praxis die Zahl *3.77/s* aus der
+Abbildung natürlich viel zu hoch!
+
+
+|{{Processing time per message}}
+|Hier können Sie ablesen, wieviel Zeit denn nun die Verarbeitung einer
+Meldung gedauert hat. Vorsicht: Im allgemeinen ist dies *nicht* der
+Kehrwert zu {{Received messages}}. Denn dabei fehlen ja noch die Zeiten,
+in denen die Event Console gar nichts zu tun hat, weil gerade keine
+Meldungen eingehen. Hier wird wirklich die reine real vergangene Zeit 
+zwischen dem Eintreffen einer Meldung und dem endgültigen Abschluss
+der Verarbeitung gemessen. Sie können darin in etwa ablesen, wie viele Meldungen die
+EC pro Zeit maximal schaffen _kann_.<br><br>
+Bitte beachten Sie auch, dass es sich hier nicht um _CPU-Zeit_ handelt,
+sondern um _reale_ Zeit. Bei einem System mit genügend freien CPUs sind
+diese Zeiten etwa gleich. Sobald aber das System so unter Last ist, dass
+nicht alle Prozesse immer eine CPU bekommen, kann die reale Zeit deutlich
+höher werden.
+
+|===
+
+==== Tipps für das Tuning
+
+Wie viele Meldungen die Event Console pro Sekunde verarbeiten kann, können Sie
+in etwa an der [.guihints]#Processing time per message# ablesen. Generell hängt diese
+Zeit damit zusammen, wie viele Regeln probiert werden müssen, bis eine Meldung
+verarbeitet wird. Sie haben veschiedene Möglichkeiten, hier zu optimieren:
+
+* Regeln, die sehr viele Meldungen ausschließen, sollten möglichst weit am Anfang der Regelkette stehen.
+* Arbeiten Sie mit [ec#rulepacks|Regelpaketen], um Sätze von verwandten Regeln zusammenzufassen. Die erste Regel in jedem Paket sollte das Paket sofort verlassen, wenn die gemeinsame Grundbedingung nicht erfüllt ist.
+
+Weiterhin gibt es in der EC eine Optimierung, die auf der Syslogpriorität
+und -facility basiert. Dazu wird für jede Kombination von Priorität und
+Facility intern eine eigene Regelkette gebildet, in die jeweils nur
+solche Regeln aufgenommen werden, die für Meldungen dieser Kombination
+relevant sind.
+
+Jede Regel, die eine Bedingung auf die Priorität, die Facility oder
+am besten auf beides enthält, kommt dann nicht mehr in alle dieser Regelketten,
+sondern optimalerweise nur in eine einzige. Das bedeutet, dass diese
+Regel bei Meldungen mit einer anderen Syslogklassifizierung gar nicht
+überprüft werden müssen.
+
+Im `var/log/mkeventd.log` sehen Sie nach einem Neustart eine
+Übersicht der optimierten Regelketten:
+
+.var/log/mkeventd.log
+
+----[8488808306.233330]  kern        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233343]  user        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233355]  mail        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233367]  daemon      : emerg(120) alert(89) crit(89) err(89) warning(89) notice(89) info(89) debug(89)
+[8488808306.233378]  auth        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233389]  syslog      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233408]  lpr         : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233482]  news        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233424]  uucp        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233435]  cron        : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233446]  authpriv    : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233457]  ftp         : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233469]  (unused 12) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233480]  (unused 13) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233498]  (unused 13) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233502]  (unused 14) : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233589]  local0      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233538]  local1      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233542]  local2      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233552]  local3      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233563]  local4      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233574]  local5      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233585]  local6      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233595]  local7      : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+[8488808306.233654]  snmptrap    : emerg(112) alert(67) crit(67) err(67) warning(67) notice(67) info(67) debug(67)
+----
+
+In obigem Beispiel sehen Sie, dass es 67 Regeln gibt, die in jedem Fall geprüft werden müssen.
+Bei Meldungen der Facility `daemon` sind 89 Regeln relevant, nur bei der Kombination
+`daemon`/`emerg` müssen 120 Regeln geprüft werden. Jede Regel, die eine Bedingung
+auf Priorität oder Facility bekommt, reduziert die Anzahl von 67 weiter.
+
+Natürlich können Sie diese Bedingungen nur dann setzen, wenn Sie sicher sind, dass sie von den
+relevanten Meldungen auch erfüllt werden!
+
+
+=== Anzahl aktueller Events
+
+Auch die Anzahl der aktuell vorhandenen Events kann die Performance der EC beeinflussen --
+und zwar, wenn diese deutlich aus dem Ruder läuft. Wie bereits erwähnt, sollte die EC
+nicht als Ersatz für ein Syslogarchiv gesehen werden, sondern lediglich „aktuelle Probleme“
+anzeigen. Die Event Console kann zwar durchaus mit mehreren tausend Problemen umgehen,
+aber der eigentliche Sinn ist das nicht.
+
+Sobald die Anzahl der aktuellen Events etwa 5.000 übersteigt, beginnt die Performance
+spürbar schlechter zu werden. Das zeigt sich zum einen in der GUI, die langsamer
+auf Anfragen reagiert. Zum anderen wird auch die Verarbeitung langsamer, da in manchen
+Situationen Meldungen mit allen aktuellen Events verglichen werden müssen.
+Auch der Speicherverbrauch kann problematisch werden.
+
+Die Event Console hält aus Gründen der Performance alle aktuellen Events stets
+im RAM. Diese werden einmal pro Minute (einstellbar) und beim sauberen
+Beenden in die Datei `var/mkeventd/status` geschrieben.
+Wenn diese sehr groß wird (z.B. über 50 Megabyte), wird dieser Vorgang
+ebenfalls immer langsamer. Die aktuelle Größe können Sie schnell mit `ll`
+abfragen (Alias für `ls -alF`):
+
+[source,bash]
+----
+OM:ll -h var/mkeventd/status
+-rw-r--r-- 1 mysite mysite <b class=hilite>386K* Dez 14 13:46 var/mkeventd/status
+----
+
+Sollten Sie aufgrund einer ungeschickten Regel (z.B. einer, die auf alles matcht)
+viel zu viele aktuelle Events haben, ist ein manuelles Löschen über die GUI
+kaum noch sinnvoll zu schaffen. In diesem Fall hilft einfach ein Löschen der
+Statusdatei:
+
+[source,bash]
+----
+OM:omd stop mkeventd
+Stopping mkeventd...killing 17436......OK
+OM:rm var/mkeventd/status
+OM:omd start mkeventd
+Starting mkeventd (builtin: syslog-udp)...OK
+----
+
+*Achtung:* Natürlich gehen dabei _alle_ aktuellen Events verloren sowie
+die gespeicherten Regelzählen und andere Zustände. Insbesondere beginnen neue
+Events dann wieder mit der ID 1.
+
+
+[#overflow]
+==== Automatischer Überlaufschutz
+
+Ab Version VERSION[1.4.0i2] hat die Event Console einen automatischen Schutz
+vor einem „Überfluten“. Dieser limitiert die Anzahl von aktuellen Events
+pro Host, pro Regel und global. Dabei werden nicht nur offene Events gezählt, sondern
+auch solche in anderen Phasen, wie z.B. [.guihints]#delayed# oder [.guihints]#counting}}.# Archivierte
+Events werden nicht gezählt.
+
+Dies schützt Sie in Situationen, in denen aufgrund eines systematischen
+Problems in Ihrem Netzwerk tausende von kritischen Events hereinströmen
+und die Event Console „dicht“ machen würde. Zum einen verhindert das
+Performanceeinbrüche der Event Console, die zu viele Events im Hauptspeicher
+halten müsste. Zum anderen bleibt so die Übersicht für den Operator
+(einigermaßen) bewahrt und Events, die nicht Teil des Sturms sind, bleiben
+sichtbar.
+
+Sobald ein Limit erreicht ist, geschieht eine der folgenden Aktionen:
+
+* Das Erzeugen neuer Events wird gestoppt (für diesen Host, diese Regel bzw. global).
+* Das Gleiche, aber zusätzlich wird ein „Overflowevent“ erzeugt.
+* Das Gleiche, aber zusätzlich werden passende Kontaktpersonen alarmiert.
+* Alternativ zu obigen drei Varianten können Sie auch das jeweils älteste Event löschen lassen, um Platz für das Neue zu machen.
+
+Die Limits sowie die verknüpfte Auswirkung beim Erreichen stellen Sie über
+die Einstellung [.guihints]#Generic => Limit amount of current events# ein. Folgende
+Abbilung zeigt die Voreinstellung:
+
+image::bilder/ec_limit_open_events.jpg[]
+
+Falls Sie [.guihints]#create overflow event# aktiviert haben, wird beim Erreichen des
+Limits _ein_ künstlichen Event erzeugt, das den Operator von der
+Fehlersituation in Kenntnis setzt:
+
+image::bilder/ec_overflow_event.png[]
+
+Falls Sie zusätzlich [.guihints]#notify contacts...# aktiviert haben, werden passende
+Kontaktpersonen per (CMK)-Alarm benachrichtigt. Der Alarm durchläuft die
+[notifications|Alarmierungsregeln] von (CMK). Diese Regeln müssen sich nicht
+unbedingt an die Kontaktauswahl der Event Console halten, sondern können diese
+modifizieren. Folgende Tabelle zeigt, welche Kontakte ausgewählt werden, falls
+Sie [.guihints]#Notify all contacts of the notified host or service# eingestellt haben
+(was der Default ist):
+
+
+[cols=15, options="header"]
+|===
+
+
+|Limit
+|Kontaktauswahl
+
+
+|pro Host
+|Die Kontakte zum Host, welche genauso ermittelt werden, wie bei der
+[ec#notifications|Alarmierung von Events] über (CMK).
+
+
+
+|pro Regel
+|Hier wird das Feld für den Hostnamen leer gelassen. Falls in der Regel
+Kontaktgruppen definiert sind, werden diese ausgewählt, ansonsten die Fallback-Kontakte.
+
+
+
+|Global
+|Die Fallback-Kontakte.
+
+|===
+
+
+=== Zu großes Archiv
+
+Wie [ec#archive|oben] gezeigt, hat die Event Console ein Archiv von allen Events
+und deren Verarbeitungsschritten. Dieses ist aus Gründen der einfachen Implementierung
+und Administration in einfachen Textdateien abgelegt.
+
+Textdateien sind beim _Schreiben_ von Daten in der Performance durch nichts zu
+übertreffen -- nichtmal durch die schnelleste Datenbank der Welt. Das liegt unter anderem
+an der Optimierung dieser Zugriffsart durch Linux und die komplette Speicherhierarchie
+von Platten und SANs. Dies geht allerdings zulasten der Lesezugriffe. Da Textdateien
+über keinen Index verfügen, ist für das Suchen in den Dateien ein komplettes Einlesen
+notwendig.
+
+Die Event Console verwendet als Index für die _Zeit_ der Ereignisse zumindest
+die Dateinamen der Logdateien. Je weiter Sie den Anfragezeitraum eingrenzen,
+desto schneller geht also die Suche.
+
+Sehr wichtig ist trotzdem, dass Ihr Archiv nicht zu groß wird. Wenn Sie die
+Event Console nur dazu verwenden, wirkliche Fehlermeldungen zu verarbeiten,
+kann das eigentlich nicht passieren. Versuchen Sie sie als Ersatz für ein echtes
+Syslogarchiv einzusetzen, kann es allerdings schon zu sehr großen Dateien kommen.
+
+Wenn Sie in eine Situation geraten, in der Ihr Archiv zu groß geworden ist,
+können Sie einfach ältere Dateien in `var/mkeventd/history/` löschen.
+Auch können Sie in [.guihints]#Event history lifetime# die Lebenszeit der Daten generell
+begrenzen, so dass das Löschen in Zukunft voreingestellt ist. Per Default
+wird 365 Tage gespeichert. Vielleicht kommen Sie ja mit deutlich weniger aus.
+
+
+=== Performance über die Zeit messen
+
+Ab Version VERSION[1.4.0] bringt (CMK) automatisch für jede laufende
+Instanz der Event Console einen neuen Service, der die Leistungsdaten in Kurven
+aufzeichnet und Sie auch warnt, wenn es zu [ec#overflow|Überläufen] kommt.
+
+Sofern Sie auf dem Monitoringserver selbst einen Linux-Agenten mindestens
+von dieser Version installiert haben, wir der Check wie gewohnt automatisch
+gefunden und eingerichtet:
+
+image::bilder/ec_check.png[]
+
+Der Check bringt sehr viele interessante Messaten mit, z.B. die Anzahl
+der eingehenden Meldungen pro Zeit und wie viele davon verworfen wurden:
+
+image::bilder/ec_graph_message_rate.png[align=center,width=550]
+
+Die Effizienz Ihrer Regelkette wird dargestellt durch einen Vergleich von
+ausprobierten Regeln zu solchen, die gegriffen haben:
+
+image::bilder/ec_graph_rule_efficiency.png[align=center,width=550]
+
+Dieser Graph zeigt die durchschnittliche Zeit für die Verarbeitung einer Meldung:
+
+image::bilder/ec_graph_processing_time.png[align=center,width=550]
+
+Daneben gibt es noch etliche weitere Diagramme.
+
+
+
+== Verteiltes Monitoring
+
+Wie Sie die Event Console in einer Installation mit mehreren (CMK)-Instanzen
+einsetzen, erfahren Sie im [distributed_monitoring#ec|Artikel über verteiltes Monitoring].
+
+
+== Die Statusschnittstelle
+
+Die Event Console bietet über das Unix-Socket `tmp/run/mkeventd/status`
+sowohl Zugriff auf den internen Status als auch die Möglichkeit, Kommandos
+auszuführen. Das hier verwendete Protokoll ist eine stark eingeschränkte
+Teilmenge von [livestatus|Livestatus].
+
+Bis Version VERSION[1.2.8] verwendet die [user_interface|GUI] dieses Socket,
+um die offenen und archivierten Events anzuzeigen und Kommandos auf Events
+auszuführen. Ab VERSION[1.4.0] greift der Monitoringkern stellvertretend
+auf die Schnittstelle zu und reicht die Daten an die GUI durch, um so ein
+[distributed_monitoring|verteiltes Monitoring] auch für die Event Console zu
+ermöglichen.
+
+Für das vereinfachte Livestatus der Event Console gelten folgende Einschränkungen:
+
+* Die einzigen erlaubten Header sind `Filter:` und `OutputFormat:`.
+* Daher ist auch kein Keepalive möglich. Pro Verbindung ist nur eine Anfrage möglich.
+
+Folgende Tabellen sind verfügbar:
+
+[cols=, ]
+|===
+
+
+|`events`
+|Liste alle aktuellen Events.
+
+
+|`history`
+|Zugriff auf das [ec#archive|Archiv]. Eine Anfrage auf diese Tabelle führt zum Zugriff auf die Textdateien
+des Archivs. Verwenden Sie auf jeden Fall einen Filter über die Zeit des Eintrags, um einen Vollzugriff
+auf alle Dateien zu vermeiden.
+
+
+|`status`
+|Status- und Performancewerte der EC. Diese Tabelle hat immer genau eine Zeile.
+
+|===
+
+Kommandos können Sie mithilfe von `unixcat` mit einer sehr einfachen Syntax
+in das Socket schreiben:
+
+[source,bash]
+----
+OM:echo "COMMAND RELOAD" | unixcat tmp/run/mkeventd/status
+----
+
+Folgende Kommandos sind verfügbar:
+
+[cols=, ]
+|===
+
+
+|`DELETE`
+|Archiviert ein Event. Argumente: Event-ID und Benutzerkürzel.
+
+
+|`RELOAD`
+|Neuladen der Konfiguration.
+
+
+|`SHUTDOWN`
+|Beendet die Event Console.
+
+
+|`REOPENLOG`
+|Die Logdatei wird neu geöffnet. Dieses Kommando wird von der Logfilerotation benötigt.
+
+
+|`FLUSH`
+|Löscht alle aktuellen und archivierten Events!
+
+
+|`SYNC`
+|Löst ein sofortiges Aktualisieren der Datei `var/mkeventd/status` aus.
+
+
+|`RESETCOUNTERS`
+|Setzt die Trefferzähler der Regeln zurück (entspricht dem WATO-Knopf ICON[context_button_reset_counters.png].
+
+
+|`UPDATE`
+|Führt ein Update von einem Event aus. Die Argumente sind der Reihe nach Event-ID,
+Benutzerkürzel, Quittierung (0/1), Kommentar und Kontaktinfo.
+
+
+|`CHANGESTATE`
+|Ändert den Status (OK) / (WARN) / (CRIT) / (UNKNOWN) eines Events. Argumente sind Event-ID, Benutzerkürzel und Statusziffer (`0`/`1`/`2`/`3`.)
+
+
+|`ACTION`
+|Führt eine benutzerdefinierte Aktion auf einem Event aus. Argumente sind Event-ID, Benutzerkürzel und Aktions-ID. Die spezielle
+ID `@NOTIFY` steht für eine [ec#notifications|Alarmierung] über (CMK).
+
+|===
+
+
+== Dateien und Verzeichnisse
+
+[cols=50, options="header"]
+|===
+
+
+|Pfad
+|Bedeutung
+
+
+|`var/mkeventd`
+|Arbeitsverzeichnis des Event-Daemons.
+
+
+
+|`var/mkeventd/status`
+|Kompletter aktueller Zustand der Event Console. Dies umfasst vor allem alle aktuell
+offenen Events (und solche in Übergangsphasen wie {{counting}}..). Im Falle
+einer Fehlkonfiguration, die zu sehr vielen offenen Events führt, kann diese Datei
+riesig werden und die Performance der EC drastisch reduzieren. In diesem Fall
+können Sie den Dienst `mkeventd` stoppen, die Datei löschen und den Dienst wieder starten, um
+alle offenen Events auf einmal zu löschen.
+
+
+|`var/mkeventd/history/`
+|Ablageort des [ec#archive|EC-Archivs].
+
+
+|`etc/check_mk/mkeventd.d/wato/global.mk`
+|Hier Speichert WATO die globalen Einstellungen der Event Console in Python-Syntax.
+
+
+|`etc/check_mk/mkeventd.d/wato/rules.mk`
+|Ihre ganzen konfigurierten Regelpakete und Regeln in Python-Syntax.
+
+
+|`tmp/run/mkeventd/events`
+|Eine Named-Pipe, in die Sie mit `echo` oder anderen Befehlen direkt
+Meldungen schreiben können, um diese an die EC zu übergeben. Achten Sie darauf, dass zu
+jedem Zeitpunkt nur eine einzige Anwendung in diese Pipe schreibt, da sich die
+Texte der Meldungen sonst vermischen können.
+
+
+|`tmp/run/mkeventd/eventsocket`
+|Ein Unix-Socket, das die gleiche Aufgabe wie die Pipe erfüllt, aber ein gleichzeitiges
+Schreiben mehrerer Anwendungen ermöglicht. Zum Hineinschreiben benötigen Sie den Befehl
+`unixcat` oder `socat`.
+
+
+|`tmp/run/mkeventd/pid`
+|Die aktuelle Prozess-ID des Event Daemons während dieser läuft.
+
+
+|`tmp/run/mkeventd/status`
+|Ein Unix-Socket, das die Abfrage des aktuellen Status und das Senden von Kommandos
+erlaubt. Bis zur Version VERSION[1.2.8] von (CMK) verwendet die GUI dieses
+Socket zum Anzeigen der Ansichten und Absetzen von Kommandos. Ab VERSION[1.4.0i2]
+gehen die Anfragen der GUI zum Monitoringkern, welcher sich dann mit dem Socket
+verbindet.
+
+
+|`local/share/snmp/mibs`
+|Von Ihnen hochgeladene MIB-Dateien für die übersetzung von SNMP-Traps.
+
+|===

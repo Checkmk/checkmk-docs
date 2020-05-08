@@ -1,0 +1,1234 @@
+= Draft für die neue Check API
+:revdate: draft
+
+Nur für den internen Gebrauch.
+
+== Vision: Das allgemeine API Prinzip
+
+Überall wo ein User Erweiterungen programmieren können soll, stellen wir eine gut dokumentierte und klare API zur Verfügung.
+
+Eine solche API sollte sich grundsätzlich an folgende Prinzipien halten:
+
+=== Allgemeines
+
+* *Boilerplating* wollen wir vermeiden wo es geht.
+* *begrenztes Featureset*: Ein Plugin darf nur Dinge verwenden, die explizit Teil der API sind.
+* Die *Implementierung* der für die jeweilige API relevanten Funktionalität liegt unter der jeweiligen Komponente von `cmk` (z.B. `cmk.base` im Fall der Check API)
+* Das *Bereitstellen* der APIs könnte auch an anderer Stelle erfolgen, beispielsweise unter `cmk.base.api`, um eine für alle APIs konsistente Art des Importierens für den User zu gewährleisten (siehe Beispiel unten)
+
+
+=== Versionierung
+
+Jede API soll versioniert sein. Jedes Plugin deklariert explizit die API-Version, auf der es basiert:
+.
+
+----from cmk.base.plugins.agent_based.v1 import (
+    ...
+)
+----
+
+Die Versionierung orientiert sich an dem Prinzip des "<a href='https://semver.org'>Semantic Versioning</a>", wobei wir die APIs mit Major.Minor versionieren.
+Hier wird bei rückwärts kompatiblen Erweiterungen die Minor Versionsnummer hochgezählt, und bei inkomptatiblen Änderungen die Major Versionsnummer.
+
+Die Versionierung wird auf eine Art vorgenommen, das folgende Punkte garantiert sind:
+
+* Neue Versionen von (CMK) unterstützen alle API-Versionen, die noch nicht explizit deprecated worden sind.
+* Deprecated werden nur komplette Major Versionen. Wenn 1.3 verfügbar ist, dann sind auch 1.0, 1.1 und 1.2 verfügbar.
+* Für ein Plugin, das Version X.Y einer API importiert, ist die Kernfunktionalität unter allen (CMK) Versionen, welche diese API beinhalten sichergestellt. Schönheitsfehler wie unvorteilhafte Formatierung oder das Fehlen einer Metrik führen nicht unbedingt zu einer inkrementierten API Version.
+* Es ist einfach nachvollziehbar, zu welchem (CMK) Release eine API-Version eingeführt wurde.
+
+
+==== Upgrade
+
+Zu jedem neuen Major Release X gibt es einen umfassenden Handbuchartikel, der sich dediziert mit der Migration von X - 1 nach X befasst.
+
+Außerdem wird _jede_ Änderung der API in einem entsprechenden Werk kommuniziert.
+Im Falle eines neuen Features (also einer neuen Minor Version) muss ein entsprechender Abschnitt im Handbuch vorhanden sein.
+
+
+==== Deprecation
+
+Wann eine API zu deprecaten ist, wird für jede Version ausdrücklich entschieden.
+Das Existieren einer neueren API Version alleine führt nicht automatisch zur Deprecation der älteren.
+Deprecated werden nur komplette Major Versionen.
+
+Beim Import einer deprecateten Major API Version wird durch den Import eine Warnung geloggt mit einem Hinweis zur Migration
+("The modul 'hurz' uses the deprecated API version X. We strongly recommend upgrading to version Y: checkmk.com/api_upgrade").
+Falls eine (CMK) Version feststeht, mit der die alte API Version entfernt wird, wird der Hinweis entsprechend ergänzt (oder Eskaliert).
+Diese Hinweise sollen sowohl in der Kommandozeile als auch in der GUI bei "Activate Changes" angezeigt werden.
+Außerdem sollen sie bis zur Quittierung in der "Analyse Config" Rubrik zu sehen sein.
+
+Wenn/falls die API Versionierung stärker in das Erstellen und Installieren von MKPs intergriert wird, sollen Inkompatibiläten auch dort
+sichtbar werden (idealerweise _vor_ der Installation).
+
+Wenn ein Plugin eine tatsächlich _entfernte_ API Version importieren möchte, schlägt der Import mit einem ImportError fehl.
+Dieser wird mit einer hilfreichen und "lauten" Meldung geloggt und Angezeigt.
+Passiert das in der `local`-Hierarchie, wird die ausgelieferte Version des Plugins ausgeführt.
+Tritt dieser Fehler in einem ausgelieferten Plugin auf (was [checkapidraft#unittests|Unittests] verhindern sollten)
+oder existiert keine ausgelieferte Version des Plugins, existiert das entsprechende Plugin nicht mehr
+(wir wissen aber zur Zeit der Exception nicht, welches Plugin das ist).
+Falls ein entsprechender Service bereits im Monitoring aufgenommen ist, sollte der Service auch über ein rediscovery hinweg in den Autochecks bleiben ("orphaned" oder so),
+bis er manuell entfernt wird, um dem User zu ermöglichen das Plugin on the fly zu fixen.
+Bei dem momentanen Verhalten von (CMK) würde der Service stillschweigend verschwinden - das wollen wir auf keinen Fall.
+
+==== Anwendungsfälle
+
+* Bei dem Backporten von einzelnen Plugins können Entwickler zuverlässig erkennen, ob und welche API-Calls angepasst werden müssen.
+* Otto Normaluser kann ohne Hilfe herausfinden welche Feature er in seiner installierten (CMK) Version nutzen kann.
+* Bei dem Backporten von "Feature Packages" können wir nötigenfalls eine neue API Version bereitstellen, ohne die Funktionalität existierender Plugins zu gefährden
+* API Umstellungen betreffen nicht die gesamte Pluginwelt auf einmal
+* Zukünftig könnte man bei dem Erzeugen von MKPs automatisch die verwendeten API Versionen detektieren/eintragen/anzeigen. Jedes MKP könnte schon vor der Installation anzeigen, ob die benötigte API vorhanden ist.
+
+==== Beispiel
+
+Wir beginnen mit Version 1.0:
+
+.v1_0.py
+
+----from cmk.utils.render import date as render_date
+from cmk.base.discovered_labels import (
+    DiscoveredServiceLabels as ServiceLabels,
+    ServiceLabel,
+    DiscoveredHostLabels as HostLabels,
+    HostLabel,
+)
+----
+
+In Version 1.1 wird zu `cmk.utils.render.date` ein neues Keyword-Argument "foo" hinzugefügt.
+Wir müssen die Version hochzählen, denn ein Plugin, das das Keyword nutzt, wird mit der alten Version nicht funktionieren.
+Trotzdem muss die Erweiterung keinen Code duplizieren:
+
+.v1_0.py
+
+----from cmk.base.legacy import saveint  # nur ein Beispiel!
+from cmk.utils.render import date
+from cmk.base.discovered_labels import (
+    DiscoveredServiceLabels as ServiceLabels,
+    ServiceLabel,
+    DiscoveredHostLabels as HostLabels,
+    HostLabel,
+)
+
+def render_date( ...  # alte signatur ohne "foo"
+    return date(..., foo=None)
+----
+
+
+.v1_1.py
+
+----from cmk.base.legacy import saveint
+from cmk.utils.render import date as render_date
+from cmk.base.discovered_labels import (
+    DiscoveredServiceLabels as ServiceLabels,
+    ServiceLabel,
+    DiscoveredHostLabels as HostLabels,
+    HostLabel,
+)
+----
+
+In Version 2.0 wollen wir jetzt endlich `saveint` abschaffen. Der import wird in `v2_0.py` weggelassen.
+
+.v2_0.py
+
+----from cmk.utils.render import date as render_date
+from cmk.base.discovered_labels import (
+    DiscoveredServiceLabels as ServiceLabels,
+    ServiceLabel,
+    DiscoveredHostLabels as HostLabels,
+    HostLabel,
+)
+----
+
+Der User wird davon durch die oben beschriebenen Mechanismen in Kenntnis gesetzt (zusätzlich wäre natürlich eine Ankündigung im Forum oder so wünschenswert - aber funktionieren muss das auch für jemanden der uns nicht gerade auf Instagram folgt oder so).
+
+.v1_1.py
+
+----from cmk.base.api_backend import deprecate_version
+
+# other imports here
+
+deprecate_version()
+----
+
+
+Hinweis: Die Beispiele von oben sind interner Code, nicht was der User schreiben muss.
+
+[#apiunittests]
+=== Unittests
+
+Es gibt ein dediziertes Verzeichis für API-Unittests, untergliedert in die API Versionen.
+Die Betonung liegt hier auf _Interface_:
+Hier werden keine interna der API getestet, sondern nur "Frontend"-Aspekte.
+Eine Änderung in diesen Unittests zieht zwangsweise _mindestens_ ein Update des Handbuchs nach sich, wenn nicht sogar eine neue API Version.
+Umgekehrt muss die Korrektheit jedes Beispiels im Handbuch durch mindestens einen Unittest abgesichert sein.
+
+COMMENT[Können wir das technisch sicherstellen?]
+
+Jeder Docstring eines API Objektes sollte den Text "New in version X.Y" enthalten. COMMENT[MO:Außer sphinx kann das magisch besser.]
+
+=== Handbuch
+
+Dem Handbuch kommt *normativer Charakter* für die API zu. Jede API wird in einem dedizierten Teil des Handbuchs beschrieben, und Änderungen in der API müssen von der entsprechenden Aktualisierung des Hanbbuchs begleitet sein (zeitgleich, nicht irgendwann).
+Das Handbuch muss so vollständig sein, dass man damit ohne weitere Onlinedoku Plugins bauen kann. Insbesondere sollte die [checkapidraft#ref|Referenz] nicht herangezogen werden müssen. Ausnahme: Die vollen Details aller ValueSpecs sind im Handbuch nicht enthalten, sondern nur die wichtigsten bzw. Beispiele.
+
+Zu jedem neuen Major Release X gibt es einen umfassenden Handbuch Artikel, der sich dediziert mit der Migration von X - 1 nach X befasst.
+
+[#ref]
+=== Referenz
+
+Der automatisch erzeugten Referenz kommt lediglich ein *deskriptiver Charakter* zu.
+Eine vollständige Referenz zur API wird erzeugt durch <a href="http://www.sphinx-doc.org">sphinx</a>.
+Neue und weggefallene Funktionen werden dadurch automatisch für jede API Version korrekt dokumentiert.
+Für jede Major Version der API gibt es eine dedizierte Referenz, bei Features soll immer klar sein,
+in welcher Minor Version sie dazu gekommen sind.
+
+In einem ersten Schritt werden die Referenzen in die Monitoring Site eingebunden.
+Später sollen sie auch über die Website erreichbar sein.
+
+
+=== Funktionales Design
+
+* Ein Plugin kommuniziert mit der Außenwelt ausschließlich durch Funktionsaufrufe, die von der API bereitgestellt werden. Weitere Aufrufe der Python-API, z.B. `open()`, sind nicht erlaubt.
+* Argumente, die den Plugins übergeben werden, dürfen (oder können) von den Plugins nicht verändert werden, sofern nicht ausdrücklich anders festgelegt.
+* Jedes Plugin erzeugt vorgegebene Objekte, die es per "yield" zurück gibt. Dadurch geschieht die Validation und ggf. das raisen von Exceptions im Kontext des Plungins.
+* Plugins sind soweit wie möglich funktional. Ein Plugin das beispielsweise eine Config Datei schreiben möchte, befüllt oder erzeugt nur ein Objekt, das alle nötigen Informationen enthält. Das schreiben selbst übernimmt (CMK).
+
+
+=== Plausibilisierung und Normalisierungen zur Laufzeit
+
+Zur Laufzeit sollten die von der API registrierten Plugins in einer kontrollierten Umgebung aufgerufen werden, wobei folgendes Beachtet wird:
+
+* Ein Crash des Plugins führt niemals zu einem Crash von (CMK), sondern wird abgefangen und geloggt.
+* Ein Crash erzeugt einen Crash-Report. Dies wird dem Nutzer, z.B. per Plugin-Output, transparent gemacht.
+* Alle Rückgabewerte werden konsumiert (Generator!)
+* Alle Rückgabewerte von unerwartetem Typ führen zu einer Exception (-> abfangen, loggen, Crashreport, siehe oben)
+* Alle Rückgabewerte werden angemessen verarbeitet (Bakeryplugin →  Dateien schreiben, Checkplugin →  Ergebnisse Aggregieren, Inventoryplugin →  Inventory Aktualisieren, etc.)
+
+
+[#pluginreg]
+=== Pluginregistrierung
+
+Beim Registrieren eines Plugins schreiben wir nicht mehr Werte
+in ein Dict, sondern es gibt dedizierte Funktionsaufrufe, mit
+denen man Dinge registiert. Diese können dann auch validieren.
+Die Registrierfunktionen haben folgenden Eigenschaften:
+
+* Sie validieren soviele wie Eigenschaften der Argumente wie sinnvoll möglich ist
+* Alle Funktionsargumente sind als explizite Keyword-Argumente implementiert (kein allgemeines akzeptieren von **kwargs)
+* Die Funktionen akzeptieren keine Nicht-Keyword-Argumente
+* Plugins registrieren sich unter expliziter Angabe eines eindeutigen Namens (erlaubte Zeichen: A-Z, a-z, 0-9 und der Unterstrich)
+* Überschreiben eines bereits registrierten Plugins ist nicht erlaubt
+
+Die Registrierung stellt _intern_ Methoden zur Verfügung mit der man erfragen kann, ob und wie eine gegebenes Plungin registriert ist.
+
+.
+
+----if sections.is_registered("my_section"):
+    section_config = sections.get_config("my_section")
+    if section_config.is_snmp_section:
+        do_stuff()
+----
+
+Die API stellt _intern_ eine Funktion zur Verfügung, die alle aus der local-Hierarchie stammenden Plugins auflistet.
+
+Die API überprüft nicht Abhängigkeiten zu Checkgruppen (WATO-Regeln). Anstelledessen haben wir Tests.
+
+== Check API Design
+
+Die Check API ist eine an dem oben vorgestellten Prinzip orientierte API, die das erstellen von Inventory- und Check-Plugins erlauben soll.
+Sie stellt Registries, Klassen und Hilfsfunktionen zur Verfügung, die dabei helfen.
+
+Das Handbuch bekommt einen neuen Teil zur Check-Plugin-Entwicklung. Dieser muss so vollständig sein, dass man damit ohne weitere Onlinedoku Plugins bauen kann. Ausnahme: Die vollen Details aller ValueSpecs sind im Handbuch nicht enthalten, sondern nur die wichtigsten bzw. Beispiele
+
+
+=== Umfang
+
+Die *Check*-API umfasst folgende Teilbereiche der Pluginlandschaft:
+
+* Sektionen
+* Check-Plugins
+* Inventory-Plugins
+* Valide Klassen zur Rückgabe (wie von der Registry überprüft)
+* Hilfsobjekte zur Checkentwicklung (`check_levels`, `item_state`, `@discover`, etc.)
+
+Außerdem, etwas niedriger priorisiert:
+
+* Checkman
+
+Für die folgenden Bereiche sind ein oder mehrere analoge APIs wünschenswert, aber nicht Teil der *Check*-API:
+
+* Aktive Checks
+* Aufrufe von Spezialagenten
+* WATO-Regeln & ValueSpec
+* Bakeryplugins
+* Notificationplugins
+* Metrik Visualisierung (Metrikdefinitionen, Graphen, Perf-O-Meter, etc.)
+
+
+=== Aufteilung in Dateien und deren Benennung
+
+==== Plugins
+
+Die *ausgelieferten* Section-, Check- und Inventoryplugins liegen in dem Verzeichnis `cmk/base/plugins/agent_based/`.
+Im einfachsten Fall stehen die Sektionsdefinition sowie das dazugehörige Check- und/oder Inventoryplugin in einer gleichnamigen Datei. Über verschiedene Plugins hinweg gemeinsam genutze Funktionen liegen in einem Unterverzeichnis `utils`.
+
+[source,bash]
+----
+cmk/base/plugins/
+    agent_based/
+      utils/
+        norris.py
+      norris_connections.py
+      norris_tablespaces.py
+----
+
+Ein Plugin importiert den geteilten Code entweder per relativem Pfad
+.
+
+----from .utils.norris import *
+----
+oder absolutem
+.
+
+----from cmk.base.plugins.agent_based.utils.norris import roundhouse_kick
+----
+
+Für die Funktionalität der jeweiligen API-Calls in den Plugins soll die Gestaltung der Aufteilung in Dateien und deren Benennung keine Rolle spielen.
+Ungeachtet eventueller "best practice"-Regelungen dürfen mehrere Plugins sowohl in einer Datei stehen, als auch auf mehrere Dateien
+aufgeteilt werden.
+
+*Ausnahme*: Der gemeinsame Code unter `utils` darf ja importiert werden - hier kann also der Dateiname nicht geändert werden, und muss in einer eventuellen "local" Variante natürlich gleich sein.
+
+Fremde Plugins liegen unter local/lib/check_mk/base/plugins/agent_based.
+
+Existiert eine Datei mit dem gleichen Namen sowohl im local als auch im offiziellen Pfad, so ist es, als würde nur die Datei im local exisiteren. 
+
+==== Bereitstellung der API(s)
+
+Prinzipiell dürfen Dinge aus der `cmk.base`-Welt und aus `cmk.utils` Teil der Check API werden.
+Die Dateien die schlussendlich festlegen, welche Objekte in einer API Version bereitgestellt werden sind `cmk/base/api/agent_based/v1_1.py` ect. (analog zu den Unterverzeichnissen von `cmk/base/plugins`
+
+Die bereitstellung erfolgt dann innerhalb der entsprechenden Plugin Welt.
+Ein Plugin importiert die API etweder per relativem Stern-Import:
+.
+
+----from .v1_3 import *
+----
+oder explizit mit diesem absolutem Pfad:
+.
+
+----from cmk.base.plugins.agent_based.v1_3 import (
+   ...
+)
+----
+
+Teilen sich Plugins Code, so liegt dieser unter `./utils`.
+
+.
+
+----from cmk.base.check_api.v1 import register.check_plugin, Result, Metric
+----
+
+
+[#sections]
+=== Sektionen und geparste Sektionen
+
+==== Benennung
+
+„Sektionen“ sind die vorgeparsten (tabellierten) Abschnitte
+einer Datenquellprogrammausgabe die durch eine Zeile der Form
+"`&lt;&lt;&lt;sektions_name&gt;&gt;&gt;`" begonnen werden oder das
+Ergebnis der SNMP-Abfragen, welche ebenfalls als Tabelle daherkommt.
+
+Durch Anwendung der Parsefunktion wird daraus eine *geparsete Sektion*. Jede Sektion
+hat immer eine Parsefunktion.
+
+Sektionen werden separat registriert. Eigenschaften von Sektionen werden
+innerhalb der Check-Plugins nicht mehr konfiguriert.
+
+Alle erzeugten geparsten Sektionen (IPMI, SNMP, Agent) landen in einem "Pool".  Check-
+und Inventoryplugins abbonieren eine beliebige Menge dieser Sektionen (default:
+nur die Gleichnamige), ohne dass sie die Datenquelle kennen müssen.
+
+Bei der Registrierung einer Sektion wird ihr Name (der aus dem Sektionsheader)
+und (optional, falls abweichend) der Name der erzeugten geparsten Sektion angegeben.
+Dadurch können für unterschiedliche Sektionen (zum Beispiel bei notwendigen
+inkompatiblen Änderungen oder unterschiedlichen Betriebssystemen)
+unterschiedliche Parsefunktionen registriert werden, die am Ende kompatible
+Datenstrukturen erzeugen.
+
+==== Registrierung:
+
+Die Registrierung folgt dem allgemeinen [checkapidraft#pluginreg|Prinzip für Pluginregistrierungen].
+
+*Registrierungsargumente für Agentensektionen und SNMP-Sektionen*:
+[cols=, options="header"]
+|===
+|Keyword|default|Kommentar
+<td>name</td><td>_(obligatorisch)_</td><td>eindeutiger Name der Sektion</td><td>parse_function</td><td>(obligatorisch)</td><td>die Parsefunktion</td><td>host_label_function</td><td>None</td><td>Funktion zum Erzeugen der HostLabel</td><td>parsed_section_name</td><td>Wert von `name`</td><td>Name der erzeugten ParsedSection</td><td>supersedes</td><td>None</td><td>Liste von Namen übertroffener (s.o.) Sektionen</td>|===
+
+*Zusätzliche Registrierungsargumente für SNMP-Sektionen:*
+[cols=, options="header"]
+|===
+|Keyword|default|Kommentar
+<td>detect</td><td>_(obligatorisch)_</td><td>früher snmp_scan_function</td><td>trees</td><td>_(obligatorisch)_</td><td>früher snmp_info</td>|===
+
+*Die Argumente im Einzelnen*:
+
+`name`
+
+Der eindeutige Name der Sektion. Er folgt dem Prinzip für [checkapidraft#pluginreg|Pluginnamen im allgemeinen Sinn].
+Im Fall einer Agentensektion muss er mit dem Sektionsheader übereinstimmen.
+Ist anders herum eine in einer Ausgabe gefundene Sektion nicht registriert, so wird eine Registrierung mit dem Sectionheader als Namen und der Identität als Parsefunktion angenommen.
+
+`parse_function`
+
+Eine Funktion, die ein einzelnes Argument erwartet (die Rohsektion) und die geparsten Daten zurück gibt.
+Die Parsefunktion ist obligatorisch, hier sollen z.B. nicht benötige Zeilen verworfen oder geeignete Datentypen erzeugt werden.
+
+Die Parsefunktion darf nicht `None` zurückgeben, das ist für nicht vorhandene Sektionen reserviert.
+
+Möchte der Entwickler von bestimmten Features der Check API profitieren, kann er ein [checkapidraft#apiobject|`ParsedSection`] Objekt zurück geben.
+
+*Achtung*: Wenn zur Laufzeit mehrere geparste Sektionen mit dem selben Namen erzeugt werden, gibt es eine Exception und sie werden nicht weiter verarbeitet.
+Es liegt in der Verantwortung des Entwicklers das zu verhindern. Der Fall kann entweder per `supersedes` explizit verhindert,
+oder aus anderen Gründen Ausgeschlossen werden (z.B. könnten die Rohsektionen `ps_lnx` und `ps_win` gefahrlos zu `ps` geparsed werden).
+
+
+`host_label_function`
+
+Eine Funktion, die die geparste Sektion übergeben bekommt, und [checkapidraft#apiobjects|`HostLabel`s] yieldet.
+
+`parsed_section_name`
+
+Optional, default ist `name`. Der Name der erzeugten geparsten Sektion. *Nur* unter diesem Namen ist die geparste Sektion von den Check-Plugins abbonierbar, der ursprüngliche `name` ist für sie nicht sichtbar.
+
+`supersedes`
+
+Dieses optionale Keyword realisiert einen Mutexmechanismus. Jede Sektion kann bei der Registrierung eine Liste von anderen *Roh*sektionen angeben, die sie "übertrifft" (per Keyword "`supersedes`").
+Falls diese Sektion gefunden wird, werden alle übertroffenen Rohsektionen von der fraglichen Node nicht geholt (oder zu geparsten Sektionen umgewandelt).
+Das Übertreffen ist transitiv: Falls die Sektion `A` die Sektion `B` übertrifft, und `B` übertrifft `C`, dann werden beim Finden von
+`A` die Sektionen `B` und `C` verworfen.
+
+Die aus den `supersedes`-Werten resultierende Hierarchie wird bei der Config-Generierung erzeugt.
+Die SNMP-Sektionen werden dann der Reihenfolge nach abgearbeitet, so dass möglichst wenige Detectfunktionen aufgerufen werden müssen.
+
+Hierbei gilt eine Agentensektion als gefunden, wenn sie im Output vorhanden und nicht leer ist.
+Eine SNMP-Sektion gilt als gefunden, wenn die Detectfunktion gegriffen hat _und_ die OIDs erfolgreich abgefragt worden sind.
+
+`detect`
+
+Der Wert dieses Keywords entscheidet, ob überhaupt weitere OIDs abgefragt werden (vormals `snmp_scan_function`). Hier wird der Rückgabewert einer beliebigen der unten genannten [checkapidraft#apiobjects|Hilffunktionen für _SNMP device detection_] übergeben. Alles andere ist ein Implementierungsdetail.
+
+`trees`
+
+Eine Liste von [checkapidraft#apiobjects|SNMPTree] Objekten. Die entsprechenden Werte der OIDs werden in einer analogen Struktur an die Parsefunktion übergen.
+
+*Beispiele finden sich in der [checkapisummary|Zusammenfassung]*
+
+
+[#cluster]
+=== Clusterkompatibilität
+
+Die Pluginregistrierung bekommt ein optionales Keyword "`cluster_check_function`".
+
+In der Version 1.0 sind Check-Plugins nicht länger implizit clusterfähig.
+Konfiguriert ein Anwender einen solchen nicht clusterfähigen Service auf einem Cluster, so lautet die Ausage des Services lediglich
+"(UNKNOWN) - This service is not fit for clustering. Please adjust your configuration.".
+(Mehr zur Migration der alten Plugins unten.)
+
+Die `cluster_check_function` wird analog zur `check_function` aufgerufen.
+Allerdigs bekommt sie statt der geparsten Sektion(en) jeweils ein `Dict` übergeben, das die geparsten Sektionen der Nodes enthält.
+Hierbei sind die Keys immer exakt die Nodes aus denen das Cluster aggregiert ist.
+Fehlt eine Sektion für eine Node vollständig, so wird eine leere Sektion geparst.
+
+
+Im allgemeinen Fall muss der Entwickler eines clusterfähigen Check-Plugins eine `cluster_check_function` implementieren.
+Zur Bequemlichkeit stellt die API allerdings einige Funktionen bereit, die gewisse häufig benötigte Clustercheckfunktionen aus den Checkfunktionen generieren:
+
+.
+
+----from check_api.v1 import clusterize
+
+register.check_plugin(
+    name                   = "norris",
+    # ...
+    check_function         = check_norris,
+    cluster_check_function = clusterize.failover(check_norris),
+)
+----
+
+Zur Verfüging gestellte "clusterize" Tools sind:
+
+* `failover`: Erwarte nur Daten von genau einer Node
+* `worst`: Schlimmstes Ergebnis bestimmt den Gesamtzustand
+* `best`: Bestes Ergebnis bestimmt den Gesamtzustand
+
+
+==== Legacy mode from hell
+
+Um bei der Migration weniger Schmerzen zu haben, stellen wir eine Möglichkeit bereit das alte Verhalten zu bekommen:
+In einer Version 0.1 der Check-API entspricht das Verhalten ohne das `cluster_check_function` Keyword dem alten impliziten, undurchschaubaren aber manchmal funktionierenden Verhalten.
+Diese API Version dient lediglich der *Migration* der Plugins, die keine `node_info` gesetzt haben, und ist von Anfang an Deprecated.
+
+Das kann nur funktionieren, wenn für alle abbonierten Sektionen `name == parsed_section_name` gilt. Wir prüfen das (sonst Exception).
+
+Bei der Migration der übrigen Plugins und der Entwicklung neuer Plugins wird die API Version 1.0 eingesetzt.
+
+
+==== Beispiel: `clusterize.failover`
+
+Die Implementierung von `clusterize.failover` würde etwa so aussehen:
+
+.clusterize.py
+
+----def failover(check_function):
+
+    def _extract_node_sections(node, clusterd_sections):
+        return tuple(arg[node] for arg in clusterd_sections)
+
+    def _add_node_info(node, results):
+        """Add node info to first encountered Details"""
+        iresults = iter(results)
+        for result in iresults:
+            if not isinstance(result, Details):
+                yield result
+            else:
+                yield Details(result.state, "[%s] %s" % (node, result.text))
+                break
+        # leave rest untouched
+        yield from iresults
+
+    # see if have item/params argument
+    func_args = inspect.signature(check_function).parameters
+    section_args_pos = 'item' in func_args + 'params' in func_args
+
+    @functools.wraps(check_function)
+    def cluster_check_function(*args)
+        # last argument must be a section
+        nodes = args[-1].keys()
+        item_params, *sections = args[:section_args_pos], args[section_args_pos:]
+        result_dict = {
+            node: list(check_function(*item_params, *_extract_node_sections(node, sections)))
+            for node in nodes
+        }
+
+        active_nodes = {node: results for node, results in result_dict.items() if results}
+
+        if len(active_nodes) >= 2:
+            yield 1, "More than one active node: %s" % ', '.join(active_nodes)
+        for node, results in active_nodes.items():
+            yield from _add_node_info(node, results)
+
+    cluster_check_function.__name__ = "cluster_%s" % check_function.__name__
+    return cluster_check_function
+----
+
+
+=== Check-Plugins
+
+==== Übersicht: Alt vs neu
+
+[cols=, options="header"]
+|===
+|Alt: check_info Dict|Neu: registry kwarg|Kommentar
+<td>_key des Eintrags_</td><td>name</td><td>eindeutiger name des Check-Plugins</td><td>extra_sections</td><td>sections</td><td>Liste von Sektionsnamen</td><td>service_description</td><td>service_name</td><td>Inhaltlich das Selbe</td><td>parse_function</td><td>---</td><td>gehört zur Sektion</td><td>inventory_function</td><td>discovery_function</td><td></td><td>---</td><td>discovery_default_parameters</td><td></td><td>---</td><td>discovery_ruleset_name</td><td></td><td>check_function</td><td>check_function</td><td></td><td>default_levels_variable</td><td>check_default_parameters</td><td></td><td>group</td><td>check_ruleset_name</td><td>konsistent zur RuleSpec-Registrierung</td><td>handle_real_time_checks</td><td>---</td><td>out of scope</td><td>has_perfdata</td><td>---</td><td>obsolet CMK-1125</td><td>node_info</td><td>---</td><td>fällt weg</td><td>includes</td><td>---</td><td>from .utils.foo import bar</td>|===
+
+Zusätzlich bei SNMP Check-Plugins:
+
+[cols=, options="header"]
+|===
+|Alt: check_info Dict|Neu: registry kwarg|Kommentar
+<td>management_board</td><td>management_board</td><td>bleibt bis auf naming</td><td>handle_empty_info</td><td>---</td><td>brauchen wir nicht</td><td>snmp_info</td><td>---</td><td>gehört zur Sektion</td><td>snmp_scan_function</td><td>---</td><td>gehört zur Sektion</td>|===
+
+==== Registrierung
+
+Die Check API stellt eine Registrierungsfunktion für Check-Plugins bereit (Beispiele in der [checkapisummary|Zusammenfassung]).
+
+*name*
+
+Obligatorisch. Ein eindeutiger Name, wie allgemein für [checkapidraft#pluginreg|Plugins] beschrieben.
+
+*sections*
+
+Optional. Eine Liste von Sektionsnamen. Diese steuern die Anzahl und Namen der Argumente, die von Discover- und check Funktion akzeptiert werden (unter dem Namen `section_foo`. Default: `[name]`.
+
+*service_name*
+
+Obligatorisch. Das Template für den Namen des Service (früher `service_description`). Die `check_function` muss muss genau dann das Argument `item` akzeptieren, wenn ein Item-Platzhalter vorkommt.
+
+*discovery_ruleset_name*
+
+Optional. Der name der Discoveryregel, falls es eine gibt.
+
+*discovery_default_parameters*
+
+Optional. Die default Parameter für die Discovery. Müssen zur WATO-Regel passen, falls es eine gibt.
+
+*discovery_function*
+
+Die Discoverfunktion. Sie akzeptiert als Argumente:
+
+* `params` genau dann, wenn `discovery_ruleset_name` gesetzt ist
+* Ein Argument für jeden Eintrag in `sections` (z.B. `section_foo, section_bar` entsprechend `sections = ["foo", "bar"]`)
+
+Die Registrierungsfunktion validiert die Anzahl der Argumente gegenüber den abbonierten Sektionen.
+
+Die Discoverfunktion wird ausgeführt, falls mindestens eine der abbonierten Sektionen vorhanden ist.
+
+Die Discoverfunktion muss den Fall berücksichtigen, dass eine Sektion zwar vorhanden, aber leer ist.
+
+Die Discoveryfunktion ist ein Generator, der Objekte des Typs check_api.Service yieldet.
+
+
+*check_ruleset_name*
+
+Optional. Der name der Checkregel, falls es eine gibt.
+
+*check_default_parameters*
+
+Optional. Die default Parameter für die Checkfunktion. Müssen zur WATO-Regel passen, falls es eine gibt.
+
+*check_function*
+
+Die Checkfunktion. Sie akzeptiert als Argumente:
+
+* `item` genau dann, wenn der Item-Platzhalter in `service_name` vorkommt
+* `params` genau dann, wenn `check_ruleset_name` gesetzt ist, die effektiven Parameter, gebildet aus Regeln und Defaults
+* Ein Argument für jeden Eintrag in `sections` (z.B. `section_foo, section_bar` entsprechend `sections = ["foo", "bar"]`)
+
+Die Registrierungsfunktion validiert die Anzahl der Argumente.
+
+Auch hier können einige oder alle Sektionen leer sein.
+
+Die Checkfunktion ist ein Generator, der Objekte folgenden Typs yieldet:
+
+* check_api.Result
+* check_api.AdditionalDetails
+* check_api.Metric
+* check_api.IgnoreResults
+
+*cluster_check_function*
+
+Siehe [checkapidraft#cluster|Clusterkompatibilität].
+Die Clustercheckfunktion wird analog zur Checkfunktion aufgerufen, und darf exakt die selben Objekte yielden.
+
+*management_board*
+
+Bei SNMP-Plugins kann es durch ein Managementboard als zweite SNMP Datenquelle zu Konflikten kommen.
+Diese können aufgelöst werden, in dem ein Plugin angeben kann, dass es excliusiv für Managementboards ist (`management_board.EXCLUSIVE`), oder auf den Managementboards nicht angewendet werden soll (`management_board.DISABLED`).
+
+=== Inventoryplugins
+
+==== Übersicht: Alt vs. neu
+
+[cols=, options="header"]
+|===
+|Alt: inv_info Dict|Neu: registry kwarg|Kommentar
+<td>_key des Eintrags_</td><td>name</td><td>eindeutiger Name des Inventroryplugins</td><td>---</td><td>sections</td><td>Liste von Sektionsnamen</td><td>---</td><td>inventory_default_parameters</td><td></td><td>---</td><td>inventory_ruleset_name</td><td>z.B.: `if`</td><td>inv_funtion</td><td>inventory_function</td><td>Ja, das ist das Verb.</td><td>includes</td><td>---</td><td>imports</td><td>has_status_data</td><td>--</td><td>nicht mehr nötig</td><td>depends_on</td><td>--</td><td>nicht mehr nötig</td><td>snmp_info</td><td>---</td><td>gehört zur Sektion</td><td>snmp_scan_function</td><td>---</td><td>gehört zur Sektion</td>|===
+
+==== Registrierung
+
+Die Check API stellt eine dedizierte Registrierungsfunktion für Inventoryplugins bereit.
+Diese ist, wo immer sinnvoll möglich, analog zu den Checkplugins.
+
+.
+
+----register.inventory_plugin(
+    name               = "norris",
+    sections           = ["norris"],
+    inventory_function = inventory_norris,
+)
+----
+
+*name*
+
+Obligatorisch. Ein eindeutiger Name, wie allgemein für [checkapidraft#pluginreg|Plugins] beschrieben.
+
+*sections*
+
+Optional. Eine Liste von Sektionsnamen. Diese steuern die Anzahl und Namen der Argumente, die von der Inventoryfunktion akzeptiert werden (unter dem Namen `section_foo`. Default: `[name]`.
+
+*inventory_ruleset_name*
+
+Optional. Der name der Inventoryregel, falls es eine gibt.
+
+*inventory_default_parameters*
+
+Optional. Die default Parameter für die Inventory. Müssen zur WATO-Regel passen, falls es eine gibt.
+
+*inventory_function*
+
+Die Inventoryfunktion. Sie akzeptiert als Argumente:
+
+* `params` genau dann, wenn `inventory_ruleset_name` gesetzt ist
+* Ein Argument für jeden Eintrag in `sections` (z.B. `section_foo, section_bar` entsprechend `sections = ["foo", "bar"]`)
+
+Die Registrierungsfunktion validiert die Anzahl der Argumente gegenüber den abbonierten Sektionen.
+
+Die Inventoryfunktion wird ausgeführt, falls mindestens eine der abbonierten Sektionen vorhanden ist.
+
+Die Inventoryfunktion ist eine Generatorfunktion, die Objekte folgenden Typs yieldet:
+
+* check_api.TableRow
+* check_api.Attributes
+
+Mehr zur Funktionsweise unten.
+
+[#apiobjects]
+== Objekte der CheckAPI
+
+=== Hilfsfunktionen für _SNMP device detection_
+
+Die Detect-Spezifikation (früher "Scanfunktion") setzt sich zusammen aus durch "und" oder "oder" verknüpften elementaren Bedingungen.
+
+Man kann jeden logischen Ausdruck in die *Normalform* _(A and B) or (C and D) or ..._ bringen.
+Dem tragen wir Rechnung, indem jede solche detec-Beschreibung immer als Liste von Listen übergeben wird:
+
+.
+
+----[
+    [ A, B ],
+    [ C, D ],
+]
+----
+
+Um das leserlicher zu gestalten, stellen wir für die "und" und "oder" Verknüpfung beliebig vieler Elemente je eine Hilfsfunktion (`all_of` und `any_of`) bereit.
+
+Alle Hilfsfunktionen (auch die Folgenden) geben immer eine detect-Beschreibung in Normalform zurück.
+
+*Elementare Bedingungen:*
+
+Elementare Bedingungen werden (intern) durch Tripel (OID, Regex, Match erwarted ja/nein) abgeblidet.
+Es wird immer geprüft, ob die Regex auf `oid(...).lower()` matcht (*full*match).
+
+Dem User werden via API Hilfsfunktionen bereit gestellt, die solche elementaren Ausdrücke erzeugen.
+Die Realisierung durch die oben genannten Tripel ist *nicht* Teil der API.
+
+[cols=28,33, options="header"]
+|===
+
+
+|Attribut
+|Negation
+|Bedeutung
+
+
+|`equals(oid, needle)`
+|`not_equals(oid, needle)`
+|Gleichheit, case insensitive
+
+
+|`contains(oid, needle)`
+|`not_contains(oid, needle)`
+|Substring-Match, case insensitive
+
+
+|`startswith(oid, needle)`
+|`not_startswith(oid, needle)`
+|Wert der OID beginnt mit needle, case insensitive
+
+
+|`endswith(oid, needle)`
+|`not_endswith(oid, needle)`
+|Wert der OID endet mit needle, case insensitive
+
+
+|`matches(oid, regex)`
+|`not_matches(oid, regex)`
+|Wert der OID beginnt matcht (hinten und vorne geankert) auf regex, case insensitive
+
+
+|`exists(oid)`
+|`not_exists(oid)`
+|Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.
+
+|===
+
+
+=== Klassen für das Arbeiten mit Sektionen
+
+==== SNMPTree
+
+Ein einfacher Wrapper für das Angeben von OIDs die abgefragt werden sollen (siehe [checkapidraft#sections|hier]).
+
+.
+
+----class SNMPTree(typing.NamedTuple("SNMPTree", [('base', str), ('oids', ListOf[Union[str,OIDQualifier]])])):
+  def __new__(cls, oids, base=None):
+    # validation goes here
+    super().__new__(cls, base, oids)
+----
+
+Die Objekte vom Typ `OIDQualifier` bilden das Verhalten von `OID_END`, `BINARY` und `CACHED_OID` aus den `snmp_utils` ab.
+Die folgenden drei Subklassen der ABC `OIDQualifier` soll es geben:
+
+[cols=, ]
+|===
+
+  <th style="width: 20%">Alt</th>
+  <th style="width: 20%">Neu</th>
+  <th>Kommentar</th>
+
+  <td class=tt>OID_END
+  <td class=tt>OIDEnd()
+  <td>der User bekommt den Teil der OID, der nicht in `base` oder `oids` enthalten ist
+
+  <td class=tt>BINARY(".1.2.3")
+  <td class=tt>OIDBytes(".1.2.3")
+  <td>Statt `str` bekommt der User eine Liste von `int`s
+
+  <td class=tt>CACHED_OID(".1.2.3")
+  <td class=tt>OIDCached(".1.2.3")
+  <td>Checkmk versucht diesen Wert "sinnvoll" zu cachen
+|===
+
+
+==== ParsedSection
+
+Wenn die Parsefunktion ein Objekt der Klasse `ParsedSection` zurück gibt, wird es im Anschluss mit verschiedenen Metainformationen angereichert, falls sie nicht in der Parsefunktion bereits gesetzt wurden. Die `ParsedSection` ist ein `dict`, ergänzt um ein Attribut "meta".
+
+Jede ParsedSection bekommt einen Zeitstempel, idealerweise den Zeitpunkt der Erzeugung der Daten (durch den Agent), ansonsten den Zeitpunkt des Empfangs durch die Site.
+
+Insgesamt hat die `ParsedSection` die folgenden Attribute:
+
+* `.meta.node_name`: der Name der node von der die Sektion stammt
+* `.meta.cached`: die Cachinginformation aus dem Sektionsheader
+* `.meta.timestamp`: Zeitpunkt des Empfangs durch die Site
+
+
+.
+
+----class _ParsedMetaInfo():
+  def __init__(self):
+    node_name = None
+    cached = None
+    timestamp = None
+    missing = None
+
+
+class ParsedSection(dict):
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.meta = _ParsedMetaInfo()
+----
+
+
+==== HostLabel
+Schon da. Siehe `cmk/base/discovered_labels.py`.
+
+=== Valide Kassen zur Rückgabe durch die Discovery
+
+==== Service ("Item")
+
+Das Service-Objekt enthält alle Informationen, die von der Discoveryfunktion für diesen Service bestimmt werden:
+
+* Item
+* Parameters
+* List der service labels
+
+
+=== Klassen für das Arbeiten mit Checkplugins
+
+==== Konstanten für das `management_board` Keyword
+.
+
+----@enum.unique
+class management_board(enum.Enum):
+    DISABLED = "disabled"
+    EXCLUSIVE = "exclusive"
+----
+
+
+=== Valide Klassen zur Rückgabe durch die Checkfunktion
+
+Eine Checkfunktion yielded Instanzen der Typen `Result` ("state" und "Details"), `AdditionalDetails`, `Metric` und `IgnoreResults` zurück.
+
+Da die Validierung dieser Objekte bei der Erzeugung im Plugin-Kontext erfolgen soll, müssen sie so konzipiert sein, dass Benutzer sie nach der Erstellung nicht mehr ändern können.
+
+==== Der Monitoring-State
+
+Als Monitoring-State wird nicht mehr ein Integer, sondern eine dedizierte Enum Klasse benutzt. Die abgebildeten States sind (OK), (WARN), (CRIT) und (UNKNOWN).
+Soll ein Service "stale" werden, wird eine Exception des Typs `IgnoreResultsException` geraised oder `IgnoreResults()` geyieldet.
+Wann ein Service auf den Status (PEND) geht, entscheidet (CMK) alleine.
+
+.
+
+----from check_api import state
+
+print(state.WARN)
+print(state(2))
+print(state["OK"])
+----
+
+.
+
+----@enum.unique
+class state(enum.IntEnum):
+    OK = 0
+    WARN = 1
+    CRIT = 2
+    UNKNOWN = 3
+----
+
+Außerdem gibt es im gleichen Namespace noch eine Funktion `state.worst`, die alle übergebenen States nach dem Schema (OK) &lt; (WARN) &lt; (UNKNOWN) &lt; (CRIT) vergleicht, und den schlimmsten zurück gibt.
+
+==== `Result`
+
+Dieses Objekt bündelt einen State und dazugehörigen Text. Es wird erzeugt mit den folgenden Keyword-Argumenten:
+
+[cols=, ]
+|===
+
+  <th style="width: 20%">Keyword</th>
+  <th style="width: 20%">Typ</th>
+  <th>Beschreibung</th>
+
+  <td class=tt>state
+  <td>`state` (s.o.)
+  <td>Der State ((OK), (WARN), (CRIT), (UNKNOWN))
+
+  <td>`summary`
+  <td>`str` (opional)
+  <td>Darf nur gesetzt werden, falls `notice` nicht gesetzt ist. Dieser Text wird in der _service summary_ angezeigt.
+
+  <td>`notice`
+  <td>`str` (opional)
+  <td>Darf nur gesetzt werden, falls `summary` nicht gesetzt ist. Dieser Text wird in der _service summary_ angezeigt, falls der state nicht (OK) ist.
+
+  <td>`details`
+  <td>`str` (opional)
+  <td>Obligatorisch, falls weder `summary` noch `notice` gesetzt sind. Dieser Text wird in der _service summary_ angezeigt.
+|===
+
+
+==== `Metric`
+
+*Achtung*: In der `Metric` sollte auch der "de-serialisierungs Hack" für `float('Inf')` enthalten sein,
+der derzeit unter dem Namen `as_float` in `cmk/base/check_api.py` lebt, und nur optional ist.
+
+.
+
+----class Metric(typing.NamedTuple("Metric", [('name', str), ('value', float), ('levels', tuple), ('boundaries', tuple)])):
+  def __new__(cls, name, value, *, levels=(None, None), boundaries=(None, None)):
+    # validation goes here
+    super().__new__(cls, name, value, levels, boundaries)
+----
+
+
+==== `IgnoreResults`
+
+Wenn eine Instanz der Klasse `IgnoreResults` zurückgegeben wird, werden *alle* Ergebnisse der Checkfunktion verworfen, so wie das jetzt beim raisen einer `MKCounterWrapped` Exception der Fall ist. Die geyieldeten Werte der Checkfunktion werden aber noch vollständig konsumiert. Soll die Checkfunktion abbrechen, muss eine `IgnoreResultsException` geworfen werden (siehe unten "Exceptions").
+
+.
+
+----class IgnoreResults(object):
+    pass
+----
+
+
+=== Klassen für das Arbeiten mit Inventoryplugins
+
+Inventoryfunktionen dürfen Instanzen von zwei verschiedenen Klassen yielden.
+Instanziierungskeys die mit "inventory" oder "status" geprefixed sind, unterscheiden sich dadurch,
+dass die Letzteren nicht bei der Berechnung der Inventoryhistory berücksichtigt werden.
+Dieser Unterschied ist also rein intentional -- sie werden exakt gleich aufgerufen,
+und unterlaufen die gleichen Validierungen.
+
+==== `TableRow`
+
+.
+
+----TableRow(
+    path = ["software", "applications", "oracle", "instance"],
+    key_columns = {
+        "sid" : item_data['sid'],
+    },
+    inventory_columns = {
+        "version": item_data['version'],
+        "openmode": item_data['openmode'],
+        "logmode": item_data['log_mode'],
+        "logins": item_data['logins'],
+        "db_creation_time": _parse_raw_db_creation_time(item_data['db_creation_time']),
+    }
+    status_columns = {
+        "db_uptime": up_seconds,
+    }
+)
+----
+
+Yieldet eine Inventoryfunktion ein Objekt vom Typ `TableRow` wird am angegebenen Pfad eine entsprechende Tabelle angelegt oder weiter befüllt.
+Das Plugin muss (und kann) nicht wissen, ob es den Pfad, die Tabelle, oder die entsprechenden Spalten bereits gibt.
+
+*path*:
+
+Obligatorisch. Eine Liste von Strings.
+Der Pfad, an dem die Tabelle, für die diese Zeile bestimmt ist, liegen soll.
+
+*key_columns*:
+
+Obligatorisch. Ein *nicht leeres* Dictionary mit Strings als Key.
+Die Keys des Dictionarys sind die Spaltenbezeichnungen, die Values die Werte,
+die in die Tabelle eingetragen werden.
+
+Diese Werte werden bei der Berechnung der Inventoryhistorie berücksichtigt.
+
+Diese Keys geben an welche Spalten von je zwei Zeilen übereinstimmen müssen,
+damit sie als die gleiche Zeile behandelt, und gemerged werden.
+Beim Anlegen eines neuen Tables werden sie als Attribute des Tables übernommen,
+bei dem Befüllen eines existierenden Tables müssen sie passen (sonst Exception).
+
+Das Mergen läuft immer gleich ab, und ist relvant
+
+* wenn mehrere Plugins Daten für die selbe Tabelle liefern
+* wenn das "diff" für die Inventoryhistory berechnet wird
+* wenn Status- und Inventory Daten zusammen gemischt werden
+
+Damit ist es nicht mehr nötig, dass die Tabellen sortiert sind. Das sortierte *Darstellen* der Tabellen ist ein Feature der aktuellen displayhints.
+
+Werden bei dem Mergen Einträge überschrieben, die nicht in `key_column` gelistet sind, wird eine Warnung in _das Log_ geschrieben.
+
+*inventory_columns*:
+
+Optional. Ein Dictionary mit Strings als Key.
+Die Keys des Dictionarys sind die Spaltenbezeichnungen, die Values die Werte,
+die in die Tabelle eingetragen werden.
+
+Diese Werte werden bei der Berechnung der Inventoryhistorie berücksichtigt.
+
+*status_columns*:
+
+Optional. Ein Dictionary mit Strings als Key.
+Die Keys des Dictionarys sind die Spaltenbezeichnungen, die Values die Werte,
+die in die Tabelle eingetragen werden.
+
+Diese Werte werden bei der Berechnung der Inventoryhistorie *nicht* berücksichtigt.
+
+==== `Attribute`
+
+.
+
+----Attributes(
+    path = ["os", "vendor"],
+    inventory_attributes = {
+        "name" : "Micki$osft",
+        "date" : 1920,
+    }
+    status_attributes = {
+        "uptime" : uptime,
+    }
+)
+----
+
+Yieldet eine Inventoryfunktion ein Objekt vom Typ `Attributes` werden die entsprechenden Attribute dem Knoten zugeordnet.
+
+
+=== Hilfsobjekte zur Checkentwicklung
+
+Hier gibt es zwei unterschiedliche Kategorien:
+
+* Rein funktionale Hilfsmittel (`check_levels`, `@discover`)
+* Helfer für die Interaktion mit (CMK) (`item_state`, `host_name`).
+
+Die letzteren sollten auf das allernötigste beschränkt sein (insbesondere `host_name` soll weg).
+Außerdem ist zu beachten, dass es möglichst einfach sein soll, Check-Plugins außerhalb eines Monitoringkontextes zu testen.
+
+COMMENT[LM: Wir sollten intern diese globalen Dinge, wie "aktueller Hostname" usw. über einen Kontextmanager registrieren. Können wir u.u. ähnlich wie bei Flask machen, dass es beim Zugriff auf dieses Objekt auserhalb eines Context eine Exception gibt.]
+
+
+==== `ValueStore` (f.k.a. "Item State")
+
+*Übersicht:*
+
+[cols=, ]
+|===
+<th>Alt </th><th>Neu</th> <th>Kommentar</th><td>---</td><td>`get_value_store` </td><td>Gibt eine servicespezifische Instanz eines `ValueStore`s zurück.</td><td>`get_item_state`</td><td>`ValueStore` hat ein `MutableMapping`-Interface </td><td>Erwartungskonform, schell dokumentiert.</td><td>`set_item_state`</td><td>-"-</td><td></td><td>`get_all_item_states`</td><td>---</td><td>Wird nur zum löschen benutzt. Anders lösen! Callsites: ps_get_counters_to_delete, with_unused_counter_removal</td><td>`clear_item_state`</td><td>---</td><td>-"-</td><td>`clear_item_states_by_full_keys`</td><td>---</td><td>-"-</td><td>`get_rate`</td><td>`get_rate(value_store, ...)`</td><td></td><td>`get_average`</td><td>`get_average(value_store, ...)`</td><td></td><td>`last_counter_wrap`</td><td>---</td><td></td><td>`SKIP`</td><td>---</td><td></td><td>`RAISE`</td><td>---</td><td></td><td>`ZERO`</td><td>---</td><td></td>|===
+
+Die Check-API Funktion `get_value_store` gibt eine servicespezifische Instanz eines `ValueStore` Objektes zurück.
+Das API Backend übernimmt das Einlesen und Persitieren der Daten. Der `ValueStore` ist ein `MutableMapping`.
+
+Die Funktion `get_rate` bekommt den `value_store` übergeben, den Key für den Wert, die Zeit und den Wert.
+Per default darf die ausgegebene Rate negativ sein, außer man erzwingt das Gegenteil per Keyword.
+Die eine Callsite von `is_rate` wird aufgelöst.
+Auftretende Exceptions werden immer geraist (keine None Rückgabe).
+Alle geraisten Exceptions erben von `IgnoreResultsException` und `GetRateError`.
+
+.VORHER
+
+----def get_rate(user_key, this_time, this_val, allow_negative=False, onwrap=SKIP, is_rate=False):
+    ...
+----
+
+.NACHHER
+
+----def get_rate(value_store, key, time, value, *, allow_negative=True):
+    ...
+----
+
+Die Funktion `get_average` bekommt den `value_store` übergeben, den Key für den Wert, die Zeit, den Wert, und die backlog Länge in Minuten.
+Wenn diese Funktion eine Exception schmeißt, ist das ein Bug.
+
+.VORHER
+
+----def get_average(itemname, this_time, this_val, backlog_minutes, initialize_zero=True):
+    ...
+----
+
+.NACHHER
+
+----def get_average(value_store, key, time, value, backlog):
+    ...
+----
+
+==== Logging
+
+User sollen über die API einen `LOGGER` aus dem `logging` modul bekommen, der immer (auch außerhalb eines Monitoringkontextes!) angemessen konfiguriert ist.
+
+.
+
+----from check_api import LOGGER
+
+def check_func(...):
+    LOGGER.warning("bla")
+----
+
+Der Logger wird durch die Check-API automatisch so mit Infos ergänzt, dass klar ist um welches Plugin es geht in welchem Check-Context (Host, Item, ...) er gerade ausgeführt wird.
+
+==== regex
+
+Weil (CMK) ein eigenes regex caching mitbringt, stellt die API unter dem Namen `regex` eine Funktion zum erzeugen von compilierten Regexen bereit. Signatur und Verhalten sind immer so wie `re.compile`.
+
+==== check_levels
+
+Die `check_levels`-Funktion hat sich bewärt, und soll in zwei Funktionen konsolidiert werden.
+Für uns könnten wir aus Kompatibilitätsgründen eine Variante mit den Keywords `scale` und `factor` behalten, aber für den gemeinen Pluginbastler ist das nix.
+
+Aus dem alten `check_levels` werden zwei Generatoris mit folgenden Signaturen:
+
+.
+
+----def check_levels(
+    value,
+    *,
+    levels_upper=None,
+    levels_lower=None,
+    metricname=None,
+    human_readable_func=None,  # superceded by value.render!
+    infoname=None,
+    boundaries=None):
+    """Generic function for checking a value against levels..."""
+    pass
+
+def check_levels_predictive(
+    value,
+    *,
+    levels=None,
+    metricname=None,
+    human_readable_func=None,  # superceded by value.render!
+    infoname=None,
+    boundaries=None):
+    """Generic function for checking a value against predictive levels..."""
+    pass
+----
+
+
+==== Exceptions
+
+Die API stellt die Exceptionklasse `IgnoreResultsException` bereit, deren Instanzen dazu führen, dass die geyieldeten Results verworfen werden. Sie teilt sich eine Oberklasse mit MKCounterWrapped, die das Verhalten triggert (CMK-1124).
+
+==== Renderfunktionen
+
+Renderingfunktionen richten sich in ihrer Benennung und ihrem Verhalten nach der Semantik, nicht nach dem Datentypt. Bytes beispielsweise werden unterschiedlich gerendert, je nach dem ob es sich um Platttenplatz (SI-Eineheit, Basis 1000) oder Memory (IEC-Einheit, Basis 1024) handelt.
+
+Alle Funktionen beginnen mit `render_`.
+
+[cols=, ]
+|===
+
+<th>Funktion</th><th>Input</th><th>Beschreibung</th><th>Beispielausgabe</th><td class=tt>date</td><td>Epoche</td><td>Datum</td><td class=tt>Dec 18 1970</td><td class=tt>datetime</td><td>Epoche</td><td>Datum und Uhrzeit</td><td class=tt>Dec 18 1970 10:40:00</td><td class=tt>timespan</td><td>Sekunden</td><td>Dauer / Alter</td><td class=tt>3d 5m oder 1 day, 50 seconds, ???</td><td class=tt>disksize</td><td>Bytes</td><td>Größe von Platten oder deren Belegung, Basis 1000!</td><td class=tt>1,234 GB</td><td class=tt>bytes</td><td>Bytes</td><td>Größe von irgendwas in Bytes, Basis 1024</td><td class=tt>23,4 KiB</td><td class=tt>filesize</td><td>Bytes</td><td>Größe von Dateien, volle Genauigkeit</td><td class=tt>1,334,560 B</td><td class=tt>nicspeed</td><td>Octets / sec</td><td>Geschwindigkeit von Netzwerkkarten</td><td class=tt>100 MBit/s</td><td class=tt>networkbandwidth</td><td>Octets / sec</td><td>Übertragungsgeschwindigkeit</td><td class=tt>23.50 GBit/s</td><td class=tt>iobandwidth</td><td>Bytes / sec</td><td>IO-Bandbreiten</td><td class=tt>124 MB/s</td><td class=tt>percent</td><td>Prozent</td><td>Prozentwert, optimiert zwischen 0 und 100, gute Darstellung knapp unter 100.</td><td class=tt>99.997%</td>
+|===
+
+
+[#unittests]
+== Best Practices (Unittests)
+
+Zusätzlich zu den von der API erzwungenen Validierungen soll es "best practices"-Regelungen geben, die in unserer Codebase durch Unittests (oder andere geeignete Maßnahmen) erzwungen werden.
+Dazu gehören:
+
+* Jedes Beispiel aus dem Handbuch hat mindestens einen [checkapidraft#apiunittests|korrespondierenden Unittest]
+* Keine '*' imports
+* Plugins müssen (ohne Nebeneffekte) Importierbar sein (schützt auch vor Verwendung deprecateter APIs)
+* Von Check-Plugins erwartete WATO Regeln müssen existieren
+* Die Argumente der Discoveryfunktion heißen (falls vorhanden) `params, section_foo, section_bar`
+* Die Argumente der Checkfunktion heißen (falls vorhanden) `item, params, section_foo, section_bar`
+
+
+== Won't do
+
+==== Real time checks
+
+Aktuell gibt es einen Key bei der Registrierung, ob ein Check-Plugin "Real
+time checks" unterstützt.  Dies ist (IOHO) ein Denkfehler, denn hier geht
+es um die Frage, ob das *Agent*-Plugin Real-time unterstützt. Das
+Check-Plugin unterstützt das nämlich immer automatisch.
+
+Am Ende geht es nur um eine Regel in der Bakery, in der man den *Agent*
+konfiguriert, ob und welche Real-time-Sections er senden soll. Deswegen
+ziehen wir die Liste der unterstützten Plugins irgendwie in die Bakery um.
+Zur Not durch Hartkodieren in dieser Regel, mit der Annahme, dass pro Jahrzehnt
+circa 1-2 Plugins hinzukommen (Kein Problem lösen, dass wir nicht haben).
+
+==== Klassen für Größen mit Einheit
+
+Klassen für Größen mit Einheit werden wir *nicht* implementieren, da der Overhead im Zusammenspiel mit Schwellen und Persistierung überwiegt.
+MyPy stellt das Konzept der `NewType`s zur Verfügung, das einen Großteil der
+auftretenden Probleme behebt.
+
+==== HostLabels auf Clustern
+
+Gibts erstmal nur manuell.
+Wenn das irgendwann ddoch benötigt wird, fallen uns mehrere kompatible Möglichkeiten ein da was zu bauen.
+
+==== Unbenutzte Elemente in `cmk/base/check_api.py`
+
+Folgende Elemente sind momentan in `cmk/base/check_api.py` definiert, werden aber *nur* im Logwatch Plugin benutzt.
+Auf das logwatch Plugin nehmen wir beim API Design keine Rücksicht. Das wird irgendwie reingehackt, oder noch besser komplett überarbeitet.
+Folgende Funktionen aus der alten Check-API werden daher nicht übernommen:
+
+* `get_checkgroup_parameters`
+* `get_effective_service_level`
+* `get_rule_options`
+* `service_extra_conf`
+
+
+Folgende Elemente sind momentan in `cmk/base/check_api.py` definiert, haben aber keine Callsites. Wir lassen sie weg:
+
+* `OID_BIN`
+* `OID_END_BIN`
+* `OID_END_OCTET_STRING`
+* `OID_STRING`
+* `all_matching_hosts`
+* `check_type` (die Funktion)
+* `core_state_names`
+* `get_http_proxy`
+* `hosttags_match_taglist`
+* `in_extraconf_hostlist`
+* `is_cmc`
+* `nagios_illegal_chars`
+* `quote_shell_string`
+* `service_description` (die Funktion)
+* `tags_of_host`
+
+
+Folgende Elemente sind momentan in `cmk/base/check_api.py` definiert, werden aber für neue Check-API nicht mehr benötigt werden:
+
+* `as_float`: dieser "de-serialisierungs Hack" für `float('Inf')` wird in die Metric-Klasse integriert.
+* `get_agent_data_time()`: nur einmal benutzt, wird ersetzt durch `parsed.meta.timestamp`
+* `host_name()`: Unnötig. Also weg mit dieser verkappten globalen Variable.
+* `in_binary_hostlist(hostname, ruleset)`: nur einmal benutzt, wird ersetzt durch Discovery-Parameter.
+* `state_markers`: nicht mehr nötig (Subresults yielden!)
+* `utc_mktime`: ist nur ein Alias für `calendar.timegm`
+
+Folgende Elemente sind momentan in `cmk/base/check_api.py` definiert, werden aber Teil einer *anderen* API:
+
+* `passwordstore_get_cmdline`: Specialagents / active Checks

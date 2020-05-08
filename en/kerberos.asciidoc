@@ -1,0 +1,153 @@
+= Single Sign-On with Kerberos
+:revdate: draft
+[.seealso][#ldap] [# wato_user] [# omd_https]MT:Using Kerberos in (CMK)
+MD:Single Sign-On is not an official feature of checkmk, however this article will attempt to provide a guide for integrating Kerberos.
+
+
+== Introduction
+
+A single sign-on to the GUI of (CMK) with Kerberos is not officially
+supported by (CMK), but you can easily set it up yourself. These
+instructions will show you how to do this.
+
+The following prerequisites must be satisfied before the configuration in
+(CMK) can be retroactively altered to SSO (Single Sign-On) with Kerberos:
+
+* The Apache-Version is 2.4 or newer.
+* The libapache-mod-auth-kerb (e.g., mod_auth_kerb under RHEL/CentOS, or apache2-mod_auth_kerb under SUSE) module is installed on the (CMK) server.
+* The Kerberos client is istalled and configured on the (CMK) server.
+* A Keytab has been installed and may be read by the site user.
+* The (CMK) server has been set up as the _Service Principal_.
+* The client's browser has been configured for access using Kerberos.
+* The (CMK) instance is on Cookie-Auth
+
+The last point ensures that users without SSO can log in over the regular
+login window.  This option can also be [kerberos#cookie|deactivated].
+The prerequisite of course does not apply in such a case.
+
+
+== Integrating Kerberos
+
+To switch (CMK) to authentification over Kerberos, migrate the site user
+to the Apache directory, and archive the `cookie_auth.conf` file out
+of the system – this file will no longer be required.
+
+[source,bash]
+----
+OM:mv etc/apache/conf.d/auth.conf /tmp/
+----
+
+The `auth.conf` file will subsequently be deleted and recreated.
+Adapt the path being used to conform to the system's environment, and
+substitute the `KrbAuthRealm` and the value of the `SITE`
+variable to suit the environment:
+
+.~/etc/apache/conf.d/auth.conf
+
+----Define SITE mysite
+
+<IfModule !mod_auth_kerb.c>
+   LoadModule auth_kerb_module /usr/lib/apache2/modules/mod_auth_kerb.so
+</IfModule>
+
+<Location /${SITE}>
+  Order allow,deny
+  Allow from all
+
+  AuthType Kerberos
+  AuthName "Check_MK Kerberos Login"
+  KrbServiceName HTTP
+  KrbMethodNegotiate on
+  KrbMethodK5Passwd off
+  KrbLocalUserMapping on
+  KrbSaveCredentials on
+
+  # Use Kerberos auth only in case there is no Check_MK authentication
+  # cookie provided by the user
+  Require expr %{HTTP_COOKIE} =~ /auth_/
+  Require expr %{REQUEST_URI} = "/${SITE}/check_mk/register_agent.py"
+  Require expr %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/
+  Require valid-user
+
+  # Environment specific: Path to the keytab and the realm
+  Krb5Keytab /etc/apache2/krb5.keytab.f-mk-mon-p01
+  KrbAuthRealm MYCOMPANY.ORG
+
+  # When Kerberos auth fails, show the login page to the user
+  ErrorDocument 401 /${SITE}/check_mk/login.py
+</Location>
+
+# These files are accessible unauthenticated (login page and needed ressources)
+<LocationMatch /${SITE}/(omd/|check_mk/(images/.*\.png|login\.py|.*\.(css|js)))>
+  Order allow,deny
+  Allow from all
+  Satisfy any
+</LocationMatch>
+----
+
+
+[#cookie]
+== Cookie based Logins
+
+If you want to only allow logins over SSO, deactivate the Cookie-Auth.
+Note that this option can only be changed when the instance is stopped:
+
+[source,bash]
+----
+OM:omd config set MULTISITE_COOKIE_AUTH off
+----
+
+The following line can also be omitted from or commented out in the
+`auth.conf` as appropriate:
+
+.~/etc/apache/conf.d/auth.conf
+
+----#  Require expr %{HTTP_COOKIE} =~ /auth_/
+----
+
+### H2:Configuration on the server
+###
+### So that the (CMK) server can communicate with the Kerberos server, and a user's
+### authenticity can be verified, the server must be set up as a Service Principal.
+### If this has not yet been configured when the Kerberos-Client is being installed,
+### this can be performed retrospectively in the `krb5.conf` file.
+### Substitute your domain in the `mycompany.org` path:
+###
+###  F+:/etc/krb5.conf
+###  [libdefaults]
+###          default_realm = MYCOMPANY.ORG
+###          forwardable = true
+###          proxiable = true
+###  [realms]
+###          MY.REALM.ROOT = {
+###                  kdc = kerberos.mycompany.org
+###                  admin_server = kerberos.mycompany.org
+###                  default_domain = mycompany.org
+###          }
+###
+###  [domain_realm]
+###          .mycompany.org = MYCOMPANY.ORG
+###          mycompany.org = MYCOMPANY.ORG
+###
+###  [logging]
+###          kdc = SYSLOG:INFO:DAEMON
+###          admin_server = SYSLOG:INFO:DAEMON
+###          default = SYSLOG:INFO:DAEMON
+###  F-:
+###
+### Next define the server as _Service Principal_.
+### Via this, in the future a client can verify that it really concerns the requested
+### service (Check_MK), and the service can in turn authenticate the client.
+### ### ### Über diesen kann ein Client später verifizieren, dass es sich
+### ### ### wirklich um den angeforderten Dienst (Check_MK) handelt und der Dienst kann
+### ### ### wiederum den Client authentifizieren:
+###
+### C+:
+### RP:kadmin -p myprincipaladmin -q "addprinc -randkey HTTTP/myserver.mycompany.org"
+### C-:
+###
+### LI:Test with kinit/klist
+### C+:
+### RP:kinit -k -t /path/to/http.keytab HTTP/myserver.mycompany.org
+### RP:klist -e
+### C-:

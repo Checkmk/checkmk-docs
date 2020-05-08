@@ -1,0 +1,161 @@
+= Working with counters
+MD:When you write checks that deal with performance data (CPU usage, disk IO), in many cases you will be working with counters.
+:revdate: outdated
+[.seealso][#writing_checks]== The principle of counters
+When you write checks that deal with performance data (CPU
+usage, network traffic, disk IO), in many cases you will be
+confronted with _counters_. As an example, look into
+the file `/proc/stat` on your Linux box. Lets `grep`
+for the line beginning with `processes`:
+
+[source,bash]
+----
+UP:grep processes /proc/stat
+processes 205458
+----
+
+What does that mean? It's the number of processes created since
+the system has booted (not the number of processes currently
+running!).
+
+Now let's do it again:
+
+[source,bash]
+----
+UP:grep processes /proc/stat
+processes 206160
+----
+
+What do we learn from this? The number of process creations has
+raised from *205458* to *206160*. That is *702*
+new process creations. If we now assume that we have waited exactly *10* seconds
+between the two calls, then processes have been created at a *rate*
+of 70.2 process creations *per second*.
+
+So if we have a counter and want to compute a rate, we need to compare the
+value of the counter between two points of time and need to know how much
+time has been passed between the first and the second sample of the counter.
+
+From that follows that a Nagios check using data from counters must have
+a memory of the previous value of the counter together with the exact point of
+time when that value was seen.
+
+== Counters in (CMK)
+The good news is: Checkmk supports check programmers with the handling
+of counters. It can keep memory or counter values and compute rates for
+you. Counter values are stored in `/var/lib/check_mk/counters` (OMD:
+`tmp/check_mk/counters`). The key to this is the helper function
+`get_counter`, which is called like this:
+
+.
+
+---- timedif, rate_per_sec = get_counter("some.unique.name", this_time, counter_value)
+----
+
+It is important to call this function with a unique name for each separate
+counter. This is usually done by using the check type and the item as a
+prefix (unless your check is always using `None` as item). Here is an
+example of how the check `winperf.diskstat` uses `get_couter`:
+It uses a separate counter for read IO and write IO:
+
+.
+
+---- read_timedif,  read_per_sec  = get_counter("diskstat.read",  this_time, read_bytes_ctr)
+ write_timedif, write_per_sec = get_counter("diskstat.write", this_time, write_bytes_ctr)
+----
+
+The check `if` is a bit more complex, since it deals with many switch ports
+and for each port with several counters. It uses the counter name (`name`) and
+the port number/description (`item`) to make the counter unique:
+
+.
+
+---- timedif, rate = get_counter(<b class=hilite>"if.%s.%s" % (name, item)*, this_time, saveint(counter))
+----
+
+The `get_counter` function returns two values:
+<ol>
+<li>The time difference since the previous update of that counter (in seconds)</li>
+<li>The averaged rate during that interval (per second)</li>
+</ol>
+
+Both values are of type `float`. In most cases the first value - the
+time difference - is not interesting. But the `rate` is exactly what
+checks usually need.
+
+== Counter wraps and resets
+There are two situations where you have to be careful when working with counters:
+_wraps_ and _resets_. A wrap occurs when a counter with a limited precision
+overflows. The most prominent example are the 32 Bit counters in the SNMP _IF-MIB_
+that are used for the network traffic - for example `ifOutOctets`. After 4GB
+of traffic over a port the counter wraps over back to `0`. Such a case must
+be detected and handled. Otherwise you would get _negative_ values for your rate.
+
+Another situation is a reboot of the target device. In that case all counters start
+again from `0`. This must also be handled correctly in order to avoid anomalies.
+
+`get_counter` makes a simple but effective wrap detection. If the new counter
+value is lower than the old one, a wrap/reset is being assumed. Now something important
+happens: `get_counter` does not return _any_ value, but raises a Python
+exception of the `MKCounterWrapped`. This exception immediately aborts the
+execution of the check. _No_ check result will be sent to Nagios this turn!
+
+You might think of this as a bug. But it's the only way to do it right! If
+a counter anomaly occurs then it is not possible to compute the rate in
+a reliable way. Even if we _would_ know the maximum value of the
+counter, we still would have no way to distinguish between a _wrap_
+and a _reset_.  And returning a rate of 0 would also be wrong and might
+trigger false alarms, create invalid RRD graphs and would send the user a
+check result that does not reflect the reality.
+
+Also if `get_counter` is called for the very first time for
+a specific counter, as `MKCounterWrapped` will be raised. No rate
+can be computed without a previous value. This is the reason why some
+checks need a bit longer to leave the pending state when a new host is
+added to the monitoring.
+
+=== Checks based on multiple counters
+If your check uses more then one are two counters then the time until the
+first time the check produces results might be no acceptable. The problem
+is that the `MKCounterWrapped` exception will immediately abort
+the check execution as soon as the first counter is initialized. The second
+time the check is called the second counter will be initialized and so on.
+
+If you want _all_ counters to be initalized at the first check then
+you need to:
+
+<ul>
+<li>catch the `MKCounterWrapped` exception</li>
+<li>let all calls to `get_counter` happen</li>
+<li>a) either _raise_ a `MKCounterWrapped` exception afterwards...</li>
+<li>b) or ignore the value of all counters</li>
+</ul>
+
+The following pseudo-code illustrates how to do this correctly (variant a):
+
+.somecheck
+
+----    wrapped = False
+    for ...: # loop over counters
+        try:
+            timedif, rate = get_counter(.....)
+            # process resulting rate...
+        except MKCounterWrapped:
+            wrapped = True
+            # continue, other counters might wrap as well
+
+    # after all counters are handled
+    if wrapped:
+        raise MKCounterWrapped("Counter wrap")
+----
+
+Variant b) is only possible if the counters just supply _additional_ performance
+data but _do not influence the check result_.
+
+In any case make sure, that your check does always output the _same number
+of performance variables_. If some would be missing due to counter wraps,
+then output _none at all_. Graphing tools such as PNP4Nagios may break
+if the number of performance variables vary.
+
+WK:1723
+WK:1725

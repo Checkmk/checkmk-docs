@@ -1,0 +1,483 @@
+= Basic Principles of monitoring with Checkmk
+:revdate: 2019-12-12
+[.seealso][#wato_hosts] [#check_mk_getting_started] [#wato_monitoringagents]MT:Understanding (CMK) terminology
+MD:The basic concepts and concepts in checkmk are explained in more detail here. Read this article if you are not yet familiar with checkmk.
+
+== States and events
+
+Until now we have been concerned with the installation and implementation
+of (CMK).  Now it is time to begin explaining the basic concepts and
+definitions of monitoring (with (CMK)).
+
+It is important to understand the basic differences between _states_
+and _events_ - and namely for a very practical benefit.  Most classic
+IT monitoring systems revolve around events.  An event is something that
+occurs uniquely at a particular time.  A good example would be _error when accessing drive X_. Typical sources of events are syslog messages, SNMP traps,
+the Windows Event Log, and log data entries. Events
+are quasi-spontaneous (self-generating, asynchronous) occurrences.
+
+In contrast a _state_ describes a sustained situation, e.g.  _drive X
+is online_. In order to observe the state of something, the monitoring
+system must regularly poll it. As the example shows, in monitoring it is
+often possible to choose to work with events or with states.
+
+(CMK) can accommodate both states and events, but,
+where the choice is available, always prioritize state-based monitoring. The
+reason for this lies in the numerous advantages of this method. Some of
+these are:
+
+* An error in the monitoring itself is detected immediately, because it is obviously noticeable when the status query no longer works. The non-occurrence of a _message_, on the other hand, does not give any certainty whether the monitoring is still working.
+* Regular checking in a fixed time-frame enables the capturing of _performance data_ to record their time history.
+* (CMK) itself can control the rate at which states are polled. There is no risk of an _event storm_ in global error situations.
+* Even in chaotic situations - e.g. a power failure in a computer centre - one always has a reliable overall status.
+
+One can well say that (CMK)'s states-based monitoring is the _norm_.
+For the processing of states, the [ec|(CMK) Event Console] is also
+available.  This is specialised for the correlation and evaluation of large
+numbers of events and is seamlessly-integrated into the (CMK) platform.
+
+== Hosts and services
+
+[#hosts]
+=== Hosts
+
+Everything in (CMK) revolves around _hosts_ and _services_.
+A host can be many things, e.g.:
+
+* A server
+* A network device (switch, router, load balancer)
+* A measuring device with an IP connection (thermomether, hydrometer)
+* Anything else with an IP address
+* A cluster of several Hosts
+* A virtual machine
+* A Docker container
+
+In monitoring a host always has one of the following states:
+
+[cols=10,10, options="header"]
+|===
+
+
+|State
+|Colour
+|Meaning
+
+
+|(UP)
+|green
+|The host is accessible via the network (this generally means that it answers
+a PING.)
+
+
+|(DOWN)
+|red
+|The host does not answer network enquiries, is not accessible.
+
+
+|(UNREACH)
+|orange
+|The _path_ to the host is currently blocked to monitoring, because a
+router or switch in the path has failed.
+
+
+|(PEND)
+|grey
+|The host has been newly-included in the monitoring, but never before been
+polled. Strictly-speaking this is not really a condition.
+
+|===
+
+Alongside the state, a host has a number of other attributes that can be
+configured by the user, e.g.:
+
+* A unique name
+* An IP address
+* Optional - an alias, that must not be unique
+* Optional - one or more _parents_
+
+[#parents]
+=== Parents
+
+In order for the monitoring to be able to assess the (UNREACH) status it must
+know via which path every individual host can be reached. Additionally for
+every host one or more so-called _parent hosts_ may be specified. If,
+e.g. server A _seen from monitoring_ is only accessible via router
+B, then B is a parent of A.  In this way only _direct_ parents are
+configured. Further, a tree-like structure is created with the (CMK) instance
+at its centre (shown here as ICON[parent_map_root.png]):
+
+image::bilder/monitoring_parents.png[]
+
+In this example, if the host _sw-ks-01.lan.tribe29.com_ shows the (DOWN)
+state, the monitoring automatically assumes that an eventual failure
+of _sw-ks-02.lan.tribe29.com_ can be explained simply as due to its no longer
+being accessible to monitoring.  Whether it really has failed cannot be
+determined. It will be classified as (UNREACH) in monitoring.
+And there is the important rule that (by default) for hosts with the status
+(UNREACH) _no_ [notifications|alerting] takes place.
+
+Because this is the most important task of the parents concept:
+the avoidance of mass false alarms if an entire network segment is no longer
+accessible for monitoring.
+
+By the way: The monitoring of _sw-ks-02.lan.tribe29.com_ still
+takes place! If this host responds, it will be displayed as (UP) in any case. 
+
+[#services]
+=== Services
+
+A host has a number of _services_. A service can be anything - please
+don't confuse this with services in Windows. A service is any part or
+aspect of the host that can be OK, or not OK. Naturally the state can only
+be determined if the host is in an (UP) condition.
+
+A service being monitored can have the following states:
+
+[cols=10,10, ]
+|===
+
+
+|State
+|Colour
+<th width="70%">Meaning</th>
+
+
+|(OK)
+|green
+|The service is fully in order. All values are in their allowed range.
+
+
+|(WARN)
+|yellow
+|The service is functioning normally, but its parameters are outside their optimal range.
+
+
+|(CRIT)
+|red
+|The service has failed</tr>
+
+
+|(UNKNOWN)
+|orange
+|The service's status cannot be correctly determined. The monitoring agent has
+delivered defective data or the element being monitored has disappeared.
+
+
+|(PEND)
+|grey
+|The service has been newly-included and has so far not provided monitoring data.
+
+|===
+
+When determining which condition is 'worse', (CMK) utilises the following
+sequence:
+
+<center>
+(OK) → (WARN) → (UNKNOWN) → (CRIT)
+</center>
+
+== Host and Service Groups
+
+Hosts and services can be grouped for an overview. In this way a host/service
+can be in more than one group. These groups are purely optional and not
+required for the configuration. Host groups can be useful when, alongside
+the folder structure in which the hosts are managed, an additional grouping
+is desired. If for example you have built a folder structure according to
+geographic standpoints, then it could be useful to have a _Linux-Server_
+host group e.g., that lists all Linux servers regardless of their geographic
+locations.
+
+== Contacts and contact groups
+
+Contacts and [wato_user#contact_groups|contact groups] offer the possibility of assigning persons to hosts
+and services.  A contact correlates with a user name or web interface. The
+correlation with hosts and services does not occur directly however, rather
+via contact groups. Firstly, a contact (e.g. `harri`) is assigned
+to a contact group (e.g. <t>linux-admins</t>). Then hosts - or as required,
+individual services - can be assigned to the contact group. In this way users,
+and likewise hosts and services can be assigned to multiple contact groups.
+
+These assignments are useful for a number of reasons:
+
+. Who is permitted to _view_ something?
+. Who is authorised to _configure and control_ which hosts and services?
+. Who receives _notifications_ for which problems?
+
+By the way - the user `cmkadmin`, who is automatically defined by the
+creation of an instance, is always permitted to view all hosts and services
+even when they are not a contact. This is determined through their role
+as administrator.
+
+== Users and roles
+
+Whereas the persons who are responsible or authorised for a particular host
+or service are defined through contacts and contact groups, their privileges
+are controlled via _roles_. (CMK) is supplied with three roles from
+which further roles can be later derived. Each role defines a series of rights
+which may be customised. The standard roles have the following meanings:
+
+[cols=5,10, options="header"]
+|===
+
+
+|
+|Role
+|Meaning
+
+
+
+|ICON[icon_roles.png]
+|`admin`
+<td>May view all, has all privileges
+
+
+
+|ICON[icon_roles.png]
+|`user`
+|May only view that for which he/she is a contact.
+May manage hosts in folders assigned to him/her. Is not permitted to make global settings
+
+
+
+|ICON[icon_roles.png]
+|`guest`
+<td>May view all, but may not configure and may not influence monitoring
+
+|===
+
+== Problems, events and notifications
+
+=== Handled and unhandled problems
+
+(CMK) identifies every host that is not (UP), and every service that is
+not (OK) as a _problem_. A problem can have two states: _unhandled_
+and _handled_. The procedure is that a new problem is first treated as
+unhandled. As soon as someone _confirms_ (acknowledges) the problem it
+is then flagged as handled. It can also be said that unhandled problems are
+those which nobody has attended to. The tactical overview in the sidebar
+therefore differentiates the two types of problems:
+
+image::bilder/tactical_overview.png[align=center,width=43%]
+
+By the way: service problems from hosts that are currently not (UP) are not
+identified as problems.
+
+Further details about acknowledgements can be found in it's
+[basics_ackn|own article].
+
+[#notifications]
+=== Alerts and notifications
+
+When a host's condition changes, (e.g. from (OK) to (CRIT)), (CMK) registers
+an _event_. These events may or may not generate a notification. (CMK)
+is so designed that whenever a host or service has a problem, an email is sent
+to the object's contacts (please note that `cmkadmin`,
+by default, is _not a_ contact for any objects). These can be customised
+very flexibly however. The alert also depends on a number of parameters. It is
+simplest when we look at cases for which notifications _are not_ sent.
+Notifications are suppressed ...
+
+* ...when notifications have been globally-deactivated in the _master control_
+* ...when notifications have been deactivated in the host/services
+* ...when notification is deactivated for a particular status of the host/services (e.g. no notification for (WARN))
+* ...when the problem affects a service whose host is (DOWN) or (UNREACH)
+* ...when the problem affects a host, whose parents are all (DOWN) or (UNREACH)
+* ...when for the host/service a _notification period_ has been set that is not currently active (see below)
+* ...when the host/service is currently _flapping_ (see below)
+* ...when the host/service is currently in a _scheduled downtime_ (see below)
+
+If none of these prerequisites for supressing notifications are satisfied,
+the monitoring core then
+creates a notification, which in a second step passes through a chain of
+rules. In these rules you can define further exclusion criteria, and decide
+whom should be alerted and in what form (email, SMS, etc.)
+
+All particulars concerning alerts can be found in it's
+[notifications|own article].
+
+[#flapping]
+=== Flapping hosts and services
+
+It sometimes happens that a service continuously and quickly changes its
+condition.  In order to avoid continuous notifications, (CMK) switches
+such a service into the _flapping_ state. This is illustrated with the
+ICON[icon_flapping.png] symbol. When a service enters a flapping state,
+a notification will be generated which informs the user of the change,
+and silences further alerts.  After a suitable time, if no further rapid
+changes are occurring, and a final (good or bad) status is evident, then
+the flapping status disappears and normal alerting resumes.
+
+[#downtimes]
+=== Scheduled downtimes
+
+If you perform maintenance work on a server, device or software, you will
+normally want to avoid potential problem notifications during this time. In
+addition, you will probably want to advise your colleagues that problems
+appearing in monitoring during this time may be temporarily ignored.
+
+For this purpose you can enter a condition of _scheduled downtimes_ on
+a host or service.  This can can be done directly before starting the work,
+or in advance. Scheduled downtimes are illustrated by the symbols:
+
+[cols=, ]
+|===
+
+
+|ICON[icon_downtime.png]
+|The host/service is in a scheduled downtime
+
+
+|ICON[icon_derived_downtime.png]
+|The host on which the service is located has a scheduled downtime
+
+|===
+
+While a host or service has a scheduled downtime:
+
+* No notifications will be sent.
+* Problems will not be shown in the tactical overview.
+
+Additionally, when you wish to later document statistics on the availability
+of hosts and services it is a good idea to include scheduled downtimes.
+These can be factored into later availability evaluations.
+
+== Timeperiods
+
+image::bilder/icon_timeperiods.png[align=left,width=8%]
+
+Timeperiods define regular, weekly-recurring
+timeperiods that are used in various positions in the monitoring's
+configuration. A typical timeperiod could be called `workhours` and
+could contain the time from 8:00 to 17:00 on all weekdays except Saturday and
+Sunday. The period `24X7` simply includes all times and is predefined.
+Timeperiods can also include exceptions for particular calendar days -
+e.g. Bavarian public holidays.
+
+Some important situations which use time periods are:
+
+* Limiting the time during which notifications will be made (notification period)
+* Limiting the time during which checks are to be performed (check period)
+* Service times for the evaluation of availability (service period)
+* Times during which the event console applies defined rules
+
+[#checkintervall]
+== Check interval, check attempts and check period
+
+The execution of checks occurs at fixed intervals in status-based monitoring.
+(CMK) uses one minute as its standard. Every check is therefore performed
+once per minute. This can be altered in the configuration:
+
+* To a longer interval in order to save CPU resources on the server and target systems
+* To a shorter interval in order to receive alerts more quickly and to collect performance data at a higher resolution.
+
+Through defining a check period other than 24X7, the execution of _active_ checks
+can be interrupted in specified time frames. The service's status will
+no longer be updated, and will be flagged as _stale_, symbolised by
+ICON[icon_stale.png].
+
+In combination with a long check interval one can ensure that an active check is
+performed once per day at a specified time. If you set an interval of e.g. 24
+hours and the check period at 02:00 - 02:01 on every day (only one minute
+per day), then (CMK) will ensure that the check really will be executed
+in this short time frame.
+
+[#max_check_attempts]
+With the aid of _max check attempts_ you can
+avoid alerts in the case of sporadic errors.  In this way you are effectively
+making a check less sensitive. If the check attempts are set to e.g. 3, and
+the corresponding service becomes (CRIT), then initially no notification will
+be generated. If the the next two checks produce a result other than (OK), the
+number of current attempts will increase to 3 and a notification will be sent.
+
+A service that finds itself in this intermediate state - is thus not (OK), but
+has not yet reached its maximum number of attempts - has a _soft state._
+
+== Active and passive Checks
+
+If you look at the (CMK) interface you can see that for some services
+in the ICON[icon_menu.png] menu
+a green double-arrow (ICON[icon_reload.png]) is shown, but a grey four-way-arrow
+(ICON[icon_reload_cmk.png]) for most others. The services with the green
+arrow are _active checks_. These are executed by (CMK) directly.
+Sevices with a grey arrow are those for which the check results are determined
+by the active check [.guihints]#Check_MK}}.# These occur for performance reasons
+and illustrate a special feature of (CMK):
+
+image::bilder/check_mk_service.png[]
+
+In order that the target system (server, network device, etc.) is not
+newly-contacted for every single service, once per interval (CMK) collects
+all important data in one pass. From this data, in a single action it
+calculates new results for all passive checks. This conserves CPU resources
+on both systems and is an important factor that supports (CMK)'s high
+performance and scalability.
+
+== Overview of the most important host and service icons
+
+The following table provides a short overview of the most important status
+icons appearing beside hosts and services:
+
+[cols=, ]
+|===
+
+
+<td style="width: 8%">ICON[icon_downtime.png]
+|This host/service currently has a scheduled downtime at the moment
+
+
+|ICON[icon_derived_downtime.png]
+|This service's host currently has a scheduled downtime at the moment
+
+
+|ICON[icon_outofnot.png]
+|This host/service is currently outside its notifications periods
+
+
+|ICON[icon_notif_man_disabled.png]
+|Notifications for this host/service are currently deactivated
+
+
+|ICON[icon_disabled.png]
+|Checks for this service are currently deactivated
+
+
+|ICON[icon_stale.png]
+|This Host/Service has a status of stale
+
+
+|ICON[icon_flapping.png]
+|This host/service has a status of flapping
+
+
+|ICON[icon_ack.png]
+|This host/service has a confirmed problem
+
+
+|ICON[icon_comment.png]
+|There is a comment for this host/service
+
+
+|ICON[icon_aggr.png]
+|This host/service is a part of a BI aggregation
+
+
+|ICON[icon_check_parameters.png]
+|Here you can directly-access the settings for the check parameters
+
+
+|ICON[icon_logwatch.png]
+|Only for logwatch services: here you can access stored log files
+
+
+|ICON[icon_pnp.png]
+|Here you can acccess a timegraph of the performance data
+
+
+|ICON[icon_software.png]
+|This host/service has inventory data. A click on it shows the related view
+
+
+|ICON[icon_crash.png]
+|This Check crashed. Click on it to view and submit a crash/bug report
+
+|===

@@ -1,0 +1,270 @@
+= Checkmk in a Docker container
+:revdate: 2020-01-21
+[.seealso][#introduction_docker] [#cma_virt1_basic_esx] [#cma_virt1_basic_virtualbox]MT:Managing (CMK) in a container
+MD:Following the start of a container is its ongoing maintenance. This article describes what peculiarities should be noted when checkmk runs in a container.
+
+
+== (CMK) in a Docker container
+
+In our [introduction_docker|installation guide for (CMK) in Docker] we've already shown you how to set up (CMK) in a Docker container. This article takes a closer look at more of the details.
+
+
+== Optional parameters during the setup
+
+All of the following parameters are specified additionally when setting up a (CMK) site as a container and are therefore not available separately.
+
+
+[#https]
+=== Using HTTPS
+
+If (CMK) is the only web server on your dockernode, you can also bind the
+port to the standard (`80`) HTTP port. As soon as you you have multiple
+web servers on a dockernode however, you will probably use a reverse-proxy
+like NGINX – this directs the inquiries to the correct container. With this
+technology you can also use (possibly preexisting) HTTPS. The reverse proxy
+will then be addressed via HTTPS, while communicating with the container
+continues via HTTP.
+
+
+=== Setting an initial password
+
+In (CMK), when setting up an instance a [introduction_packages#login|random
+password] for the default user `cmkadmin` is created.  When creating a
+(CMK) container you can also assign a password manually. Simply add the
+`-e CMK_PASSWORD ='mypassword'` option during the creation process.
+
+
+=== Setting your own instance ID
+
+With the default command to create a (CMK) container, the ID of the instance created in the container will be `cmk`. This is important to be able to access the instance via HTTP(S) and it must therefore be explicit.
+If you have multiple containers of (CMK) on the same dockernode, you will
+have to set the ID manually to ensure this uniqueness. You can do that
+by including the `-e CMK_SITE_ID=mysite` option.
+
+
+=== Sending notifications
+
+An important feature of (CMK) is the sending of
+[monitoring_basics#notifications|notifications] per email. (CMK) uses
+Postfix as its MTA (Mail Transfer Agent) for outgoing mails. This postfix instance
+is configured not to deliver mails directly to the recipient, but basically
+tries to forward to an additional mail server (SMTP Relay Server, Smarthost) which
+you need to provide outside of the container. Such a relay server is available
+in almost every organization.
+
+When implementing, specify the relay mail server that will forward the notifications.
+In the `-e` option,
+use the `MAIL_RELAY_HOST` variable -- e.g., `-e MAIL_RELAY_HOST='mailrelay.mydomain.com'`. If the mail server expects a specific host name, add the following
+option: `--hostname 'mymonitoring.mydomain.com'`.
+
+(CMK) containers currently do not support the configuration of access data for a smart host.
+You can bind a postfix configuration or configuration folder from the docker node
+if you need them.
+
+If you use one of the (CEE), you are able to bypass postfix completely so that (CMK) forwards notifications directly to a smarthost. This is done by the
+[notifications#syncsmtp|synchronous SMTP], which is described in detail in
+the article about [notifications|notifications]. Here an authentification over SMTP is also possible.
+
+
+=== Access to Livestatus via TCP
+
+As soon you connect multiple (CMK) containers/instances together
+in a distributed environment you will need a special TCP port for the
+Livestatus interface. This interface allows communication between the
+instances. Bind this port – likewise the port for HTTP – to one of the
+Docker nodes, and enable this TCP port in the Livestatus instance: `-e
+CMK_LIVESTATUS_TCP=on-p 6557:6557`.
+
+
+[#bash]
+=== Access via the command line
+
+In some cases you will want to execute commands on the command line.
+Because commands for an instance are always executed via a special user,
+you must specify this when logging in.  In (CMK) the user always has the
+same name as the instance it manages. Specify the user `cmk` with the `-u cmk` option:
+
+[source,bash]
+----
+RP:docker container exec -it -u cmk monitoring bash
+----
+
+You can then pass your [cmk_commandline|commands] to the instance.
+
+
+=== Using the Event Console
+
+(CMK) is able to receive SNMP traps and syslog messages. To be able
+to use this feature in a (CMK) container, the standardized ports must
+be provided to the (CMK) container with the following options: `-p
+162:162/udp -p 514:514/udp -p 514:514/tcp `.  In order that the instance
+itself also respects these ports, next activate the the appropriate add-ons
+in the instance with [omd_basics#omdconfig|`omd config`].  You can
+find these in the `Addons` submenu:
+
+[source,bash]
+----
+RP:docker container exec -it -u cmk monitoring bash
+OM:omd config
+----
+
+
+[#update_easy]
+== Updating a (CMK) container
+
+
+=== Simple update for current (CMK) images
+
+The updating of a (CMK) instance differs depending on the version of the image.
+As of VERSION[1.5.0p13] the update process is very simple, and
+the following are the only requirements:
+
+* The container is not deleted when the container is stopped -- i.e., the `--rm` option was not used at startup.
+* You know the ID of the data storage (volume) for the container. Normally you should have given its storage a unique ID when you started the container. If you are unsure of your volume’s ID, you can find [managing_docker#commands|help below].
+
+If you followed the [introduction_docker|Introduction to Checkmk in container]
+you should automatically meet the first two requirements. If your container uses an image that is older than VERSION[1.5.0p13],
+please follow the instructions [managing_docker#update_complex|below].
+Otherwise the update process is performed in 3 steps:
+
+. Stop the container. If the (CMK) container is called `myContainer`, the command will be, for example: `docker stop myContainer`.
+. Remove the container. The command is: `docker rm myContainer`.
+. Start a new container with the desired version, and mount the known volume. If your volume is called `myVolume`, the corresponding option is `-v myVolume:/omd/sites`.
+
+Checkmk will then automatically do the rest -- updating and starting your (CMK) instance.
+Afterwards you will be able to log in as usual.
+
+
+[#update_complex]
+=== Detailed update for older (CMK) images
+
+Updating a (CMK) instance older than VERSION[1.5.0p13] is more complex.
+The reason is mainly due to the architecture of (CMK), since in the course of a version change the configuration of an instance and other data need to be updated as well. An update is therefore performed -- differently to as described above or [update#execute|directly on a server] -- in the
+following steps:
+
+==== Backup the (CMK) container
+
+If you have created the container as recommended, all data will be stored in a
+persistent file system which is independent of the container itself.
+It is therefore not sufficient to take a snapshot of the container to save the data.
+Therefore stop the container and backup the container’s data to a suitable external location:
+
+[source,bash]
+----
+RP:docker stop monitoring
+monitoring
+RP:docker cp monitoring:/omd/sites - > /my/path/to/backup.tar
+----
+
+==== Update the (CMK) container
+
+Now create a second container with the new version, so that for the update both the old version and the desired one are available. A command is given to prevent them from both from starting. Keep this shell open so that the update can be carried out later:
+
+[source,bash]
+----
+RP:sudo docker container run -it --rm --volumes-from monitoring --name monitoring_update checkmk/check-mk-enterprise:1.5.0p6 bash
+root@801beb91d3b6:/#
+----
+
+(CMK) always sets a standard specifying which (CMK) version should be used. Change this entry on the second container with the following command:
+
+[source,bash]
+----
+RP:docker cp -L monitoring:/omd/versions/default - | docker cp - monitoring_update:/omd/versions/
+----
+
+Now you can perform the update on the second container.
+If applicable, close the open shell after the update is complete:
+
+[source,bash]
+----
+RP:docker exec -it -u cmk monitoring_update omd update
+2018-10-12 14:32:29 - Updating site 'mytest' from version 1.5.0p4.cee to 1.5.0p5.cee...
+
+ <b class=green>** Updated        *etc/apache/conf.d/omd.conf*
+Finished update.
+----
+
+
+==== Exchange the Checkmk container
+
+After you have updated the (configuration) data, you can replace the old container with the new one. First rename the old container:
+
+[source,bash]
+----
+RP:docker rename monitoring monitoring_old
+RP:
+----
+
+You can now start a container with the new (CMK) version, and assign the updated file system from the old container to it:
+
+[source,bash]
+----
+RP:docker container run -dit -p 8080:5000 --tmpfs/omd/sites/cmk/tmp --volumes-from monitoring_old --name monitoring checkmk/check-mk-enterprise:1.5.0p6
+----
+
+You can also check in the logs to see whether the container has started without problems:
+
+[source,bash]
+----
+RP:docker container logs monitoring
+### STARTING SITE
+Preparing tmp directory /omd/sites/cmk/tmp...OK
+Starting mkeventd...OK
+Starting liveproxyd...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting cmc...OK
+Starting apache...OK
+Initializing Crontab...OK
+### STARTING CRON
+### CONTAINER STARTED
+----
+
+Finally, delete the old container:
+
+[source,bash]
+----
+RP:docker rm monitoring_old
+----
+
+
+== Creating your own container-images
+
+With the help of our our repository you can also
+create your own images with a (CEE). Clone the current <a href
+="https://github.com/tribe29/checkmk">(CMK)-Git</a>, and navigate to the
+`docker` directory. With the help of your customer data you can now
+create your own image:
+
+[source,bash]
+----
+UP(myuser@myhost:~/git/check_mk/docker#):docker build \
+    --build-arg CMK_VERSION=1.5.0p5 \
+    --build-arg CMK_EDITION=enterprise \
+    --build-arg CMK_DL_CREDENTIALS='myusername:mypassword' \
+    -t mycompany/check-mk-enterprise:1.5.0p5
+----
+
+During the build process you will need two external files which -- using your customer login data -- will be automatically downloaded from our download server. To prevent this you can also
+first load the necessary files manually and place them in the `docker`
+directory:
+
+* The (CMK) installation package for Debian Stretch
+* The public GPG-Key for the installation packet
+
+
+== Useful commands
+
+[cols=, options="header"]
+|===
+
+
+|Command
+|Function
+
+
+|`docker inspect myContainer`
+|With this command you can get all sorts of information about a running container with the name `myContainer`. Among other things, here you will also find which data storage devices (volumes) are integrated. This is especially useful if you haven’t given the volume a human-readable name and want to update your container.
+
+|===

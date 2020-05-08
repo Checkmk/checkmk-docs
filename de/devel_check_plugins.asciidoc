@@ -1,0 +1,194 @@
+= Eigene Check-Plugins schreiben
+:revdate: draft
+[.seealso][#localchecks] [#agent_linux] [#agent_windows] [#cmk_commandline] [#legacy_writing_checks] [#mkps] [#simulation_mode] [#snmp] [#wato_monitoringagents] [#wato_services]
+
+== Einleitung
+
+(CMK) umfasst fast 2000 fertige Check-Plugins für alle nur denkbare Hardware und Software.
+Diese werden vom (CMK)-Team gepflegt und jede Woche kommen neue dazu.
+Daneben gibt es auf der
+<a href="https://exchange.checkmk.com">(CMK)-Exchange</a> weitere Plugins, die von unseren
+Anwendern beigesteuert werden.
+
+Und trotzdem gibt es immer wieder Situationen, in denen ein Gerät, eine
+Anwendung oder einfach nur eine bestimmte Metrik, die für Sie wichtig ist,
+noch von keinem dieser Plugins abgedeckt ist -- vielleicht auch einfach
+deshalb, weil es sich dabei um etwas handelt, dass in Ihrer Firma entwickelt
+wurde und es daher niemand anders haben kann.
+
+=== Muss es immer ein echtes Plugin sein?
+
+Welche Möglichkeiten haben Sie also, hier dennoch eine sinnvolle Überwachung
+zu implementieren? Nun -- natürlich können Sie sich an unseren
+<a href="https://checkmk.de/support.html">Support</a> wenden und ein geeignetes
+Plugin entwickeln lassen. Aber natürlich können Sie sich auch
+selbst helfen. Dabei haben Sie erstmal drei Möglichkeiten:
+
+[cols=, options="header"]
+|===
+
+
+|Methode
+|So geht's
+|Vorteile
+|Nachteile
+
+
+|[localchecks|Localcheck]
+|(CMK)-Agent um einfaches Skript erweitern
+|Geht sehr einfach, ist in allen Programmiersprachen möglich,
+welche das Betriebssystem des überwachten Hosts anbietet, unterstützt sogar Serviceerkennung
+|Konfiguration der Schwellwerte nur beim Agenten selbst, SNMP nicht möglich oder sehr umständlich
+
+
+|Nagios-kompatibles Check-Plugin
+|Plugin per _MRPE_ vom [agent_windows#mrpe|Windows-] oder [agent_linux#mrpe|Linux-]Agenten aufrufen lassen.
+|Zugriff auf alle vorhandenen Nagios-Plugins, auch hier freie Wahl der Programmiersprache
+|Konfiguration der Schwellwerte nur beim Agenten selbst, SNMP nicht möglich oder sehr umständlich,
+keine Serviceerkennung möglich
+
+
+|Echtes (CMK)-Plugin
+|Wird hier im Handbuch erklärt
+|Fügt sich zu 100% in (CMK) ein, automatische Serviceerkennung, zentrale Konfiguration der Schwellwerte über die grafische Oberfläche,
+sehr performant, unterstützt SNMP, automatische Host- und Servicelabels möglich, unterstützt [inventory|HW/SW-Inventur],
+(CMK) stellt sehr viel bereit, so dass Sie Standarddinge nicht selbst programmieren müssen. Nur ein
+echtes Plugin hat eine Chance, teil vom offiziellen (CMK) zu werden.
+|Erfordert mehr Einarbeitungszeit sowie Kenntnisse in der Programmsprache Python
+
+
+|Logmeldungen
+|_Meldungen_ überwachen per [ec|Event Console]
+|Keine Entwicklung notwendig sondern nur aufstellen von Regeln in der Event Console
+|Geht nur, wenn von der Hard- oder Software überhaupt passende Meldungen geloggt werden.
+Weiterhin gelten alle Nachteile des ereignisbasierten Monitorings gegenüber dem Zustandsbasierten: Kein gesichterter
+aktueller Status, kein Erfassen von Metriken, keine konfigurierbaren Schwellwerte, Sie wissen nicht sicher,
+welche Meldungen überhaupt kommen können.
+
+|===
+
+Dieser Artikel zeigt Ihnen, wie Sie echte (CMK)-Check-Plugins entwickeln
+können -- mit allem was dazugehört. Dabei zeigen wir Ihnen, wie Sie
+die in Version VERSION[1.7.0] von (CMK) neu entwickelte API für die
+Pluginprogrammierung nutzen. Wenn Sie Plugins entwickeln möchten, welche
+auch auf älteren (CMK)-Versionen funktionieren sollen, können Sie die auf
+die [legacy_writing_checks|früheren Handbuchartikel] zurückgreifen. Diese
+werden allerdings schon seit längerem nicht mehr gepflegt und sind nur auf
+Englisch verfügbar.
+
+
+=== Verschiedene Typen von Check-Plugins
+
+Bevor wir uns in Geschehen stürzen, müssen wir uns zunächst einen Überblick
+über die verschiedenen Arten von Check-Plugins befassen, mit denen (CMK)
+arbeitet:
+
+[cols=, ]
+|===
+
+
+|Agentenbasiert
+|Die „normalen“ Plugins werten Daten aus, welcher der (CMK)-Agent für Linux,
+Windows oder andere Betriebssysteme sendet. Damit werden Betriebssystemparameter
+und Anwendungen überwacht und teilweise auch Serverhardware. Jedes neue Check-Plugin
+erfordert eine Erweiterung des Agenten, damit dieser die nötigen
+Daten bereitsstellt. Daher entwickeln Sie zunächst ein Agentenplugin und dann ein
+oder mehrere Check-Plugins, welche diese Daten auswerten.
+
+
+|SNMP
+|Bei der Überwachung via [snmp|SNMP] benötigen Sie keine Erweiterung eines Agenten sondern werten
+Daten aus, welche Checkmk von dem zu überwachenden Gerät per SNMP abruft
+und welche dieses standardmäßig bereitstellt. (CMK) unterstützt Sie dabei
+und übernimmt sämtliche Details und Sonderheiten des SNMP-Protokolls.
+
+
+|Spezialagent
+|Einen Spezialagenten benötigen Sie, wenn Sie weder mit dem normalen (CMK)-Agenten
+noch per SNMP an die Daten kommen, welche für das Monitoring relevant sind. Der häufigste
+Einsatzgebiet für Spezialagent ist das Abfragen von HTTP-basierten APIs. Beispiele sind
+z.B. die Überwachung von [monitoring_aws|AWS], [monitoring_azure|Azure] oder [monitoring_vmware|VMware].
+Hier schreiben Sie ein Skript, welches direkt auf dem (CMK)-Server läuft, sich mit der API
+verbindet, und Daten im gleichen Format ausgibt, wie dies ein Agentenplugin tun würde.
+Dazu schreiben Sie passende Check-Plugins in der gleichen Art wie bei der „Agentenbasierten“
+Überwachung.
+
+
+
+|Aktiver Check
+|Dieser Checktyp bildet eine Sonderrolle. Hier schreiben Sie zunächst ein klassisches
+Nagios-kompatibles Plugin, welches für die Ausführung _auf dem (CMK)-Server_ bestimmt
+ist und von dort aus mit einem Netzwerkprotokoll direkt einen Dienst auf dem Zielgerät
+abfragt. Das prominenteste Beispiel ist das Plugin `check_http`, mit welchem Sie
+Webserver und Webseiten überwachen können. Dieses Plugin können Sie dann so in (CMK) integrieren,
+dass man es über WATO wie gewohnt per Regeln einrichten kann.
+
+|===
+
+=== Voraussetzungen
+
+Wenn Sie Lust haben, sich mit dem Programmieren von Check-Plugins zu befassen,
+benötigen Sie die folgenden Voraussetzungen:
+
+* Kenntnisse in der Programmiersprache Python oder wenigstens Übung in einer ähnlichen Sprache (wie z.B. PHP, Ruby, Java, etc.) nebst Lust, sich in Python einzuarbeiten.
+* Erfahrung mit (CMK), vor allem was das Thema Agenten und Checks betrifft
+* etwas Übung mit Linux auf der Kommandozeile
+
+Als Vorbereitung sind folgende Artikel gut:
+
+IN:wato_services
+IN:wato_monitoringagents
+IN:snmp
+IN:agent_windows
+IN:agent_linux
+IN:cmk_commandline
+IN:mkps
+IN:simulation_mode
+
+=== Schritte zum eigenen Plugin
+
+Typischerweise sind es folgende Phasen, die Sie beim Schreiben eines eigenen Plugins durchlaufen:
+
+. *Daten beschaffen:* Sie finden heraus, wie Sie eigentlich an die Statusdaten kommen, die Sie überwachen möchten. Welche Kommandozeilenbefehle, SNMP-Pfade oder API-Aufrufe bringen die nötigen Rohdaten? Das hat erstmal noch nichts mit (CMK) zu tun und ist manchmal die schwierigste Aufgabe.
+. *Agent erweitern:* Sie schreiben ein Plugin für den Agenten mit den richtigen Kommandos bzw. einen Spezialagenten, der die API abruft. Bei SNMP entfällt dieser Schritt.
+. *Check-Plugin:* Jetzt schreiben Sie das eigentliche Check-Plugin, welches die Daten auswertet und darauf basierend Services erkennt und deren Status erzeugt.
+
+Wenn das klappt, sind Sie eigentlich fertig. Sie können das Ganze aber noch
+um etliche Zusatzfeatures erweitern, wie zum Beispiel:
+
+* Definitionen für die von den Services gelieferten [graphing|Messdaten], damit schöne und gut beschriftete Graphen und „Perf-O-Meter“ erzeugt werden.
+* Ein Regelsatz, mit dem Sie die Parameter des Check-Plugins konfigurieren können.
+* Ein Regelsatz, welcher das Agentenplugin für die [wato_monitoringagents#bakery|Agentenbäckerei] konfiguriert.
+* Ein Regelsatz, mit der der Spezialagent konfiguriert werden kann.
+* Eine Manualpage, welche das Check-Plugin für den Anwender dokumentiert.
+* Ein [mkps|MKP-Paket], in welchem das Plugin paketiert und einfach installierbar ist.
+
+== Dieser Artikel ist noch nicht fertig
+
+Jetzt werden Sie sich wahrscheinlich fragen, warum dieser Artikel hier endet.
+Der wesentliche Grund ist der, dass wir gerade daran arbeiten, die Programmier-API
+für Check-Plugins grundlegen zu überholen und zu verbessern. Sobald diese finalisiert
+ist, werden wir diesen Artikel -- und viele weitere Artikel zum Programmieren
+von Erweiterungen -- neu schreiben. Plan ist, dass dies mit dem Release von (CMK)
+Version VERSION[1.7.0] fertig ist.
+
+Bis es soweit ist, bitten wir noch um etwas Geduld!
+
+### Weiteres Vorgehen:
+###
+### 1. Beispiel mit Agent: Wieder mit smartctl -A /dev/sda. Erstmal ohne Item. Nur eine Platte, die hartkodiert ist.
+### Und ein Check mit der Temperatur mit festen Schwellwerten. Hinweis, dass es das schon gibt, natürlich.
+### Vorgehen ziemlich wie legacy_devel_agentbased.
+###
+### 2. Erst jetzt kommt das Item. Also Plugin anpassen. Discoveryfunktion anpassen. Description anpassen.
+###
+### --> Sollen wir hier den Sack zumachen und jetzt auf der Ebene SNMP vorstellen?
+###
+### 3. Parameter: Wie sollen wir es machen, da wir ja keine main.mk mehr zulassen möchten. Wie kann man
+### das ohne WATO-Regel machen? Sollen wir wirklich mit der main.mk rummachen? Oder jetzt den riesigen
+### Ausflug in die WATO-Regeln machen? --> Gilt aber auch bei SNMP.
+###
+### | 4. Messdaten: Wie sendet man sie? Wie deklariert man sie in CMK korrekt? Grafendefinitionen?
+### |
+### | 5. Manualpage.
+### +-> Hier müssen wir bedenken, dass dies auch für SNMP-basierte Checks gilt.

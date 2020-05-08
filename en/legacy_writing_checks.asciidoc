@@ -1,0 +1,195 @@
+= Writing checks for Checkmk
+MT:Writing checks for Checkmk
+MD:Using local checks or MRPE for adding your own self-written checks to Checkmk is easy. Even inventory and performance data are supported.
+:revdate: outdated
+KW:checks
+[.seealso][#devel_errorhandling] [#devel_counters] [#devel_snmpscan] [#devel_include] [#devel_manpages] [#packaging] [#devel_guidelines] [#localchecks] [#mrpe] [#snmp]== Why not use local checks or MRPE?
+Using [localchecks|local checks] or [mrpe|MRPE] for adding your own
+self-written checks to Checkmk is easy. Even [inventory|inventory] and
+performance data are supported. So why should you want to write native
+checks for Checkmk? Well, there can be several reasons:
+<ul>
+<li>You want to define your check parameters in `main.mk` or WATO rather then locally
+on each target host. </li>
+<li>You want to exploit currently unused information sent already by an agent (for example
+   Windows' numerous performance counters)</li>
+<li>You want to implement [snmp|SNMP] based checks.</li>
+<li>You want your check to be easily ported to other installations of Checkmk.</li>
+<li>You want your check to become official part of Checkmk.</li>
+<li>You are simply interested in how Checkmk works.</li>
+</ul>
+
+If one or more of those issues are relevant for you, then you'll find all information
+needed for writing your own checks in this article and a couple of further
+articles.
+
+<ul>
+<li>[legacy_devel_agentbased|Agent based checks]             - Writing checks based on the Checkmk agent</li>
+<li>[legacy_devel_newapi|The new Check API]                  - Version <b class=new>1.2.0* offers a new and simpler API for checks</li>
+<li>[legacy_devel_errorhandling|Error handling]              - How to (not) handle errors in checks</li>
+<li>[legacy_devel_snmpbased|SNMP based checks]               - Writing checks that use SNMP</li>
+<li>[legacy_devel_snmpscan|SNMP auto detection]              - Automatic detection of checks with `cmk -I` needs your help</li>
+### <li>[legacy_devel_snmpadvanced|SNMP advanced features]       - How several problems specific to SNMP can be solved</li>
+### <li>[legacy_devel_snmpwalk|Working with stored SNMP walks]   - Developing checks for hardware you have no access to</li>
+<li>[legacy_devel_counters|Working with counters]            - How to make use of performance data that comes as a counter</li>
+<li>[legacy_devel_include|Include files and shared sections] - How to share code with other checks</li>
+<li>[legacy_devel_factorysettings|Dictionary based parameters] - <b class=new>1.1.11i2* How to handle complex check parameters</li>
+<li>Check Manpages                   - How to write a man pages for a check</li>
+### <li>[legacy_packaging|Checkmk Packages]                     - How to create and work with extension packages</li>
+<li>[dev_guidelines|Guidelines for Checks]          - Checks becoming official part of Checkmk must adhere to our guidelines</li>
+<li>[legacy_devel_perfometer|Multisite Perf-O-Meter]        - How to write Perf-O-Meters for Multisite</li>
+</ul>
+
+== Do I have to learn Python?
+Well, to be honest: yes - at least to a certain basic degree. People have suggested
+to change Checkmk such that checks can be written in other languages as well. I understand
+this request very well. But from a technical point of view I cannot image how such an
+integration could be done in a clean, simple and performant way. Checkmk's checks are
+not standalone programs or scripts but are closely integrated into the check mechanism.
+They need to have access to some of Checkmk's internal functions.  In the end, for
+each host one Python program will be created by combining a base and all checks used by this
+host into one new program. This feature saves about 75% of the CPU resources
+when compared to directly calling check_mk for checking.
+
+On the other hand, Python is a language which is cleanly designed, elegant and easy learn.
+I'm sure you'll like it once you have some experience with it (even if you dislike its
+style of indentation).
+
+Within this tutorial I assume that you have some basic knowledge of Python. Looking at
+the code of some of the existing checks might help if you are new to Python.
+
+== How (CMK)'s checks work
+Each check consists at least of the following three components:
+<ul>
+<li>a unique name</li>
+<li>a data source definition</li>
+<li>a check function</li>
+</ul>
+
+Two further components are optional but strongly recommended:
+
+<ul>
+<li>an inventory function</li>
+<li>a manual page</li>
+</ul>
+
+If your check outputs performance data, then two further components form a perfect check:
+
+<ul>
+<li>a PNP graph template</li>
+<li>a Multisite Perf-O-Meter</li>
+</ul>
+
+=== The data source
+Everything begins with the data source, i.e. source of the data the check operates
+on. Currently there are two different kinds of data sources: agent sections (`tcp`),
+and SNMP queries (`snmp`). An agent section is a part of the output of an agent, for example
+the output of the Linux command `df`. An SNMP based data source returns
+data retrieved by one or several SNMP queries on certain OIDs. Both data sources
+are presented to the check function as a table (a Python list of lists). We will
+call these data the "agent data".
+
+=== The agent plugin
+If you write a TCP based check you need a plugin for the agent. This is a typically
+small executable script which is placed in the `plugins` directory of the
+agent. It uses standard operating system methods for retrieving the
+data of interest.
+
+It is important to understand the philosophy of Checkmk at this point. The plugin
+should:
+<ul>
+<li>use standard operating system commands generally available</li>
+<li>remove unneccessary output (such as headings)</li>
+<li>_not_ remove any of the actual data, even if its not needed in the
+first version of your check</li>
+<li>_not_ decide about the status of a check</li>
+<li>_not_ process the data by any means (other than removing garbage output)</li>
+<li>_not_ break anything on hosts that do not support the used commands</li>
+<li>_not_ run longer than a couple of seconds</li>
+</ul>
+
+=== The inventory function
+
+If you want your check to support [inventory|inventory] (which is always
+a good idea), you have to supply an inventory function. This function
+examines the agent data of a host and creates a list of all *items* to be checked
+on this specific host. An item uniquely identifies a thing to be checked on
+a host within that type of check.  Some examples of items are:
+
+<ul>
+<li>The check "`df`" uses the mount point as the item, for example `"/var/log"`.</li>
+<li>The check "`services`" uses the Windows service name as its item, for example `"TnsListener"`.</li>
+<li>The check "`ps`" uses an artificial user supplied item.</li>
+<li>The check "`local`" uses the service description as output by the local check.</li>
+</ul>
+
+Some checks do not need to distinguish items. This is because
+the thing they check does not exist more than once on a host. An example
+is the check `mem`. But Checkmk always requires an item, so
+these checks simply use `None` as the item.
+
+Please note that this does not mean you cannot do an inventory on
+`mem`. It's just that the number of items the inventory returns is
+at most one. In some cases it is even zero: when the agent output does not
+contain the information needed for the check. This is a very useful feature
+and enables the Nagios administrator to automatically perform the right
+checks on the right operating systems.
+
+Your inventory function does not need to worry whether a certain item was
+already configured manually or detected by a previous inventory. Checkmk
+handles this in a general way, and makes sure that only newly detected items
+are added to the list of services.
+
+=== The check function
+
+When an actual check of a host is done, all services for this host will be
+checked in turn. When it's your check's turn, Checkmk will call your check
+function for each item that is automatically or manually configured for the
+check and host.  Your function will be provided with the checked _item_,
+the (optional) _parameters_ of the check and the _agent data_.
+
+The check function then
+<ul>
+<li>extracts the information relevant for the item in question from the agent data</li>
+<li>decides on the Nagios status of the service</li>
+<li>creates one line of text output for Nagios</li>
+<li>optionally computes performance data</li>
+<li>returns status, line of text and performance data as a Python tuple</li>
+</ul>
+
+This is very similar to what standard Nagios plugins do, with the important
+difference, that our check is already provided with data from the agent and
+does not have to retrieve it by itself.
+
+=== The manual page
+If you want to pass your check along to others, a manual page for the check is strongly
+recommended. Checkmk has its own concept and syntax of check manuals. You do not need to learn
+NROFF syntax or stuff like that. A check manual is a relatively simple text file named after
+the check and usually installed in <nobr>`/usr/share/doc/check_mk/checkman`</nobr>.
+
+Please read our [devel_manpages|article of how to write man pages] for further information.
+
+=== The PNP template
+If you check delivers performance data (i.e. not only returns a status and an
+explanatory text but also values like `memused=77364`), you should
+provide a template for PNP4Nagios which nicely displays the evolution of
+the value.
+
+If you are using another graphing tool, or no graphing tool at all, then a PNP
+template is not useful for you - of course. You only need one if you want your check
+to be officially part of Checkmk.
+
+=== Perf-O-Meter
+The same holds for the [devel_perfometer|Perf-O-Meter] for Multisite.
+People like Perf-O-Meters. If you do not use Multisite then Perf-O-Meters
+are of no use to you. Checks wanting to be part of Checkmk _must_
+provide Perf-O-Meters (even if some older checks of Checkmk still
+do not have ones either).
+
+== Let's jump to practice: Preparing the agent
+Let's now write our first check. For a start we offer two tutorials.
+
+<ul>
+<li>[legacy_devel_agentbased|Writing Agent based checks]</li>
+<li>[legacy_devel_snmpbased|Writing SNMP based checks]</li>
+</ul>

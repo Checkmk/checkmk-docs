@@ -1,0 +1,261 @@
+= Labels
+:revdate: 2019-10-07
+[.seealso][#wato_hosts] [#wato_rules]MT:Host- und Servicelabels
+MD:Mit den Labels können Sie bekannte Strukturierungsmarker aus anderen Umgebungen in checkmk nutzen. Wie das funktioniert, wird in diesem Artikel beschrieben.
+
+== Einleitung
+
+Ab Version VERSION[1.6.0] von (CMK) gibt es das neue Konzept der [.guihints]#Labels}}.# 
+Ein Host kann beliebig viele Labels haben und sind den Hostmerkmalen (Tags)
+recht ähnlich:
+
+* Labels werden wie Tags an Hosts „gehängt“.
+* Labels können wie Tags als Bedingung in Regeln verwendet werden.
+* Labels sind ähnlich wie Tags nach dem Prinzip Schlüssel`:`Wert aufgebaut.
+
+Warum gibt es hier also ein neues Konzept? Nun -- die
+IT-Welt ändert sich und wird viel dynamischer. Cloud- und
+Containersysteme wie [monitoring_azure|Azure], [monitoring_aws|AWS] und
+[monitoring_kubernetes|Kubernetes] erzeugen und löschen selbständig Objekte,
+die in (CMK) Hosts entsprechen. In diesen Technologien spielen Tags/Labels
+eine große Rolle, denn sie stellen die Verbindung zwischen den überwachten
+Objekten und ihrer Bedeutung her. Die Hostnamen hingegen werden zunehmend
+zufällig und nichtssagend.
+
+(CMK) kann mit dem neuen [dcd|Dynamic Configuration Daemon] solche dynamischen
+Hosts automatisch anlegen und bekommt dabei auch die Information über
+die dorts bereits vorhandenen Labels/Tags. Diese können Sie dann für
+Regelbedingungen, Suchen, Auswertungen und andere Dinge verwenden.
+
+Natürlich stellt sich die Frage, warum wir solche dynamischen Labels nicht
+einfach auf das vorhandene Konzept der Hosttags abbilden. Und in der Tat
+ist das auch erstmal sehr naheliegend.
+Allerdings haben Hosttags eine sehr wichtige Eigenschaft, die das sehr
+schwierig und kompliziert machen würde: Welche Tag-Gruppen und Tags es gibt,
+legen Sie bei (CMK) starr fest. Alles ist wohldefiniert. Jeder Host hat aus
+jeder Gruppe genau ein Tag. Alle können sich darauf verlassen. Tippfehler
+in der Schreibweise von Tags können nicht vorkommen, ebensowenig Hosts,
+die sich nicht an das Schema halten. Denn dessen Einhaltung wird von WATO
+streng kontrolliert. Bei sehr heterogenen Umgebungen mit vielen Tausend
+manuell gepflegten Hosts ist das wichtig und nützlich.
+
+Dynamische Labels von Kubernetes und Co hingegen sind quasi
+„Freiform“. Und selbst wenn diese einem Schema folgen, ist dieses (CMK) überhaupt
+nicht bekannt. Außerdem überwachen Sie vielleicht _mehrere unterschiedliche_
+Plattformen, die wiederum Labels auf sehr unterschiedliche Art einsetzen.
+
+Deswegen wurde mit den (CMK)-_Labels_ ein neues Konzept eingeführt,
+welches bestens auf die wachsende Dynamik passt. Und Sie können die Labels
+natürlich auch ohne Anbindung an Cloudumgebungen nutzen.
+
+Hier sind die Besonderheiten von Labels:
+
+* Labels müssen nirgendwo vordefiniert werden. Es gibt kein fixes Schema für Labels. Alles ist Freiform. Alles ist erlaubt.
+* Jeder Host kann beliebig viele Labels haben. Diese können manuell gepflegt sein, über [wato_rules|Regeln] definiert werden oder automatisch entstehen.
+* Labels sind nach dem Prinzip _Schlüssel:Wert_ aufgebaut. Pro Schlüssel darf ein Host nur einen Wert haben. Also kann ein Host, der das Label `foo:bar` hat, nicht gleichzeitig `foo:bar2` haben.
+* Anders als die Hostmerkmale dürfen sowohl der Schlüssel als auch der Wert -- bis auf den Doppelpunkt -- *beliebige Zeichen* enthalten.
+* Es gibt keine Unterscheidung zwischen ID und Titel (Anzeigename). Der Name/Schüssel des Labels ist ID und Anzeigename gleichzeitig.
+
+Labels haben folgende Aufgaben:
+
+* Sie bilden eine Grundlage für Bedingungen in Konfigurationsregeln (z.B. Alle Hosts, mit dem Label `os:windows`, sollen so und so überwacht werden).
+* Sie können damit sehr einfach zusätzliche Informationen oder Anmerkungen zu einem Host speichern (z.B. `Location:RZ 74/123/xyz`) und diese z.B. in [views|Ansichten] anzeigen lassen.
+* Labels werden mit dem neuen Konnektor an [grafana|Grafana] weitergereicht und können dort für Filterung, Aggregation, etc. verwendet werden.
+
+
+== Anlegen von Labels
+
+
+=== Explizite Labels
+
+Einem Host können auf drei verschiedene Weisen Labels zugeordnet werden. Die erste davon
+ist einfach: In der Maske, in der Sie einen [wato_hosts#labels|Host anlegen], können Sie diesem beliebig
+viele Labels verpassen:
+
+image::bilder/label_configure_host.png[]
+
+Zum Eingeben der Labels aktivieren Sie wie gewohnt das Attribut mittels der
+Checkbox. Dann Klicken Sie auf den Text [.guihints]#Add some label# und geben Labels
+ein. Geben Sie die Labels nach dem Schema _Name_`:`_Wert_ ein
+und schließen Sie jedes Label durch Drücken von Enter ab.
+
+Ein bestehendes Label können Sie durch einen Doppelklick in dessen Text editieren
+oder mit dem kleinen Kreuz löschen.
+
+*Hinweis:* Sowohl der Name, als auch der Wert von Labels dürfen _jedes beliebige Zeichen_
+enthalten -- außer dem Doppelpunkt! Allerdings sollten Sie sich genau überlegen, wie Sie es mit
+der Groß-/Kleinschreibung halten. Denn wenn Sie später Bedingungen über Labels definieren,
+dann muss die Schreibweise sowohl beim Namen als auch beim Wert strikt beachtet werden.
+
+Natürlich können Labels auch von einem Ordner vererbt werden. Wie andere
+Attribute auch, können Labels in Unterordnern oder beim Host dann nach Bedarf
+wieder überschrieben werden -- und zwar *pro Label*.  Wird im Ordner
+z.B. das Label `location:munich` gesetzt, so wird dies an alle Hosts
+in diesem Ordner vererbt, welche nicht selbst das Label `location`
+definiert haben. Andere Labels, die ein Hosts eventuell hat, bleiben dadurch
+unberührt.
+
+Beim Host oder Ordner explizit definierte Labels werden in der Liste der Hosts violett dargestellt:
+
+image::bilder/wato_host_labels.png[]
+
+
+=== Labels über Regeln erzeugen
+
+Wie in (CMK) üblich, können Attribute auch per [wato_rules|Regeln] den
+Hosts und Services zugeordnet werden. Damit werden Sie unabhängig von der
+Ordnerstruktur.  Dies gilt auch für die Labels. Dazu gibt es den Regelsatz
+[.guihints]#Host labels}}.# 
+
+Folgende Regel fügt allen Hosts im Ordner [.guihints]#Bayern}},# welche das Hostmerkmal
+[.guihints]#Hardwaretype is Real Hardware}},# das Label [.guihints]#hw:real# hinzu:
+
+image::bilder/wato_labels_rule.png[]
+
+Vielleicht fällt Ihnen auf, dass bei den Bedingungen zu dieser Regel Labels
+_nicht_ verwendet werden können! Das ist kein Fehler, sondern Absicht und
+vermeidet rekursive Abhängigkeiten und andere Anomalien.
+
+Labels, die über Regeln hinzugefügt werden, werden beim Host in Magenta
+dargestellt, tauchen allerdings nicht in der Liste der Hosts in WATO auf,
+sondern nur in der Statusansicht in den Hostdetails.
+
+
+###H2:Automatische Labels
+###
+###Die dritte Art, wie Labels entstehen können, ist vollautomatisch. Verschiedene Datenquellen,
+###wie z.B. die Spezialagenten für das Überwachen von Cloud- und Containersystemen sowie
+###das Agentenplugin der [inventory|Hardware-/Softwareinventur] erzeugen automatisch Labels.
+###Solche Labels werden orange dargestellt.
+###
+###Das Schöne: Sie müssen gar nichts konfigurieren. Sobald diese Datenquellen aktiv sind, entstehen
+###die entsprechenden Labels. Hierzu einige Details:
+###
+###
+###H3:Hardware-/Softwareinventur
+###
+###Das Inventursystem von (CMK) findet statische Informationen zur Hardware, zum
+###Betriebssystem und zur Software, die auf einem Host installiert ist. Davon
+###abhängig können automatisch Labels generiert werden. Diese finden Sie in
+###der Darstellung des Inventurbaums im Pfad [.guihints]#Software => Applications => Check_MK => Discovered host labels}}:# 
+###
+###BI:label_by_inventory.png
+###
+###H3:AWS
+###
+###Labels von Objekten in [monitoring_aws#labels|Amazon Web Services (AWS)]
+###(AWS verwendet hierfür den Begriff _Tags_) werden beim Überwachen mit
+###(CMK) automatisch übernommen.
+###
+###H3:Azure
+###
+###Auch bei Azure heißen die Labels _Tags_. Details zu Labels bei der Überwachung von Azure mit (CMK) finden
+###Sie in einem eigenen [monitoring_azure#labels|Artikel].
+###
+###H3:Kubernetes
+###
+###Vor allem Kubernetes arbeitet intensiv mit Labels -- welche dort auch
+###so heißen. Dabei wird unterschieden zwischen automatischen Labels
+###(z.B. `pod_id`, `pod_name` und `pod_namespace`), und
+###solchen, die der Administrator selbst vergibt. Beide Arten wandern direkt
+###nach (CMK) als automatische Labels.
+
+=== Labels im Discoverycheck
+
+Falls Sie den [wato_services#discovery_check|Discovery Check] aktiviert haben -- und das
+ist bei neuen Installationen per Default der Fall -- wird dieser Sie warnen, wenn neue
+Hostlabels gefunden wurden, welche noch nicht in die WATO-Eigenschaften einen Hosts aufgenommen
+wurden. Das sieht dann z.B. so aus:
+
+image::bilder/discovery_check_labels.png[]
+
+Sie haben zwei Möglichkeiten, auf diese Warnung zu reagieren. Die erste ist das Aufnehmen der
+neuen Labels, indem Sie in WATO die Servicekonfiguration des Hosts aufrufen und mit dem Knopf
+[.guihints]#Update host labels# die Konfiguration der Labels aktualisieren. Der Discovery-Check wird
+bei der nächsten Ausführung (in bis zu zwei Stunden) dann wieder (OK), selbst wenn Sie die
+Änderungen noch nicht aktiviert haben.
+
+Wenn das viele Hosts auf einmal betrifft, werden Sie sicher nicht für jeden
+einzelnen die Servicekonfiguration besuchen wollen. Führen Sie hier am
+besten die [.guihints]#Bulk discovery# aus und wählen den Modus
+[.guihints]#Add unmonitored services and new host labels}}.# 
+
+Die zweite Art, den Discovery-Check grün zu bekommen ist, dass Sie diesen so umkonfigurieren,
+dass er neue Labels nicht mehr anmahnt. Gehen Sie dazu in den Regelsatz
+[.guihints]#Monitoring Configuration => Inventoryand Check_MK settings => Periodicservice discovery# und
+editieren Sie die bestehende Regel. Dort finden Sie im Wert der Regel die Option [.guihints]#Severity of new host labels}}:# 
+
+image::bilder/periodic_service_discovery.png[]
+
+Diese ist per Default auf [.guihints]#Warning# eingestellt. Wählen Sie hier [.guihints]#OK - do not alert, just display# und
+der Check wird Ruhe geben.
+
+=== Reihenfolge der Labelzuordnung
+
+Theoretisch kann es sein, dass das gleiche Label in mehreren Quellen gleichzeitig
+und mit unterschiedlichen Werten definiert wird. Deswegen gibt es folgende Reihenfolge
+des Vorrangs:
+
+. Als erstes gelten _explizite_ Labels, also solche, die Sie per WATO direkt beim Host oder Ordner definieren.
+. An zweiter Stelle gelten Labels, die per Regeln erzeugt werden.
+. An letzter Stelle kommen automatische Labels.
+
+Durch diese Vorrangregeln haben Sie stets die letztgültige Kontrolle über die Labels.
+
+
+[#conditions]
+== Labels als Bedingungen in Regeln
+
+Eine wichtige Funktion von Labels ist die gleiche wie bei Tags: Nämlich ihre
+Verwendung Bedingung in [wato_rules|Regeln]. Das ist vor allem bei automatisch
+erzeugten Labels interessant, weil Sie so ihr Monitoring vollautomatisch
+aufgrund von Informationen aus AWS, Azure, Kubernetes und Co anpassen können.
+
+Folgendes Beispiel zeigt eine Regelbedingung, die genau dann gilt, wenn der Host
+das Label `state:bavaria`, aber _nicht_ das Label `environment:test`
+hat:
+
+image::bilder/wato_label_condition.png[]
+
+Sie können in einer Regel sowohl Labels und Tags verwenden. Diese werden
+automatisch _UND_-verknüpft. Die Regel greift also nur dann, wenn
+beide Bedingungen gleichzeitig erfüllt sind.
+
+Bitte beachten Sie, dass bei den Labels die exakte Schreibweise wichtig ist.
+Da Labels Freiform sind und WATO daher nicht wissen kann, welche Labels
+es genau gibt, kann es Vertipper nicht erkennen. Falls das im Einzelfall
+Schwierigkeiten bereitet, ist es eventuell günstiger, wenn Sie mit Tags
+arbeiten. Denn diese arbeiten mit Auswahlboxen anstelle von Texteingaben.
+
+== Labels in Ansichten
+
+Bisher haben wir nur über die Konfiguration gesprochen. Auch im Monitoring selbst
+sind die Labels sichtbar. Das beginnt mit den Host-Details:
+
+image::bilder/host_details_labels.png[align=border]
+
+Da sich die Labels auch anklicken lassen, dienen sie nicht nur einem optischen
+Zweck: Sie werden dann nämlich zu einer Suche nach allen Hosts mit diesem
+Label weitergeleitet. Etwas Ähnliches können Sie auch in der Suchfunktion
+der Ansichten machen. Hier gibt es ein neues Suchfeld, mit dem Sie nach Labels
+suchen können. Die Eingabe erfolgt hier mit einer interaktiven Suche nach
+allen vorhandenen Labels:
+
+image::bilder/host_search_label.png[align=border]
+
+== Servicelabels
+
+Auch Services können Labels haben. Diese sind ähnlich zu den Hostlabels, allerdings
+mit ein paar kleinen Unterschieden:
+
+* Sie können Servicelabels nicht explizit vergeben. Diese können nur durch Regeln ({{Service labels}})# oder automatisch entstehen.
+* Aktuell können Sie über Servicelabels noch keine Bedingungen formulieren. Dies wird jedoch in Kürze auch möglich sein.
+
+== Labels in Grafana
+
+Aktuell wird für Grafana eine
+<a href="https://github.com/tribe29/grafana-checkmk-datasource">Datasource</a>
+entwickelt, mit der Sie aus Grafana direkt auf die historischen Metriken von
+(CMK) zugeifen können. Wenn Sie diese verwenden, erhält Grafana automatisch die
+Information über alle Host- und Servicelabels. Damit können Sie (CMK)-Metriken in
+Grafana leichter gruppieren und mit Schablonen arbeiten.

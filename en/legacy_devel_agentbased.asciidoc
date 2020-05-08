@@ -1,0 +1,677 @@
+= Writing agent based checks
+MD:In Checkmk, writing agent based checks basically means writing a text file containing some Python code.
+:revdate: outdated
+[.seealso][#writing_checks] [#devel_snmpbased]== Preparing the agent
+
+=== S.M.A.R.T
+For our example we are going to implement a monitoring of the hardware
+health of hard disks by using S.M.A.R.T.
+The linux package `smartmontools` contains a program
+named `smartctl`. On hosts where that utility is available,
+our agent shall send several hard disk parameters found by that tool. Here is a small
+demonstration of `smartctl`:
+[source,bash]
+----
+RP:smartctl -d ata -A /dev/sda
+smartctl version 5.38 [x86_64-unknown-linux-gnu] Copyright (C) 2002-8 Bruce Allen
+Home page is http://smartmontools.sourceforge.net/
+
+=== START OF READ SMART DATA SECTION ===
+SMART Attributes Data Structure revision number: 16
+Vendor Specific SMART Attributes with Thresholds:
+ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
+  1 Raw_Read_Error_Rate     0x002f   200   200   051    Pre-fail  Always       -       0
+  3 Spin_Up_Time            0x0027   129   127   021    Pre-fail  Always       -       6541
+  4 Start_Stop_Count        0x0032   100   100   000    Old_age   Always       -       251
+  5 Reallocated_Sector_Ct   0x0033   200   200   140    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x002e   200   200   000    Old_age   Always       -       0
+  9 Power_On_Hours          0x0032   098   098   000    Old_age   Always       -       1495
+ 10 Spin_Retry_Count        0x0032   100   100   000    Old_age   Always       -       0
+ 11 Calibration_Retry_Count 0x0032   100   100   000    Old_age   Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       246
+192 Power-Off_Retract_Count 0x0032   200   200   000    Old_age   Always       -       22
+193 Load_Cycle_Count        0x0032   200   200   000    Old_age   Always       -       249
+194 Temperature_Celsius     0x0022   108   098   000    Old_age   Always       -       39
+196 Reallocated_Event_Count 0x0032   200   200   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0032   200   200   000    Old_age   Always       -       0
+198 Offline_Uncorrectable   0x0030   200   200   000    Old_age   Offline      -       0
+199 UDMA_CRC_Error_Count    0x0032   200   200   000    Old_age   Always       -       0
+200 Multi_Zone_Error_Rate   0x0008   200   200   000    Old_age   Offline      -       0
+----
+
+From that output we are going to use only the lines containing
+the word `Always`. All other lines contain either no or invalid data.
+We are doing this by appending a simple `grep`:
+
+[source,bash]
+----
+RP:smartctl -d ata -A /dev/sda <b class=hilite>| grep ' Always '*
+  1 Raw_Read_Error_Rate     0x002f   200   200   051    Pre-fail  Always       -       0
+  3 Spin_Up_Time            0x0027   129   127   021    Pre-fail  Always       -       6541
+  4 Start_Stop_Count        0x0032   100   100   000    Old_age   Always       -       251
+  5 Reallocated_Sector_Ct   0x0033   200   200   140    Pre-fail  Always       -       0
+  7 Seek_Error_Rate         0x002e   200   200   000    Old_age   Always       -       0
+  9 Power_On_Hours          0x0032   098   098   000    Old_age   Always       -       1496
+ 10 Spin_Retry_Count        0x0032   100   100   000    Old_age   Always       -       0
+ 11 Calibration_Retry_Count 0x0032   100   100   000    Old_age   Always       -       0
+ 12 Power_Cycle_Count       0x0032   100   100   000    Old_age   Always       -       246
+192 Power-Off_Retract_Count 0x0032   200   200   000    Old_age   Always       -       22
+193 Load_Cycle_Count        0x0032   200   200   000    Old_age   Always       -       249
+194 Temperature_Celsius     0x0022   106   098   000    Old_age   Always       -       41
+196 Reallocated_Event_Count 0x0032   200   200   000    Old_age   Always       -       0
+197 Current_Pending_Sector  0x0032   200   200   000    Old_age   Always       -       0
+199 UDMA_CRC_Error_Count    0x0032   200   200   000    Old_age   Always       -       0
+----
+
+Which values from the output we are going to use for monitoring we do not
+want and do not have to decide here. The agent simply sends all. That way,
+we won't have to change the agent when we want to change the way we use
+the information.
+
+Our next issue is: we do not want to hardcode a certain hard disk
+but query all available hard disks. A simple loop over all hard disk
+devices in `/dev` will help here:
+
+[source,bash]
+----
+RP: for disk in /dev/[sh]d[a-z] /dev/sd[a-z][a-z]
+> *do smartctl -d ata -A $disk | grep ' Always '*
+> *done*
+1 Raw_Read_Error_Rate     0x002f   200   200   051    Pre-fail  Always       -       0
+3 Spin_Up_Time            0x0027   129   127   021    Pre-fail  Always       -       6541
+4 Start_Stop_Count        0x0032   100   100   000    Old_age   Always       -       251
+5 Reallocated_Sector_Ct   0x0033   200   200   140    Pre-fail  Always       -       0
+----
+
+Our last problem is, that the information does not show which hard disk
+was queried. We solve that issue by using the stream editor to prefix
+each output line with the device name of the disk:
+
+[source,bash]
+----
+RP: for disk in /dev/[sh]d[a-z] /dev/sd[a-z][a-z]
+> *do smartctl -d ata -A $disk | grep ' Always ' | sed "s@^@$disk @"*
+> *done*
+/dev/sda   1 Raw_Read_Error_Rate     0x002f   200   200   051    Pre-fail  Always       -       0
+/dev/sda   3 Spin_Up_Time            0x0027   129   127   021    Pre-fail  Always       -       6541
+/dev/sda   4 Start_Stop_Count        0x0032   100   100   000    Old_age   Always       -       251
+/dev/sda   5 Reallocated_Sector_Ct   0x0033   200   200   140    Pre-fail  Always       -       0
+----
+
+WK:1425
+
+=== Integration into the agent
+
+Now we know which command line outputs the data we want.  Our next
+step is to integrate that command into our agent. There are two ways for
+doing that:
+
+<ol>
+<li>Directly edit `check_mk_agent`.</li>
+<li>Create a script in `/usr/lib/check_mk_agent/plugins/`</li>
+</ol>
+
+The second method makes updates of the agent to a newer official version
+simpler.  So let's put our code into a script in that directory on each
+target hosts.  Important is, that our script also outputs a *section header*. That
+header will be the name of the data source in Checkmk. We decide to use
+the header `smart`.
+
+./usr/lib/check_mk_agent/plugins/smart
+
+----#!/bin/sh
+*echo '<<<smart>>>'*
+for disk in /dev/[sh]d[a-z] /dev/sd[a-z][a-z]
+do
+   smartctl -d ata -A $disk | grep ' Always ' | sed "s@^@$disk @"
+done
+----
+
+Do not forget to make the script executable. Also please make sure
+that you do not leave editor backup files in that directory flying around:
+[source,bash]
+----
+RP:cd /usr/lib/check_mk_agent/plugins
+RP:chmod +x smart
+RP:rm *~
+----
+
+We can make sure that everything works by calling the agent's output
+from our Nagios server and grep for our new section:
+[source,bash]
+----
+UP:check_mk -d Eiger | fgrep -A 5 smart
+<<<smart>>>
+/dev/sda   1 Raw_Read_Error_Rate     0x002f   200   200   051    Pre-fail  Always       -       0
+/dev/sda   3 Spin_Up_Time            0x0027   129   127   021    Pre-fail  Always       -       6541
+/dev/sda   4 Start_Stop_Count        0x0032   100   100   000    Old_age   Always       -       251
+/dev/sda   5 Reallocated_Sector_Ct   0x0033   200   200   140    Pre-fail  Always       -       0
+/dev/sda   7 Seek_Error_Rate         0x002e   200   200   000    Old_age   Always       -       0
+----
+
+Our agent is now ready prepared!
+
+== Creating a Hello World Check
+
+Writing a check basically means writing a text file containing
+some Python code. Since the agent
+section containing our data is named <B>&lt;&lt;&lt;smart&gt;&gt;&gt;*, the file our
+check is implemented in must be named `smart` and copied to
+`/usr/share/check_mk/checks`.
+
+Our example check will not examine all SMART information but just
+one value: `Temperature_Celsius`. Since further checks using
+the `smart`-section might follow in future, we name our check
+`smart.temp`. The dot in the name tells Checkmk that the part left
+of the dot is the agent section providing the data for the check.
+
+The following minimal version
+will do for a first test:
+./usr/share/check_mk/checks/smart
+
+----# the inventory function (dummy)
+def inventory_smart_temp(info):
+   print info
+   return [] # return empty list: nothing found
+
+# the check function (dummy)
+def check_smart_temp(item, params, info):
+   return 3, "Sorry - not implemented"
+
+# declare the check to Checkmk
+check_info["smart.temp"] = {
+    'check_function':            check_smart_temp,
+    'inventory_function':        inventory_smart_temp,
+    'service_description':       'SMART drive %s',
+}
+----
+
+=== Inventory function
+A few explanations: The inventory function is called with two
+arguments: the check name and the agent data.  The check name
+is useful if you want to use the same inventory function
+for more than one check. We do not use that information for our check. The second
+argument is the `smart`-section of the agent output.
+Our function simply prints it to standard output for debugging.
+After that it returns an empty list. That means, that the inventory has
+found nothing. We will change that soon, of course.
+
+=== The check function
+
+The check function is called by Checkmk once for each item to be check.
+It gets three parameters: the item, the check parameters and the agent output. It
+must return a tuple with the following components:
+
+<ul>
+<li>a Nagios status code (0=OK, 1=WARN, 2=CRIT, 3=UNKNOWN)</li>
+<li>a text to be used by Nagios as plugin output</li>
+<li>optionally: performance data</li>
+</ul>
+
+We omit the performance data in our example and return just a hard coded
+dummy result.
+
+=== The declaration of the check
+The third section in our example makes the check known to
+Checkmk. `check_info` is a dictionary of all check
+types. Each entry is again a dictionary with several keys,
+most of which are optional. The most important keys are:
+
+[cols=, ]
+|===
+<td class=tt>check_function`</td><td>the check function</td><td class=tt>inventory_function`</td><td>the inventory function. Left out if the check does
+not support inventory.</tr>
+<td class=tt>service_description`</td><td>the service description. `%s` will be replaced with the check item.
+Do not use `%s` if your check uses `None` as check item.</tr>
+<td class=tt>has_perfdata`</td><td>`True` if the check outputs performance data. `False` or
+left out otherwise.</tr>
+|===
+
+=== Testing
+If we've got this right, we can try if Checkmk recognizes our new check:
+[source,bash]
+----
+RP:check_mk -L | grep smart
+smart.temp               tcp      no     yes    SMART drive %s
+----
+
+That is looking good. Now let's have a look at the agent output. We do this by calling
+an inventory on our new check type and will see the output of our debug command "`print info`":
+[source,bash]
+----
+RP:check_mk --checks=smart.temp -I Eiger
+[['/dev/sda', '1', 'Raw_Read_Error_Rate', '0x002f', '200', '200', '051', 'Pre-fa
+il', 'Always', '-', '0'], ['/dev/sda', '3', 'Spin_Up_Time', '0x0027', '129', '12
+7', '021', 'Pre-fail', 'Always', '-', '6541'], ['/dev/sda', '4', 'Start_Stop_Cou
+nt', '0x0032', '100', '100', '000', 'Old_age', 'Always', '-', '251'], ['/dev/sda
+', '5', 'Reallocated_Sector_Ct', '0x0033', '200', '200', '140', 'Pre-fail', 'Alw
+ays', '-', '0'], ['/dev/sda', '7', 'Seek_Error_Rate', '0x002e', '200', '200', '0
+00', 'Old_age', 'Always', '-', '0'], ['/dev/sda', '9', 'Power_On_Hours', '0x0032
+', '098', '098', '000', 'Old_age', 'Always', '-', '1497'], ['/dev/sda', '10', 'S
+pin_Retry_Count', '0x0032', '100', '100', '000', 'Old_age', 'Always', '-', ...
+----
+
+As you can see from that output, Checkmk has already splitted up the output of
+the agent by whitespaces. Each line of agent output is transformed into
+a list of strings. The whole sections is a list of those lists.
+
+== The inventory function
+
+That task of the inventory function is now to extract from this list of lists
+a list of items to be checked on that particular host. In our case we want to
+create a check for each hard disk providing a `Temperature_Celsius`
+field. The name of the field is in the third column. The name of the disk
+is in the first column.  A simple loop will do:
+
+.smart
+
+----def inventory_smart_temp(info):
+   # loop over all output lines of the agent
+   for line in info:
+      disk = line[0]   # device name is in the first column
+      field = line[2]  # SMART variable name in the third
+
+      if field == "Temperature_Celsius":
+          # found an interesting line, yield it to check_mk
+          yield disk, None
+
+----
+
+Our inventory function looks for lines containing `Temperature_Celsius`
+and adds their first column - the disk device - to the inventory. But
+the inventory is not a single list if items. Each entry is a pair
+of:
+<ol>
+<li>the item</li>
+<li>the default parameter for the check or `None`</li>
+</ol>
+
+Let's now try our inventory on a host with two hard disks:
+[source,bash]
+----
+RP:check_mk --checks=smart.temp -I Eiger
+smart.temp            <b class=green>2 new checks*
+----
+
+If something goes wrong, try calling check_mk with the option `--debug`. That
+will not catch Python exceptions but let them through:
+
+[source,bash]
+----
+RP:check_mk --debug -I smart.temp Eiger
+Traceback (most recent call last):
+  File "/usr/share/check_mk/modules/check_mk.py", line 2883, in <module>
+      make_inventory(args)
+  File "/usr/share/check_mk/modules/check_mk.py", line 1505, in make_inventory
+      inventory = inventory_function(info) # inventory is a list of
+  File "/usr/share/check_mk/checks/smart", line 5, in inventory_smart_temp
+       this_is_rubbish
+NameError: global name 'this_is_rubbish' is not defined
+----
+
+== The check function
+
+During normal operation of Nagios the inventory function is never called.
+Instead our check function is called for each item to be checked. It's main
+task is deciding about the service's status. We can first try our dummy
+function with our two newly inventorized services on our test host
+`Eiger`. We do not need Nagios for that but simply call check_mk with
+the options `-n` and `-v`:
+
+[source,bash]
+----
+RP:check_mk -nv Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda *Sorry - not implemented*
+SMART drive /dev/sdb *Sorry - not implemented*
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+That looks good, but it's just a dummy output. Let's now do some real
+coding. We want to make the check critical, if the disk's temperature is more
+than 40 degrees and warning, it is more than 35.  Our first task is to find
+the correct line in the agent output.  We code a loop which is similar to
+that one in the inventory function.  But remember: now we are looking for one
+specific item (a hard disk device). The line we are looking for has the item
+in its first column and the word `Temperature_Celsius` in the third.
+
+.smart
+
+----def check_smart_temp(item, params, info):
+   # loop over all lines
+   for line in info:
+      # is this our line?
+      if line[0] == item and line[2] == "Temperature_Celsius":
+----
+
+Now remember the output of our agent. The current value of the
+smart item is in the eleventh column (and thus has index 10).
+We take that value and convert it into an integer:
+.
+
+----         celsius = int(line[10])
+----
+
+Now we can check our hard coded levels. We also want the current
+temperature to be part of the plugin output:
+
+.
+
+----         if celsius > 40:
+	    return 2, "Temperature is %dC" % celsius
+	 elif celsius > 35:
+	    return 1, "Temperature is %dC" % celsius
+         else:
+	    return 0, "Temperature is %dC" % celsius
+----
+
+Here is our complete check so far in one piece:
+./usr/share/check_mk/checks/smart
+
+----def inventory_smart_temp(info):
+   for line in info:
+      disk = line[0]
+      field = line[2]
+      if field == "Temperature_Celsius":
+          yield disk, None
+
+def check_smart_temp(item, params, info):
+   for line in info:
+      if line[0] == item and line[2] == "Temperature_Celsius":
+         celsius = int(line[10])
+         if celsius > 40:
+            return 2, "Temperature is %dC" % celsius
+         elif celsius > 35:
+            return 1, "Temperature is %dC" % celsius
+         else:
+            return 0, "Temperature is %dC" % celsius
+
+check_info["smart.temp"] = {
+    'check_function':            check_smart_temp,
+    'inventory_function':        inventory_smart_temp,
+    'service_description':       'SMART drive %s',
+}
+----
+
+Now we can try a real check:
+[source,bash]
+----
+RP:check_mk -nv Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda <b class=yellow>WARN - Temperature is 40C*
+SMART drive /dev/sdb <b class=red>CRIT - Temperature is 41C*
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+== Check parameters
+Hard coding levels like 35 and 40 degrees is surely not the way to
+go if your check will be of any use. What we need are *parameters*.
+From a technical point of view a check parameter is an arbitrary
+Python value. That can be a single value, a tuple or may be even a
+complex python data object. Most checks use tuples to group several
+values into one parameter.
+
+Our check shall have two parameters: the level for warning and
+critical. Those levels shall be two integer numbers group together
+into a pair (or a 2-tuple as some people might say). So if our
+check function is called with such a pair of integers, we can
+make use of Python's nice unpack operation two extract our
+levels:
+
+.
+
+----def check_smart_temp(item, params, info):
+   # unpack check parameters
+   *warn, crit = params*
+----
+
+The rest is easy. We simply replace `35` and `40`
+with the two new variables:
+
+.
+
+----   for line in info:
+      if line[0] == item and line[2] == "Temperature_Celsius":
+         celsius = int(line[10])
+         if celsius > <b class=hilite>crit*:
+            return 2, "Temperature is %dC" % celsius
+         elif celsius > <b class=hilite>warn*:
+            return 1, "Temperature is %dC" % celsius
+         else:
+            return 0, "Temperature is %dC" % celsius
+----
+
+If you are testing this change, the result might bit somewhat
+surprising at the first look:
+
+[source,bash]
+----
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda UNKNOWN - invalid output from plugin section <<<smart.temp>>>
+ or error in check type smart.temp
+SMART drive /dev/sdb UNKNOWN - invalid output from plugin section <<<smart.temp>>>
+ or error in check type smart.temp
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+A look into the `autochecks` directory where our inventorized checks
+are, clears up that thing:
+
+./var/lib/check_mk/autochecks/smart.temp-2009-11-06_16.34.56.mk
+
+----[
+  # === Eiger ===
+  ("smart.temp", '/dev/sda', <b class=hilite>None*), #
+  ("smart.temp", '/dev/sdb', <b class=hilite>None*), #
+]
+----
+
+Our check is called with `None` as check parameter! And Python
+cannot unpack that into `warn` and `crit`. So we also
+need to change our inventory function such that it creates the checks
+with correct parameters.
+
+=== The inventory function must set correct default parameters
+But what parameters shall we use for inventorized checks? The Checkmk
+way is to use a variable for that which can be configured in `main.mk`.
+The trick is not to enter the current value of that variable as parameters but
+the variable *itself* when doing inventory.
+
+Also important is to define that variable with a default value.  Otherwise all
+users that do not define the variable in `main.mk` will run into an error,
+even those that do not use our check. Here is an updated inventory function:
+
+.
+
+----# set default value of variable (user can override in main.mk)
+*smart_temp_default_values = (35, 40)*
+
+def inventory_smart_temp(info):
+   for line in info:
+      disk = line[0]
+      field = line[2]
+      if field == "Temperature_Celsius":
+          *# use default variable as parameter. Note the quotes!*
+          yield disk, <b class=hilite>"smart_temp_default_values"*
+----
+
+We need to reinventorize our Test host. We delete the autochecks file
+and rerun `check_mk -Iv`:
+[source,bash]
+----
+RP:rm /var/lib/check_mk/autochecks/smart.temp-2009-11-06_16.34.56.mk
+RP:check_mk -I smart.temp Eiger
+smart.temp            <b class=green>2 new checks*
+----
+
+A look into the newly created autochecks file will show, that our
+variable is now being used as check parameter:
+
+./var/lib/check_mk/autochecks/smart.temp-2009-11-07_12.56.22.mk
+
+----[
+  # === Eiger ===
+  ("Eiger", "smart.temp", '/dev/sda', <b class=hilite>smart_temp_default_values*), #
+  ("Eiger", "smart.temp", '/dev/sdb', <b class=hilite>smart_temp_default_values*), #
+]
+----
+
+Now our check should work again:
+
+[source,bash]
+----
+RP:check_mk -nv Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda <b class=yellow>WARN - Temperature is 40C*
+SMART drive /dev/sdb <b class=red>CRIT - Temperature is 41C*
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+It should be possible to set alternative levels in `main.mk`:
+.main.mk
+
+----smart_temp_default_values = (50, 60)
+----
+
+A test shows, that the two checks are now OK:
+
+[source,bash]
+----
+RP:check_mk -nv Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda <b class=green>OK - Temperature is 40C*
+SMART drive /dev/sdb <b class=green>OK - Temperature is 41C*
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+If a user wantis to change levels just for singular items, she or he
+can do that as usual by defining an explicit check in `main.mk`:
+
+.main.mk
+
+----checks += [
+ ( "Eiger", "smart.temp", "/dev/sda", (20, 30) )
+]
+----
+
+Now one of our disks will get CRITICAL:
+
+[source,bash]
+----
+RP:check_mk -nv Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda <b class=red>CRIT - Temperature is 40C*
+SMART drive /dev/sdb <b class=green>OK - Temperature is 41C*
+OK - Agent Version 1.0.36, processed 2 host infos
+----
+
+== Performance data
+If you are using a graphing tool like PNP4Nagios, you know that
+each Nagios checks can optionally output "performance data".
+That data can be used for visualizing numbers in round robin
+databases or other systems.
+
+Creating performance data with a Checkmk check is simple.
+You just need to:
+<ul>
+<li>Declare your check accordingly</li>
+<li>Return a list of performance values as third component of the result tuple</li>
+</ul>
+
+The declaration is done by adding a key `"has_perfdata"` with the value
+`True`:
+
+.
+
+----check_info["smart.temp"] = {
+    'check_function':            check_smart_temp,
+    'inventory_function':        inventory_smart_temp,
+    'service_description':       'SMART drive %s',
+    <b class=hilite>'has_perfdata':              True*,
+}
+----
+
+The third argument of the result tuple of the check function is a list
+of entries. Each entry is a tuple with the following components:
+<ul>
+<li>A variable name (string)</li>
+<li>The current value of the variable (int or float)</li>
+<li>The warning level or `""`</li>
+<li>The critical level or `""`</li>
+<li>The minimum possible value or `""`</li>
+<li>The maximum possible value or `""`</li>
+</ul>
+
+Only the variable name and the current value are mandatory. Insert
+and empty string if you want to skip an unneeded value. Trailing
+empty strings can be left out. The following example shows
+a check function returning a valid list of performance values:
+
+.
+
+----check_foobar(item, params, info):
+  return 0, "Foobar", [
+     ( "size", 125 ),                 # simple value, no levels, no range
+     ( "used", 88.5, "", "", 0, 100), # no levels, range is from 0 to 100
+     ( "guzzi", -14.5, -20, -30),     # warning at -20, crit at -30
+     ( "argl", 66, 80, 90, 0, 100),   # levels at 80/90, min/max at 0/100
+  ]
+----
+
+Checkmk converts that list into standard Nagios syntax when sending
+the check information to Nagios. If you have activate direct RRD updates,
+Checkmk analyses the data itself and writes them into the correct RRD
+database.
+
+=== Performance data in our example
+Our temperature checks will yield one performance value: the current
+temperature. There is no minimal or maximal value available, but
+we will output the levels. Some graphing tools are able to visualize
+those levels in their graphs. Here is an updated version and final
+version of our complete check:
+
+.smart
+
+----smart_temp_default_values = (35, 40)
+
+def inventory_smart_temp(info):
+   for line in info:
+      disk = line[0]
+      field = line[2]
+      if field == "Temperature_Celsius":
+          yield disk, "smart_temp_default_values"
+
+def check_smart_temp(item, params, info):
+   # unpack check parameters
+   warn, crit = params
+
+   for line in info:
+      if line[0] == item and line[2] == "Temperature_Celsius":
+         celsius = int(line[10])
+         <b class=hilite>perfdata = [ ( "temp", celsius, warn, crit ) ]*
+         if celsius > crit:
+            return 2, "Temperature is %dC" % celsius, <b class=hilite>perfdata*
+         elif celsius > warn:
+            return 1, "Temperature is %dC" % celsius, <b class=hilite>perfdata*
+         else:
+            return 0, "Temperature is %dC" % celsius, <b class=hilite>perfdata*
+
+check_info["smart.temp"] = {
+    'check_function':            check_smart_temp,
+    'inventory_function':        inventory_smart_temp,
+    'service_description':       'SMART drive %s',
+    'has_perfdata':              True,
+}
+----
+
+When you try your check function, do not forget to add the option `-p`: it activates
+the output of performance data:
+
+[source,bash]
+----
+RP:check_mk -nvp Eiger
+Checkmk version 1.1.0beta4
+SMART drive /dev/sda <b class=red>CRIT - Temperature is 40C*             (temp=38;20;30;;)
+SMART drive /dev/sdb <b class=green>OK - Temperature is 41C*               (temp=39;50;60;;)
+OK - Agent Version 1.0.36, processed 2 host infos
+----

@@ -1,0 +1,569 @@
+= MySQL überwachen
+:revdate: draft
+[.seealso][#agent_linux] [#wato_monitoringagents] [#check_plugins_catalog]MT:MySQL effizient überwachen
+MD:Mit dem Plugin für Windows, Linux, Solaris und AIX überwachen Sie vollumfänglich MySQL. Details zur Konfiguration erfahren Sie hier.
+
+== Einleitung
+
+(CMK) erlaubt Ihnen die umfangreiche Überwachung von MySQL und Galera Cluster
+für MySQL. Eine vollständige Liste der Überwachungsmöglichkeiten können
+Sie in unserem [check_plugins_catalog#Applications|Katalog der Check-Plugins]
+nachlesen. Unter anderem kann (CMK) die folgenden Werte überwachen:
+
+* [check_mysql.sessions| MySQL Database sessions]
+* [check_mysql.galeradonor| MySQL Database: Galera Donor]
+* [check_mysql.galerasize| MySQL Database: Galera Size]
+* [check_mysql.galerastartup| MySQL Database: Galera Startup]
+* [check_mysql.galerastatus| MySQL Database: Galera Status]
+* [check_mysql.galerasync| MySQL Database: Galera Sync Status]
+* [check_mysql.connections| MySQL Maximum connection usage since startup]
+* [check_mysql_slave| MySQL Database: Slave Sync Status]
+* [check_mysql_ping| MySQL Deamon: Status]
+* [check_mysql.innodb_io| MySQL InnoDB engine IO statistics]
+* [check_mysql| MySQL: Version]
+* [check_mysql_capacity| Size of MySQL tablespaces]
+
+Um die Datenbanken überwachen zu können, benötigen Sie neben dem (CMK)-Agenten
+lediglich das Agenten-Plugin auf dem Datenbankserver. Zusätzliche Software wird
+weder auf dem (CMK)- noch auf dem Datenbankserver benötigt.
+
+Im Folgenden wird die Einrichtung für Linux- und Windows-Hosts beschrieben. Weiter
+unten, gehen wir auf die Einrichtung über die [draft_monitoring_mysql#bakery|Agent Bakery]
+ein.
+
+== Einrichten der Überwachung
+
+[#benutzereinrichten]
+=== Benutzer einrichten
+
+==== Linux und Windows
+
+### SK: Es scheint noche eine weitere Vorraussetzung für Windows-Hosts zu geben.
+### SK: Das Plugin mk_mysql.vbs findet MySQL Instanzen nur, wenn diese als
+### SK: Windows Service installiert wurden und als solcher laufen.
+### SK: MySQL-Windows-Prozesse werden nicht gefunden.
+### SK: MySQL empfiehlt zwar ohnehin MySQL als Windows Server laufen zu lassen,
+### SK: aber vielleicht sollten wir noch darauf hinweisen. Was meist du?
+### SK: Oder ist das im Grunde CMK-Standard?!?
+
+Die einzige Voraussetzung für die Einrichtung der Überwachung innerhalb von MySQL
+ist, dass ein Datenbanknutzer und dessen Passwort vorhanden sein muss. Dieser
+Benutzer benötigt lediglich lesende Rechte auf die MySQL-Instanzen. Sollte noch 
+kein solcher Benutzer vorhanden sein, legen Sie diesen in den zu überwachenden
+Instanzen an. Melden Sie sich dazu mit einem Benutzer mit ausreichenden
+Zugriffsberechtigungen in MySQL an und erzeugen Sie anschließend einen neuen
+Datenbanknutzer:
+
+[source,bash]
+----
+mysql> CREATE USER 'checkmk'@'localhost' IDENTIFIED BY 'MyPassword';
+----
+
+Dieser neu angelegte Benutzer benötigt die Berechtigung, die Instanzen zu
+lesen. Prüfen Sie daher, ob der Benutzer die notwendigen Berechtigungen
+hat, oder fügen Sie sie mit dem folgenden Befehl hinzu. Im folgenden Beispiel
+wird das für den Benutzer `checkmk` erledigt:
+
+[source,bash]
+----
+mysql> GRANT SELECT, SHOW DATABASES ON *.* TO 'checkmk'@'localhost';
+----
+
+Sollten Sie die MySQL Replikation einsetzen so muss dem Nutzer zur Überwachung
+der Slave Server noch mindestens das Recht REPLICATION CLIENT erteilt werden:
+
+[source,bash]
+----
+mysql> GRANT REPLICATION CLIENT ON *.* TO 'checkmk'@'localhost';
+----
+
+=== Plugin installieren
+
+==== Linux
+
+Das benötigte Plugin `mk_mysql` finden Sie auf ihrem Checkmk-Server im
+Verzeichnis `~/share/check_mk/agents/plugins/`. Kopieren Sie dieses nun
+in einem ersten Schritt in das Plugins-Verzeichnis des [agent_linux#manualplugins|Agenten]
+auf dem zu überwachenden Host. Das Plugins-Verzeichnis lautet im Regelfall
+`/usr/lib/check_mk_agent/plugins`. Sobald das Skript im angegebenen
+Verzeichnis liegt, muss dieses noch ausführbar gemacht werden:
+
+[source,bash]
+----
+RP:chmod 700 mk_mysql
+----
+
+Selbstverständlich kann auch dieses Plugin auf Wunsch
+[agent_linux#async_plugins|asychron ausgeführt] werden.
+
+### SK: Interessant, oder?
+
+==== Windows
+
+Der Agent für Windows wird standardmäßig bereits mit einer ganzen Reihe von Plugins
+ausgeliefert. Deshalb finden Sie auch das Plugin für die Überwachung von MySQL
+nach der Installation des Agenten bereits auf Ihrem Host. Dieses muss für die
+Verwendung nur noch in das richtige Verzeichnis kopiert werden.
+
+[source,bash]
+----
+copy "c:\Program Files (x86)\checkmk\service\plugins\mk_mysql.vbs" c:\ProgramData\checkmk\agent\plugins\
+----
+
+=== Konfigurationsdatei erstellen
+
+==== Linux
+
+Erzeugen Sie anschließend eine Datei mit dem Namen `mysql.cfg` im
+[agent_linux#pluginconfig|Konfigurationsverzeichnis] (regulär: `/etc/check_mk`)
+des Checkmk-Agenten auf dem Ziel-Host. Unter Verwendung der darin eingetragenen
+Nutzerdaten, kann der Agent die gewünschten Informationen aus Ihrer MySQL-Instanz
+abrufen. Zwar ist die Angabe eines Datenbanknutzers optional, wir empfehlen diese
+allerdings, da der Agent das Plugin in der Regel als _root_ ausführt. Diese
+Angabe wird im üblichen Format für MySQL Konfigurationsdateien vorgenommen:
+
+./etc/check_mk/mysql.cfg
+
+----[client]
+user=checkmk
+password=MyPassword
+----
+
+Die so gespeicherten Zugangsdaten werden durch das folgende Kommando noch vor
+unbefugtem Zugriff geschützt:
+
+[source,bash]
+----
+RP:chmod 400 mysql.cfg
+----
+
+==== Windows
+
+Auf einem Windows-Host müssen Sie im unten angegebenen Verzeichnis eine Datei
+names `mysql.ini` anlegen. 
+
+.C
+----[client]
+user=checkmk
+password=MyPassword
+----
+
+Sollten Sie auf dem Host mehrere MySQL-Instanzen mit verschiedenen Nutzernamen
+und Passwörtern betreiben, müssen Sie pro Instanz eine .ini-Datei nach dem 
+folgenden Namensschema anlegen: `mysql_INSTANZ-ID.ini`
+
+=== Services einrichten
+
+Nachdem Sie das Plugin nun installiert und konfiguriert haben, können Sie für
+diesen Host eine [wato_hosts#services|Serviceerkennung] durchführen. Der folgende
+Screenshot zeigt dabei nur eine Auswahl der auffindbaren Services:
+
+image::bilder/mysql_discovery.png[]
+
+== Erweiterte Konfiguration
+
+=== Asynchrone Ausführung des Plugins
+
+Das Plugin für die Überwachung von MySQL kann - wie so viele andere -
+asynchron ausgeführt werden, um beispielsweise längeren Laufzeiten bei großen
+MySQL-Instanzen Rechnung zu tragen. 
+
+====  Linux
+
+Auf einem Linux-Host muss das Plugin dafür nur in ein Unterverzeichnis des
+Plugin-Verzeichnisses verschoben werden. Möchten Sie das Plugin beispielsweise
+nur alle 5 Minuten ausführen, so verschieben Sie das Skript mk_mysql einfach in
+ein Unterverzeichnis mit dem Namen `300`. Eine detailierte Anleitung zur
+asychronen Ausführung von Plugins finden Sie im
+[agent_linux#async_plugins|Artikel über den Linux-Agenten].
+
+====  Windows
+
+Um das Plugin unter Windows asynchron auszuführen, müssen Sie 
+
+[source,bash]
+----
+execution:
+  - pattern: $CUSTOM_PLUGINS_PATH$\mk_mysql.vbs
+    cache_age: 300
+    async: yes
+----
+
+Eine detailierte Anleitung zur asychronen Ausführung von Plugins uauf einem
+Windows-Host finden Sie im Artikel über den
+[agent_windows#Ausf%C3%BChrung%20eines%20speziellen%20Plugins%20anpassen|Windows-Agenten].
+
+=== Zusätzliche Optionen der Konfigurationsdateien
+
+### MA: Hier würde ich eher auf Optionen eingehen, die auch die Agent Bakery bereit
+### MA: stellt, oder eine eventuell vorhandene Beispielkonfiguration aus Checkmk. In
+### MA: diesem Fall gibt es keine Beispielkonfiguration, daher nur die Bakery.
+### MA: Mein Vorschlag:
+
+### Es gibt noch weitere Optionen, die man in der Konfigurationsdatei angeben
+### kann. Diese werden hier beschrieben. Noch ein bisschen Text, damit es nicht
+### zu trocken wirkt....
+###
+###
+==== Kommunikation mit MySQL über Socket einrichten
+
+Statt den Agenten über TCP mit MySQL kommunizieren zu lassen, können Sie Checkmk
+anweisen den Socket anzusprechen. Dazu müssen Sie in der mysql.cfg lediglich die
+Variable socket definieren.
+
+`socket=/var/run/mysqld/mysqld.sock`
+
+==== Host manuell definieren
+
+Desweiteren ist es über die Konfigurationsdateien auch möglich den MySQL-Host
+manuell zu setzen. Die entsprechende Variable dazu heißt schlicht `host`.
+
+`host=127.0.0.1`
+
+### H3:Einen Alias für eine Instanz angeben
+###
+### LI:Sehr krude Umsetzung in der Bakery, bei der man erstmal rausfinden muss, weshalb das so umgesetzt wurde.
+### LI:Zwischenzeitlich rausgefunden. Die Sektion ist nur ein Dummy, weil [client] die Option Alias nicht kennt...
+
+=== Schwellwerte konfigurieren
+
+### Ist das hier vielleicht schon alles zu kleinteilig?
+### MA: Ja, das ist zu kleinteilig, da solche Informationen ja auch schon in den
+### MA: Manpages der jeweiligen Checkplugins stehen sollten.
+### SK: Gegenargument: Die Manpages der Checkplugins liegen nur in englischer
+### SK: Sprache vor und sind doch wieder einen größeren Schritt weit weg. 
+### SK: Außerdem fürchte ich, dass unseren Kunden der Schritt vom Checkplugin zu
+### SK: den Regeln in Host & Service Parameters nicht ganz so klar ist, wie wir
+### SK: es uns wünschen. Ich würde den Artikel gerne als "Anfänger Plus"-Artikel
+### SK: konzipieren und möglichst viele Aha-Effekte für solche Anfänger einbauen.
+### MA: Das wäre dann aber an einer anderen Stelle besser untergebracht, weil
+### MA: wir in Kapitel 5 (Weiterführende Artikel) schon einiges voraussetzen
+### MA: können müssen. Die Manpages sind ja auch schon am Anfang des Artikels
+### MA: verlinkt. Mein hauptsächliches Problem damit ist vor allem, dass wir das
+### MA: dann nicht nur hier, sondern überall machen müssten und das sehr schnell
+### MA: ausartet und nicht mehr wartbar ist (müssen ja auch jede Äanderung der
+### MA: Entwickler dann nachziehen). Daher oben auch nur eine Auswahl und explizit
+### MA: nicht die vollständige Liste.
+### SK: Das Argument "weil wir das hier machen, muss das dann überall so", kann
+### SK: ich nicht ganz gelten lassen. Es gibt ja eben keinen festen Rahmen für 
+### SK: unsere Handbuchartikel. Dann ist dieser hier halt ein bisserl anders...
+
+==== Sitzungen überwachen
+
+Aus Gründen haben einige der so eingerichteten Checks keine voreingestellten 
+Schwellwerte. Diese können aber mit wenigen Handgriffen eingerichtet werden.
+Über die bekannten [.guihints]#Host & Service Parameters# finden Sie beispielsweise die
+Regel [.guihints]#MySQL Sessions & Connections}}.# Hiermit lassen sich die für ihre
+MySQL-Instanz sinnvollen Schwellwerte für den Service [.guihints]#MySQL sessions# festlegen.
+
+### Screenshot vom Abschnitt Values der Regel MySQL Sessions & Connections hier hin Datenbanken
+image::bilder/mysql_sessions_connections.png[]
+
+==== Verbindungen überwachen
+
+Auch für die Auslastung der durch MySQL vorgegebenen maximalen Anzahl an
+gleichzeitigen Verbindungen haben wir keine Schwellwerte vorgegeben, da diese viel
+stärker als bei anderen Services vom Aufbau Ihrer MySQL-Instanz abhängig sind.
+Die Einrichtung entsprechender Schwellwerte lässt sich mit einer Regel aus dem
+Satz [.guihints]#MySQL Connections# im Handumdrehen bewerkstelligen.
+
+### Screenshot Values von MySQL Connections
+image::bilder/mysql_connections.png[]
+
+==== Datenbankgröße überwachen
+
+Die Größe einzelner Datenbanken in MySQL wird durch das Check-Plugin
+[check_mysql_capacity|mysql_capacity] überwacht. Schwellwerte hierfür lassen sich
+mit der Regel [.guihints]#Size of MySQL databases# festelegen.
+
+### Screenshot von "Impose Limits" aus Site of MySQL databases
+image::bilder/mysql_size_database.png[]
+
+=== Überwachung weiterer Status-Variablen
+
+Mit Hilfe eines Pakets aus der <a href="https://exchange.checkmk.com/">(CMK) Exchange</a>
+ist es möglich noch eine ganze Reihe weiterer Variablen des MySQL Status zu
+überwachen. Damit ist es beispielsweise möglich die Werte für Bytes_sent,
+Bytes_received oder auch Slow_queries in ihr Monitoring aufzunehmen. Das Paket
+<a href="https://exchange.checkmk.com/p/mysql-status-1">Check of MySQL Status Variables with Instance Support</a>
+lässt sich nach der Installation vollständig über WATO konfigurieren.
+
+### SK: Ist der Verweis auf das Paket in der Exchange "too much"?
+
+=== Log-Dateien überwachen
+
+### SK: Den Hinweis auf mk_logwatch an dieser Stelle verbuche ich mal als
+### SK: "ich habe was tolles neues endeckt".
+
+Unter Zuhilfenahme des Check-Plugins [check_logwatch|Logwatch] können Sie auch
+die von MySQL erzeugten Log-Dateien auf Fehler überwachen. Nach der Einrichtung
+des Plugins prüfen Sie zuerst, wo in Ihrer MySQL-Instanz die entsprechenden 
+Log-Dateien liegen. Den genauen Speicherort finden Sie in der .ini- bzw.
+.cnf-Datei Ihrer Instanz.
+
+In der Konfigurationsdatei von Logwatch können Sie die für Sie interessanten
+Logs eintragen und auf einem Linux-Host etwa die folgenden Einträge vornehmen:
+
+./etc/check_mk/logwatch.cfg
+
+----/var/log/mysql/error.log
+ W Can't create/write to file
+ C [ERROR] Can't start server
+ C mysqld_safe mysqld from pid file /var/run/mysql/mysqld.pid ended
+----
+
+[#bakery]
+== Konfiguration über die Agent Bakery
+
+[CEE]Die Einrichtung wird mittels der [wato_monitoringagents#bakery|Agent Bakery]
+sehr vereinfacht, da Syntaxfehler in den Konfigurationsdateien vermieden werden
+und Anpassungen an sich verändernde Umgebungen einfach bewerkstelligt werden
+können. Der wesentliche Unterschied zu einer manuellen Installation ist, dass
+Sie nur noch dann auf dem MySQL-Host auf der Kommandozeile arbeiten müssen, wenn
+Sie spezielle MySQL-spezifische Konfigurationen vornehmen möchten.
+ 
+Für die erste Einrichtung reicht es, wenn Sie den
+[draft_monitoring_mysql#benutzereinrichten|Datenbankbenutzer auf dem MySQL-Host einrichten]
+und eine entsprechende Regel in der Bakery anlegen. Sie finden den Regelsatz
+unter [.guihints]#WATO => Monitoring Agents => Rules}}.# In dem Suchfeld können Sie dann nach
+`MySQL` suchen:
+
+image::bilder/mysql_bakery_ruleset_search.png[align=border]
+
+Tragen Sie User ID und Password dem neuen Datenbanknutzer entsprechend ein. Über
+das folgende Feld können Sie für Linux-Hosts den (CMK)-Agenten so einstellen,
+dass er die Verbindung zu MySQL nicht über TCP sondern eben über den Socket
+aufbaut. Dies kann je nach Größe und Auslastung zu einer besseren Performance
+beitragen.
+
+### SK: Ich habe versucht die Socket Einstellung auch auf einem Windows-Host
+### SK: irgendwie zu nutzen. Die Named Pipe genannte Funktion unter Windows 
+### SK: konnte ich hier zwar einstellen, aber sinnvolle Verbindungen zur InnoDB
+### SK: waren mir nicht möglich. Außerdem waren dafür bereits Änderungen am 
+### SK: Pluing nötig.
+
+Eine asynchrone Ausführung des MySQL-Plugins ist ebenfalls über diesen Regelsatz
+einstellbar. Dies kann sinnvoll sein, um längeren Laufzeiten bei großen
+MySQL-Instanzen Rechnung zu tragen oder wenn die Statusdaten schlicht nicht im
+Minutentakt benötigt werden.
+
+image::bilder/mysql_bakery.png[]
+
+### M: Vorschläge/Notizen
+### M: Bakery verlinken
+### SK: Bakery ist verlinkt
+### M: Wo finde ich die Konfig in der GUI
+### SK: Oberhalb eingefügt
+### LI:Wie muss ich das ausfüllen. Verweis auf oben, weil hier die gleichen Optionen besprochen werden
+### LI:Für die ganz langsamen noch schnell erklären, dass man das noch aktivieren muss und die Agenten neu backen
+### LI:Schön viele Hinweise auf frühere Stellen im Handbuch, wenn es nicht ganz selbsterklärend ist.
+### LI:Eine Regel "to rule them all". Das Regelset gilt für Windows, wie für Linux.... nur dass man unter Windows keinen Alias definieren kann, weil das Werk #10331 nur halb umgesetzt wurde.
+
+== Diagnosemöglichkeiten
+
+###SK: Ich mag die Worte "Fehler" oder "unerwartetes Verhalten" hier eighentlich nicht.
+###SK: Ich lasse sie mal kurz als Platzhalter stehen, bis mir ein schöner Euphemismus eingefallen ist.
+
+Sollte es beispielsweise bei der Einrichtung der Überwachung zu unerwartetem
+Verhalten oder Fehlern kommen, so empfiehlt sich eine Prüfung direkt auf einem
+betroffenen Host. Da es sich bei den Plugins für die Überwachung von MySQL
+sowohl für Linux als auch für Windows um Shell- bzw. Visual Basic-Skripte
+handelt, können diese leicht auch ohne den Agenten ausgeführt werden. Unabhängig
+vom verwendeten Betriebssystem muss der Shell bzw. der Kommandozeile vorher
+nur das jeweilige Konfigurationsverzeichnis bekannt gemacht werden.
+
+=== Diagnosemöglichkeiten unter Linux
+
+### MA: Vielleicht reicht es, wenn wir vorher entsprechend immer gut verlinken. Das ist ja agentenspezifisch und sollte daher auch dort beschrieben sein.
+### SK: Leider ist das aber aktuell in den Artikeln zum Agenten einfach nicht gegeben.
+### SK: Sollten wir einen eigenen Artikel zu Allgemeinen Diagnosemöglichkeiten erstellen?
+### MA: Die Diagnosemöglichkeiten sind ja sehr stark davon abhängig, wo wir
+### MA: uns gerade befinden und was nicht funktioniert. In diesem Fall muss es
+### MA: eigentlich in dem Linux-Artikel einen allgemeinen Abschnitt dazu geben,
+### MA: wie man bei nicht funktionieren Plugins den Fehler findet. Im Zweifel auf
+### MA: den noch nicht existierenden Abschnitt verweisen und ein Ticket aufmachen,
+### MA: dass dieser Abschnitt sinnvoll und notwendig ist.
+
+Prüfen Sie zuerst die für ihren jeweiligen Host gültigen Verzeichnisse.
+
+[source,bash]
+----
+UP: grep 'export MK' /usr/bin/check_mk_agent
+export MK_LIBDIR='/usr/lib/check_mk_agent'
+export MK_CONFDIR='/etc/check_mk'
+----
+
+Erzeugen Sie nun mit dem Befehl export die Umgebungsvariablen `MK_CONFDIR`
+und `MK_LIBDIR`. Passen Sie die Befehle entsprechend Ihrer tatsächlichen
+Verzeichnisse an.
+
+[source,bash]
+----
+RP:export MK_CONFDIR="/etc/check_mk/"
+RP:export MK_LIBDIR="/usr/lib/check_mk_agent"
+----
+
+Diese Umgebungsvariablen existieren nur in der aktuell geöffneten Shell und
+verschwinden sobald Sie diese schließen.
+
+Anschließend können Sie das Skript `mk_mysql` direkt im Pluginverzeichnis
+des (CMK)-Agenten ausführen.
+
+[source,bash]
+----
+RP:$MK_LIBDIR/plugins/mk_mysql
+----
+
+Wenn alle Rechte für den Datenbanknutzer korrekt erteilt sind, sollten Sie jetzt
+selbst in einer kleinen und frischen MySQL-Umgebung mehrere Hundert Zeilen
+Ausgabe sehen.
+
+=== Diagnosemöglichkeiten unter Windows
+
+Um das Check-Plugin auf einem Windows-Host manuell anführen zu können, müssen Sie
+zuerst eine Kommandozeile mit Admin-Rechten öffnen. Setzen Sie in dieser
+Kommandozeile nun die Umgebungsvariable `MK_CONFDIR`. Diese wird benötigt,
+damit das Plugin Ihre Konfigurationsdateien finden kann.
+
+[source,bash]
+----
+set MK_CONFDIR=c:\ProgramData\checkmk\agent\config
+----
+
+Bei der eigentlichen Ausführung des Plugings empfiehlt es sich die Ausgabe auf
+die Kommandozeile umzulenken. Zu diesen Zwecks liefert Windows das Bordwerkzeug
+cscript mit.
+
+[source,bash]
+----
+cscript c:\ProgramData\checkmk\agent\plugins\mk_mysql.vbs
+----
+
+=== Mögliche Fehler und Fehlermeldungen
+
+==== mysqladmin: connect to server at _xyz_ failed
+
+Die Fehlermeldung "connect to server at xyz failed" deutet darauf hin, dass der
+in der Konfigurationsdatei angegebene Nutzer keinen Zugriff auf MySQL hat.
+Prüfen Sie zuerst, dass sich keine Übertragungsfehler beim Anlegen der
+Konfigurationsdatei (mysql.cfg bzw. mysql.ini) eingeschlichen haben.
+
+Sollte der in der Konfigurationsdatei angegebene Nutzername oder das Passwort
+falsch sein, erhalten Sie in etwa die folgende Fehlermeldung:
+
+`Access denied for user...`
+
+==== Größe der Datenbank wird nicht ausgegeben
+
+Sollten Sie in (CMK) zwar eine ganze Reihe von Daten Ihrer MySQL-Instanz sehen,
+es jedoch keinen Service geben, welcher die Größe der enthaltenen Datenbanken
+überwacht, so ist dies ein Indiz dafür, dass der Datenbanknutzer nicht über das
+Recht SELECT verfügt.
+
+Prüfen Sie Ihren Datenbanknutzer aus MySQL heraus mit dem folgenden Befehl:
+
+[source,bash]
+----
+mysql> *show grants for 'checkmk'@'localhost';*
++--------------------------------------------------------------------------+
+| Grants for checkmk@localhost                                             |
++--------------------------------------------------------------------------+
+| GRANT SELECT, SHOW DATABASES ON *.* TO `checkmk`@`localhost`             |
++--------------------------------------------------------------------------+
+----
+
+Sollte hier in Ihrer Ausgabe das Schlüsselwort SELECT fehlen, so erteilen Sie
+dem Datenbanknutzer die entsprechenden Rechte, wie im Abschnitt
+[draft_monitoring_mysql#benutzereinrichten|Benutzer einrichten] angegeben.
+
+### Hier fehlen halt ggf. noch ein paar Real-Life-Probleme. Mal Tickets checken...
+### MA: Muss kein Ersatz für Support sein. Die gängisten Fehler, bzw. die Schritte,
+### MA: in welcher Reihenfolge die Dinge funktionieren müssen, sind da schon ganz
+### MA: gut. Soll ja keine Support-Knowledge-Base werden. :)
+
+### SK: Tatsächlich werde eine ganze Reihe von Tickets bereits durch diesen 
+### SK: Artikel beantwortet. Die "connect to server" Frage gab es tatsächlich
+### SK: mehrfach. (Auch wenn das einmal damit zusammenhing, dass MySQL gar nicht
+### SK: installiert war.)
+
+== Dateien und Verzeichnisse
+
+=== Auf dem MySQL-Host
+
+==== Linux
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Verwendung
+
+
+|`/usr/bin/check_mk_agent`
+|Der Agent, welcher alle Daten zu dem Host sammelt.
+
+
+|`/usr/lib/check_mk/plugins/`
+|Das übliche Verzeichnis, in dem Plugins abgelegt werden.
+
+
+|`/etc/check_mk/mysql.cfg`
+|Die Konfigurationsdatei für das MySQL-Plugin.
+
+
+|`/etc/check_mk/mysql.local.cfg`
+|Weitere Konfigurationsdatei um Host-spezifische Sockets anzugeben
+
+|===
+
+
+==== Windows
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Verwendung
+
+
+|`C:\ProgramData\checkmk\agent\plugins\`
+|übliches Plugins-Verzeichnis
+
+
+|`C:\ProgramData\checkmk\agent\config\`
+|Übliches Konfigurationsverzeichnis
+
+
+|`C:\Program Files (x86)\checkmk\agent\config\`
+|übliches Konfigurationsverzeichnis bis (CMK)-Version VERSION[1.5.0]
+
+
+|`C:\Program Files (x86)\check_mk\plugins\`
+|übliches Plugins-Verzeichnis bis (CMK)-Version VERSION[1.5.0]
+
+|===
+
+=== Auf dem (CMK)-Server
+
+[cols=55, options="header"]
+|===
+
+
+|Pfad
+|Verwendung
+
+###SK: Gibt es für MySQL derzeit gar nicht. Würde ich aber gerne noch
+### zusammen mit diesem Artikel zur Verfügung stellen. Ist ja recht übersichtlich.
+###<tr>
+###<td class=tt>share/check_mk/agents/cfg_examples/
+###<td>Hier befinden sich Beispiele zu den Konfigurationsdateien, welche
+###auf dem MySQL-Host benötigt werden.
+###</tr>
+
+
+|`share/check_mk/agents/plugins/mk_mysql`
+|Das Plugin, welches auf dem MySQL-Host die Daten holt.
+
+|===

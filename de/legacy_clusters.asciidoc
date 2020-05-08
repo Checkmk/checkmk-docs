@@ -1,0 +1,346 @@
+= Clustered Services
+MD: Checkmk helps you to monitor clustered services, even those without a service IP address.
+:revdate: outdated
+KW:cluster
+[.seealso][#hosttags] [#cache]== Monitoring of clustered services
+=== Types of HA clusters
+A HA cluster is a collection of hosts that provides one or
+more services to the outside. The hosts that make up a cluster
+are called *nodes*. At one point of time each service
+is provided by exactly one of the cluster's nodes. If one node
+of the cluster
+fails, all of it's services will move to one of the remaining nodes.
+
+In order to make failover transparently to its clients some clusters
+provide a service IP address. That address points to the
+currently active node. In case of a failover the IP address
+moves over to another node, which then becomes the active node.
+The client does not need to switch over. It can continue using
+the same IP address.
+
+Other clusters do not provide a service IP address. The client keep a
+list of the physical IP addresses of all nodes that might provide the
+service and does the failover itself. A prominent example are
+ORACLE clusters in many of its variants.
+
+=== Monitoring clustered services
+Now let's assume that Nagios want's to check the availability of a
+certain process that is part of a clustered service. To which node
+should it connect? If your cluster has a service IP address it
+could connect to that. Nagios will automatically arrive at the
+active node.
+
+But without a service IP address it get's a bit more complicated.
+The monitoring server has to get data from all nodes that could possible
+provide the service and look if it can find the process there.
+
+== Monitoring clusters with check_mk
+Checkmk helps you monitoring clusterd services - even those
+without a service IP address. What you have to do is:
+
+<ol>
+<li>Define your clusters in `main.mk`.
+<li>Define, which services are clustered and which not.</li>
+<li>Run an inventory on the nodes.</li>
+<li>Maybe manually define checks.</li>
+</ol>
+
+For each cluster one virtual host will appear in Nagios.
+When check_mk checks such a cluster host, it automatically
+retrieves information from all of the clusters' nodes and merges that
+together, before looking for processes, services, filesystems and so on.
+
+=== 1. Defining your clusters
+Let's assume, that you have two clusters:
+
+<ul>
+<li>`klump1` with the nodes `knot11` and `knot12`</li>
+<li>`klump2` with the nodes `knot21`, `knot22` and `knot23`</li>
+</ul>
+
+The clusters have to be defined in `main.mk` as a Python dictionary.
+The cluster's names are the keys, the values are the lists of nodes:
+.main.mk
+
+----clusters = {
+ "klump1" : [ "knot11", "knot12" ],
+ "klump2" : [ "knot21", "knot22", "knot23" ],
+}
+----
+
+All nodes have to be listed in `all_hosts`. The
+clusters must *not* appear there!
+
+.main.mk
+
+----all_hosts = [
+ "knot11",
+ "knot12",
+ "knot21",
+ "knot22",
+ "knot23",
+]
+----
+
+=== 2. Define which services are clustered
+Even within a cluster most of Nagios' checks deal with the physical
+properties of the nodes. Examples for that are CPU and memory usage,
+local disks, physical network interfaces on so on.
+
+But in general, check_mk cannot know which of the other items it finds
+are clustered and thus could move from one node to the other, at any
+time. Some filesystems are local, others might be clustered and only
+be mounted on the active node. The same holds for processes.  The NTP
+Daemon will most probably run on all of the nodes whereas a certain
+database instance will only be available on the active node.
+
+Per default check_mk always assumes that all items are local. Via
+`clustered_service` you define those which are clustered. This
+variable is a list of entries.  Each entry is either:
+
+<ul>
+<li>a pair of a *host list* and a *service list* - if you do not use [hosttags|host tags], or:</li>
+<li>a triple of *host tag list*, a *host list* and a *service list* - if you do use [hosttags|host tags].</li>
+</ul>
+
+The host list may be replaced by the keyword `ALL_HOSTS` -
+meaning all hosts. Let's make an example that defines the filesystems
+`/cdarchiv` and `/exchange` to be clustered:
+
+.main.mk
+
+----clustered_services = [
+ ( ALL_HOSTS, [ "fs_/cdarchiv", "fs_/exchange" ] )
+]
+----
+
+On the next [inventory|inventory], if a new check with the description
+`fs_/cdarchiv` is found on a host *and* if that host
+is the node of a cluster, then the new check will be assigned to
+the cluster instead of the node.
+
+A few remarks about the example:
+<ul>
+<li>The services do not *have* to exist on each cluster.</li>
+<li>If you are unsure about how services are correctly named,
+please look into the GUI of Nagios - check_mk uses the Nagios
+service descriptions.
+</li>
+<li>Services on hosts which are not part of a cluster are never
+considered clustered. So you wouldn't need to worry about
+a filesystem `/cdarchiv` on a non-cluster host `abc123`.
+</li>
+<li>As explained in [hosttags|host tags], the service names are
+regular expressions matching the *beginning* of the
+service description. So if want
+`fs_/test` to be clustered, but `fs_/test2` *not*
+to be clustered, you need to write`"fs_/test$"`.
+</li>
+</ul>
+
+Let's now assume that the filesystem `/cdarchiv` is
+a clustered service only on `klump1`, but is a local
+service on all other clusters:
+
+.main.mk
+
+----clustered_services = [
+ ( ["knot11", "knot12"], [ "fs_/cdarchiv" ] ),
+ ( ALL_HOSTS,            [ "fs_/exchange" ] )
+]
+----
+
+You can also use [hosttags|host tags]. Please
+note, that `clustered_services` always refers to the
+*nodes*, not to the cluster hosts. The following example
+configures several services to be clustered on nodes with the
+tag `oracle`:
+
+.main.mk
+
+----all_hosts = [
+ "knot11|*oracle*",
+ "knot12|*oracle*",
+ "knot21",
+ "knot22",
+ "knot23",
+]
+
+clusters = {
+ "klump1" : [ "knot11", "knot12" ],
+ "klump2" : [ "knot21", "knot22", "knot23" ],
+}
+
+clustered_services = [
+ ( ["*oracle*"], ALL_HOSTS, [ "fs_/ora/space123" ] ),
+]
+----
+
+=== 3. Running the inventory
+
+After you've defined your clusters and your clustered
+services, simply run the inventory on all hosts:
+
+[source,bash]
+----
+RP:check_mk -I
+----
+
+Services found on cluster nodes that match a definition
+of `clustered_services` automatically get assigned
+to the cluster instead of the physical node.
+
+Please note, that the inventory only deals with *new*
+items. If you want to move a check from a physical node
+to a cluster, you need first to remove the item from the according
+file in `/var/lib/check_mk/autochecks/*` before running
+the inventory.
+
+=== 4. Manually defined checks
+Some check types do not support inventory. You can assign such checks
+to clusters just as you would do for normal hosts in `checks`.
+Please note:
+<ul>
+<li>`clustered_services` has no effect on manually configured
+checks or already inventorized checks.</li>
+<li>Clustered services have to be assigned to the *cluster host* in
+`checks`.</li>
+</ul>
+
+When using host tags within `checks` you can use the one of the following
+keywords instead of an explicit host list:
+
+[cols=, ]
+|===
+<td class=tt>PHYSICAL_HOSTS</td><td>All non-cluster hosts</td><td class=tt>CLUSTER_HOSTS</td><td>All cluster hosts (not there nodes, just the clusters)</td><td class=tt>ALL_HOSTS</td><td>All physical and cluster hosts</td>|===
+
+The following example will check for `/usr/sbin/ntpd` on all physical
+hosts with the tag `linux`:
+
+.main.mk
+
+----checks = [
+  ( ["linux"], PHYSICAL_HOSTS, "ps", "NTPD", ( "/usr/sbin/ntpd",1,1,1,1 ) ),
+]
+----
+
+Now let's configure a check for a process with `_K15` in its name
+on each cluster:
+.main.mk
+
+----checks = [
+  ( CLUSTER_HOSTS, "ps", "K15", ( ".*_K15", 1, 1, 1, 1 ) ),
+]
+----
+
+== Clusters and host tags
+Not only physical hosts but also clusters can have [hosttags|host tags].
+They are defined within `clusters`:
+
+.main.mk
+
+----clusters = {
+ "klump1|*oracle*" : [ "knot11", "knot12" ],
+ "klump2"        : [ "knot21", "knot22", "knot23" ],
+}
+----
+
+
+Host tags of clusters can be used within `checks` and most other places where
+host tags are allowed. They do *not* make sense
+within `clustered_services`, since that variable is never evaluated for cluster
+hosts but only for physical nodes. The following examples alters the upper example
+such that only on ORACLE clusters the `K15` process should be running:
+
+.main.mk
+
+----checks = [
+  ( ["*oracle*"], CLUSTER_HOSTS, "ps", "K15", ( ".*_K15", 1, 1, 1, 1 ) ),
+]
+----
+
+=== Clusters and Nagios configuration
+From the point of view of Nagios clusters are ordinary hosts.
+They can be members of host groups, have contact groups, notification
+periods and so on. All check_mk variables influencing the Nagios
+configuration will also have effect on cluster hosts.
+
+Please make sure that you set the tags accordingly in `all_hosts`
+and `clusters`. Let's assume that you have some ORACLE clusters
+and you want their physical nodes as well as the clusters themselves both
+to be in a host group `oraclehosts`:
+
+.main.mk
+
+----clusters = {
+ "klump1|*oracle*" : [ "knot11", "knot12" ],  # ORACLE cluster
+ "klump2"        : [ "knot21", "knot22", "knot23" ],
+}
+
+all_hosts = [
+ "knot11|*oracle*",  # physical node of ORACLE cluster
+ "knot12|*oracle*",  # physical node of ORACLE cluster
+ "knot21",
+ "knot22",
+ "knot23",
+]
+
+host_groups = [
+ ( "oraclehosts", ["*oracle*"], ALL_HOSTS )
+]
+----
+
+== Caching
+Are you worried about performance? If you monitor the cluster `klump1`
+and its nodes `knot11` and `knot12`, wouldn't check_mk retrieve
+the data from `knot11` and `knot12` twice each check cycle?
+
+In order to avoid that, check_mk makes use of cache files, if they
+are recent enough. If you interested, how this works, please continue reading [cache|here].
+
+== Overlapping Clusters (new in <b class=new>1.1.4*)
+As of version 1.1.4 Checkmk allows clusters to overlap. That means that
+you have two different clusters sharing one or more nodes. Such as notion might
+sound strange at the first sight, but believe me: there are some
+weird but experienced users out there who know what they want and who sought such a feature for a long time.
+And we need to keep those weird and experienced users
+happy, since they are sending pretty good patches and bug reports and - even more
+important - implement features for us that we strongly want in *their* Nagios addons...
+
+So. If you define overlapping clusters just one problem arises: If the inventory
+finds a clustered check on one of the shared nodes, then which cluster
+should it be assigned to? Let's make an example:
+
+.main.mk
+
+----clusters = {
+ "north" : [ "northeast", "*northwest*" ],
+ "west"  : [ "southwest", "*northwest*" ],
+}
+
+# old-style: bad here
+clustered_services = [
+  ( ALL_HOSTS, [ "fs_/foo" ] ),
+]
+----
+
+Now: if the inventory finds a service called `fs_/foo` on `northwest`,
+which cluster should it be assigned to? Checkmk cannot know and will randomly choose
+one of the clusters. But: with the new config variable `clustered_services_of`,
+you have a solution for that case:
+
+.
+
+----# better here: make explicit assignment
+clustered_services_of["west"] = [
+  ( ALL_HOSTS, [ "fs_/foo" ] ),
+]
+----
+
+Now the services beginning with `fs_/foo` will - if found - be assigned to
+the cluster `west`.
+
+It is completely legal to use both `clustered_services` and `clustered_services_of`
+in parallel. Just keep in mind, that `clustered_services_of` has precedence. If a service
+is matching both configurations, the explicit assignment to a specific cluster overrides the
+unspecific `clustered_services`.

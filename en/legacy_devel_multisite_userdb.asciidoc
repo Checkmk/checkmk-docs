@@ -1,0 +1,180 @@
+= Multisite Modularized User Management
+:revdate: outdated
+VS:1.2.1i4
+[.seealso][#multisite]KW:multisite,web,user,management,userdb
+
+== Introduction
+
+Prior to this release it was only possible to let the users authenticate
+with Apaches htpasswd file based authentication. There was no official
+way to implement any type of imports of users from external sources into
+Multisite / WATO.
+
+With this release Multisite and WATO have been improved by the userdb
+API which provides the option to modularize the user authentication and
+management in a flexible way. Such modules are called _connectors_.
+
+There are two connectors available by default, the htpasswd connector and
+the [multisite_ldap_integration|LDAP connector], which can be used to 
+integrate Multisite with a LDAP server.
+
+== Connector Plugins
+
+The API is realized like other existing plugin structures of Multisite.
+There is one directory `plugins/userdb` where plugin files can
+placed into. All `*.py` files in this directory are loaded into
+the `userdb` module.
+
+Each plugin has to register with the `multisite_user_connectors`
+list to make it loadable. Each connector must add it's dictionary to this
+list, as example we take a look at the LDAP connector registration:
+
+.plugins/userdb/ldap.py
+
+----multisite_user_connectors.append({
+    'id':          'ldap',
+    'title':       _('LDAP (Active Directory, OpenLDAP)'),
+    'short_title': _('LDAP'),
+
+    'login':             ldap_login,
+    'sync':              ldap_sync,
+    'page':              ldap_page,
+    'locked':            user_locked, # no ldap check, just check the WATO
+                                      # attribute. This handles setups where
+                                      # the locked attribute is not 
+                                      # synchronized and the user is enabled
+                                      # in LDAP and disabled in Checkmk. When
+                                      # the user is locked in LDAP a login is
+                                      # not possible.
+    'locked_attributes':      ldap_locked_attributes,
+    'multisite_attributes':   ldap_multisite_attributes,
+    'non_contact_attributes': ldap_multisite_attributes,
+})
+----
+
+[cols=, ]
+|===
+    <tr><th>Attribute</th><th>Description</th></tr>
+    <tr>
+        <td>`id`
+        <td>This is the identifier of the connector. It has to be unique
+        compared to all other connectors.
+        
+    </tr>
+    <tr>
+        <td>`title`
+        <td>The human readable title of the connector. It is shown to the
+        user in WATO to identify the connector.
+        
+    </tr>
+    <tr>
+        <td>`short_title`
+        <td>The title of the connector in short. It is shown e.g. in the
+        users and contancts table to identify the connector.
+        
+    </tr>
+    <tr>
+        <td>`login`
+        <td><p>Takes the reference to a hook function as value. This is called
+        when a user likes to authenticate with Multisite (filled and submitted
+        the login form). The functions task is to verify the user credentials.</p>
+        <p>The function must take two parameters, the `username` and the
+        `password`.</p>
+        <p>The function must return one of the three values:
+        <ul>
+        <li>`True`: The user has entered valid credentials.</li>
+        <li>`False`: The user has entered invalid credentials.</li>
+        <li>`None`: Unknown user for this connector. Try next connector.</li>
+        </ul>
+        </p>
+        
+    </tr>
+    <tr>
+        <td>`sync`
+        <td><p>Takes the reference to a hook function as value. This is called
+        in several situations:
+        <ul>
+        <li>When opening the &quot;Users & Contacts&quot; page of WATO</li>
+        <li>Before activating the pending changes in WATO</li>
+        <li>Distributed WATO: After receiving a new snapshot on slave sites</li>
+        <li>Only for a single user, when a user is created during first login</li>
+        <li>_LDAP_: On page rendering, when the LDAP cache needs to be renewed (`ldap_cache_livetime`)</li>
+        </ul></p>
+        <p>The return value of this function is not processed. If an exception occurs,
+        the connectors sync function is terminated and the sync function of the next
+        connector is processed.</p>
+        <p>The function must deal with the two parameters `add_to_changelog` 
+        to create a changelog entry or none and `only_username` to only synchronize
+        the given user or all users.</p>
+        
+    </tr>
+    <tr>
+        <td>`page`
+        <td><p>Takes the reference to a hook function as value. This is called on each
+        http request to the multisite code. This are not only the pages requested by
+        the user, but also the ajax requests which are used to update the contents
+        shown to the user. So be careful when implementing things in this hook, it
+        will be called often.</p>
+        <p>The hook function is called without arguments. The returned value is ignored.
+        If an exception occurs, the connectors sync function is terminated and the sync
+        function of the next connector is processed.</p>
+        
+    </tr>
+    <tr>
+        <td>`locked`
+        <td><p>Takes the reference to a hook function as value. This is called after a
+        successfull login (and optional user account creation). It checks whether or not 
+        the user is locked and therefor not allowed to login. In htpasswd connector the
+        function checks whether or not there is a "!" in front of the password. But when
+        using other conectors it might be neccessary to validate the users `locked`
+        attribute.</p>
+        <p>The hook function is called with the `username` to be checked as argument.
+        It must return `True` if the user is locked and `False` if the user
+        is allowed to login.</p>
+        
+    </tr>
+    <tr>
+        <td>`locked_attributes`
+        <td><p>Takes the reference to a hook function as value. It is called by WATO when
+        a user assigned to this connector is being edited. It is called to gather the list of WATO
+        attributes which should be read only in the editing dialog.</p>
+        <p>The function is called without arguments and must return a list of WATO attribute
+        names to be locked.</p>
+        
+    </tr>
+    <tr>
+        <td>`multisite_attributes`
+        <td><p>Takes the reference to a hook function as value. It is called by WATO when
+        a user assigned to this connector is saved. It is called to gather the list of WATO
+        attributes which should be saved in the Multisite configuration (`users.mk`).</p>
+        <p>The function is called without arguments and must return a list of WATO attribute names.</p>
+    </tr>
+    <tr>
+        <td>`non_contact_attributes`
+        <td><p>Takes the reference to a hook function as value. It is called by WATO when
+        a user assigned to this connector is saved. It is called to gather the list of WATO
+        attributes which should _not_ be saved in the Check_MKs contact config (`contacts.mk`).</p>
+        <p>The function is called without arguments and must return a list of WATO attribute names.</p>
+    </tr>
+|===
+
+== Authentication with Multiple Connectors
+
+The authentication of users is done after the user entered the credentials into the login dialog
+and submitted the form. Multisite is calling the `login` hook functions of all connectors
+in the order the connectors are registered. Each connector has the option to validate the credentials
+of the user or simply skip validation and let the next connectors validate the user.
+
+When a connector rates the credentials of the user to be correct, all other connectors are skipped
+and the user is logged in. When a connector comes to the result that the credentials belong to an
+existing user but are wrong, the user is sent back to the login form for a retry.
+
+== The Default User Profile
+
+All users created by the synchronization function should be initialized with the function
+`new_user_template(&lt;connector_id&gt;)`. It uses the default user profile to e.g. assign
+the user a default role.
+
+The default user profile can be customized using the "Global Settings" dialog of WATO. You can find
+this option in the "User Management" section. Currently you can configure the roles and contactgroups
+which should be assigned to new users.

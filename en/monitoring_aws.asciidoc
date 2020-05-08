@@ -1,0 +1,288 @@
+= Monitoring Amazon Web Services
+:revdate: 2019-02-17
+[.seealso][#monitoring_azure] [#check_plugins_catalog] [#dcd]MT:Integration and monitoring of Amazon Web Services
+MD:How to monitor Amazon S3, EC2, EBS, RDS, and ELB, or their costs, and seamlessly integrate them into checkmk is described here.
+
+== Introduction
+
+image::bilder/logo_aws.png[align=float,left]
+
+According to a survey among our users,
+<a href="https://docs.aws.amazon.com/aws-technical-content/latest/aws-overview/introduction.html">Amazon
+Web Services</a> is currently the most important provider of cloud-based
+Services, so goes without saying that (CMK) must here provide excellent monitoring.
+
+(CMK) contains a comprehensive monitoring for AWS which consists of a connector
+to AWS and an impressive collection of check plug-ins consisting of various
+metrics for the retrieval and evaluation of states. Because of the amount
+of check plug-ins only some of them, to show the AWS web services that (CMK)
+can currently monitor:
+
+* [check_aws_ebs_summary|AWS EBS Summary]
+* [check_aws_ec2|AWS EC2 Instance Status]
+* [check_aws_elb|AWS ELB Statistics]
+* [check_aws_elbv2_application.statistics|AWS ELB Application Statistics]
+* [check_aws_elbv2_network.statistics|AWS ELB Network Statistics]
+* [check_aws_rds_summary.db_status|AWS RDS Database Info]
+* [check_aws_s3.summary|AWS S3 Summary]
+* [check_aws_glacier.summary|AWS Glacier Summary] (beginning with VERSION[1.7.0])
+* [check_aws_cloudwatch_alarms|AWS Cloudwatch Alarms]
+* [check_aws_costs_and_usage|AWS Costs and Usage Summary]
+
+For a complete, up-to-date list of all available plug-ins,
+see the [check_plugins_catalog|Check plug-ins Catalog].
+
+
+== Concrete Implementation of AWS Monitoring
+
+=== Hosts and services
+
+In (CMK) all objects to be monitored are arranged in a hierarchical structure of hosts and services.
+With cloud-based services the concept of hosts does not now apply.
+To retain the simplicity and consistency of (CMK),
+we still however map AWS objects according to the host/service schema.
+
+How to do that can best be illustrated by an example: In one region several
+EC2 instances have been configured. An EC2 is usually assigned to EBS. This
+constellation looks like this in (CMK):
+
+* There is a host that matches the AWS account. This host gives an overview of all EC2 instances and their status as a service.
+* The EC2 instances themselves are their own hosts.
+* On these EC2 hosts you can find services with the actual metrics.
+* The EBS are interpreted as a type of hard disk, and accordingly provide metrics to I/O (e.g., the number of bytes read or written). For this purpose there are separate services in (CMK) with the name <AWT>>EBS Disk IO` per EBS which are assigned to the EC2 instance.
+
+
+=== Access to AWS
+
+Of course AWS does not allow installation of a (CMK) agent, and this
+is not actually necessary since it provides an HTTP-based API over
+which monitoring data are also available.
+
+(CMK) accesses this API via the `agent_aws` ‚Special Agent‘
+which replaces the (CMK) agent, but in contrast this runs locally on the
+(CMK) server.
+
+
+== Preparing AWS
+
+=== Creating the user
+
+To enable monitoring via (CMK), it is best to achieve it by creating a
+special AWS user under your root account.
+<a href="https://console.aws.amazon.com">Log in</a>
+to AWS as the root user, and navigate to [.guihints]#Security, Identity, & Compliance => IAM# (Identity and Access Management).
+Go to [.guihints]#Users# and create a new user [.guihints]#Add User}}.# 
+As a user name choose, for example, `check-mk`.
+
+It is important that you select the [.guihints]#Programmatic Access# for [.guihints]#Access Type}}.# 
+
+### User: check-mk
+### Acess key id:  AKIAJMNG3SHALVWELRJQ
+### Key: GIBIczXoYMRQImgSWL9kmFAK0fv7OZTS0BWKGd3d
+
+image::bilder/aws_create_user.png[]
+
+
+=== Permissions
+
+Under no circumstances should the user receive any rights for amending the monitoring.
+You can simply assign the user `check-mk` the single policy [.guihints]#ReadOnlyAccess}}# 
+(or you take the trouble to restrict your account with more detailed policies):
+
+image::bilder/aws_create_user_policies.png[]
+
+
+=== Access to Billing-Informationen
+
+If you want (CMK) to have read access for the billing information
+(in order to perform the [.guihints]#Costs and Usage# global check), you need another policy for your AWS user – a policy you must first define yourself.
+
+Under [.guihints]#Security, Identity, & Compliance => IAM => Policies# select the [.guihints]#Create Policy# button.
+Select the [.guihints]#Billing# service from [.guihints]#Select a Service => Service => Choosea Service}}.# 
+Under [.guihints]#Actions# tick the [.guihints]#Read# checkbox.
+Click [.guihints]#Review# to go to step two. Set the name `BillingViewAccess` as [.guihints]#Name}}# 
+and save with the [.guihints]#Create policy# button.
+
+You must now add this new policy to the user.
+Go again to [.guihints]#Security, Identity, & Compliance => IAM => Policies# – in the
+[.guihints]#Filter Policies# search box look for `BillingViewAccess`, select this by clicking in the circle link, and then go to [.guihints]#Policy actions => Attach}}.# 
+Here you will find your `check-mk` user,
+select this and confirm with [.guihints]#Attache policy}}.# The following message will be received once it has been executed successfully:
+
+image::bilder/aws_entity_was_attached.png[]
+
+=== Keys
+
+After completing the user creation an access key will be generated
+automatically for you. Attention: The secret of the key is displayed only
+once -- directly after the creation. Therefore without fail copy the key and
+save it, for example, in the (CMK) password store. Alternatively specify
+it in plain text as a rule (see below).  For (CMK) you need the [.guihints]#Access Key ID}}# 
+in addition to the secret. The name of the user (in our example
+`check-mk`) does not matter here.
+
+image::bilder/aws_create_user_key.png[]
+
+If for some reason you should lose the secret, you can create a new access key
+for the user and get a new secret:
+
+image::bilder/aws_create_access_key.png[]
+
+
+== Configuring monitoring in (CMK)
+
+=== Create a host for AWS in (CMK)
+
+Now create a host to monitor AWS in (CMK).
+You can assign the hostname as you wish. Important: Because AWS is not a service
+it has no IP-address or DNS name (access is granted by the special agent itself),
+so you need to set the [.guihints]#IP Address Family# to [.guihints]#No IP}}.# 
+
+image::bilder/azure_wato_no_ip.png[]
+
+
+[#agent_rule]
+=== Create a rule for AWS agents
+
+AWS cannot be queried through the regular (CMK) agent.
+Set up the AWS Special Agent now. To do so,
+under [.guihints]#Host & Service Parameters => DatasourcePrograms => AmazonWeb Services (AWS)}}# 
+add a rule whose [wato_rules#conditions|conditions] apply only to the just-created
+AWS-host.
+
+For the actual content of the rule, you first need to find the information
+for the login. Here enter the [.guihints]#Access Key ID# of the created AWS user `check-mk`.
+Also choose here which global data you want to monitor,
+i.e., those that are independent of a region. That is currently
+only the data on the costs:
+
+image::bilder/aws_rule_1.png[]
+
+The really interesting data is assigned to regions.
+Therefore here select your AWS region(s):
+
+image::bilder/aws_rule_2.png[]
+
+Under [.guihints]#Service by region to monitor# you specify which information you
+want to retrieve from these regions. At default all AWS web services and
+the monitoring of their [Monitoring_aws#limits|limits] are activated. In
+the following screenshot are all but one deactivated to get a better overview:
+
+image::bilder/aws_rule_3.png[]
+
+You now can restrict the fetched data per web service or globally with
+[.guihints]#Restrict moinitoring services by one of these tags}}.# The global restriction
+will be overwritten , if you restrict by web service! Also you not only
+have the option to restrict by AWS tags but additionally to specify the
+explicit names:
+
+image::bilder/aws_rule_4.png[]
+
+
+=== Services on the AWS host itself
+
+Now go to the service discovery of the newly created AWS host, where WATO
+should now find several services. After you add the services, after
+an [.guihints]#Activate Changes# it will look something like this :
+
+image::bilder/aws_services_ec.png[]
+
+
+===  Create hosts for the EC2 instances
+
+Services associated with EC2 instances do not become the AWS host,
+rather they become so-called [piggyback|piggyback hosts].
+This works in such a way that data retrieved from the AWS host is distributed to
+these hosts, and they work without their own monitoring agents.
+Each EC2 instance will be assigned to a piggy-host, the name for the EC2 instance
+will be derived from the private DNS name.
+
+The piggy-hosts are not automatically created by (CMK).
+Create these hosts either manually or -- from version VERSION[1.6.0] -
+optionally with the new [dcd|Dynamic Configuration Daemon (DCD)].
+It is important that the names of the hosts exactly match the private DNS names of the
+EC2 instance -- they are also case-sensitive!
+
+By the way – with the auxiliary script `find_piggy_orphans` from the
+Treasures Directory you can find all of the piggy-hosts for which there are data
+even if the hosts themselves have not yet been created as hosts in (CMK):
+
+[source,bash]
+----
+OM:share/doc/check_mk/treasures/find_piggy_orphans
+ip-172-31-44-50.eu-central-1.compute.internal
+ip-172-31-44-51.eu-central-1.compute.internal
+----
+
+Configure the EC2 hosts without IP addresses (analogous to the
+Azure host), and select [.guihints]#No Agent# as the agent.
+
+image::bilder/wato_host_no_agent.png[]
+
+
+=== Hosts for the ELB (Classic Load Balancer)
+
+The services for the ELB are also assigned to piggy-hosts.
+The names correspond to  their DNS names.
+
+
+[#limits]
+=== Monitoring limits
+
+Some web services of AWS do have limits and (CMK) is able to monitor them. Here
+some examples:
+
+* [check_aws_ebs_limits|AWS EBS Limits]
+* [check_aws_ec2_limits|AWS EC2 Limits]
+* [check_aws_elb_limits|AWS ELB Limits]
+* [check_aws_elbv2_limits|AWS Application and Network Limits]
+* [check_aws_glacier_limits|AWS Galcier Limits]
+* [check_aws_rds_limits|AWS RDS Limits]
+* [check_aws_s3_limits|AWS S3 Limits]
+* [check_aws_cloudwatch_alarms_limits|AWS Cloudwatch Alarm Limits]
+
+As soon as such a check plug-in creates Services and checks them later on,
+the special agent will always fetch *all* elements of the web service
+that has the activated limits monitoring. Only in this case (CMK) is able
+to compute reasonably the utilization and check the thresholds. That's also
+the case even if you restrict the fetched data by some tags or names.
+
+The checking of the limits is activated by default for each
+monitored web service. If you want to restrict the fetched data in
+[monitoring_aws#agent_rule|special agent rule] to limit the amount of
+transferred data, you need to deactivate the monitoring of the limits, too.
+
+
+=== Further services
+
+The other services in AWS are assigned as follows:
+
+[cols=, options="header"]
+|===
+
+
+|
+|Service
+|Assignment
+
+
+<td width="8%">CE
+<td width="25%">Costs & Usage
+<td width="67%">At the AWS host
+
+
+|EBS
+|Block Storages
+|Appended to the EC2 instance if it belongs to the instance, otherwise to the AWS host
+
+
+|S3
+|Simple storages
+|At the AWS-Host
+
+
+|RD
+|Relational databases
+|At the AWS-Host
+
+|===

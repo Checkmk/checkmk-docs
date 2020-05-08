@@ -1,0 +1,301 @@
+= Docker überwachen
+:revdate: 2019-09-05
+[.seealso][#wato_monitoringagents] [#agent_linux] [#monitoring_kubernetes]MT:Open-Source Monitoring für Docker
+MD:Der Artikel beschreibt, wie Sie ein vollständiges Monitoring für Docker-Nodes und deren Container in (CMK) betreiben und was Sie dabei beachten müssen.
+
+
+== Einleitung
+
+image::bilder/docker_logo_breit.png[align=float,left]
+
+In den vergangenen Jahren hat das Containerkonzept die IT-Welt im Sturm
+erobert. Das wirft natürlich auch Fragen zu der Überwachung solcher Container
+auf. (CMK) kann ab der Version VERSION[1.5.0] Docker-Container
+direkt über den [agent_linux|Linux-Agenten] überwachen. Dabei werden nicht nur
+Rahmendaten, wie der Status des Daemons oder des Containers, sondern auch die
+Container selbst überwacht. Eine vollständige Liste der aktuell überwachbaren
+Dinge finden Sie wie immer im [check_plugins_catalog|Katalog der Check-Plugins].
+
+Neben den Status- und Inventurinformationen, die (CMK) über die Node
+(Docker-Sprech für: Host, auf dem die Container laufen) ermitteln kann, kann
+(CMK) detaillierte Statusinformationen der Container ermitteln. Hierzu wird
+in (CMK) jeder Container als eigenständiger Host angelegt, wenn er überwacht
+werden soll. Seine Daten werden im [piggyback|Huckepackverfahren (piggyback)] an diesen Host
+geliefert.
+
+Ab Version VERSION[1.6.0] der (CEE) können Sie mithilfe der [dcd|dynamischen Konfiguration]
+die Container-Hosts sogar automatisch anlegen und entfernen lassen.
+
+
+== Einrichtung
+
+=== Installation von Agent und Plugins
+
+Damit Sie eine Docker-Node mit (CMK) überwachen können, muss diese zunächst
+mit dem normalen [agent_linux#Installation|Linux-Agenten] überwacht werden.
+Dadurch erhalten Sie wie gewohnt ein Grundmonitoring des Wirtssystems, jedoch
+noch keine Information über den Docker-Daemon oder gar über die Container.
+
+Dazu benötigen Sie noch folgende [agent_linux#plugins|Agent-Plugins]:
+
+* In der Version VERSION[1.5.0] die beiden Plugins `mk_docker_node` und `mk_docker_container_piggybacked`
+* Ab Version VERSION[1.6.0] nur das Plugin `mk_docker.py`
+
+Installieren Sie die Plugins bzw. das Plugin wie gewohnt nach `/usr/lib/check_mk_agent/plugins`.
+In den (EE) können Sie natürlich alternativ auch mit der [wato_monitoringagents#bakery|Agentenbäckerei]
+arbeiten, welche für Docker entsprechende Regelsätze bereitstellt:
+
+* In der Version VERSION[1.5.0] die Regelsätze [.guihints]#Docker node# und [.guihints]#Piggybacked Docker containers}}# 
+* Ab Version VERSION[1.6.0] der Regelsatz [.guihints]#Docker node and containers}}# 
+
+Bitte beachten Sie, das ab der VERSION[1.6.0] die Python-Bibliothek
+`docker` benötigt wird (*nicht* `docker-py`). Es ist mindestens Version 2.0.0 notwendig.
+Mit `python` auf der Kommandozeile können Sie dies leicht überprüfen:
+
+[source,bash]
+----
+RP:python
+Python 2.7.16 (default, Sep 24 2019, 22:49:21)
+[GCC 8.2.0] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> *import docker*
+>>> *docker.version*
+'4.0.2'
+----
+
+Falls notwendig, können Sie die Bibliothek mit `pip` installieren:
+[source,bash]
+----
+RP:pip install docker
+----
+
+*Achtung:* Die Pakete `docker-py` beziehungsweise
+`python-docker-py` dürfen nicht installiert sein.  Diese stellen
+eine veraltete und nicht kompatible Version der Docker-Bibliothek unter dem
+selben Namesraum zur verfügung! Wenn sie `docker-py` (oder beide Varianten)
+installiert haben, reicht eine alleinige Deinstallation nicht aus, da `pip`
+den Namesraum nicht reparieren kann.  Um sicher zu stellen, dass die korrekte
+Version installiert ist, führen Sie in diesem Fall bitte folgenden Befehle aus:
+
+[source,bash]
+----
+RP:pip uninstall docker-py docker
+RP:pip install docker
+----
+
+Wenn Sie jetzt im WATO die Serviceerkennung durchführen und die Änderungen aktivieren,
+sollten Sie zunächst einige neue Services finden, welche den Docker-Node selbst
+betreffen (hier von Version 1.6.0):
+
+image::bilder/docker_basic_services.png[align=border]
+
+=== Finetuning des Plugins
+
+Ab der VERSION[1.6.0] können Sie verschiedene Parameter des Plugins konfigurieren.
+So können sie zum Beispiel Ressourcen schonen, in dem Sie nicht benötigte Sektionen
+deaktivieren, oder -- falls nötig -- den Docker API-Engine-Endpunkt anpassen (der Standard
+ist das Unix-Socket `unix://var/run/docker.sock`).
+
+Legen sie dazu wie üblich eine Konfigurationsdatei nach `/etc/check_mk/docker.cfg`.
+Eine Vorlage mit ausführlichen Erläuterungen finden Sie im Checkmk Verzeichnis unter
+`share/check_mk/agents/cfg_examples/docker.cfg`.
+
+In den (EE) können Sie alle Parameter bequem mit der [wato_monitoringagents#bakery|Agentenbäckerei]
+einstellen.
+
+=== Überwachung der Container
+
+==== Anlegen der Container-Hosts
+
+Das eigentlich Interessante ist natürlich das Überwachen der Docker-Container.
+Dies geschieht durch Installation der Plugins automatisch. Allerdings werden
+die Services nicht dem Docker-Node zugeordnet sondern (CMK) geht von einem
+eigenen Host pro Docker-Container aus.
+
+Der Mechanismus, der hier zum Einsatz kommt, heißt [piggyback|Piggyback] (Huckepack).
+Dabei transportiert ein Plugin oder Spezialagent Daten zu anderen Hosts quasi „huckepack“
+in seiner Ausgabe mit. (CMK) legt diese Daten im Verzeichnis `tmp/check_mk/piggyback`
+ab. Sie brauchen dann nur noch in WATO Hosts mit den richtigen Namen anzulegen und die
+Services werden diesen automatisch zugeordnet.
+
+Ab Version VERSION[1.6.0] der (EE) können Sie diese Hosts automatisch anlegen lassen.
+Verwenden Sie dazu in der [dcd|dynamische Konfiguration] den Konnektor [.guihints]#Piggyback}}.# 
+Sie können die Hosts auch von Hand anlegen. Beachten Sie dabei Folgendes:
+
+* Der Hostname muss exakt dem Verzeichnis entsprechen, welches in `tmp/check_mk/piggyback` angelegt wird. Per Default ist das die zwölfstellige Short-ID des Containers (z.B. `2ed23056480f`)
+* Falls die Container keine eigene IP-Adresse haben (was meist der Fall ist), stellen Sie das Attribut [.guihints]#bei IP-Address-Family# auf [.guihints]#No IP# ein.
+* Bei [.guihints]#Data sources# stellen Sie [.guihints]#Check_MK Agent# unbedingt auf [.guihints]#No agent# ein.
+* Das Feld [.guihints]#Parent# können Sie auf den Hostnamen der Docker-Node setzen.
+* Wichtig ist ferner, dass die Docker-Node und dessen Container von der selben (CMK)-Instanz aus überwacht werden.
+
+Nachdem Sie die Container-Hosts angelegt und die Serviceerkennung durchgeführt haben,
+tauchen auf diesen weitere Services auf.
+
+Falls Sie in dem Container einen [agent_linux#Installation|Linux-Agenten] installiert haben,
+wird er automatisch ausgeführt. Da allerdings viele Services, welche der Agent innerhalb des
+Containers überwacht, eigentlich die Information der Node zeigen (z.B. CPU load, Temperatur
+und viele weitere Betriebssystemparameter), wurden diese bei Version VERSION[1.6.0] entfernt.
+
+==== Alternative Benennung der Container-Hosts
+
+Als Standardeinstellung wird wie oben erwähnt die zwölfstellige Short-ID
+des Containers als Name des Container-Hosts verwendet. Dies können sie
+optional anders konfigurieren.  Setzen sie hierzu in der Konfigurationsdatei
+die Option `container_id` auf `long`, um die vollständinge
+Container-ID als Name zu verwenden, oder auf `name`, um den Containernamen
+zu verwenden.  Selbstverständlich können Nutzer der (CEE) dies in der
+[wato_monitoringagents#bakery|Agentenbäckerei] einstellen.
+
+Übrigens: Mit dem Regelsatz [.guihints]#Access to agents => Generalsettings => Hostnametranslation for piggybacked hosts}}# 
+können Sie recht flexibel Regeln definieren, nach denen Hostnamen, welche
+in Piggyback-Daten enthalten sind, umgewandelt werden, um bessere Hostnamen für
+(CMK) zu generieren. Damit können Sie z.B. das auch Problem lösen, wenn Sie auf
+zwei verschiedenen Docker-Nodes Container mit dem gleichen Namen haben. Über
+geeignete Translation-Regeln können Sie die Namen dann z.B. mit einem Präfix
+versehen, um diese eindeutig zu machen.
+
+
+==== Überwachen des Hoststatus
+
+Da der [monitoring_basics#hosts|Hoststatus] eines Containers nicht unbedingt
+über [cmc_differences#smartping|TCP-Pakete oder ICMP] geprüft werden kann,
+muss dieser anders ermittelt werden. Hier bietet sich der Service
+[.guihints]#Docker container status# an. Dieser prüft ohnehin, ob der Container läuft
+oder nicht und kann daher als sicheres Mittel verwendet werden, um den
+Hoststatus zu ermitteln. Legen Sie dazu eine Regel in dem Regelset
+[.guihints]#Host Check Command# an und setzen Sie die Option [.guihints]#Use the status of the service}}# 
+auf den erwähnten Service. Vergessen Sie nicht die Bedingungen so zu setzen,
+dass sie nur Container betreffen. In unserem Beispiel liegen alle Container
+in einem gleichnamigen Ordner:
+
+image::bilder/docker_container_hoststatus.png[]
+
+==== Den Agent direkt im Container betreiben
+
+Um Details im Container selbst zu überwachen (z.B. laufenden Prozesse,
+Datenbanken, Logdateien, etc.), ist es notwendig, dass der (CMK)-Agent im
+Container selbst ausgeführt wird. Das gilt insbesondere für das Ausrollen von
+Agentenplugins.
+Falls sie keinen Agenten im Container installiert haben, wird bis zur Version
+VERSION[1.5.0] von (CMK) dazu automatisch der auf der Node installierte
+Agent im Container ausgeführt, sobald Sie die Node mit (CMK) überwachen.
+
+Da sich dieses Verfahren als nicht sehr performant herausgestellt hat, ist es
+ab Version VERSION[1.6.0] notwendig, dass Sie den normalen (CMK)-Agenten
+direkt im Container installieren, um ein detaillierteres Monitoring im Container
+zu bekommen. Die drei Plugins `mem`, `cpu` und `diskstat`
+(Disk-I/O) funktionieren hier allerdings auch ohne Agent im Container und
+werden vom (CMK)-Agenten auf der Node selbst berechnet.
+
+Gerade für selbst erstellte Docker-Images möchten Sie vielleicht den
+Agenten selbst in den Container ausrollen. In diesem Fall werden die
+Daten nicht mehr, wie oben beschrieben, von dem Agenten der Docker-Node
+berechnet. Stattdessen läuft ein separater Agent in jedem Container.
+Der Aufruf erfolgt aber nach wie vor gebündelt über die Docker-Node im
+Piggyback-Verfahren.
+
+Der im Container installierte Agent funktioniert allerdings nur dann, wenn in
+dem Container auch alle benötigten Befehle vorhanden sind.
+Speziell bei minimal gebauten Containern auf Basis von Alpine-Linux kann es
+gut sein, dass elementare Dinge wie die Bash nicht vorhanden sind.
+In diesem Fall sollten Sie den Container aus der Docker-Node heraus überwachen.
+
+Die Verwendung des Regelsets [.guihints]#Host Check Command# wird in diesem Fall nur
+benötigt, wenn der Container nicht pingbar ist, funktioniert aber ansonsten
+exakt so wie oben beschrieben.
+
+
+== Diagnosemöglichkeiten
+
+=== Diagnose für eine Docker-Node
+
+Sollte die Einrichtung nicht klappen, gibt es verschiedene Möglichkeiten
+der Analyse des Problems. Der (CMK)-Agent unterstützt die Überwachung
+von Docker erst ab Version VERSION[1.5.0]. Prüfen Sie daher, ob
+auf dem Host ein Agent mit dieser oder einer höheren Version installiert ist.
+
+Falls die Version des Agenten auf dem Host passt, prüfen Sie als nächstes,
+ob die Daten in der Ausgabe des Agenten enthalten sind. Sie können die Ausgabe
+als Textdatei über den Button [.guihints]#Download agent output# in der GUI in dem
+Dropdown des Hosts herunterladen:
+
+image::bilder/docker_node_dropdown.png[align=center,width=55%]
+
+Oder Sie durchsuchen direkt den Agent-Cache. Die Ausgabe in dem folgenden
+Beispiel ist für die Anschaulichkeit auf die Ausgaben zur Node gekürzt:
+
+[source,bash]
+----
+OM:strings tmp/check_mk/cache/mydockerhost | grep "&lt&lt&ltdocker"
+<<<docker_node_info>>>
+<<<docker_node_disk_usage:sep(44)>>>
+<<<docker_node_images>>>
+<<<docker_node_network:sep(0)>>>
+----
+
+Werden die Sektionen hier nicht geführt, wird die Docker-Installation nicht
+erkannt. Für den Service [.guihints]#Docker node info# wird in Version VERSION[1.5.0]
+der folgende Befehl
+benutzt. Dieser muss auf dem Hostsystem in exakt dieser Form ausführbar
+sein. Prüfen Sie dann gegebenenfalls Ihre Docker-Installation:
+
+[source,bash]
+----
+RP:docker info 2>&1
+----
+
+
+=== Diagnose für einen Containerhost
+
+Falls der Containerhost keine Daten erhält, bzw. keine Services
+erkannt werden, prüfen Sie zuerst, ob die Piggyback-Daten zu diesem Host
+vorhanden sind. Der Name des Hosts muss identisch zu der ID des Containers
+sein. Alternativ können Sie auch über das Regelset
+[.guihints]#Hostname translation for piggybacked hosts# eine manuelle Zuordnung
+vornehmen. Hier bietet sich allerdings nur die Option
+[.guihints]#Explicit hostname mapping# an:
+
+image::bilder/docker_container_namemapping.png[align=center,width=70%]
+
+Um zu prüfen, ob zu einer ID Piggyback-Daten angelegt werden, können Sie
+das folgende Verzeichnis prüfen:
+
+[source,bash]
+----
+OM:ls -l tmp/check_mk/piggyback/
+76adfc5a7794  f0bced2c8c96  bf9b3b853834
+----
+
+== Hostlabels
+
+Ab Version VERSION[1.6.0] von (CMK) gibt es sogenannte [labels|Hostlabels]. Das
+überarbeitete Dockermonitoring setzt automatisch die drei Labels
+`cmk/docker_image`, `cmk/docker_image_name` und
+`cmk/docker_image_version`. Diese Labels können Sie z.B. in Bedingungen
+für Ihre [wato_rules|Regeln] verwenden, um Ihre Monitoringkonfiguration abhängig
+vom in einem Container verwendeten Image zu machen.
+
+
+== Dateien und Verzeichnisse
+
+[cols=, options="header"]
+|===
+
+
+<th  style="width:30%">Pfad</th>
+|Bedeutung
+
+
+|`tmp/check_mk/piggyback/`
+|Hier legt WATO die Huckepackdaten ab. Für jeden Host wird ein
+Unterordner mit seinem Namen erzeugt. Darin befindet sich eine
+Textdatei mit den Daten des Hosts. Dateiname ist der Host, welcher
+die Daten angeliefert hat.
+
+
+|`tmp/check_mk/cache/`
+|Hier wird die jeweils jüngste Agentenausgabe aller Hosts temporär
+gespeichert. Der Inhalt einer Datei zu einem Host ist identisch zu dem Befehl
+`cmk -d myserver123`.
+
+|===

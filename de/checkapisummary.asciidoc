@@ -1,0 +1,648 @@
+= Vorschlag für die neue Check API
+:revdate: draft
+
+Dies ist ein Whitepaper für unsere neue Check-API. Nur für den internen Gebrauch.
+
+== Integration in System
+
+=== Import der API
+
+Alle Plugins sind Pythonmodule. Damit diese die API nutzen können, müssen Sie die API oder Teile davon
+importieren. Dabei sind zwei Varianten vorgesehen. Die einfache Variante
+importiert alle Symbole per relativem Stern-Import. Dies ist für externe Entwickler gedacht (Plugins
+für die Exchange, etc.):
+
+.
+
+----from .v1 import *
+----
+
+Plugins, die offiziell Teil von (CMK) sind, müssen die Symbole explizit
+mit absolutem Pfad importieren:
+
+.
+
+----from cmk.base.plugins.agent_based.v1 import (
+   Result,
+   register,
+)
+----
+
+
+=== Import von Drittmodulen
+
+Ein Plugin darf beliebige Python-Module importieren. Best practice ist, keine externen
+Kanäle aufzumachen (z.B. SNMP-Zugriffe, IMAP, etc.)
+
+
+=== Verzeichnisstruktur
+
+Unsere Plugins liegen unter `lib/python3/cmk/base/plugins/agent_based`.
+
+Dabei existiert ein Symlink `lib/check_mk/base/plugins/agent_based`. Dieser
+ist das offizielle Verzeichnis für Handbuch etc. (ganz ähnlich wie `/opt/omd` offiziell
+nicht existiert, sondern immer nur `/omd` verwendet wird.)
+
+Fremde Plugins liegen unter `local/lib/check_mk/base/plugins/agent_based`.
+
+Existiert eine Datei mit dem gleichen Namen sowohl im `local` als auch
+im offiziellen Pfad, so ist es, als würde nur die Datei im `local`
+exisiteren.
+
+== Registrierung von (Agenten-)Sektionen
+
+Ein Checkplugin muss mindestens eine Agentensektion und einen Check
+deklarieren.  Dies ist in der neuen API getrennt und vermeidet auf diese
+Art einige Anomalien bei den Subchecks und an anderen Stellen. Die Funktion
+dafür ist `register.agent_section`. In diesen und allen weiteren
+Beispielen gehen wir wir davon aus, dass dieses Symbol bereit
+importiert ist. Hier ist ein Beispiel:
+
+.
+
+----register.agent_section(
+    name                 = "norris_solaris",
+    parsed_section_name  = "solaris",
+    parse_function       = parse_norris,
+    host_label_function  = host_label_norris,
+)
+----
+
+Folgende Keywordargumente sind definiert:
+
+[cols=25,10, options="header"]
+|===
+
+
+|Argument
+|obligatorisch
+|Bedeutung
+
+
+|`name`
+|ja
+|Name der Sektion, wie im Agentoutput zwischen `&lt;&lt;&lt;` und `&gt;&gt;&gt;` angegeben
+
+
+|`parse_function`
+|ja
+|Bekommt die Sektion als Tabelle, spuckt was Beliebiges aus.
+Diese ist neuerdings *obligatorisch*. Aber es gibt vordefinierte Funktionen,
+so dass man kein Lambda braucht. Beispiel: `parse_into_string_table`.
+
+
+|`parsed_section_name`
+|nein
+|Name der erzeugten Parsedsektion. Defaultiert zu `name`. Damit ist es aber auch möglich
+(siehe Beispiel), dass zwei Sektionen mit inhaltlich äquivalenten aber syntaktisch unterschiedlichen
+Daten mit zwei getrennten Parsefunktionen in ein gleiches Ergebnis geparst werden. Das macht die
+Parsefunktionen einfacher. Auch kann man so zu einem bestehenden Check eine neue Sektion in einem
+alternativen Format ausgeben lassen und diese dann per Parsefunktion wieder kompatibel zum bestehenden
+Check machen.
+
+
+|`host_label_function`
+|nein
+|Liefert eine Liste von Labels zum Host
+
+
+|`supersedes`
+|nein
+|Die hier gelisteten Sektionen werden verworfen, falls es die hiesige Sektion gibt.
+
+|===
+
+=== Die Parsefunktion
+
+==== Aufbau
+
+.
+
+----def parse_norris(string_table):
+    # rummachen mit der table
+    return { "irgendwas" : tolles }
+----
+
+Das einzige Argument heißt immer `string_table`, weil dies
+symbolisiert, dass wir eine Liste von Listen von Strings haben (wie
+aktuell auch, falls der Check keine Parsefunktion hat).
+
+==== Exceptions
+
+Exceptions dürfen fliegen. Man soll davon ausgehen, dass man wohlformatierte
+Daten bekommt.
+
+
+=== Die Hostlabelfunktion
+
+Die mit `host_label_function` deklarierte Funktion in der Sektion
+liefert anhand der Daten aus der Sektion Labels zum Host. Sie bekommt
+als Argument die geparste Sektion und kann 0, 1 oder mehrer Labels
+yielden, welche in die Klasse `HostLabel` eingepackt werden.
+
+.
+
+----def norris_host_labels(section):
+    ...
+    yield HostLabel("norris_client", "yes")
+    yield HostLabel("norris_id", "4711")
+----
+
+
+
+== SNMP-Sektionen
+
+=== Registrierung
+
+Sektionen, die per SNMP geholt werden, werden mit einer separaten Funktion
+deklariert. Diese ist eine erweiterte Version von `register.agent_section`.
+Hier ist ein Beispiel:
+
+.
+
+----register.snmp_section(
+    name            = "norris_snmp",
+    parsed_section_name = "norris",
+###    detect          = ("1.2.6.1.4.3.2.1.10.20", contains("norris")),
+    trees           = [ SNMPTree(
+        base = '.1.3.6.1.2.1',
+        oids = [
+            '1.3',     # DISMAN-EVENT-MIB::sysUpTime
+            '25.1.1',  # HOST-RESOURCES-MIB::hrSystemUptime
+        ],
+    ) ],
+    parse_function  = parse_snmp_norris,
+    supersedes      = ['norris'],  # ignore agent section, if we have SNMP. Not needed if this can't happen
+)
+----
+
+Die gleichen Schüssel wie bei den Agentensektionen und zusätzlich:
+
+[cols=25,10, options="header"]
+|===
+
+
+|Argument
+|obligatorisch
+|Bedeutung
+
+
+|`trees`
+|ja
+|Liste der abzuholenden SNMP-Bäume als Liste von SNMP-Tree-Objekten (siehe unten)
+
+
+|`detect`
+|ja
+|Deklarative Detectspezifikation, Beispiele dazu siehe unten.
+
+
+|`management_board`
+|nein
+|Zwei mögliche Werte: `management_board.DISABLED` und `management_board.EXCLUSIVE`.
+Der Defaultfall (der Host hat Präzedenz) kann nicht explizit eingestellt werden.
+
+|===
+
+
+
+=== SNMP-Detection
+
+Wie auch in der alten API müssen SNMP-Checks (neu: SNMP-Sektionen!) eine
+Logik implementieren, mittels der durch das Abholen von einigen wenigen OIDs
+erkannt werden kann, ob die Sektion auf dem besagten Gerät geholt werden
+soll. Dies ist aber jetzt keine Funktion mehr, sondern wird deklarativ gemacht.
+So kann die Logik einfacher an die neuen Fetch-Helper delegiert werden und
+diese sind nicht auf die Sprache Python beschränkt.
+
+Hier ein komplexeres Beispiel:
+
+.
+
+----    detect = all_of(
+        startswith(".1.3.6.1.2.1.1.2.0", ".1.3.6.1.4.1.13742.6"),
+        any_of(
+            startswith(".1.3.6.1.4.1.13742.6.3.2.1.1.3.1", "PX2-2"),
+            startswith(".1.3.6.1.4.1.13742.6.3.2.1.1.3.1", "PX23"),
+        ),
+    ),
+----
+
+Die Deklaration ist eine baumartige Struktur. Die Blätter sind immer
+Attribute auf bestimmte OIDs, die inneren Knoten sind `all_of`
+oder `any_of` (also eine und- oder oder-Verknüpfung).
+
+Bei den Attributsfunktionen ist das erste Argument eine OID, das zweite ein
+Vergleichsstring. Zu jedem Attribut gibt es eine Variante mit `not_`,
+welche die Negation darstellt. Folgende Attribute sind erlaubt:
+
+[cols=28,33, options="header"]
+|===
+
+
+|Attribut
+|Negation
+|Bedeutung
+
+
+|`equals(oid, needle)`
+|`not_equals(oid, needle)`
+|Gleichheit, case insensitive
+
+
+|`contains(oid, needle)`
+|`not_contains(oid, needle)`
+|Substring-Match, case insensitive
+
+
+|`startswith(oid, needle)`
+|`not_startswith(oid, needle)`
+|Wert der OID beginnt mit needle, case insensitive
+
+
+|`endswith(oid, needle)`
+|`not_endswith(oid, needle)`
+|Wert der OID endet mit needle, case insensitive
+
+
+|`matches(oid, regex)`
+|`not_matches(oid, regex)`
+|Wert der OID beginnt matcht (hinten und vorne geankert) auf regex, case insensitive
+
+
+|`exists(oid)`
+|`not_exists(oid)`
+|Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.
+
+|===
+
+
+== Registrierung von Checkplugins
+
+Beispiel:
+
+.
+
+----register.check_plugin(
+    name                     = "norris",
+    sections                 = ["norris", "somethingelse"],
+    service_name             = "Norris %s",
+    discovery_function       = discover_norris,
+    discovery_ruleset_name   = "norris_discovery",
+    check_function           = check_norris,
+    check_default_parameters = {"levels": (23, 42)},
+    check_ruleset_name       = "norris",
+)
+----
+
+Argumente von `register.check_plugin`:
+
+[cols=25,10, options="header"]
+|===
+
+
+|Argument
+|obligatorisch
+|Bedeutung
+
+
+|`name`
+|ja
+|Name des Plugins
+
+
+|`service_name`
+|ja
+|Schema für den Servicenamen, inklusive `%s`
+
+
+|`check_function`
+|ja
+|Ermittelt Status, Details, Additional Details und Metriken zu einem Item
+
+
+|`sections`
+|nein
+|Liste der Sektionen. Wenn fehlt, ist diese `["`_name_`"]`
+
+
+|`discovery_function`
+|nein
+|Ermittelt die zu übewachenden Items. Ist *obligatorisch*
+
+
+|`discovery_default_parameters`
+|nein
+|Parameter für die Serviceerkennung, falls der User keine per Regel definiert
+
+
+|`discovery_ruleset_name`
+|nein
+|Name der WATO-Regel für Discoverparameter
+
+
+|`check_default_parameters`
+|nein
+|Checkparameter, falls der User keine per Regel definiert
+
+
+|`check_ruleset_name`
+|nein
+|Name der WATO-Regel, welche die Checkparameter festlegen
+
+|===
+
+=== Die Discoverfunktion
+
+==== Aufrufsignatur
+
+Fall mit einer Sektion und mit Parametern:
+
+.
+
+----def discover_norris(params, section):
+----
+
+Falls der key `sections` verwendet wurde, bekommt
+die Funktion pro Sektion ein Argument, welches den Namen
+der jeweiligen Sektion hat und mit `section_` präfigiert ist:
+
+.
+
+----def discover_norris(section_foo, section_bar):
+----
+
+==== Exceptions
+
+Dürfen nur geschmissen werden, wenn man einen Programmierfehler macht.
+Da man aber keine Fehler machen darf, werden also nie Exceptions geworfen.
+
+==== Rückgabe
+
+Normalfall mit Items aber ohne Parameter:
+
+.
+
+----def discover_norris(section):
+    for key in section:
+        yield Service(item=key)
+----
+
+
+Fall, wo Items Parameter haben (z.B. `mounts`-Check):
+
+.
+
+----def discover_norris(section):
+    for key, value in section.items():
+        yield Service(item=key, params=value["p"])
+----
+
+
+Fall einer binären Discoverfunktion (ohne Item), also bei einem Check
+der entweder da ist oder nicht:
+
+.
+
+----def discover_norris(section):
+    if "foo" in section:
+        yield Service()
+----
+
+
+
+=== Die Checkfunktion
+
+==== Aufrufsignatur
+
+Check mit Item und Parameter und einer Sektion:
+
+.
+
+----def check_norris(item, params, section):
+----
+
+Check mit Item und Parameter und *mehreren* Sektionen:
+
+.
+
+----def check_norris(item, params, section_foo, section_bar):
+----
+
+Check ohne Item (erkannt am fehlenden `%s` im Servicenamen), aber mit
+Parametern:
+
+.
+
+----def check_norris(params, section):
+----
+
+Auch das Argument `params` darf analog fehlen. In allen Fällen sind die Namen der
+Argumente genau festgelegt und werden von uns validiert.
+
+==== Was darf sie machen?
+
+COMMENT[Das hier fehlt noch.]
+
+==== Exceptions
+
+Die Checkfunktion soll davon ausgehen, dass die Inhalt der Sektion valide sind
+und nicht auf unbekannte Dinge reagieren, die in keinem bekannten Agentoutput
+oder Walk vorkommen. Ausnahme: wenn man so etwas wie enums auswertet und
+möchte den Fall behandeln, dass ein nicht definiertert Wert kommt, raist
+man eine spezielle Exception. (CMK) zeigt dann nicht die Crashbombe an,
+sondern ein anderen Icon, was den Benutzer nicht so erschreckt. Es passiert
+aber ansonsten das gleiche.
+
+==== Skippen von Checks bzw. Teilresultaten
+
+Auslassen von einem kompleten Checkzyklus: Der Itemstate wird trotzdem immer
+automatisch gespeichert:
+
+.
+
+----def check_norris(params, section):
+    if counter_foo_bla:
+        raise IgnoreResultsException()
+----
+
+Auslassen des Checkergebnisse, allerdings soll die Checkfunktion erstmal noch
+weiterlaufen, damit z.B. weitere Counter verarbeitet werden.
+
+.
+
+----def check_norris(params, section):
+    for counter in list_of_counters:
+        if counter_wrapped_foo_bla[counter]:
+            yield IgnoreResults()
+
+----
+
+Außerdem gibt es Funktionen (z.B. Counterbehandlungsfunktionen, die von sich
+aus Exceptions schmeißen).
+
+
+==== Rückgabe
+
+== Hilfsfunktionen
+
+=== Renderfunktionen
+
+Renderingfunktionen richten sich in ihrer Benennung und ihrem Verhalten
+nach der Semantik, nicht nach dem Datentyp. Bytes beispielsweise werden
+unterschiedlich gerendert, je nach dem ob es sich um Platttenplatz
+(SI-Eineheit, Basis 1000) oder Memory (IEC-Einheit, Basis 1024) handelt.
+
+Alle Renderfunktionen hängen unter dem importierten Hilfsobjekt `render`,
+werden als z.B. aufgerufen mit `render.date(....)`.
+
+[cols=10,10,10, options="header"]
+|===
+
+
+|Funktion
+|Input
+|Beschreibung
+|Beispielausgabe
+
+
+<td class=tt>date</td><td>Epoche</td><td>Datum</td><td class=tt>Dec 18 1970</td><td class=tt>datetime</td><td>Epoche</td><td>Datum und Uhrzeit</td><td class=tt>Dec 18 1970 10:40:00</td><td class=tt>timespan</td><td>Sekunden</td><td>Dauer / Alter</td><td class=tt>3d 5m oder 1 day, 50 seconds, ???</td><td class=tt>disksize</td><td>Bytes</td><td>Größe von Platten oder deren Belegung, Basis 1000!</td><td class=tt>1,234 GB</td><td class=tt>bytes</td><td>Bytes</td><td>Größe von irgendwas in Bytes, Basis 1024</td><td class=tt>23,4 KiB</td><td class=tt>filesize</td><td>Bytes</td><td>Größe von Dateien, volle Genauigkeit</td><td class=tt>1,334,560 B</td><td class=tt>nicspeed</td><td>Octets / sec</td><td>Geschwindigkeit von Netzwerkkarten</td><td class=tt>100 MBit/s</td><td class=tt>networkbandwidth</td><td>Octets / sec</td><td>Übertragungsgeschwindigkeit</td><td class=tt>23.50 GBit/s</td><td class=tt>iobandwidth</td><td>Bytes / sec</td><td>IO-Bandbreiten</td><td class=tt>124 MB/s</td><td class=tt>percent</td><td>Prozent</td><td>Prozentwert, optimiert zwischen 0 und 100, gute Darstellung knapp unter 100.</td><td class=tt>99.997%</td>
+|===
+
+
+== Cluster
+
+=== Kein Defaultmode
+
+Ab Verion 1.0 der API gibt es keine implizite Clusterfähigkeit von
+Check-Plugins mehr.  Wenn ein nicht clusterfähiges Plugin auf einen
+Cluster gemappt wird, geht das, aber der Service geht auf (UKNOWN) mit einer
+entsprechend aussagekräftigen Fehlermeldung.
+
+=== Die Cluster-Checkfunktion
+
+==== Registrierung
+
+Ein Clusterfähiges Plugin definiert *zusätzlich* eine
+`cluster_check_function`.  Falls ein Host ein Cluster ist
+(nur dann), wird diese _anstelle_ der `check_function`
+aufgerufen. Die Sektionen werden dabei *pro Node separat* geparst
+und die Cluster-Checkfunktion bekommt diese geparsten Sektionen separat.
+Sie ermittelt das Ergebnis, wobei sie die normale Checkfunktion dabei
+verwenden kann, und ist rückgabewertkompatibel zur normalen Checkfunktion.
+
+Beispiel für die Deklaration:
+
+.
+
+----register.check_plugin(
+    name                   = "norris",
+    check_function         = check_norris,
+    cluster_check_function = check_norris_cluster,
+    # ...
+)
+----
+
+==== Aufrufsignatur
+
+Die Aufrufsignatur ist exakt gleich wie bei der normalen Checkfunktion,
+nur dass `section` jetzt ein Dictionary ist. Die Keys sind die
+Namen der Nodes. Die Werte die Eregbnisse der Parsefunktion (so wie sie
+die `check_function` bekommt.
+
+.
+
+----def check_norris_cluster(item, params, section):
+    # Hier ein Beispiel für eine "aggregate worst" oder sowas:
+    for node_name, node_parsed in section.items():
+        yield from check_norris(item, params, node_parsed)
+----
+
+Bei mehreren Sektionen ist es analog:
+
+.
+
+----def check_norris_cluster(item, params, section_foo, section_bar):
+    for node_name, node_parsed in section_foo.items():
+        # ...
+----
+
+=== Standard-Clusterfunktionen
+
+Um die Programmierung der Standardfälle zu erleichtern, enthält die API
+eine Reihe von Funktionsgeneratoren, welche eine normale Checkfunktion
+in eine Cluster-Checkfunktion umbauen.
+
+Hier ist die Tabelle der Generatoren:
+
+[cols=10, options="header"]
+|===
+
+
+|Name
+|Wirkung
+
+
+
+|`failover`
+|Der Service geht genau dann (OK), wenn auf genau einer der Nodes ein
+Checkresultat erzeugt wird, was den Zustand (OK) hat. Sollte von mehreren
+Nodes Ergebnisse kommen, wird der schlechteste Zustand gewählt (also die
+Einzelresultate per yield zurückgegeben), aber zusätzlich ein (WARN)
+geyieldet, so dass der Zustand nicht (OK) sein kann.
+
+
+|`worst`
+|Analog zu `failover`, aber es wird kein (WARN) erzeugt, wenn Daten
+von mehreren Nodes kommen.
+
+
+|`best`
+|Hier werden zunächste von allen Nodes die Einzelergebnisse ermittelt und aufgesammelt
+und dann aber nur dasjenige zurückgegeben, welches den besten Status hat.
+|===
+
+[cols=, ]
+|===
+
+Beispiel für eine Anwendung von so einem Generator:
+
+
+.
+
+----register.check_plugin(
+    name                   = "norris",
+    check_function         = check_norris,
+    cluster_check_function = clusterize.failover(check_norris),
+    # ...
+)
+----
+
+=== Migration der bestehenden Plugins
+
+Legacy-Plugins, die heute nicht explizit clusterfähig sind, importieren
+wir mit einer Version 0.1 der neuen API, welche per Default das alte
+Clusterverhalten hat. In dieser gibt es den key `cluster_check_function`
+gar nicht.
+
+Legacy-Plugin mit Nodeinfo migrieren wir auf eine explizitiere vernünftige
+Implementierung mit der neue API Version 1.0.
+
+
+=== Hostlabels auf Clustern
+
+Hostlabels auf Clustern gehen nur explizit -- also beim Anlegen des Hosts durch den
+User. Außerdem bekommt z.B. jeder Cluster das Label `cmk:cluster` oder so.
+
+Begründung: Dass Cluster dynamisch per DCD angelegt werden, ist aktuell gar nicht möglich
+und in Zukunft sehr unwahrscheinlich. Dass ein Kunde also unbedingt _automatisch_
+Labels auf Clustern braucht ist unwahrscheinlich. Automatisch dem Cluster die Labels
+der Nodes zuzuweisen ist problematisch, weil es dann sicher Situationen gibt, in denen
+der Anwender das nicht will und wir dann eine (komplizierte) Möglichkeit schaffen
+müssen, dass zu unterbinden ("Disabled Cluster Labels" oder so ein Schmarrn).
+
+Falls es mal zur Anforderung wird (nur dann!) haben wir mindestens diese Möglichkeiten:
+
+* Eine Funktion `cluster_label_function` analog zur `cluster_check_function`
+* Eine Regelkette, welche Clustern anhand von Nodelabels Labels zuweist
+

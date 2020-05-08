@@ -1,0 +1,353 @@
+= Writing SNMP based checks
+MD:In Checkmk, SNMP based checks work exactly like the agent based ones, except that you have to specify a list of subtrees in an SNMP MIB as data source.
+:revdate: outdated
+[.seealso][#writing_checks] [#devel_agentbased]== Preparations and SNMP basics
+
+[snmp|SNMP based checks] work exactly like the [devel_agentbased|agent based]
+ones with one exception: Instead of using a section from an agent's output
+you specify a list of subtrees in an SNMP MIB as data source.  Checkmk will
+retrieve each of the subtrees with a separate `snmpwalk` and combine the
+output into a table compatible with those used by the agent based checks.
+
+=== SNMPv1 versus SNMPv2
+
+Before we can start I want to say a few words about the different SNMP
+versions.  Checkmk supports three of them: *v1*, *v2c* and
+*v3*.  When calling `snmpwalk` you always have to specify the SNMP
+version to use (`-v1`, `-v2c` or `-v3`) Please note that:
+
+<ul>
+<li>Some information is *only* available via `-v2c` and `-v3`!</li>
+<li>Some older devices do not support `-v2c` and `-v3`, however</li>
+<li>`-v3` is about encryption and security and inconvenient for testing.</li>
+</ul>
+
+Do not wonder that you cannot find any 64 bit counters when using
+`-v1`. SNMPv1 does not support them. So rather try `-v2c`
+in that case. Please note, that users must declare such SNMPv2c-hosts in `bulkwalk_hosts`
+in `main.mk`.
+
+=== Vendor specific MIBs
+
+Many people have an unclear understand of what a MIB (file) is. Some assume that
+with the installation of a MIB file a monitoring system automatically knows how
+to monitor the device in question. The truth is that:
+
+<ul>
+<li>A MIB file is just a translation from numeric OIDs and enumeration values into texts.</li>
+<li>It also might contain some human readable explanation of its variables.</li>
+<li>Checkmk does not need (nor use) MIB files.</li>
+</ul>
+
+MIB files are quite helpful during the development of checks since they give
+us information about the existing OIDs and their meaning. They help finding
+the OIDs interesting for the monitoring and the possible values they can have.
+There are two ways for installing a MIB file:
+
+<ol>
+<li>Install it as `root` in `/usr/share/snmp/mibs`</li>
+<li>Install it as user in `~/.snmp/mibs/` (do a mkdir -p `~/.snmp/mibs` before this)</li>
+</ol>
+
+If you correctly have installed a MIB files, `snmpwalk` will show
+names instead of numbers at the places in question.
+
+=== Finding the correct OIDs
+
+If you have setup your SNMP environment, then next step in implementing our
+own SNMP check is to find the interesting places (OIDs) in the whole tree
+of SNMP variables your device supports.
+
+In this tutorial we want to write a simple check for testing the
+operational state of network interfaces. Checkmk already ships a powerful
+check that can do this and much more (`if`/`if64`). But as an
+example this will do perfectly (and it will work on almost _every_ SNMP
+device).
+
+After some investigation with `snmpwalk` we find the place in the OID
+tree where information about local network interfaces is provided:
+
+[source,bash]
+----
+RP:snmpwalk -v1 -c public 192.168.56.2 ifTable
+IF-MIB::ifIndex.1 = INTEGER: 1
+IF-MIB::ifIndex.2 = INTEGER: 2
+IF-MIB::ifIndex.3 = INTEGER: 3
+IF-MIB::ifDescr.1 = STRING: lo
+IF-MIB::ifDescr.2 = STRING: eth0
+IF-MIB::ifDescr.3 = STRING: eth1
+IF-MIB::ifType.1 = INTEGER: softwareLoopback(24)
+IF-MIB::ifType.2 = INTEGER: ethernetCsmacd(6)
+IF-MIB::ifType.3 = INTEGER: ethernetCsmacd(6)
+IF-MIB::ifMtu.1 = INTEGER: 16436
+----
+
+Since Checkmk in general works with numeric OIDs, lets call `snmpwalk`
+again, this time with the option `-On`:
+
+[source,bash]
+----
+RP:snmpwalk <b class=hilite>-On* -v2c -c public 192.168.56.2 ifTable
+<b class=hilite>.1.3.6.1.2.1.2.2.1*.1.1 = INTEGER: 1
+.1.3.6.1.2.1.2.2.1.1.2 = INTEGER: 2
+.1.3.6.1.2.1.2.2.1.1.3 = INTEGER: 3
+.1.3.6.1.2.1.2.2.1.<b class=hilite>2*.1 = STRING: lo
+.1.3.6.1.2.1.2.2.1.<b class=hilite>2*.2 = STRING: eth0
+.1.3.6.1.2.1.2.2.1.<b class=hilite>2*.3 = STRING: eth1
+.1.3.6.1.2.1.2.2.1.<b class=hilite>3*.1 = INTEGER: softwareLoopback(24)
+.1.3.6.1.2.1.2.2.1.<b class=hilite>3*.2 = INTEGER: ethernetCsmacd(6)
+.1.3.6.1.2.1.2.2.1.<b class=hilite>3*.3 = INTEGER: ethernetCsmacd(6)
+.1.3.6.1.2.1.2.2.1.4.1 = INTEGER: 16436
+.1.3.6.1.2.1.2.2.1.4.2 = INTEGER: 1500
+.1.3.6.1.2.1.2.2.1.4.3 = INTEGER: 1500
+.1.3.6.1.2.1.2.2.1.5.1 = Gauge32: 10000000
+.1.3.6.1.2.1.2.2.1.5.2 = Gauge32: 10000000
+.1.3.6.1.2.1.2.2.1.5.3 = Gauge32: 10000000
+.1.3.6.1.2.1.2.2.1.6.1 = STRING:
+.1.3.6.1.2.1.2.2.1.6.2 = STRING: 8:0:27:38:45:b1
+.1.3.6.1.2.1.2.2.1.6.3 = STRING: 8:0:27:f4:e2:e
+.1.3.6.1.2.1.2.2.1.7.1 = INTEGER: up(1)
+.1.3.6.1.2.1.2.2.1.7.2 = INTEGER: up(1)
+.1.3.6.1.2.1.2.2.1.7.3 = INTEGER: up(1)
+.1.3.6.1.2.1.2.2.1.<b class=hilite>8*.1 = INTEGER: up(1)
+.1.3.6.1.2.1.2.2.1.<b class=hilite>8*.2 = INTEGER: up(1)
+.1.3.6.1.2.1.2.2.1.<b class=hilite>8*.3 = INTEGER: down(2)
+----
+
+I marked the interesting OIDs in the example output.  The longest common
+prefix of all relevant OIDs is `.1.3.6.1.2.1.2.2.1` in our case. We'll
+remember that for later. Now we have to decide, which subtrees are needed.
+In our case we will use the following sub OIDs:
+
+[cols=, ]
+|===
+<td class=tt>2</td><td>The name of the interface</td><td class=tt>3</td><td>The type of the interface</td><td class=tt>8</td><td>The operational state of the interface</td>|===
+
+=== Declaration of the OIDs in the check file
+
+Now let's create a check file with the name `mynics`. The needed OIDs
+are declared in the array `snmp_info`. You specify a pair of
+
+<ul>
+<li>The base OID (= the prefix)</li>
+<li>A python list with the sub OIDs to retrieve below this base OID</li>
+</ul>
+
+./usr/share/check_mk/checks/mynics
+
+----snmp_info["mynics"] = ( ".1.3.6.1.2.1.2.2.1", [ "2", "3", "8" ] )
+----
+
+*Note*: If you are using OMD, then you put
+your check files as site user directly into your site's local area into <nobr>`~/local/share/check_mk/checks`</nobr>.
+
+As soon as an `snmp_info` entry exists for a check Checkmk knows
+that it is of type SNMP (and not TCP). During inventory and during checking
+Checkmk will fetch the three sub-OIDs `2`, `3` and `8`
+below the prefix `.1.3.6.1.2.1.2.2.1` with three separate calls
+to `snmpwalk`.
+
+== The implementation of the check
+=== Dummy implementation
+Just as in [devel_agentbased|tutorial for agent based checks], we first write dummy functions
+and output the data arriving at the inventory function. Here
+is a complete check implementation:
+
+.mynics
+
+----def inventory_mynics(info):
+   # Debug: lets see how the data we get looks like
+   <b class=hilite>print info*
+   return []
+
+def check_mynics(item, params, info):
+   return (3, "UNKNOWN - not yet implemented")
+
+check_info["mynics"] = {
+    "check_function"        : check_mynics,
+    "inventory_function"    : inventory_mynics,
+    "service_description"   : "NIC %s",
+    "snmp_info"             : ( ".1.3.6.1.2.1.2.2.1", [ "2", "3", "8" ] )
+}
+----
+
+An explanations of `check_info` for those who have not read the
+[devel_agentbased|tutorial for agent based checks]:
+
+<ul>
+<li>The first entry is the check function</li>
+<li>The second entry is the _Nagios service description_. The `%s` will be replaced
+with the check item. If your check does not have an item (uses `None`) then you must not use a `%s`.</li>
+<li>The third entry is `1` if the check outputs performance data and `0` otherwise.</li>
+<li>The forth entry is the inventory function or `no_inventory_possible` if you check does not support
+inventory.</li>
+</ul>
+
+We know that that declaration is a bit strange. This has historical reasons, of course. During the
+version 1.1.11 it will probably cleaned up...
+
+=== A first test of our check
+Before we can try a first inventory, we _must_ declare the host
+as an SNMP host in `main.mk`. Otherwise Checkmk will not
+even contact the host via SNMP (this has changed in version 1.1.9.
+Please read the [migration_notes|migration notes] for details).
+
+Simply add the [hosttags|host tag] `snmp`:
+
+.main.mk
+
+----all_hosts = [
+ "192.168.56.2|<b class=hilite>snmp*",
+]
+----
+
+A test inventory of that host now shows this debug output:
+
+[source,bash]
+----
+RP:check_mk --checks mynics -I  192.168.56.2
+[['lo', '24', '1'], ['eth0', '6', '2'], ['wlan0', '6', '1'], ['usb0', '6', '2'],
+['vboxnet0', '6', '2'], ['pan0', '6', '2']]
+----
+
+If your SNMP info is more complex, then that output quickly becomes unreadable.
+Fortunately Python provides the module `pprint` for pretting printing Python objects.
+Here is a variant that uses `pprint`:
+
+.mynics
+
+----def inventory_mynics(info):
+   # Debug: lets see how the data we get looks like
+   <b class=hilite>import pprint ; pprint.pprint(info)*
+   return []
+----
+
+And its output:
+[source,bash]
+----
+RP:check_mk -I mynics 192.168.56.2
+[['lo', '24', '1'],
+ ['eth0', '6', '2'],
+ ['wlan0', '6', '1'],
+ ['usb0', '6', '2'],
+ ['vboxnet0', '6', '2'],
+ ['pan0', '6', '2']]
+----
+
+You might have noticed from this that Checkmk transforms the SNMP output such that
+each item is in one line (one list). So from now on everything
+works exactly like at agent based checks.
+
+
+When looping over the lines in `info`, we can make use of Python's list
+assignment feature and directly unpack each line into the three variables `nic`,
+`type` and `state`:
+
+.mynics
+
+----def inventory_mynics(info):
+   <b class=hilite>for nic, type, state in info:*
+----
+
+
+Now let our inventory function skip the loopback device `lo`, since
+it is its task to decide which items _make sense_ being checked. The
+loopback device certainly does not. For that purpose we have declared the
+second column in `snmp_info`: the interface type. As a look into
+the MIB file `/usr/share/snmp/mibs/IANAifType-MIB.txt` will confirm,
+the type `6` means ethernet and is used for "normal" interfaces.
+Furthermore we only want to monitor NICs that are currently up.
+
+When making comparisons please have in mind, that - though SNMP is
+sometimes sending _numbers_ - Checkmk provides everything as
+_strings_. So we need to check for type `"6"` and state `"1"` (up):
+
+.
+
+----def inventory_mynics(info):
+   for nic, type, state in info:
+       if <b class=hilite>type == "6" and state == "1":*
+----
+
+So what if we find a match? Simply add a pair for _item_ and
+_parameter_ to the inventory. Since our check does not use a
+parameter, we specify `None` as second argument.
+Here is the complete inventory function:
+
+.
+
+----def inventory_mynics(info):
+   for nic, type, state in info:
+       if type == "6" and state == "1":
+	  <b class=hilite>yield, nic, None*
+----
+An inventory will now find one check for our host:
+
+[source,bash]
+----
+RP:check_mk --checks mynics -I 192.168.56.2
+mynics                <b class=green>1 new checks*
+----
+
+=== The check function
+For each item (in this case NIC)
+the check function will be called once, with the following arguments:
+
+<ul>
+<li>The item (e.g. `"eth0")`</li>
+<li>The parameters for the check</li>
+<li>The agent data (just the same as for inventory)</li>
+</ul>
+
+How to work with parameters is explained in the [devel_agentbased#H1:Check parameters|tutorial for agent based checks].
+It is good style to name the argument `_no_params`
+if you check does not process any parameters.
+
+The check now is free in how to computes its result and returns a
+pair or triple of values:
+
+<ul>
+<li>The Nagios status (`0`, `1`, `2` or `3`</li>
+<li>The plugin output for Nagios (free text)</li>
+<li>optional: [devel_agentbased#H1:Performance data|performance data]</li>
+</ul>
+
+Our check just checks the operations status of the NIC
+and returns an according state:
+
+.
+
+----def check_mynics(item, _no_params, info):
+   for nic, type, state in info:
+      if nic == item:
+	 if state == "1":
+	    return 0, "OK - link is up"
+	 else:
+	    return 2, "CRITICAL - link is " + state
+----
+
+Now we can try and check the host:
+[source,bash]
+----
+RP:cmk -nv localhost
+Checkmk version 1.1.9i9
+NIC eth0             <b class=green>OK - link is up*
+----
+
+=== What's next?
+If you got so far, you can further improve your check, for example:
+
+<ul>
+<li>by outputting [devel_agentbased#H1:Performance data|performance data]</li>
+<li>by making your check understand [devel_agentbased#H1:Check parameters|parameters]</li>
+<li>by adding a [devel_snmpscan|SNMP scan function]</li>
+<li>by writing a man page for your check</li>
+</ul>
+
+If you thing that your check is really useful and also well implemented then
+consider donating it to the official Checkmk project. Our [devel_guidelines|check development guidelines]
+tell you what criteria a check must fullfil to be accepted into our distribution.
+
+If your check ist not completely matching our guidelines but still of use for
+others than you can make an [packaging|MKP package] out of it and upload
+it to the <a href="https://exchange.checkmk.com/">Checkmk Exchange</a>.

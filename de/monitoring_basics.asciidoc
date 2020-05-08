@@ -1,0 +1,513 @@
+= Grundlagen des Monitorings mit Checkmk
+:revdate: 2019-12-12
+[.seealso][#wato_hosts] [#check_mk_getting_started] [#wato_monitoringagents]MT:Begriffe in (CMK) verstehen
+MD:Grundlegende Begriffe und Konzepte in checkmk werden hier näher erläutert. Lesen Sie diesen Artikel, wenn Sie checkmk noch nicht kennen.
+
+== Zustände und Ereignisse
+
+Bisher haben wir uns damit befasst, wie man (CMK) installiert und in Betrieb
+nimmt. Nun ist es an der Zeit, die grundlegenden Konzepte und Begriffe des
+Monitorings (mit (CMK)) zu erläutern.
+
+Zunächst ist es wichtig, die grundlegenden Unterschiede zwischen _Zuständen_
+und _Ereignissen_ zu verstehen -- und zwar aus ganz praktischem Nutzen.
+Die meisten klassischen IT-Monitoring-Systeme drehen sich um
+Ereignisse (Events). Ein Ereignis ist etwas zu einem ganz bestimmten Zeitpunkt
+einmalig Geschehenes. Ein gutes Beispiel wäre _Fehler beim Zugriff
+auf Platte X_. Übliche Quellen von Ereignissen sind Syslog-Meldungen,
+SNMP-Traps, das Windows-Event-Log und Einträge in Logdateien. Ereignisse
+passieren quasi spontan (von selbst, asynchron).
+
+Dagegen beschreibt ein _Zustand_ eine anhaltende Situation, z.B.
+_Platte X ist online_. Um den aktuellen Zustand von etwas zu überwachen,
+muss das Monitoring-System diesen regelmäßig abfragen. Wie das Beispiel
+zeigt, gibt es beim Monitoring oft die Wahl, ob man mit Ereignissen oder
+mit Zuständen arbeitet.
+
+(CMK) beherrscht beide Disziplinen, gibt jedoch
+immer dort, wie die Wahl besteht, dem zustandsbasierten Monitoring den Vorzug.
+Der Grund liegt in den zahlreichen Vorteilen dieser Methode. Einige davon
+sind:
+
+* Ein Fehler in der Überwachung selbst wird sofort erkannt, weil es natürlich auffällt, wenn das Abfragen des Zustands nicht mehr funktioniert. Das Nichtauftreten einer _Meldung_ dagegen gibt keine Sicherheit, ob das Monitoring noch funktioniert.
+* Das Monitoring kann selbst steuern, mit welcher Rate Zustände abgerufen werden. Es gibt keine Gefahr eines Sturms an Event-Meldungen in systemweiten Problemsituationen.
+* Das regelmäßige Abfragen in einem festen Zeitraster ermöglicht das Erfassen von [graphing|Metriken], um deren Zeitverlauf aufzuzeichnen.
+* Auch nach chaotischen Situationen  --  z.B. Stomausfall im RZ  --  hat man immer einen zuverlässigen Gesamtzustand.
+
+Man kann also sagen, dass das zustandsbasierte Monitoring bei (CMK) das
+_normale_ ist. Für das Verarbeiten von Ereignissen gibt es daneben
+die [ec|(CMK) Event Console]. Diese ist auf das Korrelieren und Bewerten
+von großen Mengen von Events spezialisiert und nahtlos in das Monitoring
+integriert.
+
+
+== Hosts und Services
+
+[#hosts]
+=== Hosts
+Alles in der Überwachung dreht sich um _Hosts_ und _Services_. Wir haben
+uns lange Gedanken gemacht, wie man Host ins Deutsche übersetzen könnte und am Ende
+entschieden, dass wir den Begriff so belassen, um keine unnötige Verwirrung zu stiften.
+Denn ein Host kann vieles sein, z.B.:
+
+* Ein Server
+* Ein Netzwerkgerät (Switch, Router, Loadbalancer)
+* Ein Messgerät mit IP-Anschluss (Thermomether, Luftfeuchtesensor)
+* Irgendetwas anderes mit einer IP-Adresse
+* Ein Cluster aus mehreren Hosts
+* Eine virtuelle Maschine
+* Ein Docker-Container
+
+Im Monitoring hat ein Host immer einen von folgenden Zuständen:
+
+[cols=10,10, options="header"]
+|===
+
+
+|Zustand
+|Farbe
+|Bedeutung
+
+
+|(UP)
+|grün
+|Der Host ist über das Netzwerk erreichbar (in der Regel heißt das, dass er
+auf PING antwortet).
+
+
+|(DOWN)
+|rot
+|Der Host antwortet nicht auf Anfragen aus
+dem Netzwerk, ist nicht erreichbar.
+
+
+|(UNREACH)
+|orange
+|Der _Weg_ zu dem Host ist aktuell für das Monitoring versperrt, weil ein
+Router oder Switch auf dem Weg dorthin ausgefallen ist.
+
+
+|(PEND)
+|grau
+|Der Host wurde frisch in die Überwachung aufgenommen
+und noch nie abgefragt. Genau genommen ist das aber kein Zustand.
+
+|===
+
+Neben dem Zustand hat ein Host noch einige Attribute, die vom Anwender
+konfiguriert werden, z.B.:
+
+* Einen eindeutigen Namen
+* Eine IP-Adresse
+* Optional einen Alias-Namen, welcher nicht eindeutig sein muss
+* Optional einen oder mehrere _Parents_
+
+
+[#parents]
+=== Parents
+
+Damit das Monitoring den Zustand (UNREACH) berechnen kann,
+muss es wissen, über welchen Weg es jeden einzelnen Host erreichen kann. Dazu
+kann man bei jeden Host einen oder mehrere sogenannte _Parenthosts_
+angeben.  Wenn z.B. ein Server A _vom Monitoring aus gesehen_ nur über
+einen Router B erreichbar ist, dann ist B ein Parent von A. Dabei werden
+nur _direkte_ Parents konfiguriert. Daraus ergibt sich dann eine
+baumartige Struktur mit der (CMK)-Instanz in der Mitte (hier dargestellt als
+ICON[parent_map_root.png]):
+
+image::bilder/monitoring_parents.png[]
+
+Wenn in diesem Beispiel also der Host _sw-ks-01.lan.tribe29.com_ den
+Zustand (DOWN) annimmt, dann geht das Monitoring automatisch davon aus, dass
+ein eventueller Ausfall von _sw-ks-02.lan.tribe29.com_ einfach damit
+erklärbar ist, dass dieser vom Monitoring nicht mehr erreicht werden kann.
+Ob er wirklich ebenfalls ausgefallen ist, ist damit nicht feststellbar.
+Er wird im Monitoring dann als (UNREACH) klassifiziert. Und es gilt die
+wichtige Regel, dass (per Default) zu Hosts mit dem Status (UNREACH) _keine_
+[notifications|Alarmierung] erfolgt. Denn das ist die wichtigste Aufgabe
+des Konzepts mit den Parents: Die Vermeidung von massenhaften Fehlalarmen,
+falls ein ganzes Netzwerksegment für das Monitoring nicht mehr erreichbar ist.
+
+Übrigens: Die Überwachung von _sw-ks-02.lan.tribe29.com_ findet trotzdem noch statt!
+Sollte dieser Host antworten, wird er auf jeden Fall als (UP) dargestellt.
+
+
+[#services]
+=== Services
+
+Ein Host hat eine Menge von _Services_. Ein Service kann alles Mögliche
+sein, bitte verwechseln Sie das nicht mit den Services von Windows. Ein Service
+ist irgendein Teil oder Aspekt des Hosts, der OK sein kann oder eben nicht.
+Der Zustand von Services kann natürlich immer nur dann abgefragt werden, wenn
+der Host im Zustand (UP) ist.
+
+Folgende Zustände kann ein Service im Monitoring haben:
+
+[cols=10,10, options="header"]
+|===
+
+
+|Zustand
+|Farbe
+|Bedeutung
+
+
+|(OK)
+|grün
+|Der Service ist vollständig in Ordnung. Alle Messwerte liegen im
+erlaubten Bereich.
+
+
+|(WARN)
+|gelb
+|Der Service funktioniert normal, aber seine Parameter
+liegen außerhalb des optimalen Bereichs.
+
+
+|(CRIT)
+|rot
+|Der Service ist ausgefallen, defekt.
+
+
+|(UNKNOWN)
+|orange
+|Der Zustand des Services konnte nicht korrekt ermittelt
+werden. Der Monitoring-Agent hat
+fehlerhafte Daten geliefert oder die zu überwachende Sache
+ist ganz verschwunden.
+
+
+|(PEND)
+|grau
+|Der Service ist gerade in die Überwachung aufgenommen worden und es gibt noch
+keine Monitoring-Daten.
+
+|===
+
+Wenn es darum geht, welcher Zustand „schlimmer“ ist, verwendet (CMK) folgende Reihenfolge:
+
+<center>
+(OK) → (WARN) → (UNKNOWN) → (CRIT)
+</center>
+
+
+== Host- und Servicegruppen
+
+Hosts und Services können zur Übersicht gruppiert werden. Dabei kann ein Host/Service
+auch in mehreren Gruppen sein. Diese Gruppen sind rein optional und für die Konfiguration
+nicht notwendig. Hostgruppen können nützlich sein, wenn Sie eine zusätzliche Gruppierung
+quer zu der Ordnerstruktur wünschen, in der Sie die Hosts verwalten. Haben Sie
+die Ordnerstruktur z.B. nach geographischen Gesichtspunkten aufgebaut, dann kann
+eine Hostgruppe _Linux-Server_ sinnvoll sein, die alle Linux-Server zusammenfasst,
+egal an welchen Standorten diese stehen.
+
+
+
+== Kontakte und Kontaktgruppen
+
+Kontakte und [wato_user#contact_groups|Kontaktgruppen] bieten die Möglichkeit, Hosts und Services
+Personen zuzuordnen. Ein Kontakt entspricht einer Benutzerkennung der
+Weboberfläche. Die Zuordnung zu Hosts und Services geschieht jedoch
+nicht direkt, sondern über Kontaktgruppen. Zunächst wird ein Kontakt
+(z.B. `harri`) einer Kontaktgruppe (z.B. `linux-admins`) zugeordnet.
+Der Kontaktgruppe werden dann wieder Hosts oder nach Bedarf auch einzelne
+Services zugeordnet. Dabei können sowohl Benutzer als auch Hosts und Services
+jeweils mehreren Kontaktgruppen zugeordnet sein.
+
+Diese Zuordnung ist für mehrere Aspekte nützlich:
+
+. Wer darf was _sehen?_
+. Wer darf welche Hosts und Services _konfigurieren und steuern?_
+. Wer wird bei welchen Problemen _benachrichtigt?_
+
+Der Benutzer `cmkadmin`, der beim Erzeugen einer Instanz automatisch
+angelegt wird, darf übrigens immer alle Hosts und Services sehen, auch wenn
+er kein Kontakt ist. Dies ist durch seine Rolle als Administrator bedingt.
+
+
+== Benutzer und Rollen
+
+Während über Kontakte und Kontaktgruppen gesteuert wird, welche Personen
+für einen bestimmten Host oder Service zuständig oder berechtigt sind,
+werden die Privilegien über _Rollen_ gesteuert. (CMK) wird dabei
+mit drei Rollen ausgeliefert, von denen Sie später weitere Rollen ableiten
+können. Jede Rolle definiert eine Reihe von Rechten, welche Sie anpassen
+können. Die Bedeutung der Standardrollen sind:
+
+[cols=5,10, options="header"]
+|===
+
+
+|
+|Rolle
+|Bedeutung
+
+
+|ICON[icon_roles.png]
+|`admin`
+|Darf alles sehen, hat alle Privilegien.
+
+
+|ICON[icon_roles.png]
+|`user`
+|Darf nur sehen, wofür er Kontakt ist. Darf Hosts verwalten in Ordnern,
+die ihm zugewiesen sind. Darf keine globalen Einstellungen machen.
+
+
+|ICON[icon_roles.png]
+|`guest`
+|Darf alles sehen, aber nichts konfigurieren und auch
+nicht in das Monitoring eingreifen.
+
+|===
+
+
+== Probleme, Ereignisse und Alarmierungen
+
+=== Behandelte und unbehandelte Probleme
+
+(CMK) bezeichnet jeden Host der nicht (UP) und jeden
+Service, der nicht (OK) ist, als ein _Problem_.
+Dabei kann ein Problem zwei Zustände haben: _unbehandelt_ (unhandled)
+und _behandelt_ (handled). Der Ablauf ist so, dass ein neues Problem
+zunächst als unbehandelt gilt. Sobald jemand das Problem im Monitoring
+_bestätigt_ (quittiert, acknowledged), gilt es als behandelt.
+Man könnte auch sagen, dass die unbehandelten Probleme solche sind, um
+die sich noch niemand gekümmert hat. Die taktische Übersicht in der
+Seitenleiste unterscheidet deswegen diese beiden Arten von Problemen:
+
+image::bilder/tactical_overview.png[align=center,width=43%]
+
+Übrigens: Service-Probleme von Hosts, die gerade nicht (UP) sind, werden
+hier nicht als Problem angezeigt.
+
+Weitere Details zu den Quittierungen finden Sie in einem [basics_ackn|eigenen Artikel].
+
+
+[#notifications]
+=== Alarme und Benachrichtigungen
+
+Wann immer sich der Zustand eines Hosts oder Serivces ändert (z.B. von
+(OK) auf (CRIT)), spricht (CMK) von
+einem _Ereignis_ (Alert). So ein Ereignis kann  --  muss aber nicht  --  zu einer
+[notifications|Alarmierung] führen. (CMK) ist so voreingestellt, dass im Falle eines
+Problems von einem Host oder Service jeder Kontakt dieses Objekts per Email
+benachrichtigt wird (bitte beachten Sie hierbei, dass `cmkadmin`
+erstmal _kein_ Kontakt von irgendeinem Objekt ist). Dies kann aber
+sehr flexibel angepasst werden. Auch hängt die Alarmierung von einigen
+Rahmenbedingungen ab. Am einfachsten ist es, wenn wir uns ansehen, in
+welchen Fällen _nicht_ alarmiert wird. Die Alarmierung wird
+unterdrückt, wenn:
+
+* Alarme global in der _Master Control_ ausgeschaltet wurden,
+* Alarme bei dem Host/Service ausgeschaltet wurden,
+* der jeweilige Zustand bei dem Host/Service für Alarmierung abgeschaltet ist (z.B. keine Benachrichtigung bei (WARN)),
+* das Problem einen Service betrifft, dessen Host (DOWN) oder (UNREACH) ist,
+* das Problem einen Host betrifft, dessen Parents alle (DOWN) oder (UNREACH) sind,
+* für den Host/Service eine _Alarmierungsperiode_ (notification period) definiert wurde, die gerade nicht aktiv ist (siehe unten),
+* der Host/Service gerade _unstetig_ ICON[icon_flapping.png] (flapping) ist (siehe unten),
+* sich der Host/Service gerade in einer _Wartungszeit_ (scheduled downtime) befindet (siehe unten).
+
+Wenn keine dieser Bedingungen für eine Unterdrückung erfüllt ist, erzeugt der Monitoring-Kern
+eine Benachrichtigung, welche dann im zweiten Schritte eine Kette von benutzerdefinierbaren
+Regeln durchläuft. Dort können Sie dann noch weitere Ausschlusskriterien
+festlegen und entscheiden, wer auf welchem Wege alarmiert werden soll (Email,
+SMS, etc.).
+
+Alle Einzelheiten rund um die Alarmierung finden Sie in einem [notifications|eigenen Artikel].
+
+[#flapping]
+=== Unstetige Hosts und Services (Flapping)
+
+Manchmal kommt es vor, dass sich der Zustand von einem Service in kurzen
+Abständen immer wieder ändert. Um ständige Alarmierungen zu
+vermeiden, schaltet (CMK) so einen Service in den Zustand _unstetig_
+(flapping). Dies wird durch das Symbol ICON[icon_flapping.png] illustriert. Jetzt wird ein
+letztes Mal eine Benachrichtigung erzeugt. Diese informiert, dass eben dieser
+Zustand eingetreten ist, und danach ist Ruhe. Wenn für eine angemessene
+Zeit kein weiterer Zustandswechsel geschieht  --  sich also alles beruhigt und
+endgültig zum Guten oder zum Schlechten gewendet hat  --  verschwindet dieser
+Zustand wieder und die normale Alarmierung setzt wieder ein.
+
+
+[#downtimes]
+=== Wartungszeiten (Scheduled Downtimes)
+
+Wenn Sie an einem Server, Gerät oder an einer Software Wartungsarbeiten vornehmen möchten,
+möchten Sie in der Regeln Alarmierungen über eventuelle Probleme in dieser Zeit
+vermeiden. Außerdem möchten Sie Ihren Kollegen evtl. signalisieren, dass Probleme, die
+das Monitoring anzeigt, vorübergehend ignoriert werden sollen.
+
+Zu diesem Zweck können Sie zu einem Host oder Service _Wartungszeiten_ (scheduled
+downtimes) eintragen. Diese können Sie entweder direkt beim Beginn der Arbeiten oder
+auch schon im Vorfeld eintragen. Wartungszeiten werden durch Symbole illustriert:
+
+[cols=, ]
+|===
+
+
+|ICON[icon_downtime.png]
+|Der Host/Service befindet sich in einer Wartungszeit.
+
+
+|ICON[icon_derived_downtime.png]
+|Der Host, auf dem sich der Service befindet, ist in einer Wartungszeit.
+
+|===
+
+Während ein Host oder Service in Wartungszeit ist,
+
+* werden keine Alarme versendet,
+* werden Probleme nicht in der Tactical Overview angezeigt.
+
+Auch wenn Sie später Auswertungen über die Verfügbarkeit von Hosts
+oder Services machen möchten, ist es eine gute Idee Wartungszeiten
+einzutragen. Diese können dann später bei der Berechnung berücksichtigt
+werden.
+
+
+== Zeitperioden (Timeperiods)
+
+image::bilder/icon_timeperiods.png[align=left,width=8%]
+
+Zeitperioden definieren regelmäßig wöchentlich wiederkehrende Zeitbereiche, die
+an verschiedenen Stellen in der Konfiguration des Monitorings zum Einsatz kommen.
+Eine typische Zeitperiode könnte `workhours` heißen und die Zeiten von
+jeweils 8:00 bis 17:00 Uhr beinhalten, an allen Wochentagen außer Samstag und Sonntag.
+Vordefiniert ist die Periode `24X7`, welche einfach alle Zeiten einschließt.
+Zeitperioden können auch Außnahmen für bestimmte Kalendertage enthalten  --  z.B.
+für die bayerischen Feiertage.
+
+Einige wichtige Stellen, an denen Zeitperioden zum Einsatz kommen, sind:
+
+* Begrenzung der Zeiten, innerhalb derer alarmiert wird (Alarmierungsperiode, notification period)
+* Begrenzung der Zeiten, innerhalb derer Checks ausgeführt werden (Checkperiode, check period)
+* Servicezeiten für die Berechnung von Verfügbarkeiten (Serviceperiode, service period)
+* Zeiten, innerhalb derer bestimmte Regeln in der Event Console greifen.
+
+[#checkintervall]
+== Checkintervall, Checkversuche und Checkperiode
+
+Das Ausführen von Checks geschieht beim zustandsbasierten Monitoring in festen
+Intervallen. (CMK) verwendet als Standard eine Minute. Jeder Check wird also
+einmal pro Minute ausgeführt. Per Konfiguration kann dies geändert werden:
+
+* Auf einen längeren Wert, um CPU-Ressourcen auf Server und Zielsystem zu sparen
+* Auf einen kürzeren Wert, um schneller Alarme zu bekommen und Messdaten in einer höheren Auflösung einzusammeln
+
+Durch Definition einer anderen Checkperiode als 24X7 kann das Ausführen von
+_aktiven_ Checks in bestimmten Zeitfenstern unterbrochen werden. Der
+Zustand der Services wird dann nicht mehr aktualisiert und diese werden als
+_veraltet_ angezeigt (stale), symbolisiert durch ICON[icon_stale.png].
+
+In Kombination mit einem großen Checkintervall kann man dafür sorgen, dass
+ein aktiver Check einmal am Tag zu einer ganz bestimmten Zeit ausgeführt
+wird. Setzen Sie z.B. das Intervall auf 24 Stunden und die Checkperiode auf
+den Zeitraum 2:00 bis 2:01 Uhr an jedem Tag (also nur eine Minute pro Tag),
+dann wird (CMK) dafür sorgen, dass der Check auch wirklich in dieses kurze
+Zeitfenster verschoben wird.
+
+[#max_check_attempts]
+Mit Hilfe der _Checkversuche_ (max check attempts) können Sie Alarmierungen
+bei sporadischen Fehlern vermeiden. Sie machen einen Check damit quasi weniger
+sensibel. Sind die Checkversuche z.B. auf 3 eingestellt, und der entsprechende
+Service wird (CRIT), dann wird zunächst noch keine Alarmierung
+ausgelöst. Erst wenn auch die nächsten beiden Checks ein Resultat liefern, das
+nicht (OK) ist, steigt die Nummer des aktuellen Versuchs
+auf 3 und die Alarmierung wird versendet.
+
+Ein Service, der sich in diesem Zwischenzustand befindet -- also nicht (OK) ist,
+aber die maximalen Versuche noch nicht erreicht hat -- hat einen _weichen
+Zustand_ (soft state).
+
+
+== Aktive und Passive Checks
+
+Wenn Sie auf die (CMK)-Oberfläche schauen, werden Sie sehen, dass bei
+einigen Services im ICON[icon_menu.png] Menü ein oranger Doppelpfeil steht (ICON[icon_reload.png]),
+bei den meisten anderen aber ein grauer Vierfachpfeil (ICON[icon_reload_cmk.png]).
+Die Services mit dem orange Pfeil sind _aktive Checks_. Diese
+werden von (CMK) direkt ausgeführt. Services mit dem grauen Pfeil sind
+solche, bei denen die Checkergebnisse von dem aktiven Check (CMK)
+ermittelt werden. Dies geschieht aus Gründen der Performance und stellt eine
+Besonderheit von (CMK) dar:
+
+image::bilder/check_mk_service.png[]
+
+Damit das Zielsystem (Server, Netzwerkgerät, etc.) nicht für jeden einzelnen
+Service aufs Neue kontaktiert werden muss, holt (CMK) einmal pro Intervall
+alle wichtigen Daten in einem Rutsch und berechnet daraus die neuen Resultate
+für alle passiven Checks auf einmal. Das schont CPU-Ressourcen auf beiden
+Systemen und ist ein wichtiger Grund für die hohe Performance und gute
+Skalierbarkeit von (CMK).
+
+
+== Übersicht über die wichtigsten Host- und Service-Icons
+
+Folgende Tabelle gibt eine kurze Übersicht der wichtigsten Icons, die
+Sie als Status neben Hosts und Services finden:
+
+[cols=, ]
+|===
+
+
+<td style="width: 8%">ICON[icon_downtime.png]
+|Dieser Host/Service ist gerade in einer Wartungszeit.
+
+
+|ICON[icon_derived_downtime.png]
+|Der Host dieses Services ist in einer Wartungszeit.
+
+
+|ICON[icon_outofnot.png]
+|Dieser Host/Service ist gerade außerhalb seiner Benachrichtigungsperiode.
+
+
+|ICON[icon_notif_man_disabled.png]
+|Benachrichtigungen für diesen Host/Service sind gerade abgeschaltet.
+
+
+|ICON[icon_disabled.png]
+|Checks dieses Services sind gerade abgeschaltet.
+
+
+|ICON[icon_stale.png]
+|Der Zustand dieses Hosts/Services ist veraltet.
+
+
+|ICON[icon_flapping.png]
+|Der Zustand dieses Hosts/Services ist unstetig.
+
+
+|ICON[icon_ack.png]
+|Dieser Host/Service hat ein Problem, das bestätigt wurde.
+
+
+|ICON[icon_comment.png]
+|Zu diesem Host/Service gibt es einen Kommentar.
+
+
+|ICON[icon_aggr.png]
+|Dieser Host/Service ist Teil einer BI-Aggregation.
+
+
+|ICON[icon_check_parameters.png]
+|Hier gelangen Sie direkt zur Einstellung der Checkparameter.
+
+
+|ICON[icon_logwatch.png]
+|Nur bei Logwatch-Services: Hier gelangen Sie zu den gespeicherten Logfiles.
+
+
+|ICON[icon_pnp.png]
+|Hier gelangen Sie zum Zeitverlauf der aufgezeichneten Messwerte.
+
+
+|ICON[icon_software.png]
+|Dieser Host besitzt HW/SW-Inventurdaten. Ein Klickt bringt Sie zu deren Ansicht.
+
+
+|ICON[icon_crash.png]
+|Bei diesem Check ist ein Fehler aufgetreten. Über einen Klick können Sie einen Fehlerreport einsehen und absenden.
+
+|===

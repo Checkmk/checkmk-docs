@@ -1,0 +1,169 @@
+= Monitoring SAP R/3 with Checkmk
+MD:Checkmk legacy documentation: Monitoring SAP R/3 with Checkmk.
+VS:1.2.3i1
+:revdate: outdated
+== Overview
+As of version <b class=new>1.2.3i1* Checkmk ships an agent plugin
+and checks for monitoring various aspects of SAP R/3 systems.
+Currently the following checks are available:
+
+[cols=, ]
+|===
+<td class=tt>[check_sap.dialog|sap.dialog]</td><td>Check response time, number of logged in users</td><td class=tt>[check_sap.value|sap.value]</td><td>Process various monitoring information from SAP</td>|===
+
+Those checks can be used to fetch monitoring information from SAP and make it available
+to Nagios and give you the option to use your standard visualization, notification and
+reporting mechanisms. Those checks are very basic at the moment, but might be a good start
+for future improvements or extensions.
+
+The SAP R/3 (`mk_sap`) agent plugin can be installed on several systems, either
+a single seated SAP system, all nodes of a cluster or a solution manager host. It is also
+possible to install the agent on the Checkmk host an let it connect to a SAP R/3 installation
+on another host. The agent plugin uses the RFC protocol to connect to SAP. According
+to the docs of the python module this should work with all R/3 releases since 4.6x.
+
+The agent plugin is implemented in python and uses the
+<a href="https://pypi.python.org/pypi/sapnwrfc/">sapnwrfc</a> module, which has
+been used in version 0.19 during development. This module must be installed on
+the host running the agent plugin. You also need to have the nwrfcsdk installed,
+it can be downloaded from the SAP download portal.
+
+== Installing prerequisites
+
+Install the SAP NetWeaver RFCSDK (`nwrfcsdk`). You need to download this from
+the SAP service Portal for Software downloads, and follow the path of:
+
+Download -> Support Packages and Patches -> Entry by Application Group -> Additional Components  -> SAP NW RFC SDK -> SAP NW RFC SDK 7.xx -> SAP NW RFC SDK 7.xx.
+
+Download this, unpack and install it. Once installed you should have the directory
+`/usr/sap/nwrfcsdk/` on your system. It should contain the needed library
+`/usr/sap/nwrfcsdk/lib/sapnwrfc.so`.
+
+You need to ensure that this library can be found by ld. To ensure this, create
+the file `/etc/ld.so.conf.d/sapnwrfc.conf`, put `/usr/sap/nwrfcsdk/lib`
+into the file and run `ldconfig` afterwards.
+
+Now you need to install the sapnwrfc python module, which should be shipped with
+Checkmk and located on your Checkmk server in the agents' sap directory
+(usually `/usr/share/check_mk/agents/sap/sapnwrfc-0.19.tar.gz`). Copy this
+to the host the agent should be running on, unpack, compile and install it. To
+be able to compile the module you need to have a python versions >= 2.6 and the python-devel and gcc packages
+of your system installed.
+
+[source,bash]
+----
+RP:cp sapnwrfc-0.19.tar.gz /tmp
+cd /tmp
+tar xvzf sapnwrfc-0.19.tar.gz
+cd sapnwrfc-0.19
+python setup.py build
+python setup.py install
+----
+
+Now you can remove the temporary files we created below `/tmp`.
+
+If you run this plugin on several SAP systems, you do not need to compile it on
+every system. You must only ensure that you compile it on one system and copy
+all needed files of the python module to the other systems. For examply, you can
+run `python setup.py build --prefix=target` and then copy all files and
+directories from the target directory to e.g. `/usr/local` on the target
+system.
+
+Having this plugin installed you should be able to load the module in python
+like this, without receiving any error message:
+
+[source,bash]
+----
+RP:python -c "import sapnwrfc"
+----
+
+== Installing the plugin
+In order to use the SAP R/3 monitoring you need the agent plugin `mk_sap`,
+which you will find in the agents' plugins directory on your Nagios host
+(usually `/usr/share/check_mk/agents/plugins`).
+
+Install the plugin on the host of your choice into the `plugins` directory of the
+Checkmk agent. Look into the agent's code in order to learn which directory
+this is. The default is `/usr/lib/check_mk_agent/plugins`. It may vary
+in your installation. If you are unsure, you can `grep` it out of the agent:
+
+[source,bash]
+----
+RP:grep MK_LIBDIR /usr/bin/check_mk_agent
+export MK_LIBDIR="/usr/lib/check_mk_agent"
+PLUGINSDIR=$MK_LIBDIR/plugins
+LOCALDIR=$MK_LIBDIR/local
+----
+
+If the directory is not yet existing, simply create it. Then put the plugin `mk_sap`
+there and make it executable:
+
+[source,bash]
+----
+RP:mkdir -p /usr/lib/check_mk_agent/plugins
+RP:cp mk_sap /usr/lib/check_mk_agent/plugins
+RP:chmod 755 /usr/lib/check_mk_agent/plugins/mk_sap
+----
+
+== Configuring the plugin
+The agent plugin needs to be able to connect to the R/3 system using RFC calls
+usually you need to configure the connection settings like hostname, system id,
+username and password. This is done in the `sap.cfg`, which has to be
+located in the agent configuration directory. This is usually `/etc/check_mk`.
+If unsure, you can again grep this from your agent:
+
+[source,bash]
+----
+RP:grep MK_CONFDIR /usr/bin/check_mk_agent
+export MK_CONFDIR="/etc/check_mk"
+----
+
+Now create this directory (if not existing) and copy the sample configuration
+from the agents' sap directory on your Checkmk host
+(usually `/usr/share/check_mk/agents/sap/sap.cfg`).
+
+[source,bash]
+----
+RP:mkdir -p /etc/check_mk
+RP:cp sap.cfg /etc/check_mk/sap.cfg
+----
+
+Now open the file in your favorite text editor to customize the connection
+settings. You can execute the `mk_sap` plugin manually to test your
+current configuration. It will throw errors if your settings are not correct.
+
+== Configuration on the (CMK) server
+
+The system will now offer all information you told it to forward in the agent
+configuration to the Checkmk server. Now, when you create a host named like
+the SAP System ID provided by the agent, the retrieved monitoring information
+will automatically be assigned to it.
+
+For example if you have a single SAP Instance named `XYZ` on the host `xyzhost`,
+you first need to add the `xyzhost` as a regular server to your monitoring. Even
+after inventory it should not get any SAP related services assigned.
+Now add the host `XYZ` to your monitoring and perform a service inventory for this
+host. It should find some SAP related services now. After a restart of Nagios,
+you should have the services added to your monitoring.
+
+By default the `[check_sap.value|sap.value]` check does not add any
+available monitoring information as service. You can add a rule (for example using
+WATO) to let the check add all available information to your monitoring. Please
+refer to the check documentation linked before for details.
+
+== Handling of data classes
+
+The monitored SAP systems provide their information in different data classes. Currently the
+agent plugin handles the following classes:
+
+<ul>
+<li>`MTE_PERFORMACE`: Performance value, normally a single integer with a unit of measure.</li>
+<li>`MTE_SINGLE_MSG`: Single status message</li>
+<li>`MTE_MSG_CONTAINER`: Multiple messages which all have an individual state (like a log)</li>
+</ul>
+
+All of these classes provide a state indicator which simply transported from SAP to Checkmk. There
+is one special handling for the `MTE_MSG_CONTAINER` classes: The logs from the message containers
+are transported as `logwatch` checks to Checkmk. This makes it possible to handle the single
+events from this container which are provided by SAP individually within Checkmk, for example acknowledge
+only some of them while keeping the others unacknowledged.
