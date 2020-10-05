@@ -1,0 +1,273 @@
+include::global_attr.adoc[]
+= Predictive Monitoring
+:revdate: 2020-09-21
+:title: Predictive Monitoring
+:description: Predictive monitoring evaluates historical measurement data, and uses this data to generate a forecast of how a service will behave in the future.
+
+[TIP]
+.Related Articles:
+====
+link:graphing.html[]
+
+link:timeperiods.html[]
+
+====
+
+
+== Introduction
+
+image::CME.png[float=left,width=48]
+
+For checks that measure performance values, it is often difficult to set
+the correct thresholds to indicate the {WARN} and {CRIT} states. While a setting
+that is too low will generate false alarms, a setting that is too high will
+display no alarms at all, resulting in the monitoring being blind to problems.
+
+Take the [.guihint]#CPU load# service on a Linux host (or similarly, [.guihint]#Processor Queue#
+on a Windows host) as an example: You may have a server that is idle most of the
+time, but regularly for a few short periods of time every day except Saturdays
+and Sundays, from about 0:00 to 7:00 in the morning, some large backup jobs run
+on this server. During this time, a CPU usage of 10 (with 20 cores) is
+completely normal. During the rest of the time even a load of 3 could be
+suspiciously high.
+
+In {CMK} you have several possibilities for implementing this example.
+One of these is to first define the periods with the various workloads and then
+set specific threshold values for these periods. In our example, this means
+first defining a new link:timeperiods.html[time period] for the time with high load
+(Monday through Friday from 0:00 to 7:00). Then you can specify a rule for the
+([.guihint]#CPU load#/[.guihint]#Processor Queue#) service. Select this new time period, and set
+different (higher) threshold values for it.
+
+Using a time period has the advantage that it is always easy to understand why
+a {WARN}/{CRIT} state occured at a certain time. However, the manual linking of
+threshold values to time periods is also somewhat inflexible and sometimes
+simply far too complicated.
+
+image::CME.png[float=left,width=48]
+
+If you are using one of the {CEE}, there is another way to solve this
+problem. It is called _predictive monitoring_, and this involves evaluating
+the data to derive a prediction of how they will behave in the future.
+
+Once set up, the prediction does not remain static, but adapts itself to the
+changing reality over time: _Today's_ forecast for the day after tomorrow will not remain unchanged, because the real values from tomorrow will have been included for the day after tomorrow. Without going time travelling (exhausting!), the process can also be expressed in this way: {CMK} learns continuously. Since the threshold values for the {WARN}/{CRIT} states are always set relative to the forecast values, the threshold values also learn along with the forecast.
+
+
+== Implementing Predictive Monitoring
+
+=== From plug-in name to forecast parameter
+
+A whole range of {CMK} plug-ins support predictive monitoring. In the following
+you will find some important examples:
+
+[cols="20,~"]
+|===
+|Category |Plug-in Name 
+
+|CPU |link:check_kernel.util.html[CPU Utilization] + link:check_cpu.loads.html[CPU Load] + link:check_vms_cpu.html[OpenVMS: CPU Utilization and IO-Wait] + link:check_ucd_cpu_util.html[UCD SNMP Daemon: CPU Utilization]
+|Hard drives |link:check_diskstat.html[Disk Throughput] + link:check_winperf_phydisk.html[Windows: Disk Throughput] + link:check_scaleio_volume.html[EMC ScaleIO: Volume Size and Throughput] + link:check_esx_vsphere_counters.diskio.html[VMWare ESX Host Systems: Disk Throughput] + link:check_aws_ec2.disk_io.html[AWS EC2: Instance Disk IO]
+|Interfaces |link:check_lnx_if.html[Linux: State of Network Interfaces] + link:check_winperf_if.html[Windows: State and Performance of Network Interfaces] + link:check_statgrab_net.html[Network Interfaces: Traffic] + link:check_if64.html[Monitor Network Interfaces via Standard MIB Using 64 Bit Counters]
+|Firewall |link:check_checkpoint_packets.html[Checkpoint Firewalls: Packet Statistics]
+|===
+
+
+The settings for predictive monitoring can be found in the same place where
+you otherwise set thresholds for a service.
+There you will find the selection [.guihint]#Predictive Levels (only on CMC)#,
+if the check concerned supports this.
+
+
+=== Creating a rule for predictive monitoring
+
+For the service [.guihint]#CPU load# on the Linux host in our example, you can create a
+new rule as follows: In [.guihint]#WATO => Host & Service Parameters# search for the
+service 'CPU load', click [.guihint]#CPU load (not utilization!)#, and then click
+[.guihint]#Create rule in folder#. You will get a new page for the new rule, which lists
+the parameters of the service. In the section [.guihint]#Value# you will find the
+parameter on the Service level, for which you can select the
+value [.guihint]#Predictive Levels (only on CMC)#:
+
+image::predictive.png[]
+
+
+=== Selecting past reference values
+
+With [.guihint]#Base prediction on# you define the periodicity in which the repetition
+of the measured data is expected (monthly, weekly, daily or hourly):
+
+* [.guihint]#Day of the month#: The measured values from each day in the month are compared with each other, i.e. the 1st, 2nd, 3rd, etc. of each month.
+* [.guihint]#Day of the week#: The comparison is based on the days of the week, i.e. a different forecast is made for each day of the week (Monday, Tuesday, Wednesday, etc.). This is usually the correct setting.
+* [.guihint]#Hour of the day#: The individual hours for each day are compared, i.e. the forecast is repeated daily.
+* [.guihint]#Minute of the hour#: The comparison on a per minute basis and the hourly repetition are usually only useful for testing a forecast.
+
+In the next parameter [.guihint]#Time horizon# you enter up to how many days in the
+past {CMK} should evaluate the measurement data. {CMK} accesses the historical
+data stored in link:graphing.html#rrds[RRD files]. Although the measurement data in the
+RRD files is stored for 4 years, it makes no sense to go back too far in
+the past. For one thing, the typical values of the recent past may differ from
+those of the more distant past.
+
+On the other hand, the further back in time you look, the less measurement data
+per unit of time there is for comparison. This is because _by default_
+{CMK} compresses the measurement data available from each minute in the RRD
+files in three phases to save space: after 2, 10, and after 90 days.
+Compression means that the minimum, maximum and average are calculated from
+multiple measurement data and these calculated data replace the originally
+measured data. If the measured data from the last two days are available in the
+full resolution of 1 minute, the resolution is 5 minutes after 2 days,
+30 minutes after 10 days and 6 hours after 90 days. If {CMK} accesses historical
+data for predictive monitoring, the maximum of the three stored values is
+always taken.
+
+For our example server with the high workload on Monday to Friday nights it is
+advisable to select the weekly reference period and a period of
+(maximum) 90 days. 90 days is an acceptable compromise, since on the one hand
+this period contains enough comparison days, while on the other hand the
+measurement data is still available with a resolution of 30 minutes -- provided
+that the default values have not been changed.
+
+Select [.guihint]#Day of the week# as [.guihint]#Base prediction on#,
+and as [.guihint]#Time horizon# enter 90:
+
+image::predictive.png[]
+
+By setting the weekly reference period for a 90-day period in the past {CMK} has
+the necessary information for calculating the reference curve.
+This involves evaluating each Monday in the time period (over a 90-day period
+there are 12 Mondays), comparing the measured value from each Monday with the
+measured values from the other Mondays at the same time, and calculating the
+average. After Monday, {CMK} handles the other weekdays Tuesday to Sunday in the
+same way. The so-calculated reference curve for the past is then updated and
+thus becomes the projected reference curve for the future.
+
+*Note:* The values used to calculate the average for the reference period
+may themselves already have been calculated (i.e. not measured)
+values -- depending on the resolution of the historical data in the RRD files.
+
+The reference curve calculated by {CMK} on the basis of the two parameters
+defined so far (reference period and time period) is drawn as a black line in
+the following image:
+
+[.border]
+image::prediction-graph.png[]
+
+As a preview, this image shows the prediction graph, which you can display after the setup is completed. Apart from the black reference curve, the current values are displayed as a blue line -- if they are available in the displayed time period.
+
+What is missing to complete the setup are the definitions of the threshold values for the states {WARN} and {CRIT}, which are marked in the graph with yellow and red background coulors. The following section deals with the definition of these thresholds.
+
+
+=== Defining thresholds for the forecast
+
+You define the threshold values for {WARN} and {CRIT} depending on the predicted
+values shown in the reference curve.
+
+image::predictive_levels.png[]
+
+To illustrate the effect of the different parameter values used to define the
+thresholds, let us take a close look at a single value on the reference curve.
+We will assume that the predicted value of the service [.guihint]#CPU load# is 10 at
+3:30am on Fridays.
+
+For the upper thresholds there is the
+parameter [.guihint]#Dynamic levels -- upper bound#, and for the lower thresholds
+[.guihint]#Dynamic levels -- lower bound#. For both parameters you have three choices, which are described in the following three sections.
+
+
+==== Absolute difference from prediction
+
+With this value the thresholds are calculated by increasing or decreasing the predicted value by a fixed absolute value. Example: [.guihint]#Warning at# 2 will cause a warning to be displayed if the value is above 12 and below 8.
+
+
+==== Relative difference from prediction
+
+With this value the thresholds are calculated by increasing or decreasing the predicted value by a percentage. Example: [.guihint]#Warning at# 10% will cause a warning to be displayed if the value is above 11 and below 9.
+
+
+==== In relation to standard deviation
+
+With this value the thresholds are calculated by increasing or decreasing the predicted value by a multiple of the standard deviation. The standard deviation indicates how much the values differ in a reference period (e.g. on Fridays at 3:30am).
+
+With this option the calculation of the threshold values is not so easy to predict, because {CMK} calculates the standard deviation internally from all measured values of the reference period. To illustrate the effect, we need more information about the 12 measurements of the reference period on Fridays at 3:30am: We assume that 10 measurements are equal to 10, one is 11 and one is 9. The 12 measurements therefore have an average value of 10 (which corresponds to the predicted value), a variance of about 0.167 and a standard deviation of about 0.41. (We will save the calculation details here, but you can refer to various link:https://de. statista.com/statistics/lexicon/definition/126/standard deviation/[statistics pages] on the Internet.)
+
+Example: [.guihint]#Warning at# 1 as a multiple of the standard deviation will result in a warning being displayed if the value is above 10.41 and below 9.59.
+
+In general, the following rule applies: the more consistent the values of the past are, the smaller the standard deviation is and the more strict the forecast is. This option is therefore useful for defining thresholds more narrowly for a reference period with stable, uniform values.
+
+
+==== Minimum upper threshold values
+
+Finally, with [.guihint]#Limit for upper bound dynamic levels# you have the possibility
+of setting absolute minimum values for the upper threshold values.
+This allows you to prevent unwanted {WARN}/{CRIT} states for times when the predicted values are
+very low. Example: A [.guihint]#Warning level# of 2 will cause a warning to be displayed
+only if the value is above 2, even if the upper threshold for a warning is 1.5.
+
+
+==== Prediction graph with threshold values
+
+The effects described as an example for _one_ value are calculated by {CMK}
+for _all_ values on the reference curve. You can see the result in the prediction graph, which will be described in more detail in the next chapter.
+The graph shows the curves for the upper and lower threshold values above and below the reference curve. The areas for {WARN} are coloured in yellow and for {CRIT} in red.
+
+You should check the ranges for {WARN} and {CRIT} carefully in the prediction
+graph, especially if you have the thresholds calculated from the standard
+deviation, as the values underlying the standard deviation cannot be read
+directly from the {CMK} user interface. By checking and, if necessary, adjusting the levels, you can prevent the service from unintentionally having the states {WARN} or {CRIT} too often.
+
+This completes the implementation of predictive monitoring.
+In the next chapter you will learn how the setup in the user interface can be
+observed during monitoring, and how you can display the prediction graph.
+
+
+== Analysing the prognoses
+
+If you have set up prediction-based monitoring for a service,
+enabled the change, and once {CMK} has performed a check for this service,
+the new icon icon:icon_prediction[] will appear in the service list:
+
+image::predictive-bulb.png[]
+
+Especially following the initial setup for a service, this icon may be missing
+because not enough data is available for the configured forecast.
+In this case a message of the type
+"(no reference for prediction (Got no historic metrics))" is displayed in the
+[.guihint]#Status Details# column.
+After a short waiting period, this problem should disappear by itself.
+
+Click on icon:icon_prediction[] in the Service List, and a graphic
+representation of the current prediction period -- the Prediction Graph -- will
+be displayed:
+
+[.border]
+image::prediction-graph.png[]
+
+In the prediction graph you will see the reference curve as a black line,
+the current values as a blue line, and the ranges for the {OK} states in white,
+for {WARN} in yellow, and for {CRIT} with a red background colour.
+
+The time period displayed is based on the selected reference period.
+For example, if you have a weekly period, you can view the individual days of
+the week and use the drop-down list above the graph to switch to another day.
+With the special [.guihint]#Everyday# list entry the graph will show you the average
+values for all days from which data are available.
+
+In the example graph, the high capacity utilisation at night and the low
+capacity utilisation during the day can be seen. From 0:00 to 04:00 hours,
+the current values (blue line) are lower than the forecast reference curve
+(black line) -- in fact so low that the lower threshold values were being
+intermittently undercut. Also visible is the period between 08:30 and 23:30
+hours when the blue line is constantly in the lower {CRIT} range.
+This state could be avoided in the future by higher values for the lower
+thresholds. Finally, the graph shows that the upper thresholds are based on the
+standard deviation, because between 05:00 and 07:30 the upper thresholds tend to
+increase while the values in the reference curve decrease.
+This behaviour can only be explained by the standard deviation, since the other
+two options (absolute and percentage value) would have led to an adjustment of
+the threshold values in the direction of the reference curve.
+
+*Tip:* As with the initial setup, any change to the predictive monitoring
+will only become effective following a fresh check of the service.
+You do not need to wait for the next regular check, but can trigger one manually
+from the service list with the icon:icon_menu[] icon,
+and the menu item [.guihint]#Reschedule 'Checkmk' service#.
