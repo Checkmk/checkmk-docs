@@ -1,0 +1,165 @@
+include::global_attr.adoc[]
+= Best Practises, Tipps & Tricks
+:revdate: draft
+:title: Best Practises, Tipps & Tricks
+:description: Durch die Umsetzung bewährter Vorgehensweisen können Probleme in Checkmk vermieden werden, z.B. bei der Überwachung von Windows-Diensten, der Internetverbindung oder HTTP/HTTPS-Diensten. Um diese Themen geht es im aktuellen Kapitel des Leitfadens für Checkmk Einsteiger, der kompakt durch die ersten Schritte führt, um das IT-Monitoring mit Checkmk optimal einzurichten.
+
+
+
+[#cpu_single_core]
+== CPU-Auslastung aller Kerne einzeln überwachen
+
+{CMK} richtet sowohl unter Linux als auch unter Windows automatisch einen Service ein, der die durchschnittliche Auslastung der CPU-Leistung über die
+letzte Minute überwacht. Dies ist einerseits sinnvoll, erkennt aber andererseits einige Fehler nicht, beispielsweise den, dass ein einzelner Prozess Amok läuft und permanent *eine* CPU mit 100{nbsp}% belastet. Bei einem System mit 16 CPUs trägt eine CPU aber nur mit 6.25{nbsp}% zur Gesamtleistung bei, und so wird selbst im geschilderten Extremfall nur eine Auslastung von 6.25{nbsp}% gemessen -- was dann nicht zu einer Alarmierung führt.
+
+Deswegen bietet {CMK} die Möglichkeit (für Linux und für Windows),
+alle vorhandenen CPUs einzeln zu überwachen und festzustellen, ob einer der
+Kerne über längere Zeit permanent ausgelastet ist. Diesen Check einzurichten,
+hat sich als gute Idee herausgestellt.
+
+Um diese Überprüfung für Ihre Windows-Server einzurichten, benötigen Sie für den Service [.guihint]#CPU utilization# den Regelsatz [.guihint]#CPU utilization for simple devices#, der für die Überwachung *aller* CPUs zuständig ist, aber auch diesen Parameter im Angebot hat: [.guihint]#Levels over an extended time period on a single core CPU utilization#.
+
+Erstellen Sie eine neue Regel und aktivieren Sie in dieser nur diesen Parameter:
+
+image::cpu_single_core.png[]
+
+Definieren Sie die Bedingung so, dass sie nur für die Windows-Server greift,
+z.B. durch einen geeigneten Ordner oder ein Hostmerkmal. Diese Regel wird
+andere Regeln im gleichen Regelsatz nicht beeinflussen, wenn diese andere
+Parameter festlegen, z.B. die Schwellwerte für die Gesamtauslastung.
+
+Bei Linux-Servern ist dafür die Regelsatz [.guihint]#CPU utilization on Linux/UNIX#
+zuständig, in dem Sie den gleichen Parameter setzen können.
+
+
+[#windows_services]
+== Windows-Dienste überwachen
+
+In der Voreinstellung überwacht {CMK} auf Ihren Windows-Servern keine Dienste. Warum nicht? Nun, weil {CMK} nicht weiß, welche Dienste für Sie wichtig sind.
+
+Wenn Sie sich nicht die Mühe machen wollen, für jeden Server von Hand festzulegen, welche Dienste dort wichtig sind, können Sie auch einen Check einrichten, der einfach überprüft, ob alle Dienste mit der Startart „automatisch“ auch wirklich laufen. Zusätzlich können Sie sich informieren lassen, ob Dienste laufen, die manuell -- quasi außer der Reihe -- gestartet wurden. Diese werden nach einem Reboot nicht mehr laufen, was ein Problem sein kann.
+
+Um dies umzusetzen, benötigen Sie zunächst eine Regel aus dem Regelsatz [.guihint]#Windows Services#, den Sie z.B. über die Suchfunktion [.guihint]#Setup# > [.guihint]#General# > [.guihint]#Rule search# finden können. Der entscheidende Parameter in der neuen Regel lautet [.guihint]#Service states#. Aktivieren Sie diesen und fügen Sie drei neue Elemente für die Zustände der Dienste hinzu:
+
+image::windows_services_rule.png[]
+
+Dadurch erreichen Sie folgende Überwachung:
+
+* Ein Dienst mit der Startart [.guihint]#auto#, der läuft, gilt als {OK}.
+* Ein Dienst mit der Startart [.guihint]#auto#, der nicht läuft, gilt als {CRIT}.
+* Ein Dienst mit der Startart [.guihint]#demand#, der läuft, gilt als {WARN}.
+
+Diese Regel gilt allerdings nur für Services, die auch wirklich überwacht
+werden. Daher benötigen wir noch einen zweiten Schritt und eine zweite Regel, diesmal aus dem Regelsatz [.guihint]#Windows service discovery#, mit der Sie festlegen, welche Windows-Dienste {CMK} als Services überwachen soll.
+
+Wenn Sie diese Regel anlegen, können Sie zunächst beim Parameter [.guihint]#Services (Regular Expressions)# den regulären Ausdruck `pass:[.*]` eingeben, der auf alle Services zutrifft.
+
+Nach dem Sichern der Regel wechseln Sie für einen passenden Host in die Service-Konfiguration. Dort werden Sie eine große Zahl von neuen Services finden -- für jeden Windows-Dienst einen.
+
+Um die Anzahl der überwachten Services auf die für Sie interessanten einzuschränken, kehren Sie zu der Regel zurück und verfeinern die Suchausdrücke nach Bedarf. Dabei wird Groß- und Kleinschreibung unterschieden. Hier ist ein Beispiel für eine angepasste Service-Auswahl:
+
+image::windows_service_discovery.png[]
+
+Sollten Sie Services, die den neuen Suchausdrücken nicht entsprechen, zuvor schon in die Überwachung aufgenommen haben, erscheinen diese jetzt in der Service-Konfiguration als fehlend. Mit dem Knopf [.guihint]#Full service scan#
+können Sie reinen Tisch machen und die ganze Service-Liste neu erstellen lassen.
+
+
+[#internet]
+== Internetverbindung überwachen
+
+Der Zugang Ihrer Firma zum Internet ist sicherlich für alle sehr wichtig. Die Überwachung der Verbindung zu „dem Internet“ ist dabei etwas schwierig umzusetzen, da es um Milliarden von Rechnern geht, die (hoffentlich) erreichbar sind -- oder eben nicht. Sie können aber trotzdem effizient eine Überwachung einrichten, nach folgendem Bauplan:
+
+. Wählen Sie mehrere Rechner im Internet, die normalerweise per `ping`-Kommando erreichbar sein sollten, und notieren Sie deren IP-Adressen.
+
+. Legen Sie in {CMK} einen neuen Host an, etwa mit dem Namen `internet` und konfigurieren diesen wie folgt: Als [.guihint]#IPv4 Address# geben Sie eine der notierten IP-Adressen ein. Unter [.guihint]#Additional IPv4 addresses# tragen Sie die restlichen IP-Adressen ein. Aktivieren Sie die Datenquelle [.guihint]#Checkmk Agent# und setzen Sie sie auf [.guihint]#No agent#. Speichern Sie den Host ohne Serviceerkennung.
+
+. Erstellen Sie eine neue Regel aus dem Regelsatz [.guihint]#Check hosts with PING (ICMP Echo Request)#, die nur für den neuen Host `internet` greift (z.B. über die Bedingung mit [.guihint]#Explicit hosts# oder einem passenden Hostmerkmal). Konfigurieren die Regel wie folgt: Aktivieren Sie [.guihint]#Service description# und geben Sie `Internet connection` ein. Aktivieren Sie [.guihint]#Alternative address to ping# und wählen Sie dort [.guihint]#Ping all IPv4 addresses# aus. Aktivieren Sie [.guihint]#Number of positive responses required for OK state# und tragen Sie `1` ein.
+
+. Erstellen Sie eine weitere Regel, die ebenfalls nur für den Host `internet` gilt, diesmal aus dem Regelsatz [.guihint]#Host check command#. Wählen Sie dort als [.guihint]#Host check command# die Option [.guihint]#Use the status of the service...# und tragen Sie als Namen `Internet connection` ein, den Sie im vorherigen Schritt als Service-Namen gewählt haben.
+
+Wenn Sie jetzt die Änderungen aktivieren, erhalten Sie im Monitoring den neuen Host `internet` mit dem einzigen Service `Internet connection`.
+
+Wenn mindestens eines der Ping-Ziele erreichbar ist, hat der Host den Status {UP} und der Service den Status {OK}. Gleichzeitig erhalten Sie beim Service für jede der eingetragenen IP-Adressen Messdaten für die typische Paketumlaufzeit (_round trip time_) und den Paketverlust. Damit erhalten Sie einen Anhaltspunkt für die Qualität Ihrer Verbindung im Laufe der Zeit:
+
+image::service_internet.png[]
+
+Der letzte Schritt 4 ist notwendig, damit der Host nicht den Zustand {DOWN} erhält, falls die erste IP-Adresse nicht per `ping` erreichbar ist. Stattdessen übernimmt der Host den Status seines einzigen Services.
+
+*Wichtig:* Da ein Service grundsätzlich nicht alarmiert wird, wenn dessen Host {DOWN} ist, ist es wichtig, dass Sie die Alarmierung über den Host steuern -- und nicht über den Service. Außerdem sollten Sie in diesem speziellen Fall einen Alarmierungsweg verwenden, der keine Internetverbindung voraussetzt.
+
+
+[#http]
+== HTTP/HTTPS-Dienste überwachen
+
+Nehmen wir an, Sie wollen die Erreichbarkeit einer Website oder eines Web-Dienstes prüfen. Der normale {CMK}-Agent bietet hier keine Lösung, da er diese Information nicht anzeigt -- und außerdem haben Sie vielleicht gar nicht die Möglichkeit, den Agenten auf dem Server zu installieren.
+
+Die Lösung ist ein sogenannter *aktiver Check*. Das ist einer, der nicht per Agent durchgeführt wird, sondern direkt durch das Kontaktieren eines Netzwerkprotokolls beim Ziel-Host -- in diesem Fall HTTP(S). Das Vorgehen ist wie folgt:
+
+Legen Sie zuerst in {CMK} einen neuen Host für den Webserver an, z.B. für `tribe29.com`. Aktivieren Sie die Datenquelle [.guihint]#Checkmk Agent# und setzen Sie sie auf [.guihint]#No agent#. Speichern Sie den Host ohne Serviceerkennung.
+
+Erstellen Sie anschließend eine neue Regel aus dem Regelsatz [.guihint]#Check HTTP service#, die nur für den neuen Host greift (z.B. über die [.guihint]#Explicit hosts# Bedingung).
+
+Im Kasten [.guihint]#Check HTTP service# finden Sie zahlreiche Parameter zur Durchführung des Checks. Beachten Sie dabei die folgenden Punkte:
+
+* Geben Sie bei [.guihint]#Service name# dem Service einen Namen, z.B. `Homepage`.
+
+* Bei [.guihint]#Host settings# > [.guihint]#Virtual host# müssen Sie eventuell die Domäne des Servers angeben, wenn dieser mehr als eine Domäne hostet.
+
+* [.guihint]#Mode of the Check# > [.guihint]#Use SSL/HTTPS for the connection# ermöglicht die Überwachung von HTTPS.
+
+* Mit [.guihint]#Mode of the Check# > [.guihint]#Expected response time# können Sie den Service auf {WARN} oder sogar {CRIT} setzen lassen, wenn die Antwortzeit zu langsam ist.
+
+* Mit [.guihint]#Fixed string to expect in the content# können Sie prüfen lassen, ob in der Antwort -- also in der gelieferten Seite -- ein bestimmter Text vorkommt. Damit können Sie einen relevanten Teil des Inhalts prüfen, damit nicht eine simple Fehlermeldung des Servers als positive Antwort gewertet wird.
+
+Speichern Sie die Regel und aktivieren Sie die Änderungen. Sie bekommen jetzt einen neuen Host mit einem Service, der einen Zugriff per HTTP(S) prüft.
+
+image::http_service.png[]
+
+Sie können diesen Check natürlich auch auf einem Host durchführen, der bereits mit {CMK} per Agent überwacht wird. In diesem Fall entfällt das Anlegen des Hosts und Sie müssen nur die Regel für den Host erstellen.
+
+
+[#magic_factor]
+== Dateisystem-Schwellwerte magisch anpassen
+
+Gute Schwellwerte für die Überwachung von Dateisystemen zu finden, kann mühsam sein. Denn eine Schwelle von 90{nbsp}% ist bei einer sehr großen Festplatte viel zu niedrig und bei einer kleinen vielleicht schon zu knapp. Wir hatten bereits im link:intro_finetune.html#filesystems[Kapitel über die Feinjustierung des Monitoring] die Möglichkeit vorgestellt, Schwellwerte in Abhängigkeit von der  Dateisystemgröße festzulegen -- und angedeutet, dass {CMK} eine weitere, noch schlauere Option im Angebot hat: den *Magic Factor*.
+
+Den Magic Factor richten Sie so ein:
+
+. Im Regelsatz [.guihint]#Filesystems (used space and growth)# legen Sie nur eine einzige Regel an.
+. In dieser Regel aktivieren Sie [.guihint]#Levels for filesystem# und lassen den Standard der Schwellwerte 80.0{nbsp}% bzw. 90.0{nbsp}% unverändert.
+. Zusätzlich aktivieren Sie [.guihint]#Magic factor (automatic level adaptation for large filesystems)# und akzeptieren auch hier den Standardwert von 0.8.
+. Aktivieren Sie ferner [.guihint]#Reference size for magic factor#. Übernehmen Sie auch hier den Standardwert von 20{nbsp}GByte.
+
+Das Ergebnis sieht dann so aus:
+
+image::magic_factor.png[]
+
+Wenn Sie jetzt die Regel sichern und die Änderung aktivieren, erhalten Sie Schwellwerte, die automatisch von der Größe des Dateisystems abhängen:
+
+. Dateisysteme, die genau 20{nbsp}GByte groß sind, erhalten die Schwellwerte 80{nbsp}%/90{nbsp}%.
+. Dateisysteme, die kleiner als 20{nbsp}GByte sind, erhalten niedrigere Schwellwerte.
+. Dateisysteme, die größer als 20{nbsp}GByte sind, erhalten höhere Schwellwerte.
+
+Wie hoch die Schwellwerte genau sind ist -- nun ja -- magisch! Über den Faktor (hier 0.8) bestimmen Sie, wie stark die Werte verbogen werden. Ein Faktor von 1.0 ändert gar nichts, und alle Dateisysteme bekommen die gleichen Werte. Kleinere Werte verbiegen die Schwellwerte stärker. Die in diesem Kapitel angewendeten Standardwerte von {CMK} haben sich in der Praxis bei sehr vielen Installationen bewährt.
+
+Welche Schwellen genau gelten, können Sie bei jedem Service in seiner Zusammenfassung ([.guihint]#Summary#) sehen:
+
+image::magic_factor_services.png[]
+
+Die folgende Tabelle zeigt einige Beispiele für die Auswirkung des Magic Factors (mf) bei einer Referenz von 20{nbsp}GByte / 80{nbsp}%:
+
+[cols="17,~,~,~,~,~,~"]
+|===
+|Dateisystemgröße |mf = 1.0 |mf = 0.9 |mf = 0.8 |mf = 0.7 |mf = 0.6 |mf = 0.5 
+
+|5{nbsp}GByte |*80{nbsp}%* |77{nbsp}% |74{nbsp}% |70{nbsp}% |65{nbsp}% |60{nbsp}%
+|10{nbsp}GByte |*80{nbsp}%* |79{nbsp}% |77{nbsp}% |75{nbsp}% |74{nbsp}% |72{nbsp}%
+|20{nbsp}GByte |*80{nbsp}%* |*80{nbsp}%* |*80{nbsp}%* |*80{nbsp}%* |*80{nbsp}%* |*80{nbsp}%*
+|50{nbsp}GByte |*80{nbsp}%* |82{nbsp}% |83{nbsp}% |85{nbsp}% |86{nbsp}% |87{nbsp}%
+|100{nbsp}GByte |*80{nbsp}%* |83{nbsp}% |86{nbsp}% |88{nbsp}% |89{nbsp}% |91{nbsp}%
+|300{nbsp}GByte |*80{nbsp}%* |85{nbsp}% |88{nbsp}% |91{nbsp}% |93{nbsp}% |95{nbsp}%
+|800{nbsp}GByte |*80{nbsp}%* |86{nbsp}% |90{nbsp}% |93{nbsp}% |95{nbsp}% |97{nbsp}%
+|===
+
+
+Mit dem Magic Factor schließen wir den Leitfaden für Einsteiger ab. Wir hoffen, dass Sie es geschafft haben, Ihr {CMK} grundlegend einzurichten -- mit oder ohne Magie. Für fast alle Themen, die wir in diesem Leitfaden behandelt haben, finden Sie im link:index.html#installation[Referenzteil für Experten] vertiefende  Informationen. Wir wünschen viel Erfolg mit {CMK}!
