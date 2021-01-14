@@ -21,85 +21,91 @@ link:wato_services.html[Understanding and configuring services]
 
 {CMK} includes nearly 2000 ready-made check plug-ins for all imaginable hardware and software.
 These are maintained by the {CMK} team, and new plug-ins are added every week.
-On the link:https://exchange.checkmk.com[{CMK}-Exchange]
+On the link:https://exchange.checkmk.com[{CMK} Exchange]
 there are also more plug-ins contributed by our users.
 
 And yet there are always situations where a device, an application,
 or just a specific metric that is important to you is not covered by any of
-these plug-ins - maybe because it is something that was developed within your own company
-and is therefore not available to anyone else.
+these plug-ins -- maybe because it is something that was developed within your
+own company and is therefore not available to anyone else.
 
 
 === Does it always have to be a real plug-in?
 
 What options do you have for implementing an effective monitoring here?
-Well - you could of course contact our link:https://checkmk.com/support.html[support team]
-and request that they develop a suitable plug-in for you - but naturally it's quicker
-if you can do it yourself.
+Well, you could of course contact our
+link:https://checkmk.com/product/pricing#/[support team]
+and request that they develop a suitable plug-in for you -- but naturally it is
+quicker if you can do it yourself.
+
 You have four options:
 
 [cols=4]
 |===
 |Method |How to do it |Advantages |Disadvantages 
 
-|link:localchecks.html[Localcheck] |Extend a {CMK} Agent with a simple script |Is very simple, is possible in all programming languages offered by the monitored host’s operating system, even supports service detection |Threshold configuration only for the agent itself, SNMP not possible or very cumbersome
+|link:localchecks.html[Localcheck] |Extend a {CMK} Agent with a simple script |Is very simple, is possible in all programming languages offered by the monitored host’s operating system, and even supports service discovery |Threshold configuration only for the agent itself, SNMP not possible or very cumbersome
 |Nagios-compatible check plug-in  |Run the plug-in via _MRPE_ from the link:agent_windows.html#mrpe[Windows] or link:agent_linux.html#mrpe[Linux] agent.  |Access to all existing Nagios plug-ins, also free choice of the programming language |Threshold configuration only for the agent itself, SNMP not possible or very cumbersome, no service discovery possible
-|Logmeldungen auswerten |Monitor _messages_ with the link:ec.html[Event Console] |No development necessary, but only need to set up rules in the Event Console |Geht nur, wenn passende Logmeldungen vorhanden sind, //kein gesichterter aktueller Status, //kein Erfassen von Metriken, keine konfigurierbaren Schwellwerte
-|Genuine {CMK} plug-in |Wird link:devel_check_plugins.html#agentbased[in diesem Artikel] erklärt |Fügt sich zu 100% in {CMK} ein, automatische Serviceerkennung, zentrale //Konfiguration der Schwellwerte über die grafische Oberfläche, //sehr performant, unterstützt link:snmp.html[SNMP], automatische Host- und //Servicelabels möglich, unterstützt link:inventory.html[HW/SW-Inventur], //Unterstützung durch Standardbibliothken von {CMK}. |Requires more training and knowledge of the Python programming language
+|Evaluating log messages |Monitor _messages_ with the link:ec.html[Event Console] |No development necessary, but only need to set up rules in the Event Console |Only works if suitable log messages are available, no verified current status, no recording of metrics, no configurable thresholds.
+|Genuine {CMK} plug-in |Will be explained in this article |Integrates 100% with {CMK}, automatic service detection, central configuration of thresholds via graphical interface, very high performance, supports link:snmp.html[SNMP], automatic host and service labels are possible, supports link:inventory.html[HW/SW inventory], supported by standard libraries from {CMK}. |Requires more training and knowledge of the Python programming language
 |===
 
 
-This article will show you how to develop real {CMK} check plug-ins - along with everything that goes with them.
-Here we show you how to use the *newly-developed API* for programming plug-ins in version VERSION[2.0] of {CMK}.
+This article will show you how to develop real {CMK} check plug-ins -- along
+with everything associated with them.
+Here we show you how to use the *newly-developed API* for programming
+plug-ins in version VERSION[2.0] of {CMK}.
 
 
-//H2:Was hat sich seit der alten API geändert?
+=== What has changed compared to the old API?
 
-//Haben Sie schon Erfahrung mit dem Entwickeln von Checkplugins für die
-//{CMK}-Version VERSION[1.6.0] oder früher?  Dann finden Sie hier eine knappe
-//Übersicht über alle Änderungen, welche die ab VERSION[2.0] verfügbare neue
-//Check-API mit sich bringt:
+Do you already have experience with developing check plug-ins for {CMK} Version
+VERSION[1.6.0] or earlier? If so, here is a concise overview of all of the
+changes introduced in the new Check API available from Version VERSION[2.0]:
 
-//LI:Plugins sind jetzt Python-3-Module und die Dateien müssen mit `.py` enden.
-//LI:Die eigenen Plugins liegen jetzt im Verzeichnis `local/lib/check_mk/base/plugins/agent_based`.
-//LI:Am Anfang der Datei brauchen Sie nun mindestens eine spezielle `import`-Anweisung.
-//LI:Die Sektionen und die eigentlichen Checks werden getrennt registiert. Dazu gibt es die neuen Funktionen `register.agent_section` und `register.check_plugin`.
-//LI:Etliche Funktions- und Argumentnamen wurden umbenannt. Unter anderem wird jetzt immer konsequent von _Discovery_ gesprochen (früher: _Inventory_).
-//LI:Die Discovery-Funktion (vormals Inventory-Funktion) und auch die Check-Funktion müssen nun _immer_ als Generatoren arbeiten (also `yield` verwenden).
-//LI:Die Namen der Argumente der deklarierten Funktionen sind jetzt fest vorgegeben.
-//LI:Anstelle der SNMP-Scanfunktion schreiben Sie eine _Deklaration_, welche OIDs mit welchen Werten erwartet werden.
-//LI:Die Funktionen zum Darstellen von Zahlen wurden neu strukturiert (z.B. wird `get_bytes_human_readable` zu `render.bytes`).
-//LI:Es gibt nun eine eigene Methode, mit der Checks andere ausschließen können (`superseeds`). Das wird nicht mehr in der SNMP-Scanfunktion gemacht.
-//LI:Die Hilfsfunktionen für die Arbeit mit Countern, Raten und Durchschnitten haben sich geändert.
-//LI:Anstelle von magischen Rückgabewerten wie z.B. `2` für {CRIT} gibt es jetzt Konstanten (z.B. `State.CRIT`).
-//LI:Viele mögliche Programmierfehler in Ihrem Plugin erkennt {CMK} jetzt sehr früh und kann Sie gleich darauf hinweisen.
-
-
-//H2:Wird die alte API noch unterstützt
-
-//Ja, die bis zu Version VERSION[1.6.0] von {CMK} gültige API für die
-//Entwicklung von Checkplugins wird mit einigen kleinen Einschränkunen noch
-//etliche Jahre unterstützt werden, da mit dieser sehr sehr viele Plugins
-//entwickelt wurden. Während dieser Zeit wird {CMK} bei APIs parallel anbieten.
-//Einzelheiten erfahren Sie in Werk link:https://checkmk.com/check_mk-werks.php?werk_id=11759[#10601].
-
-//Trotzdem empfehlen wir für die Enwicklung von neuen Plugins die neue API,
-//da diese konsistenter und logischer ist, besser dokumentiert und langfristig
-//am zukunftssichersten.
+* Plug-ins are now Python 3 modules, and the file names must have the `.py` extension.
+* The custom plug-ins are now located in the `local/lib/check_mk/base/plugins/agent_based` directory.
+* At the beginning of the file you will now need at least one special `import` statement.
+* The sections and the actual checks are now stored separately. For this purpose there are the new `register.agent_section` and `register.check_plugin` functions.
+* Several function and argument names have been renamed. Among other things, _Discovery_ is now always used consistently (previously _Inventory_).
+* The Discovery function (formerly Inventory function) and also the Check function must now _always_ work as generators (so use `yield`).
+* The names for the declared functions' arguments are now fixed.
+* Instead of the SNMP scan function, write a _declaration_ of which OIDs are expected with which values.
+* The functions for representing numbers have been restructured (e.g. `get_bytes_human_readable` becomes `render.bytes`).
+* There is now a separate method for checks to exclude others (`supersedes`). This is no longer done in the SNMP scan function.
+* The auxiliary functions for working with counters, rates and averages have changed.
+* Instead of magic return values such as `2` for {CRIT}, there are now constants (e.g. `State.CRIT`).
+* Many possible programming errors in your plug-in are now recognised by {CMK} at a very early stage and can be immediately highlighted for you.
 
 
-//H2:Verschiedene Arten von Agenten
+=== Will the old API still be supported?
 
-//Checkplugins werten die Daten der {CMK}-Agenten aus. Und deswegen sollten wir,
-//bevor wir uns in Geschehen stürzen, uns zunächst einen Überblick
-//darüber verschaffen, welche Arten von Agenten {CMK} eigentlich kennt:
+Yes -- the API for the development of check plug-ins valid up to version
+VERSION[1.6.0] of {CMK} will be supported with some minor restrictions for a few
+more years, because a significant number of plug-ins have been developed
+with it. During this time, {CMK} will offer both APIs in parallel.
+Details can be found in the
+link:https://checkmk.com/werk/10601[#10601] work.
+
+Nevertheless, we do recommend the new API for the development of new plug-ins,
+as it is more consistent and logical, better documented and is the most
+future-proof solution in the long term.
+
+
+=== The different types of agents
+
+Check plug-ins evaluate the data from the {CMK} agents. And that is why, before
+we leap into action here, we should first look at an overview of the types of
+agents that {CMK} actually recognises:
+
+
 
 [cols="20,~"]
 |===
 
-|{CMK}-Agent |The ‘normal’ plug-ins evaluate data that the {CMK} agent sends for Linux, Windows or other operating systems. This agent monitors operating system parameters and applications, and sometimes also server hardware. Each new check plug-in requires an extension of the agent to provide the necessary data. Therefore you first develop an agent plug-in, and then one or more check plug-ins that evaluate this data.
-|Spezialagent / API-Integration |You need a special agent if you do not receive the data that is relevant for monitoring from either the normal {CMK} agent or link:snmp.html[SNMP]. The most common application for Special Agent is querying HTTP-based APIs. Examples are, e.g. Monitoring link:monitoring_aws.html[AWS], link:monitoring_azure.html[Azure], or link:monitoring_vmware.html[VMware]. In this case you write a script that runs directly on the {CMK} server, connects to the API, and outputs data in the same format as an agent plug-in would. For this you write suitable check plug-ins in the same way as with the ‘agent-based’ monitoring.
-|SNMP |When monitoring via link:snmp.html[SNMP] you do not need an extension of an agent, but evaluate the data that your device retrieves data from your device via SNMP, which provides this by default. {CMK} supports you and takes over all details and special features of the SNMP protocol. //Eigentlich gibt es //auch hier einen Agenten: nämlich den auf dem überwachten System //vorinstallierten SNMP-Agenten.
+|{CMK} Agent |The ‘normal’ plug-ins evaluate data that the {CMK} agent sends for Linux, Windows or other operating systems. This agent monitors operating system parameters and applications, and sometimes also server hardware. Each new check plug-in requires an extension of the agent to provide the necessary data. Therefore you first develop an agent plug-in, and then one or more check plug-ins that evaluate this data.
+|Special Agent / API-Integration |You need a special agent if you do not receive the data that is relevant for monitoring from either the normal {CMK} agent or link:snmp.html[SNMP]. The most common application for Special Agent is querying HTTP-based APIs. Examples are, e.g. Monitoring link:monitoring_aws.html[AWS], link:monitoring_azure.html[Azure], or link:monitoring_vmware.html[VMware]. In this case you write a script that runs directly on the {CMK} server, connects to the API, and outputs data in the same format as an agent plug-in would. For this you write suitable check plug-ins in the same way as with the ‘agent-based’ monitoring.
+|SNMP |When monitoring via link:snmp.html[SNMP] you do not need an extension of an agent, but simply evaluate the data retrieved from your device via SNMP, which provides this by default. {CMK} supports you and takes over all of the details and special features of the SNMP protocol. There is in fact an agent here as well -- namely the SNMP agent which is pre-installed on the system being monitored.
 |Active Check |This check type forms a special role. Here you first write a classic Nagios-compatible plug-in which is intended for execution _on the {CMK} server_, and which from there uses a network protocol to directly query a service on the target device. The most prominent example is the `check_http` plug-in which allows you to monitor web servers and web pages. You can then integrate this plug-in into {CMK} so that it can be set up as usual via rules.
 |===
 
@@ -125,1882 +131,1819 @@ As preparation, the following articles are recommended:
 - link:simulation_mode.html[Checkmk's simulation mode]
 
 
-//
-//H1:Ein erstes einfaches Checkplugin#agentbased
-//
-//Nach dieser langen Einleitung wird es Zeit, dass wir unser erstes einfaches
-//Checkplugin programmieren. Als Beispiel nehmen wir eine einfache Überwachung
-//für Linux. Denn da {CMK} selbst auf Linux läuft, ist es sehr wahrscheinlich,
-//dass Sie auch auf ein Linuxsystem Zugriff haben.
-//
-//Das Checkplugin soll einen neuen Service anlegen, welcher erkennt, ob auf einem
-//Linuxserver jemand einen USB-Stick eingesteckt hat. In diesem Fall soll er
-//kritisch werden. Vielleicht werden Sie sowas sogar nützlich finden, aber
-//es ist wirklich nur ein vereinfachtes Beispiel und möglicherweise auch
-//nicht ganz wasserdicht programmiert. Denn darum geht es hier erstmal nicht.
-//
-//Das Ganze läuft in zwei Schritten:
-//
-//NL:Wir finden heraus, mit welchem Linuxbefehl man sehen kann, ob ein USB-Stick eingesteckt ist, und erweitern den Linux-Agenten um ein kleines Skript, welches diesen Befehl aufruft.
-//NL:Wir schreiben in der {CMK}-Instanz ein Checkplugin, welches diese Daten auswertet.
-//
-//Und los geht's...
-//
-//H2:Den richtigen Befehl finden
-//
-//Am Anfang jeder Checkprogrammierung steht: die Recherche! Das bedeutet, dass
-//wir herausfinden, wie wir überhaupt an die Informationen kommen, die wie für
-//die Überwachung brauchen. Bei Linux sind das oft Kommandozeilenbefehle, bei
-//Windows hilft die PowerShell, VBScript oder WMI und bei link:snmp.html[SNMP] müssen wir die
-//richtigen OIDs finden (dazu gibt es einen link:devel_check_plugins.html#snmp[eigenen Abschnitt]).
-//
-//Für das Herausfinden des richtigen Befehls gibt es leider kein allgemeines
-//Vorgehen und so will ich mich auch nicht allzulange mit dem Thema aufhalten,
-//erkläre aber kurz, wie das mit dem USB-Stick funktioniert.
-//
-//Zunächst loggen wir uns also auf dem zu überwachenden Host ein.  Unter Linux
-//läuft der Agent per Default als `root`-Benutzer. Deswegen machen
-//wir auch alle unsere Tests einfach als `root`.  Für unsere Aufgabe
-//mit dem USB-Stick gibt es praktischerweise symbolische Links im Verzeichnis
-//`/dev/disk/by-id`. Diese zeigen auf alle Linux-Block-Devices.  Und ein
-//solches ist auch ein eingesteckter USB-Stick. Außerdem kann man an der ID
-//am Präfix `usb-` erkennen, wenn ein Block-Device ein USB-Gerät ist.
-//Folgender Befehl listet alle Einträge in diesem Verzeichnis auf:
-//
-//C+:
-//RP:ls -l /dev/disk/by-id/
-//total 0
-//lrwxrwxrwx 1 root root  9 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191 -> ../../sda
-//lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1 -> ../../sda1
-//lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2 -> ../../sda2
-//lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3 -> ../../sda3
-//lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4 -> ../../sda4
-//lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5 -> ../../sda5
-//lrwxrwxrwx 1 root root  9 May 14 11:21 wwn-0x5002538655584d30 -> ../../sda
-//lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part1 -> ../../sda1
-//lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part2 -> ../../sda2
-//lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part3 -> ../../sda3
-//lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part4 -> ../../sda4
-//lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part5 -> ../../sda5
-//C-:
-//
-//So. Und das Ganze jetzt mit eingestecktem USB-Stick:
-//
-//C+:
-//RP:ls -l /dev/disk/by-id/
-//total 0
-//lrwxrwxrwx 1 root root  9 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191 -> ../../sda
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1 -> ../../sda1
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2 -> ../../sda2
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3 -> ../../sda3
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4 -> ../../sda4
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5 -> ../../sda5
-//[hilite]#lrwxrwxrwx 1 root root  9 Mai 14 12:15 usb-SCSI_DISK-0:0 -> ../../sdc#
-//[hilite]#lrwxrwxrwx 1 root root 10 Mai 14 12:15 usb-SCSI_DISK-0:0-part1 -> ../../sdc1#
-//[hilite]#lrwxrwxrwx 1 root root 10 Mai 14 12:15 usb-SCSI_DISK-0:0-part2 -> ../../sdc2#
-//lrwxrwxrwx 1 root root  9 Mai 14 11:21 wwn-0x5002538655584d30 -> ../../sda
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part1 -> ../../sda1
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part2 -> ../../sda2
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part3 -> ../../sda3
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part4 -> ../../sda4
-//lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part5 -> ../../sda5
-//C-:
-//
-//H2:Die Daten entschlacken
-//
-//Eigentlich wären wir damit fertig und könnten diese ganze Ausgabe per {CMK}-Agent
-//zum {CMK}-Server transportieren und dort analysieren lassen. Denn im {CMK} gilt
-//immer folgende Empfehlung: lassen Sie die komplexe Arbeit immer den Server erledigen.
-//Halten Sie das Agentenplugin so einfach wie möglich.
-//
-//Aber: Hier ist trotzdem noch zuviel heiße Luft drin. Es ist immer gut,
-//unnötige Daten nicht zu übertragen. Das spart Netzwerkverkehr, Speicher,
-//Rechenzeit und macht alles auch übersichtlicher. Das geht besser!
-//
-//Als erstes können wir das `-l` weglassen. Damit ist die Ausgabe von
-//`ls` schon deutlich schlanker:
-//
-//C+:
-//RP:ls /dev/disk/by-id/
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191        ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5  wwn-0x5002538655584d30-part3
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1  wwn-0x5002538655584d30-part4                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2
-//wwn-0x5002538655584d30                      wwn-0x5002538655584d30-part5                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3
-//wwn-0x5002538655584d30-part1                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4  wwn-0x5002538655584d30-part2
-//C-:
-//
-//Jetzt wiederum stört der mehrspaltige Aufbau. Dieser ist aber nur deswegen, weil der `ls`-Befehl erkennt,
-//dass er in einem interaktiven Terminal läuft. Später als Teil vom Agenten wird er die Daten einspaltig ausgeben.
-//Das können wir aber auch ganz einfach hier mit der Option `-1` erzwingen:
-//
-//C+:
-//RP:ls -1 /dev/disk/by-id/
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5
-//wwn-0x5002538655584d30
-//wwn-0x5002538655584d30-part1
-//wwn-0x5002538655584d30-part2
-//wwn-0x5002538655584d30-part3
-//wwn-0x5002538655584d30-part4
-//wwn-0x5002538655584d30-part5
-//C-:
-//
-//Wenn Sie genau hinsehen, werden Sie nicht nur die Blockgeräte selbst sehen,
-//sondern auch dort vorhandene Partitionen. Dies sind die Einträge, die
-//auf `-part1`, `-part2` usw. enden. Diese brauchen wir für unseren
-//Check nicht und bekommen sie ganz einfach mit einem `grep`. Dort
-//nehmen wir die Option `-v` für eine negative Logik. Hier sieht man
-//jetzt auch viel deutlicher, dass es in meinem Beispiel eigentlich genau vier Geräte sind,
-//falls der USB-Stick eingesteckt ist:
-//
-//
-//C+:
-//RP:ls /dev/disk/by-id/ | grep -v -- -part
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191
-//[hilite]#usb-SCSI_DISK-0:0#
-//wwn-0x5002538655584d30
-//C-:
-//
-//Perfekt! Jetzt haben wir eine übersichtliche Liste aller Blockgeräte, die
-//mit einem einfachen Befehl ermittelt wird. Mehr brauchen wir nicht.
-//
-//Das `-1` hab ich jetzt hier wieder weggelassen, weil `ls`
-//jetzt in eine Pipe schreibt und von sich aus einspaltig ausgibt. Und
-//`grep` braucht das `--`, da es sonst das Wort `-part`
-//als die vier Optionen `-p`, `-a`, `-r` und `-t`
-//interpretieren würde.
-//
-//Übrigens: Warum greppen wir nicht gleich noch nach `usb`? So dass
-//nur noch USB-Geräte übertragen werden? Nun, natürlich könnten wir
-//das tun. Aber zum Einen wird dann unser Beispiel zunehmend langweilig und
-//außerdem ist es irgendwie beruhigender, im Normalfall _irgendeinen_
-//Inhalt in der Sektion zu bekommen und nicht einfach nur nichts. So kann
-//man auf dem {CMK}-Server sofort erkennen, dass das Agentenplugin korrekt
-//funktioniert.
-//
-//
-//H2:Den Befehl in den Agenten einbauen
-//
-//Damit wir vom {CMK}-Server aus diese Daten abrufen können, müssen wir den
-//neuen Befehl Teil vom {CMK}-Agenten auf dem überwachten System machen. Wir
-//könnten dazu natürlich einfach dort die Datei `/bin/bin/check_mk_agent` editieren
-//und das einbauen. Das hätte dann aber den Nachteil, dass bei einem Softwareupdate
-//des Agenten unser Befehl wieder verschwindet, weil die Datei ersetzt wird.
-//
-//Besser ist daher, wenn wir ein *Agentenplugin* machen. Das ist sogar
-//noch einfacher. Alles was wir brauchen, ist eine ausführbare Datei mit unserem
-//Befehl im Verzeichnis `/usr/lib/check_mk_agent/plugins`.
-//
-//Und noch eins ist wichtig: Wir können unsere Daten nicht einfach so
-//ausgeben. Was wir noch brauchen, ist eine *Sektionskopf* (_section header_).
-//Das ist eine speziell formatierte Zeile, in der der Name unseres
-//neuen Checks steht. An diesen Sektionsköpfen kann {CMK} später erkennen, wo die
-//Daten des Plugins beginnen und die des vorherigen aufhören.
-//
-//Also brauchen wir jetzt erstmal einen sinnvollen Namen für unseren neuen
-//Check. Dieser Name muss aus Kleinbuchstaben, Unterstrichen und Ziffern
-//bestehen und eindeutig sein. Es darf also nicht schon ein Checkplugin mit
-//diesem Namen geben.
-//Wenn Sie neugierig sind, welche Namen es schon gibt,
-//können Sie diese in einer {CMK}-Instanz auf der Kommandozeile mit `cmk -L`
-//auflisten lassen:
-//
-//C+:
-//OM:cmk -L | head -n 20
-//3par_capacity                 auto migrated    HPE 3PAR: Capacity
-//3par_cpgs                     auto migrated    HPE 3PAR: CPGs
-//3par_cpgs_usage               auto migrated    HPE 3PAR: CPGs Usage
-//3par_hosts                    auto migrated    HPE 3PAR: Hosts
-//3par_ports                    auto migrated    HPE 3PAR: Ports
-//3par_remotecopy               auto migrated    HPE 3PAR: Remote Copy
-//3par_system                   auto migrated    HPE 3PAR: System
-//3par_volumes                  auto migrated    HPE 3PAR: Volumes
-//3ware_disks                   auto migrated    3ware ATA RAID Controller: State of Disks
-//3ware_info                    auto migrated    3ware ATA RAID Controller: General Information
-//3ware_units                   auto migrated    3ware ATA RAID Controller: State of Units
-//acme_agent_sessions           auto migrated    ACME Devices: Agent Sessions
-//acme_certificates             auto migrated    ACME Devices: Certificates
-//acme_fan                      auto migrated    ACME Devices: Fans
-//acme_powersupply              auto migrated    ACME Devices: Power Supplies
-//acme_realm                    auto migrated    ACME Devices: Realm
-//acme_sbc                      auto migrated    ACME SBC: Health
-//acme_sbc_settings             auto migrated    ACME SBC: Health Settings
-//acme_sbc_snmp                 auto migrated    ACME SBC: Health (via SNMP)
-//acme_temp                     auto migrated    ACME Devices: Temperature
-//C-:
-//
-//
-//
-//„auto migrated“ zeigt an, dass es sich hier um Checkplugins handelt, die noch
-//gegen die alte API programmiert wurden.
-//
-//Wählen wir für unser Beispiel den Namen `linux_usbstick`. In diesem
-//Fall muss der Sektionskopf so aussehen:
-//
-//F+:
-//<<<linux_usbstick>>>
-//F-:
-//
-//Den können wir einfach mit `echo` ausgeben. Wenn wir dann noch den
-//„Shabang“ nicht vergessen (das ist kein giftiger Stachel aus dem Wüstenplaneten
-//sondern eine Abkürzung für _sharp_ und _bang_, wobei letzteres
-//eine Abkürzung für das Ausrufezeichen ist!), an dem Linux erkennt, dass es
-//das Skript mit der Shell ausführen soll, dann sieht unser Plugin
-//so aus:
-//
-//F+:/usr/lib/check_mk_agent/plugins/linux_usbstick
-//#!/bin/sh
-//echo '<<<linux_usbstick>>>'
-//ls /dev/disk/by-id/ | grep -v -- -part
-//F-:
-//
-//Als Dateiname hab ich jetzt einfach auch `linux_usbstick` verwendet,
-//auch wenn der eigentlich egal ist. Aber eines ist noch sehr wichtig: Machen
-//Sie die Datei ausführbar!
-//
-//C+:
-//RP:chmod +x /usr/lib/check_mk_agent/plugins/linux_usbstick
-//C-:
-//
-//Natürlich können Sie das Plugin ganz einfach von Hand ausprobieren, indem Sie den
-//kompletten Pfad als Befehl eingeben:
-//
-//R+:
-//RP:/usr/lib/check_mk_agent/plugins/linux_usbstick
-//<<<linux_usbstick>>>
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191
-//wwn-0x5002538655584d30
-//R-:
-//
-//H2:Agent ausprobieren
-//
-//Wie immer ist am wichtigsten Test und Fehlersuche. Am besten gehen Sie in drei Schritten vor:
-//
-//NL:Plugin solo ausprobieren. Das haben wir gerade gemacht.
-//NL:Agent aus ganzes lokal testen.
-//NL:Agent vom {CMK}-Server aus abrufen.
-//
-//Das lokale Testen des Agenten ist sehr einfach. Rufen Sie einfach als `root`
-//den Befehl `check_mk_agent` auf. Irgendwo in der Ausgabe muss die neue
-//Sektion erscheinen:
-//
-//C+:
-//RP:check_mk_agent
-//C-:
-//
-//Hier ist ein Ausschnitt der Ausgabe, welcher die neue Sektion enthält:
-//
-//R+:
-//<<<lnx_thermal:sep(124)>>>
-//thermal_zone0|-|BAT0|35600
-//thermal_zone1|-|x86_pkg_temp|81000|0|passive|0|passive
-//<<<local>>>
-//[hilite]#<<<linux_usbstick>>>#
-//[hilite]#ata-APPLE_SSD_SM0512F_S1K5NYBF810191#
-//[hilite]#wwn-0x5002538655584d30#
-//<<<lnx_packages:sep(124):persist(1589463274)>>>
-//accountsservice|0.6.45-1ubuntu1|amd64|deb|-||install ok installed
-//acl|2.2.52-3build1|amd64|deb|-||install ok installed
-//acpi|1.7-1.1|amd64|deb|-||install ok installed
-//R-:
-//
-//
-//Durch Anhängen von `less` können Sie in der Ausgabe blättern
-//(drücken Sie die Leertaste zum Blättern,
-//`/` zum Suchen und `Q` zum Beenden ):
-//
-//C+:
-//RP:check_mk_agent | less
-//C-:
-//
-//Der dritte Test ist dann direkt von der {CMK}-Instanz aus. Nehmen Sie den Host ins Monitoring
-//auf (z.B. als `myserver01`) und rufen Sie die Agentendaten dann mit `cmk -d` ab.
-//Hier sollte die gleiche Ausgabe kommen:
-//
-//C+:
-//OM:cmk -d myserver01 | less
-//C-:
-//
-//Übrigens: `grep` hat mit `-A` eine Option, nach jedem Treffer
-//noch einige Zeilen mehr auszugeben.  Damit können Sie bequem die Sektion
-//suchen und ausgeben:
-//
-//R+:
-//RP:cmk -d heute | grep -A5 '^&lt;&lt;&lt;linux_usbstick'
-//<<<linux_usbstick>>>
-//ata-APPLE_SSD_SM0512F_S1K5NYBF810191
-//wwn-0x5002538655584d30
-//<<<lnx_packages:sep(124):persist(1589463559)>>>
-//accountsservice|0.6.45-1ubuntu1|amd64|deb|-||install ok installed
-//R-:
-//
-//Wenn das funktioniert, ist Ihr Agent vorbereitet! Und was haben wir
-//dafür gemacht? Wir haben lediglich ein dreizeiliges Skript mit dem Pfad
-//`/usr/lib/check_mk_agent/plugins/usbstick` erzeugt und ausführbar
-//gemacht!
-//
-//Alles was nun folgt, geschieht nur noch auf dem {CMK}-Server: Dort schreiben
-//wir das eigentliche Checkplugin.
-//
-//H2:Die Sektion deklarieren
-//
-//Das Vorbereiten des Agenten ist zwar der komplizierteste Teil, aber nur die
-//halbe Miete. Jetzt müssen wir {CMK} noch beibringen, wie es mit den Informationen
-//und der neuen Agentensektion umgehen soll, welches Services es erzeugen soll,
-//wann diese auf {OK} oder {CRIT} gehen sollen usw. All dies machen wir durch
-//die Programmierung eines Checkplugins in Python.
-//
-//Für Ihre eigenen Checkplugins finden Sie ein Verzeichnis vorbereitet
-//in der `local`-Hierarchie des
-//link:cmk_commandline.html#sitedir[Instanzverzeichnisses]. Dieses lautet
-//`local/lib/check_mk/base/plugins/agent_based/`. Hier im Pfad
-//bedeutet `base` den Teil von {CMK}, der für das eigentlich Monitoring
-//und die Alarmierung zuständig ist. Das `agent_based` ist
-//für alle Plugins, die sich auf den {CMK}-Agenten
-//beziehen (also z.B. nicht Alarmierungsplugins). Am einfachsten, Sie wechseln
-//zum Arbeiten dort hinein:
-//
-//C+:
-//OM:cd local/lib/check_mk/base/plugins/agent_based
-//C-:
-//
-//Das Verzeichnis gehört dem Instanzbenutzer und ist daher für Sie schreibbar.
-//Sie können Ihr Plugin mit jedem auf dem Linuxsystem installierten Texteditor
-//bearbeiten.
-//
-//Legen wir also unser Plugin hier an. Konvention ist, dass der Dateiname
-//den Namen der Agentensektion wiedergibt. _Pflicht_ ist, dass die Datei
-//mit `.py` endet, denn ab Version VERSION[2.0] von {CMK} handelt es
-//sich bei den Plugins immer um echte Pythonmodule.
-//
-//Als erstes müssen wir die für die Plugins nötigen Funktionen aus
-//anderen Pythonmodulen importieren. Die einfachste Methode dafür ist die
-//mit einem `pass:[*]`. Wie Sie vielleicht ahnen können, steckt hier auch
-//eine Versionsnummer der API für die Pluginprogrammierung. Diese ist bis
-//auf weiteres Version 1, was hier durch `v1` abgekürzt ist:
-//
-//F+:local/lib/check_mk/base/plugins/agent_based/linux_usbstick.py
-//from .agent_based_api.v1 import *
-//F-:
-//
-//Diese Versionierung ermöglicht es uns in Zukunft eventuell neue
-//Versionen der API _parallel_ zu den bisherigen bereitzustellen,
-//so dass bestehende Checkplugins weiterhin problemlos funktionieren.
-//
-//
-//H2:Den Check deklarieren
-//
-//Damit {CMK} weiß, dass es den neuen Check gibt, muss dieser
-//registriert werden. Dies geschieht durch den Aufruf
-//der Funktion `register.check_plugin`.
-//Dabei müssen Sie immer mindestens vier Dinge angeben:
-//
-//NL:`name`: Der Name des Checkplugins. Wenn Sie keinen Ärger bekommen möchten, nehmen Sie hier den gleichen Namen wie bei Ihrer neuen Agentensektion. Damit weiß der Check automatisch, welche Sektion er auswerten soll.
-//NL:`service_name`: Der Name des Services wie er dann im Monitoring erscheinen soll.
-//NL:`discovery_function`: Die Funktion zum Erkennen von Services dieses Typs (dazu gleich mehr).
-//NL:`check_funktion`: Die Funktion zum Durchführen des eigentlichen Checks (auch dazu gleich mehr).
-//
-//Für unseren Check sieht das dann also so aus:
-//
-//F+:
-//register.check_plugin(
-//    name="linux_usbstick",
-//    service_name="USB stick",
-//    discovery_function=discover_linux_usbstick,
-//    check_function=check_linux_usbstick,
-//)
-//F-:
-//
-//Versuchen Sie am besten noch nicht, das gleich auszuprobieren, denn natürlich
-//müssen wir die Funktionen `discovery_linux_usbstick` und `check_linux_usbstick`
-//vorher noch schreiben. Und diese müssen im Quellcode _vor_ obiger Deklaration
-//erscheinen.
-//
-//
-//H2:Die Discovery-Funktion schreiben
-//
-//Eine Besonderheit von {CMK} ist die automatische Erkennung von zu
-//überwachenden Services. Damit dies klappt, muss jedes Checkplugin eine
-//Funktion definieren, welche anhand der Agentenausgaben erkennt, _ob_ ein Service
-//dieses Typs bzw. _welche_ Services des Typs für den betreffenden Host
-//angelegt werden sollen.
-//
-//Die Discovery-Funktion wird immer dann aufgerufen, wenn für einen Host
-//die Serviceerkennung durchgeführt wird. Sie entscheidet dann ob, bzw.
-//welche Services angelegt werden sollen. In Standardfall bekommt sie genau
-//ein Argument mit dem Namen `section`. Dieses enthält die Daten
-//der Agentensektion in einem geparsten Format (dazu später mehr).
-//
-//Wir implementieren folgende simple Logik: _Wenn_ die Agentensektion
-//`linux_usbstick` vorhanden ist, dann legen wir auch einen passenden
-//Service an. Dann erscheint dieser automatisch auf allen Hosts, wo unser
-//Agentenplugin ausgerollt ist. Das Vorhandensein der Sektion erkennen wir
-//ganz einfach daran, dass unsere Discovery überhaupt aufgerufen wird!
-//
-//Die Discovery-Funktion muss Für jeden anzulegenden Service mittels
-//`yield` ein Objekt vom Typ `Service` zurückgeben (nicht mit
-//`return`). Bei Checks, die pro Host nur einmal auftreten können,
-//benötigt man keine weitere Angaben:
-//
-//F+:
-//def discovery_linux_usbstick(section):
-//    yield Service()
-//F-:
-//
-//H2:Die Check-Funktion schreiben
-//
-//Somit können wir nun zur eigentlichen Check-Funktion kommen, welche anhand
-//aktueller Agentenausgaben endlich entscheidet, welchen Zustand ein Service
-//annehmen soll. Da unser Check keine Parameter hat und es auch immer nur
-//einen pro Host gibt, wird unsere Funktion ebenfalls mit dem einzigen
-//Argument `section` aufgerufen.
-//
-//Da wir diesmal den Inhalt auch wirklich brauchen, müssen wir uns
-//mit dem Format dieses Arguments befassen. Solange Sie keine explizite
-//link:devel_check_plugins.html#parsefunction[Parse-Funktion] definiert haben, zerlegt
-//{CMK} jede Zeile der Sektion anhand von Leerzeichen in eine _Liste von
-//Worten_. Das Ganze wird dann wiederum eine Liste dieser Wortlisten. Als
-//Endergebnis haben wir also immer eine Liste von Listen.
-//
-//Im einfachen Fall, dass unserer Agentenplugin nur zwei Devices findet,
-//sieht das dann z.B. so aus (hier gibt es pro Zeile nur ein Wort):
-//
-//F+:
-//[['ata-APPLE_SSD_SM0512F_S1K5NYBF810191'], ['wwn-0x5002538655584d30']]
-//F-:
-//
-//Die Checkfunktion geht nun Zeile für Zeile durch und sucht nach
-//einer Zeile, deren erstes (und einziges) Wort mit `usb-SCSI_DISK` beginnt.
-//Wenn das der Falll ist, wird der Zustand {CRIT}.
-//Hier ist die Implementierung:
-//
-//F+:
-//def check_linux_usbstick(section):
-//    for line in section:
-//        if line[0].startswith("usb-SCSI_DISK"):
-//            yield Result(state=State.CRIT, summary="Found USB stick")
-//            return
-//    yield Result(state=State.OK, summary="No USB stick found")
-//F-:
-//
-//Und hier die Erklärung:
-//LI:Mit `for line in section` gehen wir in einer Schleife alle Zeilen der Agentenausgabe durch.
-//LI:Dann prüfen wir, ob das erste Wort der Zeile -- das jeweilige Gerät -- mit `usb-SCSI_DISK` beginnt.
-//LI:Falls ja, erzeugen wir ein Check-Resultat mit dem Status {CRIT} und dem Text `Found USB stick`. Und wir beenden dann die Funktion mit einem `return`.
-//LI:Falls die Schleife durchlaufen wird, ohne etwas zu finden, erzeugen wir den Status {OK} und den Text `No USB stick found`.
-//
-//H2:Die Discovery testen
-//
-//
-//
-//H2:Den Check testen
-//
-//
-//
-//H2:Das ganze Plugin auf einen Blick
-//
-//Und hier ist das ganze Plugin nochmal komplett:
-//
-//F+:local/lib/check_mk/base/plugins/agent_based/linux_usbstick.py
-//from .agent_based_api.v1 import *
-//
-//def discover_linux_usbstick(section):
-//    yield Service()
-//
-//def check_linux_usbstick(section):
-//    for line in section:
-//        if line[0].startswith("usb-SCSI_DISK"):
-//            yield Result(state=State.CRIT, summary="Found USB stick")
-//            return
-//    yield Result(state=State.OK, summary="No USB stick found")
-//
-//register.check_plugin(
-//    name = "linux_usbstick",
-//    service_name = "USB stick",
-//    discovery_function = discover_linux_usbstick,
-//    check_function = check_linux_usbstick,
-//)
-//F-:
-//
-//Und das hier war das Plugin für den Linuxagenten:
-//
-//F+:/usr/lib/check_mk_agent/plugins/linux_usbstick
-//#!/bin/sh
-//echo '<<<linux_usbstick>>>'
-//ls /dev/disk/by-id/ | grep -v -- -part
-//F-:
-//
-//H1:Checks mit mehr als einem Service pro Host (Items)
-//
-//H2:Grundprinzip
-//
-//In unserem Beispiel haben wir einen sehr einfachen Check gebaut, der auf
-//einem Host einen Service erzeugt -- oder eben nicht. Ein sehr üblicher Fall
-//ist aber natürlich auch, dass es von einem Check mehrere Services auf einem
-//Host geben kann.
-//
-//Das häufigste Beispiel dafür sind die Dateisysteme eines Hosts. Das Plugin
-//mit dem Namen `df` legt pro Dateisystem auf dem Host einen Service
-//an. Um diese Services zu unterscheiden, wird der Mountpunkt des Dateisystems
-//(z.B. `/var`) bzw. der Laufwerksbuchstabe (z.B. `C:`)
-//in den Namen des Services eingebaut.  Das ergibt dann als Servicename
-//z.B. `Filesystem /var` oder `Filesystem C:`. Das Wort
-//`/var` bzw. `C:` wird hier als _Item_ bezeichnet. Wir
-//sprechen also auch von einem Check _mit Items_.
-//
-//Wenn Sie einen Check mit Items bauen möchten, müssen Sie folgende
-//Dinge umsetzen:
-//
-//LI:Die Discovery-Funktion muss die für jedes der Items, die auf dem Host sinnvollerweise überwacht werden sollen, einen Service generieren.
-//LI:Im Servicenamen müssen Sie das Item mithilfe des Platzhalters `%s` einbauen (also z.B. `"Filesystem %s"`).
-//LI:Die Check-Funktion wird pro Item einmal separat aufgerufen und bekommt dieses als Argument. Sie muss dann aus den Agentendaten die für dieses Item relevanten Daten herausfischen.
-//
-//H2:Ein einfaches Beispiel
-//
-//Um das ganze praktisch ausprobieren zu können, bauen wir uns einfach
-//eine weitere Agentensektion, die nur Spieldaten ausgibt. Dazu genügt ein
-//kleines Shellskript. Die Sektion soll hier im Beispiel `foobar` heißen:
-//
-//F+:/usr/lib/check_mk_agent/plugins/foobar
-//#!/bin/sh
-//echo "<<<foobar>>>"
-//echo "West 100 100"
-//echo "East 197 200"
-//echo "North 0 50"
-//F-:
-//
-//Von _Foobar_ gibt es hier drei Sektoren: `West`, `East`
-//und `North` (was immer auch das bedeuten mag). In jedem Sektor gibt
-//es eine Anzahl von _Plätzen_ von denen einige belegt sind (z.B. sind
-//in `West` 34 von 180 Plätzen belegt).
-//
-//Nun legen wir dazu ein passendes Checkplugin an. Die Registrierung ist wie
-//gehabt, allerdings mit dem wichtigen Unterschied, dass der Servicename jetzt
-//genau einmal ein `%s` enthält. An dieser Stelle wird später dann von
-//{CMK} der Name des Items eingesetzt:
-//
-//F+:
-//register.check_plugin(
-//    name = "foobar",
-//    service_name = "Foobar Sector [hilite]#%s#",
-//    discovery_function = discover_foobar,
-//    check_function = check_foobar,
-//)
-//F-:
-//
-//Die Discovery-Funktion hat jetzt die Aufgabe, die zu überwachenden Items zu
-//ermitteln. Wie gehabt bekommt sie das Argument `section`.  Und auch hier
-//handelt es sich um eine Liste von Zeilen, welche ihrerseits wiederum Listen
-//von Worten sind. Diese sieht in unserem Beispiel aus aus:
-//
-//F+:
-//[['West', '100', '100'], ['East', '197', '200'], ['North', '0', '50']]
-//F-:
-//
-//So eine Liste kann man mit Python prima in einer Schleife
-//durchlaufen und den drei Worten pro Zeile gleich sinnvolle Namen geben:
-//
-//F+:
-//for sector, _used, _slots in section:
-//    ...
-//F-:
-//
-//In jeder Zeile ist das erste Wort -- hier der Sektor -- unser Item.  Immer wenn
-//wir ein Item gefunden haben, geben wir das mit `yield` zurück, wobei
-//wir ein Objekt vom Typ `Service` erzeugen, welches den Sektornamen als
-//Item bekommt. Der Unterstrich zeigt an, dass uns die beiden andere Spalten
-//in der Ausgabe erstmal egal sind, denn bei der Discovery ist es schließlich
-//unerheblich, wieviele Slots belegt sind. Insgesamt sieht das dann so aus:
-//
-//F+:
-//def discover_foobar(section):
-//    for sector, _used, _slots in section:
-//        yield Service(item=sector)
-//F-:
-//
-//Es wäre natürlich ein Leichtes, hier anhand von beliebigen Kriterien manche
-//Zeilen auszulassen. Vielleicht gibt es ja Sektoren, welche die Größe 0 haben
-//und die man grundsätzlich nie überwachen möchte? Lassen Sie solche Zeilen
-//einfach aus und yielden Sie dafür kein Item.
-//
-//Wenn dann später der Host überwacht wird, dann wird die Check-Funktion
-//für jeden Service -- und damit für jedes Item -- separat aufgerufen. Sie
-//bekommt deswegen zusätzlich zur Sektion das Argment `item` mit dem
-//jeweils gesuchten Item. Jetzt gehen wir wieder alle Zeilen der Reihe nach
-//durch. Dabei suchen diejenige Zeile heraus, die zum gewünschten Item gehört:
-//
-//F+:
-//def check_foobar(item, section):
-//    for sector, used, slots in section:
-//        if sector == item:
-//            ...
-//F-:
-//
-//Jetzt fehlt nur noch die eigentliche Logik, welche festlegt, wann das Ding denn überhaupt {OK},
-//{WARN} oder {CRIT} sein soll. Wir machen es hier so:
-//
-//LI:Wenn alle Slots belegt sind, soll das Ding {CRIT} werden.
-//LI:Wenn weniger als 10 Slots frei sind, dann wird es {WARN}.
-//LI:Ansonsten {OK}
-//
-//Die belegten und insgesamten Slots kommen ja immer als Wort zwei und drei
-//in jeder Zeile. Aber: es handelt sich hier um Strings, nicht um Zahlen.
-//Diese brauchen wir aber, um vergleichen und rechnen zu können. Daher
-//wandeln wir die Strings mit `int()` in Zahlen um.
-//
-//Das Checkergebnis liefern wir dann, indem wir ein Objekt vom Typ `Result`
-//per `yield` liefern. Dieses benötigt die Parameter `state` und
-//`summary`:
-//
-//F+:
-//def check_foobar(item, section):
-//    for sector, used, slots in section:
-//        if sector == item:
-//            used = int(used)   # convert string to int
-//            slots = int(slots)   # convert string to int
-//            if used == slots:
-//                s = State.CRIT
-//            elif slots - used < 10:
-//                s = State.WARN
-//            else:
-//                s = State.OK
-//            yield Result(
-//                state = s,
-//                summary = f"used {used} out of {slots} slots")
-//            return
-//F-:
-//
-//Dazu noch folgende Hinweise:
-//
-//NL:Der Befehl `return` sorgt dafür, dass die Check-Funktion nach dem Bearbeiten des gefundenen Items sofort abgebrochen wird. Es gibt schließlich auch nichts mehr weiter zu tun.
-//NL:Wird die Schleife durchlaufen, ohne das gesuchte Item zu finden, so erzeugt {CMK} _automatisch_ das Resultat `UNKNOWN - Item not found in monitoring data`. Das ist so gewollt und gut so. Behandeln Sie diesen Fall nicht selbst. Wenn sie ein gesuchtes Item nicht finden, so lassen sie Python einfach aus der Funktion rauslaufen und {CMK} seine Arbeit erledigen.
-//NL:Mit dem Argument `summary` definieren Sie den Text, den der Service aus Statusausgabe produziert. Er ist rein informell und wird von {CMK} nicht weiter ausgewertet.
-//
-//Übrigens gibt es für den häufigen Fall, dass Sie eine einfache Metrik auf Schwellwerte
-//prüfen wollen, die Hilfsfunktion `check_levels`. Diese wird in einem eigenen
-//link:devel_check_plugins.html#check_levels[Abschnitt] erklärt.
-//
-//
-//
-//Probieren wir jetzt zunächst die Discovery aus. Der Übersicht halber beschränke ich das
-//ganze mit der Option `--detect-plugins=foobar` auf unser Plugin:
-//
-//C+:
-//OM:cmk --detect-plugins=foobar -vI myhost123
-//  [green]#3# foobar
-//SUCCESS - Found 3 services, 1 host labels
-//C-:
-//
-//Und jetzt können wir auch gleich das Checken ausprobieren (ebenfalls auf
-//`foobar` begrenzt):
-//
-//C+:
-//OM:cmk --detect-plugins=foobar -v myhost123
-//Foobar Sector East   [yellow]#WARN - used 197 out of 200 slots#
-//Foobar Sector North  [green]#OK - used 0 out of 50 slots#
-//Foobar Sector West   [red]#CRIT - used 100 out of 100 slots#
-//C-:
-//
-//
-//H2:Beispiel komplett
-//
-//Und hier nochmal das ganze Beispiel komplett. Damit es keine Fehler wegen nicht definierter Funktionsnamen gibt,
-//müssen die Funktionen immer vor dem Registrieren definiert werden.
-//
-//
-//F+:local/lib/check_mk/base/plugins/agent_based/foobar.py
-//from .agent_based_api.v1 import *
-//import pprint
-//
-//def discover_foobar(section):
-//    for sector, used, slots in section:
-//        yield Service(item=sector)
-//
-//def check_foobar(item, section):
-//    for sector, used, slots in section:
-//        if sector == item:
-//            used = int(used)    # convert string to int
-//            slots = int(slots)  # convert string to int
-//            if used == slots:
-//                s = State.CRIT
-//            elif slots - used < 10:
-//                s = State.WARN
-//            else:
-//                s = State.OK
-//            yield Result(
-//                state = s,
-//                summary = f"used {used} out of {slots} slots")
-//            return
-//
-//register.check_plugin(
-//    name = "foobar",
-//    service_name = "Foobar Sector %s",
-//    discovery_function = discover_foobar,
-//    check_function = check_foobar,
-//)
-//F-:
-//
-//H1:Messwerte
-//
-//H2:Werte in der Checkfunktion ermitteln
-//
-//Nicht immer, aber oft befassen sich Checks mit Zahlen. Mit seinem link:graphing.html[Graphingsystem]
-//hat {CMK} eine Komponente, um solche Zahlen zu speichern, auszuwerten und darzustellen. Das
-//geht dabei völlig unabhängig von der Berechnung der Zuständige {OK}, {WARN} und {CRIT}.
-//
-//Solche Messwerte -- oder auch Metriken genannt -- werden von der Checkfunktion ermittelt
-//und einfach als zusätzliches Ergebnis zurückgegeben. Dazu dient das Objekt `Metrik`,
-//welches mindestens die beiden Argument `name` und `value` benötigt.
-//Hier ist ein Beispiel:
-//
-//F+:
-//    yield Metrik("fooslots", used)
-//F-:
-//
-//H2:Informationen zu den Schwellwerten
-//
-//Weiterhin gibt es noch zwei optionale Argumente. Mit dem Argument `levels` können Sie eine Information
-//zu Schwellwerten für {WARN} und {CRIT} mitgeben, und zwar in Form eines Paares von zwei Zahlen.
-//Diese wird dann üblicherweise im Graphen als gelbe und rote Linie eingezeichnet. Die erste Zahl
-//steht für die Warnschwelle, die zweite für die kritische.
-//Dabei gilt die Konvention, dass der Check beim Erreichen der Warnschwelle
-//bereits auf {WARN} geht (bei {CRIT} analog).
-//
-//Das sieht dann z.B. so aus (hier mit hartkodierten Schwellwerten):
-//
-//F+:
-//    yield Metrik("fooslots", used, levels=(190,200))
-//F-:
-//
-//Hinweise:
-//
-//LI:Falls nur eine der beiden Schwellen definiert ist, tragen Sie für die andere einfach `None` ein, also z.B. `levels=(None, 200)`.
-//LI:Es sind auch Fließkommazahlen erlaubt, aber keine Strings.
-//LI:Achtung: für die _Überprüfung_ der Schwellwerte ist die Checkfunktion selbst verantwortlich.  Die Angabe von `levels` dient lediglich als Randinformation für das Graphingsystem!
-//
-//
-//H2:Der Wertebereich
-//
-//Analog zu den Schwellwerten können Sie dem Graphingsystem auch die Information über
-//den möglichen Wertebereich mitgeben. Damit ist der kleinste und größte mögliche Wert
-//gemeint. Das geschieht im Argument `boundaries`, wobei auch hier optional
-//für eine der beiden Grenzen `None` eingesetzt werden kann. Beispiel:
-//
-//F+:
-//    yield Metrik(name="fooslots", value=used, boundaries=(0, 200))
-//F-:
-//
-//Und jetzt unsere Checkfunktion aus dem obigen Beispiel nochmal, aber
-//diesmal mit der Rückgabe von Metrikinformation inklusive Schwellwerte und
-//Wertebereich (diesmal natürlich nicht mit fixen sondern mit berechneten Werten):
-//
-//F+:
-//def check_foobar(item, section):
-//    for sector, used, slots in section:
-//        if sector == item:
-//            used = int(used)    # convert string to int
-//            slots = int(slots)  # convert string to int
-//
-//*            yield Metric(*
-//*                "fooslots",*
-//*                used,*
-//*                levels=(slots-10, slots),*
-//*                boundaries=(0, slots))*
-//
-//            if used == slots:
-//                s = State.CRIT
-//            elif slots - used < 10:
-//                s = State.WARN
-//            else:
-//                s = State.OK
-//            yield Result(
-//                state = s,
-//                summary = f"used {used} out of {slots} slots")
-//            return
-//F-:
-//
-//
-//
-//
-//
-//
-//H1:Checks mit mehreren Teilresultaten
-//
-//Um die Anzahl der Services auf einem Host nicht ins Unermessliche steigen zu
-//lassen, sind in einem Service oft mehrere Teilresultate zusammengefasst. So
-//prüft z.B. der Service [.guihint]#Memory used# unter Linux nicht nur den RAM- und Swapverbrauch,
-//sondern auch Shared memory, Pagetabellen und alles mögliche Andere.
-//
-//Die API von {CMK} bietet dafür eine sehr komfortable Schnittstelle. So darf eine
-//Checkfunktion einfach beliebig oft ein Ergebnis mit `yield` erzeugen. Der
-//Gesamtstatus des Services richtet sich dann nach dem „schlechtsten“ Teilergebnis
-//nach dem Schema {OK} → {WARN} → {UNKNOWN} → {CRIT}.
-//
-//Hier ist ein gekürztes fingiertes Beispiel:
-//
-//F+:
-//def check_foobar(section):
-//    yield Result(state=State.OK, summary="Knulf rate optimal")
-//    # ...
-//    yield Result(state=State.WARN, summary="Gnarz required")
-//    # ...
-//    yield Result(state=State.OK, summary="Last Szork was good")
-//F-:
-//
-//Die Summary des Services in der GUI sieht dann so aus:
-//„{{Knulf rate optimal, Gnarz required {WARN}, Last Szork was good}}“.
-//Und der Gesamtstatus ist {WARN}.
-//
-//Auf die gleiche Art können Sie auch mehrere Metriken zurückgeben.
-//Rufen Sie einfach für jede Metrik einmal `yield Metrik(...)`
-//auf.
-//
-//H1:Summary und Details
-//
-//In der Monitoringansicht im {CMK} hat jeder Service neben dem Status {OK},
-//{WARN}, usw. auch eine Zeile Text. Diese hieß bis zur Version VERSION[1.6.0]
-//[.guihint]#Output of check plugin#. Ab VERSION[2.0] heißt diese [.guihint]#Summary# --
-//hat also die Aufgabe einer knappen Zusammenfassung des Zustandes. Die Idee
-//ist, dass dieser Text eine _Länge von 60 Zeichen nicht überschreitet_.
-//Das sorgt dann immer für eine übersichtliche Tabellendarstellung ohne
-//störende Zeilenumbrüche.
-//
-//Daneben gibt es noch das Feld [.guihint]#Details#, welches früher
-//[.guihint]#Long output of check plugin (multiline)# hieß. Hier werden alle Details des Zustandes
-//angezeigt, wobei die Idee ist, dass alle Informationen des Summary hier auch
-//enthalten sind.
-//
-//Beim Aufruf von `yield Result(...)` können Sie bestimmen, welche
-//Informationen so wichtig sind, dass sie in der Summary angezeigt werden
-//sollen und bei welchen es genügt, dass diese in den Details erscheinen.
-//Dabei gilt die Regel, dass Teilergebnisse, die zu einem {WARN}/{CRIT}
-//führen, _immer_ in der Summary sichtbar werden.
-//
-//In unseren Beispiele bisher haben wir immer folgenden Aufruf
-//verwendet:
-//
-//F+:
-//    yield Result(state=State.OK, summary="some important text")
-//F-:
-//
-//Dieser führt dazu, dass `some important text` immer in der [.guihint]#Summary#
-//erscheint -- und zusätlich auch in den [.guihint]#Details#. Dies sollten sie
-//also nur für wichtige Informationen verwenden. Ist ein Teilergebnis eher
-//untergeordnet, so ersetzen Sie `summary` durch `notice` und
-//der Text erscheint -- falls es {OK} ist _nur_ in den Details.
-//
-//F+:
-//    yield Result(state=State.OK, notice="some additional text")
-//F-:
-//
-//Falls der Zustand {WARN} oder {CRIT} ist, taucht der Text dann automatisch
-//zusätzlich in der Summary auf:
-//
-//F+:
-//    yield Result(state=State.CRIT, notice="some additional text")
-//F-:
-//
-//Somit wird aus der Summary dann sofort klar, warum der Service nicht {OK}
-//ist.
-//
-//Zu guter Letzt haben Sie noch -- sowohl bei `summary` als auch bei
-//`notice` die Möglichkeit, für die Details einen _alternativen_
-//Text anzugeben, der evtl. mehr Informationen zu dem Teilergebnis enthält:
-//
-//F+:
-//    yield Result(state=State.OK,
-//                 summary="55% used space",
-//                 details="55.2% of 160 GB used (82 GB)")
-//F-:
-//
-//Zusammengefasst bedeutet das:
-//
-//LI:Der Gesamttext für die Summary sollte (bei Services die {OK} sind) nicht länger als 60 Zeichen sein.
-//LI:verwenden Sie immer entweder `summary` oder `notice` -- nicht beides und nicht keines davon.
-//LI:Fügen Sie bei Bedarf `details` hinzu, wenn der Text für die Details ein alternativer sein soll.
-//
-//H1:Fehlerbehandlung#errors
-//
-//H2:Exceptions und Crashreports
-//
-//Die korrekte Behandlung von Fehlern nimmt (leider) einen großen Teil der
-//Programmierabeit ein. Die gute Nachricht ist: die API von {CMK} erledigt dabei
-//bereits die meiste Arbeit. Meistens ist für Sie daher wichtig, dass Sie Fehler
-//einfach *garnicht* behandeln.
-//
-//Wenn Python in eine Situation kommt, die in irgendeiner Form _unerwartet_ ist,
-//reagiert es mit einer sogenannten _Exception_. Hier sind ein paar Beispiele:
-//
-//LI:Sie konvertieren mit `int(...)` einen String in eine Zahl, aber der String enthält keine Zahl, z.B. `int("foo")`
-//LI:Sie greifen mit `bar[4]` auf das fünfte Element von `bar` zu, aber das hat nur vier Elemente.
-//LI:Sie rufen eine Funktion auf, die es nicht gibt.
-//
-//Hier gilt die generelle wichtige Regel: *Fangen Sie Exceptions nicht selbst ab!* Denn {CMK} übernimmt das für
-//Sie in einer sinnvollen immer gleichen Art und Weise. Und zwar meist mit einem _Crashreport_. Das sieht
-//dann z.B. so aus:
-//
-//BI:crash_report_1.png
-//
-//Durch einen Klick auf das Icon icon:icon_crash[] gelangt der User dann auf eine Seite, auf der er
-//
-//LI:Die Datei angezeigt bekommt, in der der Crash stattgefunden hat.
-//LI:Alle Informationen über den Crash angezeigt bekommt (wie Fehlermeldung, Aufrufstack, Agentenausgabe, aktuelle Werte von lokalen Variablen und vieles mehr).
-//LI:Den Report zu uns als Feedback einsenden kann.
-//
-//Das Einsenden des Reports macht natürlich nur Sinn für Checkplugins,
-//welche offiziell Teil von {CMK} sind. Aber Sie können Ihre Anwender bitten,
-//Ihnen die Daten einfach zukommen zu lassen. Diese werden Ihnen beim Finden
-//des Fehlers helfen. Oft ist es ja so, dass das Checkplugin bei Ihnen selbst
-//funktioniert, aber es bei anderen Anwendern vielleicht sehr sporadisch zu
-//Fehlern kommt. Diese können Sie dann so meist sehr leicht finden.
-//
-//Falls Sie aber die Exception selbst abfangen würden, wären diese ganzen
-//Informationen plötzlich nicht verfügbar. Sie würden vielleicht den Service
-//auf {UNKNOWN} setzen und eine Fehlermeldung ausgeben. Aber die ganzen Umstände,
-//wie es dazu kam (z.B. die Daten vom Agenten), wäre verschleiert.
-//
-//H2:Exceptions auf der Kommandozeile ansehen
-//
-//Falls Sie ihr Plugin auf der Kommandozeile ausführen, werden keine Crashreports
-//erzeugt. Sie sehen nur die zusammengefasste Fehlermeldung:
-//
-//C+:
-//OM:cmk -II --detect-plugins=foobar myhost123
-//  WARNING: Exception in discovery function of check plugin 'foobar': invalid literal for int() with base 10: 'foo'
-//C-:
-//
-//Aber: hängen Sie einfach die Option `--debug` dran. Dann bekommt Sie den
-//Python-Stacktrace:
-//
-//C+:
-//OM:cmk --debug -II --detect-plugins=foobar myhost123
-//Traceback (most recent call last):
-//  File "/omd/sites/myhost123/bin/cmk", line 82, in <module>
-//    exit_status = modes.call(mode_name, mode_args, opts, args)
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/modes/__init__.py", line 68, in call
-//    return handler(*handler_args)
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/modes/check_mk.py", line 1577, in mode_discover
-//    discovery.do_discovery(set(hostnames), options.get("checks"), options["discover"] == 1)
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 345, in do_discovery
-//    _do_discovery_for(
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 397, in _do_discovery_for
-//    discovered_services = _discover_services(
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1265, in _discover_services
-//    service_table.update({
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1265, in <dictcomp>
-//    service_table.update({
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1337, in _execute_discovery
-//    yield from _enriched_discovered_services(hostname, check_plugin.name, plugins_services)
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1351, in _enriched_discovered_services
-//    for service in plugins_services:
-//  File "/omd/sites/myhost123/lib/python3/cmk/base/api/agent_based/register/check_plugins.py", line 69, in filtered_generator
-//    for element in generator(*args, **kwargs):
-//  File "/omd/sites/myhost123/local/lib/python3/cmk/base/plugins/agent_based/foobar.py", line 5, in discover_foobar
-//    int("foo")
-//ValueError: invalid literal for int() with base 10: 'foo'
-//C-:
-//
-//
-//H2:Ungültige Ausgaben vom Agenten
-//
-//Die Frage ist, wie Sie reagieren sollen, wenn die Ausgaben vom Agenten
-//nicht die Form haben, die Sie eigentlich erwarten würden - egal ob es der
-//„echte“ Agent ist oder die Daten per link:snmp.html[SNMP] kommen. Nehmen wir an, dass Sie
-//pro Zeile immer drei Worte erwarten. Was sollen Sie tun, falls nur zwei kommen?
-//
-//Nun -- wenn das ein _erlaubtes und bekanntes_ Verhalten des Agenten
-//ist, dann müssen das natürlich abfangen und mit einer Fallunterscheidung
-//arbeiten.
-//
-//Falls das aber eigentlich nicht sein darf... dann tun Sie am besten so,
-//als ob die Zeile immer aus drei Worten besteht, also z.B. mit:
-//
-//F+:
-//def check_foobar(section):
-//    for foo, bar, baz in section:
-//        # ...
-//F-:
-//
-//Sollte jetzt mal eine Zeile dabei sein, die nicht aus genau drei Worten
-//besteht, wird eine hübsche Exception erzeugt und wir bekommen den gerade
-//erwähnten sehr hilfreichen Crashreport.
-//
-//
-//H2:Fehlende Items
-//
-//Was ist, wenn der Agent korrekte Daten ausgibt, aber das Item, das
-//überprüft werden soll, fehlt? Also z.B. auf diese Art:
-//
-//F+:
-//def check_foobar(item, section):
-//    for sector, used, slots in section:
-//        if item == sector:
-//            # ... Check state ...
-//            yield Result(...)
-//            return
-//F-:
-//
-//Ist das gesuchte Item nicht dabei, so wird die Schleife durchlaufen und
-//Python fällt am Ende der Funktion einfach hinten raus, ohne dass ein
-//Resultat „geyieldet“ wurde. Und das ist genau das Richtige! Denn daran
-//erkennt {CMK}, dass das zu überwachende Item fehlt und erzeugt mit {UNKNOWN}
-//den richtigen Status und einen passenden Standardtext dazu.
-//
-//
-//H1:SNMP-basierte Checks#snmp
-//
-//H2:Grundsätzliches
-//
-//Das Entwickeln von Checks, die mit SNMP arbeiten, läuft sehr ähnlich zu den
-//agentenbasierten, nur dass Sie hier noch angeben müssen, welche SNMP-Bereiche
-//(OIDs) der Check benötigt. Falls Sie noch keine Erfahrung mit SNMP haben,
-//so empfehlen wir Ihnen an dieser Stelle als Vorbereitung unbedingt den
-//Artikel über das link:snmp.html[Monitoren via SNMP].
-//
-//Der Ablauf der Discovery und des Checkens via SNMP ist etwas anders als beim
-//normalen Agenten. Denn anders also dort -- wo der Agent von sich aus alle
-//interessanten Informationen senden -- müssen wir bei SNMP selbst genau
-//sagen, welche Datenbereiche wir benötigen. Ein Komplettabzug aller Daten
-//wäre zwar theoretisch möglich (via SNMP-Walk), dauert aber bei schnellen
-//Geräten eher im Bereich von Minuten und bei komplexen Switches gern auch
-//über eine Stunde. Daher scheidet das beim Checken und sogar auch bei der
-//Discovery aus. {CMK} geht deswegen etwas zielgerichteter vor.
-//
-//H3:SNMP-Detection
-//
-//Die Serviceerkennung teilt sich in zwei Phasen auf. Zunächst geschieht die
-//_SNMP-Detection_. Diese ermittelt, welche Plugins
-//denn überhaupt auf dem jeweiligen Gerät interessant sind. Dazu werden einige
-//wenige SNMP-OIDs abgerufen -- und zwar einzelne, ohne Walk.  Die wichtigste
-//davon ist die `sysDescr` (OID: `1.3.6.1.2.1.1.1.0`). Unter dieser
-//OID hält jedes SNMP-Gerät eine Beschreibung von sich selbst bereit, z.B.
-//„`Cisco NX-OS(tm) n5000, Software (n5000-uk9),...`“.
-//
-//Ausgehend von diesem Text kann man für sehr viele Plugins schon definitiv
-//entscheiden, ob diese hier Sinn ergeben. Wenn der Text noch nicht spezifisch
-//genug ist, werden weitere OIDs geholt und geprüft. Ergebnis der SNMP-Detection
-//ist dann eine Kandidaten-Liste von Checkplugins.
-//
-//H3:Discovery
-//
-//Im zweiten Schritt werden für jeden dieser Kandidaten die jeweils nötigen
-//Monitoringdaten mit SNMP-Walks geholt. Diese werden dann zu einer Tabelle
-//zusammengefasst und der Discovery-Funktion des Checks in dem Argument
-//`section` bereitgestellt, welche dann daraus wie gewohnt die zu
-//überwachenden Items ermittelt.
-//
-//H3:Checken
-//
-//Beim Checken ist ja schon bekannt, welche Plugins für das Gerät ausgeführt
-//werden sollen und die SNMP-Detection entfällt. Hier werden gleich per
-//SNMP-Walks die für die Plugins benötigten Monitoringdaten geholt und daraus
-//das Argument `section` für die Checkfunktion befüllt.
-//
-//H3:Zusammenfassung
-//
-//Was müssen Sie also bei einem SNMP-Check anders machen als bei einem agentenbasierten?
-//
-//NL:Sie benötigen kein Plugin für den Agenten.
-//NL:Sie müssen die für die SNMP-Detection nötigen Einzel-OIDs und Suchtexte festlegen.
-//NL:Sie müssen festlegen, welche SNMP-Bereiche für das Monitoring geholt werden müssen.
-//
-//H2:Ein Wort zu den MIBs
-//
-//Bevor wir weitermachen will ich hier noch ein Wort zu den berüchtigten
-//SNMP-MIBs verlieren, denn über diese gibt es viele Vorurteile. Gleich zu
-//Beginn eine gute Nachricht: {CMK} benötigt sie nicht. Wirklich! Sie sind
-//aber eine wichtige Hilfe, um einen SNMP-Check _entwickleln_ zu können.
-//
-//Was ist nun eine MIB? Wörtlich bedeutet die Abkürzung _Management
-//Information Base_ -- etwas nichtssagend. Konkret ist eine MIB eine
-//ganz gut lesbare Textdatei, welche einen bestimmten Teilbaum der SNMP-Welt
-//beschreibt. Und zwar steht hier, welcher Ast im Baum -- also welche _OID_ --
-//welche Bedeutung hat. Das umfasst einen Namen für die OID, einen Hinweis,
-//welche Werte diese annehmen kann (z.B. bei enumerierten Datentypen, wo
-//dann Dinge wie 1=up, 2=down, etc. festgelegt sind) und manchmal auch noch
-//einen nützlichen Kommentar.
-//
-//{CMK} liefert eine Reihe von frei verfügbaren MIB-Dateien mit aus. Diese
-//beschreiben sehr allgemeine Bereiche im globalen OID-Baum, enthalten aber
-//keine herstellerspezifischen Bereiche. Daher helfen sie für selbstentwickelte
-//Checks nicht viel weiter.
-//
-//Versuchen Sie also, die für Ihr spezielle Gerät relevaten MIB-Dateien irgendwo
-//auf den Webseiten vom Hersteller oder sogar auf dem Management-Interface
-//des Geräts zu finden und installieren Sie diese in der {CMK}-Instanz nach
-//`local/share/check_mk/mibs`. Dann können Sie in SNMP-Walks OID-Nummern
-//in Namen umrechnen lassen und so schneller finden, wo die für das Monitoring
-//interessanten Daten sind. Auch enthalten die MIBs, wenn sie sorgfältig
-//gemacht sind, wie gesagt interessante Information in den Kommentaren.
-//Sie können eine MIB-Datei einfach mit einem Texteditor oder mit `less` ansehen.
-//
-//H2:Die richtigen OIDs finden
-//
-//Die entscheidende Voraussetzung, um ein Plugin zu entwickeln, ist natürlich,
-//dass Sie wissen, welche OIDs die notwendigen Informationen enthalten. Der
-//erste Schritt dabei ist (falls das Gerät das nicht verweigert), einen kompletten
-//SNMP-Walk zu ziehen. Dabei werden _alle_ per SNMP verfügbaren Daten
-//abgerufen.
-//
-//{CMK} kann das sehr einfach für Sie erledigen. Nehmen Sie dazu zunächst
-//das Gerät (oder eines der Geräte), für das Sie ein Plugin entwickeln wollen,
-//ins Monitoring auf. Sagen wir es heißt `mydevice01`. Stellen Sie sicher,
-//dass dieses in den Grundfunktionen überwacht werden kann. Zumindest müssen
-//die Services [.guihint]#SNMP Info# und [.guihint]#Uptime# gefunden werden und wahrscheinlich
-//auch noch mindestens ein [.guihint]#Interface#. So stellen Sie sicher, dass der SNMP-Zugriff
-//sauber funktioniert.
-//
-//Wechseln Sie dann auf die Kommandozeile der {CMK}-Instanz. Hier können
-//Sie mit folgendem Befehl einen kompletten Walk ziehen. Dabei empfehle ich,
-//gleich die Option `-v` (verbose) zu verwenden:
-//
-//C+:
-//OM:cmk -v --snmpwalk mydevice01
-//mydevice01:
-//Walk on ".1.3.6.1.2.1"...3898 variables.
-//Walk on ".1.3.6.1.4.1"...6025 variables.
-//Wrote fetched data to /omd/sites/heute/var/check_mk/snmpwalks/mydevice01.
-//C-:
-//
-//Wie bereits erwähnt, kann so ein Komplettwalk Minuten oder sogar
-//Stunden dauern (auch wenn letzteres eher selten ist). Werden Sie also
-//nicht nervös, wenn es hier etwas dauert. Der Walk wurde nun in der Datei
-//`var/check_mk/snmpwalks/mydevice01` gespeichert. Es handelt sich
-//dabei um eine gut lesbare Textdatei, die etwa so beginnt:
-//
-//F+:var/check_mk/snmpwalks/mydevice01
-//.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots
-//.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3
-//.1.3.6.1.2.1.1.3.0 546522419
-//.1.3.6.1.2.1.1.4.0 hh@example.com
-//.1.3.6.1.2.1.1.5.0 sw-ks-01
-//.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein
-//.1.3.6.1.2.1.1.7.0 3
-//.1.3.6.1.2.1.2.1.0 27
-//F-:
-//
-//In jeder Zeile steht eine OID und danach deren Wert. Und gleich in der ersten Zeile finden Sie die
-//wichtigste, nämlich die `sysDescr`.
-//
-//Nun sind die OIDs nicht sehr aussagekräftig. Wenn die richtigen MIBs installiert sind,
-//können Sie diese in einem zweiten Schritt mit dem Befehl `cmk --snmptranslate`
-//in Namen umrechnen lassen. Am besten leiten Sie das Ergebnis, was ansonsten im Terminal
-//käme, in eine Datei um:
-//
-//C+:
-//OMD[heute]:~$ cmk --snmptranslate mydevice01  > translated
-//Processing 9923 lines.
-//finished.
-//C-:
-//
-//Die Datei `translated` liest sich wie der ursprüngliche Walk, hat aber in jeder
-//Zeile nach dem `--&gt;` einen übersetzten Wert für die OID:
-//
-//F+:translated
-//.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots --> *SNMPv2-MIB::sysDescr.0*
-//.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3 --> *SNMPv2-MIB::sysObjectID.0*
-//.1.3.6.1.2.1.1.3.0 546522419 --> *DISMAN-EVENT-MIB::sysUpTimeInstance*
-//.1.3.6.1.2.1.1.4.0 hh@example.com --> *SNMPv2-MIB::sysContact.0*
-//.1.3.6.1.2.1.1.5.0 sw-ks-01 --> *SNMPv2-MIB::sysName.0*
-//.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein --> *SNMPv2-MIB::sysLocation.0*
-//.1.3.6.1.2.1.1.7.0 3 --> *SNMPv2-MIB::sysServices.0*
-//.1.3.6.1.2.1.2.1.0 27 --> *IF-MIB::ifNumber.0*
-//.1.3.6.1.2.1.2.2.1.1.1 1 --> *IF-MIB::ifIndex.1*
-//.1.3.6.1.2.1.2.2.1.1.2 2 --> *IF-MIB::ifIndex.2*
-//F-:
-//
-//Beispiel: die OID `.1.3.6.1.2.1.1.4.0` hat den übersetzten Namen
-//`SNMPv2-MIB::sysContact.0`. Dies ist ein wichtiger Hinweis, der Rest
-//ist dann Übung, Erfahrung und natürlich experimentieren.
-//
-//H2:Die Registrierung der SNMP-Sektion
-//
-//Wenn Sie also die notwendigen OIDs festgestellt haben, geht es an die
-//eigentliche Entwicklung des Plugins. Das geschieht in drei Schritten:
-//
-//LI:Legen Sie für die SNMP-Detection fest, welche OIDs welche Texte enthalten müssen, damit Ihr Plugin ausgeführt werden soll.
-//LI:Deklarieren Sie, welche OID-Zweige für das Monitoring geholt werden müssen.
-//LI:Schreiben Sie ein Checkplugin analog zu denjenigen für agentenbasierte Checks.
-//
-//Die ersten beiden Schritte erfolgen durch die Registrierung einer SNMP-Sektion.
-//Dies erledigen Sie durch den Aufruf von `register.snmp_section()`. Hier
-//geben Sie mindestens drei Argumente an: den Namen der Sektion (`name`),
-//die Angaben für die SNMP-Detection `detect` und die benötigten
-//OID-Zweige für das eigentlich Monitoring (`fetch`). Hier ist ein Beispiel für ein
-//fiktives Checkplugin mit dem Namen `foo`:
-//
-//F+:local/lib/check_mk/base/plugins/agent_based/foo.py
-//register.snmp_section(
-//    name = "foo",
-//    detect = startswith(".1.3.6.1.2.1.1.1.0", "foobar device"),
-//    fetch = SNMPTree(
-//        base = '.1.3.6.1.4.1.35424.1.2',
-//        oids = [
-//            '4.0',
-//            '5.0',
-//            '8.0',
-//        ],
-//    ),
-//)
-//F-:
-//
-//H3:Die SNMP-Dection
-//
-//Mit dem Schlüsselwort `detect` geben Sie an, unter welchen Bedingungen
-//die Discoveryfunktion überhaupt ausgeführt werden soll. In unserem Beispiel
-//ist das der Fall, wenn der Wert der OID `.1.3.6.1.2.1.1.1.0` (also
-//die `sysDescr`) mit dem Text `foobar device` beginnt (wobei
-//Groß-/Kleinschreibung grundsätzlich nicht unterschieden wird). Neben
-//`startswith` gibt es noch eine ganze Reihe weiterer möglichen
-//Attribute. Dabei existiert von jedem auch eine negierte Form, welche mit
-//`not_` beginnt:
-//
-//<table>
-//
-//<tr>
-//<th style="width: 28%">Attribut</th>
-//<th style="width: 33%">Negation</th>
-//<th>Bedeutung</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>equals(oid, needle)</td>
-//<td class=tt>not_equals(oid, needle)</td>
-//<td>Der Wert der der OID ist gleich dem Text `needle`</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>contains(oid, needle)</td>
-//<td class=tt>not_contains(oid, needle)</td>
-//<td>Der Wert der der OID enthält an irgendeiner Stelle den Text `needle`</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>startswith(oid, needle)</td>
-//<td class=tt>not_startswith(oid, needle)</td>
-//<td>Der Wert der der OID beginnt mit dem Text `needle`</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>endswith(oid, needle)</td>
-//<td class=tt>not_endswith(oid, needle)</td>
-//<td>Der Wert der der OID endet mit dem Text `needle`</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>matches(oid, regex)</td>
-//<td class=tt>not_matches(oid, regex)</td>
-//<td>Wert der OID matcht auf den link:regexes.html[regulären Ausdruck] `regex`, und zwar
-//hinten und vorne geankert, also mit einem exakten Match. Wenn Sie nur einen Teilstring
-//benötigen, ergänzen Sie einfach vorne bzw. hinten noch ein `pass:[.*]`</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>exists(oid)</td>
-//<td class=tt>not_exists(oid)</td>
-//<td>Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.</td>
-//</tr>
-//
-//
-//Daneben gibt es noch die Möglichkeit, mehrere Tests mit `all_of`
-//oder `any_of` zu verknüpfen. `all_of` erfordert mehrere
-//erfolgreiche Attribute für eine positive Erkennung des Plugins. Folgendes
-//Beispiel findet auf einem Gerät das Plugin, wenn in der `sysDescr` mit
-//dem Text `foo` (oder `FOO` oder `Foo`) beginnt *und*
-//die OID `.1.3.6.1.2.1.1.2.0` den Text `.4.1.11863.` enthält:
-//
-//F+:
-//detect = all_of(
-//    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
-//    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
-//)
-//F-:
-//
-//`any_of` hingegen ist damit zufrieden, wenn auch nur eines der Kriterien
-//erfüllt ist. Hier ist ein Beispiel, wo verschiedene Werte für die `sysDescr`
-//erlaubt sind:
-//
-//F+:
-//detect = any_of(
-//    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
-//    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
-//    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
-//)
-//F-:
-//
-//Übrigens: Kennen Sie sich gut mit link:regexes.html[regulären Ausdrücken] aus? Dann würden Sie wahrscheinlich
-//das ganze vereinfachen und doch wieder mit einer Zeile auskommen:
-//
-//F+:
-//detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*"),
-//F-:
-//
-//Und noch ein wichtiger Hinweis: Die OIDs, die Sie bei der `detect`-Deklaration
-//von einem Plugin angeben, werden im Zweifel von *jedem* Gerät geholt, welches
-//per SNMP überwacht wird. Sein Sie daher sehr sparsam bei der Verwendung von herstellerspezifischen
-//OIDs. Versuchen Sie, Ihre Erkennung unbedingt so zu machen, dass aussschließlich
-//die `sysDescr` (`.1.3.6.1.2.1.1.1.0`) und die `sysObjectID`
-//(`.1.3.6.1.2.1.1.2.0`) verwendet werden. Falls Sie dennoch eine weitere
-//andere OID benötgen, dann reduzieren Sie die Anzahl der Geräte, wo diese angefragt
-//wird auf ein Minimum, indem Sie zuvor mittels der `sysDescr` soviele Geräte
-//wie möglich bereits ausschließen, z.B. so:
-//
-//F+:
-//detect = all_of(
-//    startswith(".1.3.6.1.2.1.1.1.0", "foo"),   # first check sysDescr
-//    contains(".1.3.6.1.4.1.4455.1.3", "bar"),  # fetch vendor specific OID
-//)
-//F-:
-//
-//Das `all_of()` funktioniert so, dass bei einem Scheitern der ersten
-//Bedingung die zweite garnicht erst probiert wird (und somit die betreffende
-//OID auch nicht geholt). Hier im Beispiel wird die OID `.1.3.6.1.4.1.4455.1.3` nur
-//bei solchen Geräten geholt, die `foo` in ihrer `sysDescr` haben.
-//
-//Was geschieht, wenn Sie die Deklaration falsch oder zumindest nicht ganz
-//zielsicher gemacht haben?
-//
-//LI:Falls die Detection fälschlicherweise Geräte erkennt, auf denen die nötigen OIDs garnicht vorhanden sind, wird Ihre Discoveryfunktion dann auch keine Services erzeugen. Es passiert also nichts „Schlimmes“. Allerdings wird das die Discovery auf solchen Geräten verlangsamen, da jetzt jedesmal nutzlos versucht wird, die entsprechenden OIDs abzufragen.
-//LI:Falls die Detection eigentlich zulässige Geräte _nicht_ erkennt, werden dort im Monitoring bei der Discovery auch keine Services gefunden.
-//
-//H2:Die OID-Bereiche für das Monitoring
-//
-//Die wichtigste Stelle der SNMP-Deklaration ist die Angabe, welche OIDs für
-//das Monitoring geholt werden sollen. In fast allen Fällen benötigt ein Plugin
-//dazu nur ausgewählte Äste aus einer einzigen Tabelle. Betrachten wir folgendes
-//Beispiel:
-//
-//F+:
-//    fetch = SNMPTree(
-//        base = '.1.3.6.1.4.1.35424.1.2',
-//        oids = [
-//            '4.0',
-//            '5.0',
-//            '8.0',
-//        ],
-//    ),
-//F-:
-//
-//Das Schlüsselwort `base` gibt hier einen OID-Präfix an. Alle
-//nötigen Daten liegen unterhalb. Bei `oids` geben Sie dann eine
-//Liste von Sub-OIDs an, die ab dort geholt werden sollen. In obigem
-//Beispiel werden dann insgesamt drei SNMP-Walks gemacht, nämlich auf
-//ausgehend von den OIDs `.1.3.6.1.4.1.35424.1.2.4.0`, `.1.3.6.1.4.1.35424.1.2.5.0`
-//und `.1.3.6.1.4.1.35424.1.2.8.0`. Dabei ist es wichtig, dass diese
-//Walks die gleiche Anzahl von Variablen holen und dass diese auch einander
-//entsprechen. Damit ist gemeint, dass z.B. das n-te Element aus jedem der
-//Walks dem selben überwachten Objekt entsprechen.
-//
-//Hier ist ein Beispiel vom Checkplugin `snmp_quantum_storage_info`:
-//
-//F+:
-//    tree = SNMPTree(
-//       base=".1.3.6.1.4.1.2036.2.1.1",  # qSystemInfo
-//       oids=[
-//           "4",   # qVendorID
-//           "5",   # qProdId
-//           "6",   # qProdRev
-//           "12",  # qSerialNumber
-//       ],
-//    ),
-//)
-//F-:
-//
-//Hier wird pro Storagegerät jeweils die Vendor ID, die Product ID, die Product Revsion
-//und die Seriennummer geholt.
-//
-//Der Discovery- und Checkfunktion werden diese Daten als Tabelle präsentiert, also
-//als Liste von Listen. Dabei wird die Tabelle so gespiegelt, dass Sie pro Eintrag
-//in der äußeren Liste alle Daten zu einem Item haben. Jeder Eintrag hat so viele
-//Elemente, wie Sie bei `oids` angegeben haben. So können Sie die Liste
-//sehr praktisch mit einer Schleife durchlaufen, z.B.
-//
-//F+:
-//    for vendor_id, prod_id, prod_rev, serial_number in section:
-//        ...
-//F-:
-//
-//Bitte beachten Sie
-//LI:Alle Einträge sind _strings_, selbst wenn die betreffenden OIDs eigentlich Zahlen sind.
-//LI:Fehlende OIDs werden als Leerstrings präsentiert
-//LI:Denken Sie an die Möglichkeit, während der Entwicklung mit `pprint` die Daten formatiert auszugeben.
-//
-//H2:Weitere SNMP-Sonderheiten
-//
-//
-//Hier beschreiben wir in Zukunft noch:
-//LI:Wie Sie mehrere unabhängige SNMP-Bereiche abrufen können
-//LI:Was es mit OIDEnd() auf sich hat.
-//LI:Weitere Sonderfälle beim Umgang mit SNMP
-//
-//H1:Hinweise für Nutzer der alten API
-//
-//Sind Sie bereits erfahren bei der Entwicklung von Checkplugins mit der bisherigen
-//API -- derjenigen bis Version VERSION[1.6.0] von {CMK}? Dann finden Sie hier einige
-//Hinweise über wichtige Änderungen zusammengefasst.
-//
-//H2:saveint() und savefloat()
-//
-//Die beiden Funktionen `saveint()` und `savefloat()` sind weggefallen.
-//Zur Erinnerung: `saveint(x)` liefert `0` wenn sich `x` nicht
-//vernünftig in eine Zahl konvertieren lässt, z.B. weil es ein leerer String ist oder
-//nicht nur aus Ziffern besteht.
-//
-//Auch wenn es dafür einige wenige gute Anwendungsfälle gab, wurde es doch in der
-//Mehrheit der Fälle falsch verwendet und hat dazu geführt, dass so viele
-//link:devel_check_plugins.html#errors[Fehler] verschleiert wurden.
-//
-//Für den Fall, dass Sie bei einem Leerstring eine `0` bekommen möchten,
-//also den häufigsten „guten“ Anwendungsfall von `saveint(x)`, können
-//Sie einfach Folgendes schreiben:
-//
-//F+:
-//foo = int(x) if x else 0
-//F-:
-//
-//Für `savefloat()` gilt alles analog.
-//
-//
-//H1:Formatierung von Zahlen
-//
-//H2:Grundlegendes
-//
-//In der Summary oder den Details eines Services werden oft Zahlen ausgegeben. Um Ihnen
-//eine schöne und korrekte Formatierung möglichst einfach zu machen und um
-//auch die Ausgaben von allen Checkplugins zu vereinheitlichen, gibt es Hilfsfunktionen
-//für die Darstellung von verschiedenen Arten von Größen.
-//Alle diese sind Unterfunktionen vom Modul `render` und werden folglich
-//mit `render.` aufgerufen. Z.B. ergibt `render.bytes(2000)` den Text
-//`1.95 KiB`.
-//
-//Allen diesen Funktionen ist gemein, dass Sie ihren Wert in einer
-//sogenannten _kanonischen_ oder natürlichen Einheit bekommen. So muss
-//man nie nachdenken und es gibt keine Schwierigkeiten oder Fehler bei der
-//Umrechung. Z.B. werden Zeiten immer in Sekunden angegeben und Größen von
-//Festplatten, Dateien, etc. immer in Bytes und nicht in Kilobytes, Kibibytes,
-//Blöcken oder sonstigem Durcheinander.
-//
-//Bitte verwenden Sie diese Funktionen auch dann, wenn Ihnen die Darstellung
-//nicht so gut gefällt. Immerhin ist diese dann für den Benutzer einheitlich.
-//Und zukünftige Versionen von {CMK} können die Darstellung möglicherweise
-//ändern oder sogar konfigurierbar für den Benutzer machen. Davon wird dann
-//Ihr Checkplugin auch profitieren.
-//
-//Nach der ausführlichen Beschreibung aller Darstellungsfunktionen (Renderfunktionen) finden
-//Sie eine Zusammenfassung in Form einer übersichtlichen Tabelle.
-//
-//H2:Zeiten, Zeitspannen, Frequenzen
-//
-//Absolute Zeitangaben (Zeitstempel) werden mit `render.date()` oder `render.datetime()`
-//formatiert. Die Angaben erfolgen immer in _Sekunden ab dem 1. Januar 1970, 00:00:00 UTC_ -- der
-//sogenannten Epochenzeit. Dies ist auch das Format, mit dem die Pythonfunktion `time.time()`
-//arbeitet. Vorteil an dieser Darstellung ist, dass sich damit sehr einfach rechnen lässt, also
-//z.B. die Dauer eines Vorgangs, wenn Start- und Endzeit bekannt sind. Die Formel ist dann
-//einfach `duration = end - start`. Und diese Berechnungen funktionieren unabhängig von
-//der Zeitzone, Sommerzeitumstellungen oder Schaltjahren.
-//
-//`render.date()` gibt dabei nur das Datum aus, `render.datetime()` fügt noch die
-//Uhrzeit hinzu. Die Ausgabe erfolgt dabei gemäß der aktuellen Zeitzone desjenigen {CMK}-Servers,
-//welcher den Check ausführt! Beispiele:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.date(0)</td>
-//<td class=tt>Jan 01 1970</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.datetime(0)</td>
-//<td class=tt>Jan 01 1970 01:00:00</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.date(1600000000)</td>
-//<td class=tt>Sep 13 2020</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.datetime(1600000000)</td>
-//<td class=tt>Sep 13 2020 14:26:40</td>
-//</tr>
-//
-//
-//Bitte wundern Sie sich jetzt nicht, dass `render.date(0)` als Uhrzeit
-//nicht 00:00, sondern 01:00 ausgibt! Das liegt daran, dass ich dieses Handbuch
-//in der Zeitzone von Deutschland schreibe, und die ist der Standardzeit UTC
-//eine Stunde voraus (zumindest während der Normalzeit, denn der 1. Januar liegt
-//ja bekanntlich nicht in der Sommerzeit).
-//
-//Für _Zeitspannen_ gibt es noch die Funktion `render.timespan()`.
-//Diese bekommt eine Dauer in Sekunden und gibt das menschenlesbar aus. Bei
-//größeren Zeitspannen werden Sekunden oder Minuten weggelassen.
-//
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.timespan(1)</td>
-//<td class=tt>1 second</td>
-//</tr>
-//
-//
-//<tr>
-//<td class=tt>render.timespan(123)</td>
-//<td class=tt>2 minutes 3 seconds</td>
-//</tr>
-//
-//
-//<tr>
-//<td class=tt>render.timespan(12345)</td>
-//<td class=tt>3 hours 25 minutes</td>
-//</tr>
-//
-//
-//<tr>
-//<td class=tt>render.timespan(1234567)</td>
-//<td class=tt>14 days 6 hours</td>
-//</tr>
-//
-//
-//Eine _Frequenz_ ist quasi der Kehrwert der Zeit. Die kanonische Einheit ist _Hz_, was
-//das gleiche bedeutet wie 1 / sec. Einsatzgebiet ist z.B. die Taktrate einer CPU:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.frequency(111222333444)</td>
-//<td class=tt>111 GHz</td>
-//</tr>
-//
-//
-//
-//H2:Bytes
-//
-//Überall wo es um Arbeitsspeicher, Dateien, Festplatten, Dateisystem und
-//dergleichen geht, ist die kanonische Einheit das _Byte_. Da Computer
-//sowas meist in Zweierpotenzen organisieren, also z.B. in Einheiten zu
-//512, 1024 oder 65536 Bytes, hatte sich dabei von Beginn an eingebürgert,
-//dass ein _Kilobyte_ nicht 1000, sondern 1024 Bytes sind. An sich
-//sehr praktisch, weil so meist runde Zahlen rauskamen. Der legendäre Commodore
-//C64 hatte eben 64 Kilobyte Speicher und nicht 65,536.
-//
-//Leider kamen irgendwann Festplattenhersteller auf die Idee, die Größen
-//ihrer Platten in 1000'er-Einheiten anzugeben. Da bei jeder Größenordnung
-//der Unterschied zwischen 1000 und 1024 immerhin 2,4% ausmacht, und diese sich
-//aufmultiplizieren, wird so aus einer Platte der Größe 1 GB (1024 mal 1024 *
-//1024) auf einmal 1,07 GB. Das verkauft sich besser.
-//
-//Diese lästige Verwirrung besteht bis heute und sorgt immer wieder für Fehler.
-//Als Linderung wurden von der internationalen elektrotechnischen Kommission
-//neue Präfixe auf Grundlage des Binärsystems festgelegt. Demnach ist heute
-//offiziell ein Kilobyte 1000 Byte und ein _Kibibyte_ 1024 Byte (2 hoch 10).
-//Außerdem soll man _Mebibyte_ und _Gibitbyte_ und _Tebibyte_
-//sagen (schon mal gehört?). Die Abkürzungen lauten (Achtung, hier auf
-//einmal immer i, statt e!) _KiB_, _MiB_, _GiB_ und _TiB_.
-//
-//{CMK} passt sich an diesen Standard an und hilft Ihnen mit mehreren angepassten
-//Renderfunktionen dafür, dass Sie immer korrekte Ausgaben machen. So
-//gibt es speziell für Festplatten und Dateisysteme die Funktion
-//`render.disksize()`, welche die Ausgabe in 1000'er-Potenzen macht.
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.disksize(1000)</td>
-//<td class=tt>1.00 kB</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.disksize(1024)</td>
-//<td class=tt>1.02 kB</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.disksize(2000000)</td>
-//<td class=tt>2.00 MB</td>
-//</tr>
-//
-//
-//Bei der Größe von _Dateien_ ist es oft üblich, die genaue Größe in
-//Bytes _ohne Rundung_ anzugeben. Dies hat den Vorteil, dass man so
-//sehr schnell sehen kann, wenn sich eine Datei auch nur minimal geändert
-//hat oder dass zwei Dateien (wahrscheinlich) gleich sind. Hierfür ist
-//die Funktion `render.filesize()` verantwortlich:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.filesize(1000)</td>
-//<td class=tt>1,000 B</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.filesize(1024)</td>
-//<td class=tt>1,024 B</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.filesize(2000000)</td>
-//<td class=tt>2,000,000 B</td>
-//</tr>
-//
-//
-//Wenn Sie eine Größe ausgeben möchte, die keine Platten- oder Dateigröße ist,
-//dann verwenden Sie einfach das generische `render.bytes()`. Hier bekommen
-//sie die Ausgabe in klassichen 1024'er-Potenzen in der neuen offiziellen Schreibweise:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.bytes(1000)</td>
-//<td class=tt>1000 B</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.bytes(1024)</td>
-//<td class=tt>1.00 KiB</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.bytes(2000000)</td>
-//<td class=tt>1.91 MiB</td>
-//</tr>
-//
-//
-//
-//H2:Bandbreiten, Datenraten
-//
-//Die Netzwerker haben ihre eigenen Begriffe und Arten, Dinge auszudrücken.
-//Und wie immer gibt sich {CMK}-Mühe, in jeder Domäne die dort übliche
-//Art zu kommunizieren zu übernehmen. Deswegen gibt es für Datenraten
-//und Geschwindigkeiten gleich drei verschiedene Renderfunktionen. Alle
-//haben gemeinsam, dass die Raten in _Bytes pro Sekunde_ übergeben
-//werden, selbst dann, wenn die Ausgabe in Bits erfolgt!
-//
-//`render.nicspeed()` stellt die Maximalgeschwindigkeit einer
-//Netzwerkkarte oder eines Switchports dar. Da es keine Messwerte sind, muss
-//auch nicht gerundet werden. Obwohl kein Port einzelne Bits versenden
-//kann, sind die Angaben aus historischen Gründen in Bits. Achtung: trotzdem
-//müssen Sie auch hier Bytes pro Sekunde übergeben! Beispiele:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.nicspeed(12500000)</td>
-//<td class=tt>100 MBit/s</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.nicspeed(100000000)</td>
-//<td class=tt>800 MBit/s</td>
-//</tr>
-//
-//
-//`render.networkbandwidth()` ist für eine tatsächlich gemessene
-//Übertragungsgeschwindigkeit im Netzwerk. Eingabewert sind wieder Bytes pro
-//Sekunde (Oder „Oktette“, wie der Netzwerker sagen würde):
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.networkbandwidth(123)</td>
-//<td class=tt>984 Bit/s</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.networkbandwidth(123456)</td>
-//<td class=tt>988 kBit/s</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.networkbandwidth(123456789)</td>
-//<td class=tt>988 MBit/s</td>
-//</tr>
-//
-//
-//Wo es nicht ums Netzwerk geht und dennoch Datenraten ausgegeben werden,
-//sind wieder Bytes üblich. Prominentester Fall sind IO-Raten von Festplatten.
-//Dafür gibt es die Renderfunktion `render.iobandwidth()`, die in
-//{CMK} mit 1000'er-Potzenzen arbeitet:
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.iobandwidth(123)</td>
-//<td class=tt>123 B/s</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.iobandwidth(123456)</td>
-//<td class=tt>123 kB/s</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.iobandwidth(123456789)</td>
-//<td class=tt>123 MB/s</td>
-//</tr>
-//
-//
-//H2:Prozentwerte
-//
-//Die Funktion `render.percent()` stellt einen Prozentwert dar --
-//intelligent gerundet. Es ist insofern eine Ausnahme zu den anderen Funktionen,
-//als hier nicht der eigentlich natürliche Wert -- also das Verhältnis --
-//übergeben wird, sondern wirklich die Prozentzahl. Wenn also etwas z.B.
-//zur Hälfte voll ist, müssen Sie nicht 0.5 sondern 50 übergeben.
-//
-//Übrigens gibt es bei Prozentwerten eine Besonderheit beim Runden. Es macht
-//hier nicht immer Sinn, mit „gültigen Ziffern“ zu arbeiten. Würde mann z.B.
-//immer zwei gültige Ziffern ausgeben, so würden Prozenzwerte nahe hundert --
-//z.B. 99.95% -- immer auf 100 gerundet. Hier gibt sie {CMK} Mühe, dass dies
-//nicht passiert und bei der Ausgabe keine wichtigen Informationen verloren gehen.
-//
-//<table>
-//
-//<tr>
-//<th style="width:50%">Aufruf</th>
-//<th>Ausgabe</th>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.percent(0.4)</td>
-//<td class=tt>0.40%</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.percent(18.5)</td>
-//<td class=tt>18.5%</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.percent(99.99512)</td>
-//<td class=tt>99.9951%</td>
-//</tr>
-//
-//<tr>
-//<td class=tt>render.percent(123)</td>
-//<td class=tt>123%</td>
-//</tr>
-//
-//
-//
-//
-//H2:Zusammenfassung
-//
-//Hier ist nochmal eine Übersicht über alle Renderfunktionen:
-//
-//<table>
-//
-//<tr>
-//<th style="width:10%">Funktion</th>
-//<th style="width:10%">Eingabe</th>
-//<th style="width:40%">Beschreibung</th>
-//<th>Beispielausgabe</th>
-//</tr>
-//
-//
-//<tr><td class=tt>date</td><td>Epoche</td><td>Datum</td><td class=tt>Dec 18 1970</td></tr>
-//<tr><td class=tt>datetime</td><td>Epoche</td><td>Datum und Uhrzeit</td><td class=tt>Dec 18 1970 10:40:00</td></tr>
-//<tr><td class=tt>timespan</td><td>Sekunden</td><td>Dauer / Alter</td><td class=tt>3d 5m</td></tr>
-//<tr><td class=tt>frequency</td><td>Hz</td><td>Frequenz (z.B. Taktrate)</td><td class=tt>110 MHz</td></tr>
-//<tr><td class=tt>disksize</td><td>Bytes</td><td>Größe von Festplatte, Basis 1000</td><td class=tt>1,234 GB</td></tr>
-//<tr><td class=tt>filesize</td><td>Bytes</td><td>Größe von Dateien, volle Genauigkeit</td><td class=tt>1,334,560 B</td></tr>
-//<tr><td class=tt>bytes</td><td>Bytes</td><td>Größe in Bytes, Basis 1024</td><td class=tt>23,4 KiB</td></tr>
-//<tr><td class=tt>nicspeed</td><td>Octets/sec</td><td>Geschwindigkeit von Netzwerkkarten</td><td class=tt>100 MBit/s</td></tr>
-//<tr><td class=tt>networkbandwidth</td><td>Octets/sec</td><td>Übertragungsgeschwindigkeit</td><td class=tt>23.50 GBit/s</td></tr>
-//<tr><td class=tt>iobandwidth</td><td>Bytes/sec</td><td>IO-Bandbreiten</td><td class=tt>124 MB/s</td></tr>
-//<tr><td class=tt>percent</td><td>Prozent</td><td>Prozentwert, sinnvoll gerundet</td><td class=tt>99.997%</td></tr>
-//
-//
-//
-//H1:Weitere Aspekte
-//
-//In diesem Artikel werden in Zukunft noch weitere Aspekte der Pluginentwicklung
-//besprochen werden. Die wichtigsten sind:
-//
-//
-//H2:Schwellwerte und andere Checkparameter#parameters
-//AN:check_levels
-//H3:Die Hilfsfunktion `check_levels`
-//_... wird noch ergänzt ..._
-//
-//
-//H2:Checks im Cluster
-//H2:Checks mit einem Regelsatz, welche die Discovery steuert
-//H2:Counter und andere persistierte Daten
-//H2:Host- und Servicelabels erzeugen
-//H2:Includefunktionen, geteilter Code
-//H2:Definition von Perf-O-Metern, Graphtemplates, Metriken
-//H2:Manpages schreiben
-//H2:Checks, die mehr als eine Sektion verwenden
-//H2:Deklaratoren in den Sektionen, z.B. `sep(...)`.
-//H2:Mehrere Checks für die gleiche Sektion
-//H2:Ein Check, der mehrere Sektionen auswertet
-//
-//H1:Ausblick
-//
-//Wenn das klappt, sind Sie eigentlich fertig. Sie können das Ganze aber noch
-//um etliche Zusatzfeatures erweitern, wie zum Beispiel:
-//
-//LI:Definitionen für die von den Services gelieferten link:graphing.html[Messdaten], damit schöne und gut beschriftete Graphen und „Perf-O-Meter“ erzeugt werden.
-//LI:Ein Regelsatz, mit dem Sie die Parameter des Checkplugins konfigurieren können.
-//LI:Ein Regelsatz, welcher das Agentenplugin für die link:wato_monitoringagents.html#bakery[Agentenbäckerei] konfiguriert.
-//LI:Ein Regelsatz, mit der der Spezialagent konfiguriert werden kann.
-//LI:Eine Manualpage, welche das Checkplugin für den Anwender dokumentiert.
-//LI:Ein link:mkps.html[MKP-Paket], in welchem das Plugin paketiert und einfach installierbar ist.
-//
-//Artikel dazu folgen hier in Kürze...
-//
-//H1:Dateien und Verzeichnisse
-//
-//.
-//
+[#agentbased]
+== A first simple check plug-in
+
+After this long introduction, it's time we programmed our first simple check
+plug-in. As an example, let's take a simple monitoring for Linux.
+Since ( CMK ) itself runs on Linux, it is very likely that you also have access
+to a Linux system.
+
+The check plug-in will create a new service that detects whether someone has
+inserted a USB stick on a Linux server. In this case, this service should then
+become critical. You might even find something like this useful, but it is really
+only a simplified example and possibly also not programmed in a completely
+watertight way -- but for now that's not what this exercise is really about.
+
+The whole procedure involves two steps:
+
+. We find out which Linux command can be used to determine whether a USB stick has been plugged in, and then extend the Linux agent with a small script that calls this command.
+. We then write a check plug-in in the {CMK} instance that evaluates this data.
+
+Here we go...
+
+
+=== Find the right command
+
+At the beginning of any check programming activity is the necessary research!
+This means that we have to find out how we can get the information we need for
+monitoring. With Linux, this will often involve command line commands.
+In Windows, PowerShell, VBScript or WMI can help, and with link:snmp.html[SNMP] we have
+to find the right OIDs (there is an link:devel_check_plugins.html#snmp[own chapter] for this).
+
+Unfortunately, there is no general procedure for determining the correct command,
+so we do not want to spend too much time on the subject here, we will however briefly explain
+how it works for a USB stick.
+
+First we log in to the host we want to monitor. Under Linux, the agent runs
+as the `root` user by default -- which is why we perform all our tests as `root`. For our task with the USB stick, there are convenient
+symbolic links in the directory `/dev/disk/by-id`. These point to all the
+Linux block devices. And a plugged-in USB stick is one such device. In addition,
+you can tell by the ID of the prefix `usb-` when a block device is a USB
+device.
+
+The following command lists all entries in this directory:
+
+[{shell}]
+----
+{c-root} ls -l /dev/disk/by-id/
+total 0
+lrwxrwxrwx 1 root root  9 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191 -> ../../sda
+lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1 -> ../../sda1
+lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2 -> ../../sda2
+lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3 -> ../../sda3
+lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4 -> ../../sda4
+lrwxrwxrwx 1 root root 10 May 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5 -> ../../sda5
+lrwxrwxrwx 1 root root  9 May 14 11:21 wwn-0x5002538655584d30 -> ../../sda
+lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part1 -> ../../sda1
+lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part2 -> ../../sda2
+lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part3 -> ../../sda3
+lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part4 -> ../../sda4
+lrwxrwxrwx 1 root root 10 May 14 11:21 wwn-0x5002538655584d30-part5 -> ../../sda5
+----
+
+So -- and now the whole thing with the plugged in USB stick:
+
+[{shell}]
+----
+{c-root} ls -l /dev/disk/by-id/
+total 0
+lrwxrwxrwx 1 root root  9 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191 -> ../../sda
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1 -> ../../sda1
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2 -> ../../sda2
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3 -> ../../sda3
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4 -> ../../sda4
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5 -> ../../sda5
+[hilite]#lrwxrwxrwx 1 root root  9 Mai 14 12:15 usb-SCSI_DISK-0:0 -> ../../sdc#
+[hilite]#lrwxrwxrwx 1 root root 10 Mai 14 12:15 usb-SCSI_DISK-0:0-part1 -> ../../sdc1#
+[hilite]#lrwxrwxrwx 1 root root 10 Mai 14 12:15 usb-SCSI_DISK-0:0-part2 -> ../../sdc2#
+lrwxrwxrwx 1 root root  9 Mai 14 11:21 wwn-0x5002538655584d30 -> ../../sda
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part1 -> ../../sda1
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part2 -> ../../sda2
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part3 -> ../../sda3
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part4 -> ../../sda4
+lrwxrwxrwx 1 root root 10 Mai 14 11:21 wwn-0x5002538655584d30-part5 -> ../../sda5
+----
+
+
+=== Purging the data
+
+
+Actually, we would be finished with that and could transport this whole output
+via the {CMK} agent to the {CMK} server and have it analysed there as well,
+because in {CMK} the following recommendation always applies: always let the
+server do the complex work, so keep the agent plug-in as simple as possible.
+
+But there is still too much hot air in here. It is always good not to transfer
+unnecessary data. This saves network traffic, memory, computing time and also
+makes everything clearer. That is a better way of doing things!
+
+First, we can omit the `-l`.
+This already makes the output of `ls` much leaner:
+
+[{shell}]
+----
+{c-root} ls /dev/disk/by-id/
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191        ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5  wwn-0x5002538655584d30-part3
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1  wwn-0x5002538655584d30-part4                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2
+wwn-0x5002538655584d30                      wwn-0x5002538655584d30-part5                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3
+wwn-0x5002538655584d30-part1                ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4  wwn-0x5002538655584d30-part2
+----
+
+Now again, the multi-column structure is disturbing, but this is only because
+the `ls` command recognises that it is running in an interactive terminal.
+Later, as part of the agent, it will output the data in a single column.
+But we can also easily force this here with the `-1` option:
+
+[{shell}]
+----
+{c-root} ls -1 /dev/disk/by-id/
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part1
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part2
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part3
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part4
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191-part5
+wwn-0x5002538655584d30
+wwn-0x5002538655584d30-part1
+wwn-0x5002538655584d30-part2
+wwn-0x5002538655584d30-part3
+wwn-0x5002538655584d30-part4
+wwn-0x5002538655584d30-part5
+----
+
+If you look closely, you will see not only the block devices themselves,
+but also any partitions that exist there. These are the entries that end in
+`-part1`, `-part2`, etc. We do not need these for our check and
+can get rid of them quite easily with a `grep`. There we take the `-v`
+option for negative logic. Here you can now see much more clearly that in our
+example there are in fact exactly three devices when the USB stick is plugged in:
+
+[{shell}]
+----
+{c-root} ls /dev/disk/by-id/ | grep -v -- -part
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191
+[hilite]#usb-SCSI_DISK-0:0#
+wwn-0x5002538655584d30
+----
+
+Perfect! We now have a clear list of all block devices which has been
+compiled with a simple command. That's all we need.
+
+Here we have again omitted the `-1`, because `ls` now writes into a pipe and outputs a single column by itself. And `grep` needs the
+`--` because otherwise it would interpret the word `-part` as the
+four options `-p`, `-a`, `-r` and `-t`.
+
+And by the way: Why don't we simply use `usb` so that only USB
+devices are transferred? Well, of course we could do that. But for one thing,
+our example then becomes increasingly boring, and besides, it is somehow more
+reassuring to get _some_ content in the section in a normal situation and not
+simply nothing. In this way one can see immediately on the {CMK} server that the
+agent plug-in is working correctly.
+
+
+=== Include the command in the agent
+
+In order for us to be able to retrieve this data from the {CMK} server,
+we need to make the new command part of the {CMK} agent on the system being
+monitored. We could of course simply edit the `/bin/check_mk_agent` file
+there and include that. However, this would have the disadvantage that our
+command would disappear again when we update the agent's software because the
+file will be replaced at that point.
+
+It is therefore better if we make an *agent plug-in*. This is even simpler.
+All we need is an executable file with our command in the
+`/usr/lib/check_mk_agent/plugins` directory.
+
+And one more point is important: we can't just output our data like this.
+What we still need is a *section header*. This is a specially-formatted
+line that contains our new check's name. By means of these section headers,
+{CMK} can later recognise where this plug-in's data begins and the previous
+plug-in's data ends.
+
+So now we need a meaningful name for our new check. This name must consist of
+lower case letters, underscores and numbers and be unique. There may not be an
+existing check plug-in with this name. If you are curious about which names
+already exist, in a {CMK} instance you can list them on the command line with
+`cmk -L`:
+
+[{shell}]
+----
+{c-omd} cmk -L | head -n 20
+3par_capacity                 auto migrated    HPE 3PAR: Capacity
+3par_cpgs                     auto migrated    HPE 3PAR: CPGs
+3par_cpgs_usage               auto migrated    HPE 3PAR: CPGs Usage
+3par_hosts                    auto migrated    HPE 3PAR: Hosts
+3par_ports                    auto migrated    HPE 3PAR: Ports
+3par_remotecopy               auto migrated    HPE 3PAR: Remote Copy
+3par_system                   auto migrated    HPE 3PAR: System
+3par_volumes                  auto migrated    HPE 3PAR: Volumes
+3ware_disks                   auto migrated    3ware ATA RAID Controller: State of Disks
+3ware_info                    auto migrated    3ware ATA RAID Controller: General Information
+3ware_units                   auto migrated    3ware ATA RAID Controller: State of Units
+acme_agent_sessions           auto migrated    ACME Devices: Agent Sessions
+acme_certificates             auto migrated    ACME Devices: Certificates
+acme_fan                      auto migrated    ACME Devices: Fans
+acme_powersupply              auto migrated    ACME Devices: Power Supplies
+acme_realm                    auto migrated    ACME Devices: Realm
+acme_sbc                      auto migrated    ACME SBC: Health
+acme_sbc_settings             auto migrated    ACME SBC: Health Settings
+acme_sbc_snmp                 auto migrated    ACME SBC: Health (via SNMP)
+acme_temp                     auto migrated    ACME Devices: Temperature
+----
+
+
+
+'auto migrated' indicates that these are check plug-ins that were coded
+using the old API.
+
+For our example, let's choose the name `linux_usbstick`.
+In this example the section header must look like this:
+
+.
+[{file}]
+----
+<<<linux_usbstick>>>
+----
+
+We can simply output this with `echo`. If we then don't forget the
+'shabang' (this is not a venomous sting from the desert planet but an
+abbreviation for _sharp_ and _bang_ -- the latter being an abbreviation
+for the exclamation mark!), by which Linux recognises that it should execute the
+script with the shell, in which case our plug-in will look like this:
+
+./usr/lib/check_mk_agent/plugins/linux_usbstick
+[{file}]
+----
+#!/bin/sh
+echo '<<<linux_usbstick>>>'
+ls /dev/disk/by-id/ | grep -v -- -part
+----
+
+We have now simply used the file name `linux_usbstick`, even though it
+doesn't really matter.
+But one thing is still very important: Make the file executable!
+
+[{shell}]
+----
+{c-root} chmod +x /usr/lib/check_mk_agent/plugins/linux_usbstick
+----
+
+Of course, you can easily try out the plug-in by manually by entering the
+complete path as a command:
+
+[{shell-raw}]
+----
+{c-root} /usr/lib/check_mk_agent/plugins/linux_usbstick
+<<<linux_usbstick>>>
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191
+wwn-0x5002538655584d30
+----
+
+
+=== Test the agent
+
+As always, the next most important tasks are testing and troubleshooting.
+It is best to proceed in three steps:
+
+. Try out the plug-in on its own. We have just done that.
+. From the agent test the whole process locally.
+. Retrieve the agent via the {CMK} server.
+
+Testing the agent locally is very simple -- as `root` user call
+the command `check_mk_agent`.
+The new section should appear somewhere in the output from this:
+
+[{shell}]
+----
+{c-root} check_mk_agent
+----
+
+Here is an excerpt from that output which contains the new section:
+
+[{shell-raw}]
+----
+<<<lnx_thermal:sep(124)>>>
+thermal_zone0|-|BAT0|35600
+thermal_zone1|-|x86_pkg_temp|81000|0|passive|0|passive
+<<<local>>>
+[hilite]#<<<linux_usbstick>>>#
+[hilite]#ata-APPLE_SSD_SM0512F_S1K5NYBF810191#
+[hilite]#wwn-0x5002538655584d30#
+<<<lnx_packages:sep(124):persist(1589463274)>>>
+accountsservice|0.6.45-1ubuntu1|amd64|deb|-||install ok installed
+acl|2.2.52-3build1|amd64|deb|-||install ok installed
+acpi|1.7-1.1|amd64|deb|-||install ok installed
+----
+
+By appending `less` you can scroll through the output (press the space
+bar to scroll, `/` to search and `Q` to exit):
+
+[{shell}]
+----
+{c-root} check_mk_agent | less
+----
+
+The third test is then performed directly from the {CMK} instance. Include the
+host in the monitoring (e.g. as `myserver01`) and then retrieve the agent
+data with `cmk -d`. You should get the same output here:
+
+[{shell}]
+----
+{c-omd} cmk -d myserver01 | less
+----
+
+By the way: `grep` has the `-A` option to output a few more lines
+after each hit.  This allows you to conveniently search and output the section:
+
+[{shell-raw}]
+----
+{c-root} cmk -d heute | grep -A5 '^<<<linux_usbstick'
+<<<linux_usbstick>>>
+ata-APPLE_SSD_SM0512F_S1K5NYBF810191
+wwn-0x5002538655584d30
+<<<lnx_packages:sep(124):persist(1589463559)>>>
+accountsservice|0.6.45-1ubuntu1|amd64|deb|-||install ok installed
+----
+
+If this works, your agent is now ready! And what have we done to achieve this?
+We simply created a three-line script with the path
+`/usr/lib/check_mk_agent/plugins/usbstick` and made it executable!
+
+Everything that follows now only takes place on the {CMK} server:
+There we will write the actual check plug-in.
+
+
+=== Declare the section
+
+Preparing the agent is the most complicated part, but it is only half the battle.
+Now we have to teach {CMK} how to handle the information and the new agent
+section, which services it should generate, when they should go to {OK} or
+{CRIT}, etc. We do all this by programming a check plug-in in Python.
+
+For your own check plug-ins you will find a directory prepared in the
+`local` hierarchy of the link:cmk_commandline.html#sitedir[instance directory].
+This is `local/lib/check_mk/base/plugins/agent_based/`.
+Here in the path, `base` means the part of {CMK} that is responsible for
+actually monitoring and alerting. The `agent_based` is for all plug-ins
+that relate to the {CMK} agent (so not alerting plug-ins, for example).
+The easiest way to work with this is to switch to it:
+
+[{shell}]
+----
+{c-omd} cd local/lib/check_mk/base/plugins/agent_based
+----
+
+This directory belongs to the instance user and is therefore editable by you.
+You can edit your plug-in with any text editor installed on the Linux system.
+
+So let's create our plug-in here. The convention is that the file name reflects
+the agent section's name. _Mandatory_ is that the file ends with
+`.py`, since from {CMK} version VERSION[2.0] onwards the plug-ins
+will always be real Python modules.
+
+First, we need to import the functions needed for the plug-ins from other
+Python modules. The simplest method for this is with a `pass:[*]`. As you might
+guess, there is also a version number of the API for plug-in programming here.
+This will be version 1 until further notice,
+and is abbreviated here to `v1`:
+
+.local/lib/check_mk/base/plugins/agent_based/linux_usbstick.py
+[{file}]
+----
+from .agent_based_api.v1 import *
+----
+
+This versioning allows us to eventually provide future new versions of the API
+_parallel_ to the previous ones, so that existing check plug-ins continue
+to work without problems.
+
+
+=== Registering the check
+
+In order for {CMK} to know that the new check exists, it must be registered.
+This is done by calling the function `register.check_plugin`.
+In doing so, you must always specify at least four things:
+
+. `name`: The name of the check plug-in. If you don't want to get into trouble, take the same name here as for your new agent section. This way the check will automatically know which section to evaluate.
+. `service_name`: The name of the service as it should then appear in the monitoring.
+. `discovery_function`: The function that discovers services of this type (more on this in a moment).
+. `check_function`: The function to perform the actual check (more on this in a moment).
+
+So for our check the registration will look like this:
+
+.
+[{file}]
+----
+register.check_plugin(
+    name="linux_usbstick",
+    service_name="USB stick",
+    discovery_function=discover_linux_usbstick,
+    check_function=check_linux_usbstick,
+)
+----
+
+It's best not to try this out just yet, because of course we still have to write
+the `discovery_linux_usbstick` and `check_linux_usbstick` functions
+beforehand, and these functions must appear in the source code _before_
+the above declaration.
+
+
+=== Writing the Discovery Function
+
+A special feature of {CMK} is the automatic discovery of services to be monitored.
+In order for this to work, each check plug-in must define a function that detects
+_whether_ a service of this type or _which_ services of this type are
+to be created for the host in question on the basis of the agents' output.
+
+The discovery function is always called when the service discovery is carried
+out for a host. This function then decides whether or which services are to be
+created. In the standard procedure, it receives exactly one argument with the
+name `section`. This contains the data of the agent section in a parsed
+format (more on this later).
+
+We implement the following simple logic: _If_ the agent section
+`linux_usbstick` exists, then we also create a matching service.
+This service will then automatically appear on all hosts where our agent plug-in
+has been rolled out. We recognise the presence of the section simply by the fact
+that our discovery has actually been invoked!
+
+The discovery function must return an object of the type `Service` for
+each service to be created using `yield` (not with `return`).
+For checks that can only occur once per host, no further information is needed:
+
+.
+[{file}]
+----
+def discovery_linux_usbstick(section):
+    yield Service()
+----
+
+
+=== Writing the check function
+
+So now we can come to the actual check function, which finally decides on the
+basis of current agent outputs which state a service should assume. Since our
+check has no parameters and there is only ever one per host, our function is
+also called with the single argument `section`.
+
+Since we really need the content this time, we have to deal with the format of
+this argument. Unless you have explicitly defined a
+Parse function,
+//TK: link:devel_check_plugins.html#parsefunction[Parse-Funktion] ist auskommentiert
+{CMK} will parse each line
+of the section into a _list of words_ using spaces. The whole thing then in
+turn becomes a list of these word lists. So the end result is that we will
+always have a list of lists.
+
+In the simple case in which our agent plug-in only finds two devices,
+it will then look like this (here there is only one word per line):
+
+.
+[{file}]
+----
+[['ata-APPLE_SSD_SM0512F_S1K5NYBF810191'], ['wwn-0x5002538655584d30']]
+----
+
+The check function now goes through line by line and looks for a line whose
+first (and only) word begins with `usb-SCSI_DISK`.
+If this is found, the state will become {CRIT}. Here is the implementation:
+
+.
+[{file}]
+----
+def check_linux_usbstick(section):
+    for line in section:
+        if line[0].startswith("usb-SCSI_DISK"):
+            yield Result(state=State.CRIT, summary="Found USB stick")
+            return
+    yield Result(state=State.OK, summary="No USB stick found")
+----
+
+And here is the explanation:
+
+* With `for line in section` we loop through all of the lines in the agent's output.
+*  We then check whether the first word in the line -- the respective device -- begins with `usb-SCSI_DISK`.
+* If yes, we generate a check result with the status {CRIT} and the text `Found USB stick`. And we then end the function with a `return`.
+* If the loop is run without finding anything, it will generate the status {OK} and the text `No USB stick found`.
+
+
+=== Testing the discovery
+
+
+
+
+=== Testing the check
+
+
+
+
+=== The complete plug-in at a glance
+
+And here is the complete plug-in one more time:
+
+.local/lib/check_mk/base/plugins/agent_based/linux_usbstick.py
+[{file}]
+----
+from .agent_based_api.v1 import *
+
+def discover_linux_usbstick(section):
+    yield Service()
+
+def check_linux_usbstick(section):
+    for line in section:
+        if line[0].startswith("usb-SCSI_DISK"):
+            yield Result(state=State.CRIT, summary="Found USB stick")
+            return
+    yield Result(state=State.OK, summary="No USB stick found")
+
+register.check_plugin(
+    name = "linux_usbstick",
+    service_name = "USB stick",
+    discovery_function = discover_linux_usbstick,
+    check_function = check_linux_usbstick,
+)
+----
+
+And this is the plug-in for the Linux agent:
+
+./usr/lib/check_mk_agent/plugins/linux_usbstick
+[{file}]
+----
+#!/bin/sh
+echo '<<<linux_usbstick>>>'
+ls /dev/disk/by-id/ | grep -v -- -part
+----
+
+
+== Checks with more than one service (items) per host
+
+
+=== Basic principles
+
+In our example, we have built a very simple check that creates a service on a
+host -- or not. A very common situation is, of course, that there can be several
+services with one check on one host.
+
+The most common example of this is the file systems for a host.
+The plug-in named `df` creates one service per file system on the host.
+To distinguish these services, the mount point of the file system
+(e.g. `/var`), or the drive letter (e.g. `C:`) is built into the
+service name.  This then results in the service name being,
+e.g. `filesystem /var`, or `filesystem C:`.
+The word `/var` or `C:` is referred to here as the _item_.
+So we also speak of a check _with items_.
+
+If you want to build a check with multiple items,
+you need to implement the following things:
+
+* The discovery function must generate a service for each of the items that are to be meaningfully monitored on the host.
+* In the service name you must include this item using the `%s` wildcard (i.e. `"Filesystem %s"`).
+* The check function is invoked once separately for each item and receives this as an argument. It must then fish out the relevant data for this item from the agent data.
+
+
+=== A simple example
+
+To be able to test the whole thing practically, we will simply build another
+agent section that only outputs game data. A small shell script is sufficient
+for this. The section should be called `foobar` in this example:
+
+./usr/lib/check_mk_agent/plugins/foobar
+[{file}]
+----
+#!/bin/sh
+echo "<<<foobar>>>"
+echo "West 100 100"
+echo "East 197 200"
+echo "North 0 50"
+----
+
+From _foobar_, there are three sectors to be found here: `West`,
+`East` and `North` (whatever that means).
+In each sector there are a number of _seats_, some of which are occupied
+(e.g. in `West` 100 of 100 seats are occupied).
+
+Now we will create a matching check plug-in for this.
+The registration is as usual, but with the important difference that the service
+name now contains exactly one `%s`.
+At this position the item's name will be inserted later by {CMK}:
+
+.
+[{file}]
+----
+register.check_plugin(
+    name = "foobar",
+    service_name = "Foobar Sector [hilite]#%s#",
+    discovery_function = discover_foobar,
+    check_function = check_foobar,
+)
+----
+
+The discovery function now has the task of determining the items to be monitored.
+As usual, it receives the `section` argument. And again, this is a list
+of lines, which in turn are lists of words.
+
+In our example the list looks like this:
+
+.
+[{file}]
+----
+[['West', '100', '100'], ['East', '197', '200'], ['North', '0', '50']]
+----
+
+You can loop through such a list with Python and give meaningful names to these
+three words grouped in each line:
+
+.
+[{file}]
+----
+for sector, _used, _slots in section:
+    ...
+----
+
+In each line, the first word -- here the sector -- is our item.
+Whenever we find an item, we return that with `yield`, creating an object
+of type `Service` that gets the sector name as its item. The underscore
+indicates that for now we don't care about the other two columns in the output,
+since in a discovery it ultimately doesn't matter how many slots are occupied.
+
+Overall it looks like this:
+
+.
+[{file}]
+----
+def discover_foobar(section):
+    for sector, _used, _slots in section:
+        yield Service(item=sector)
+----
+
+Of course, it would be easy to omit some lines here on the basis of arbitrary
+criteria. Maybe there are sectors which have a size of 0 and which you would
+never want to monitor? Simply omit such rows so that no item will be generated
+for them.
+
+Then later, when the host is being monitored, the check function is called
+separately for each service -- and thus for each item. Therefore, in addition to
+the section, it also receives the `item` argument with the item it is
+looking for. Now we go through all of the lines one after the other.
+When doing so, we will find the line that corresponds to the desired item:
+
+.
+[{file}]
+----
+def check_foobar(item, section):
+    for sector, used, slots in section:
+        if sector == item:
+            ...
+----
+
+Now all that is missing is the actual logic which determines when the item
+should in fact be {OK}, {WARN} or {CRIT}. We do that here like this:
+
+* When all slots have been used, the thing is to become {CRIT}.
+* If there are fewer than 10 slots free, then it will become {WARN}.
+* Otherwise {OK}
+
+The occupied and total slots always appear as the second and third words in each
+line. However, here we are dealing with strings, not numbers -- but we need
+numbers to be able to compare and calculate. We therefore convert the strings
+into numbers using `int()`.
+
+We then return the check result by supplying an object of type `result`
+via `yield`. This takes the parameters `state` and `summary`:
+
+.
+[{file}]
+----
+def check_foobar(item, section):
+    for sector, used, slots in section:
+        if sector == item:
+            used = int(used)   # convert string to int
+            slots = int(slots)   # convert string to int
+            if used == slots:
+                s = State.CRIT
+            elif slots - used < 10:
+                s = State.WARN
+            else:
+                s = State.OK
+            yield Result(
+                state = s,
+                summary = f"used {used} out of {slots} slots")
+            return
+----
+
+In this context, please note the following:
+
+. The command `return` ensures that the check function is terminated immediately after processing the found item. There is nothing more to be done, after all.
+. If the loop is processed without finding the item being searched for, {CMK} _automatically_ generates the result `UNKNOWN - Item not found in monitoring data`. This is intentional and a good thing. Do not handle this case yourself. If you don't find an item you are looking for, just let Python run its course through the function and let {CMK} do its work.
+. With the argument `summary` you define the text that the service produces from the status output. This is purely informal and will not be evaluated further by {CMK}.
+
+By the way, for the common situation where you want to check a simple metric for
+thresholds, there is a helper function called `check_levels`.
+This is explained in a separate link:devel_check_plugins.html#check_levels[chapter].
+
+
+
+Now let's first try out the Discovery. For the sake of clarity we will restrict
+this action to our plug-in by using the `--detect-plugins=foobar` option:
+
+[{shell}]
+----
+{c-omd} cmk --detect-plugins=foobar -vI myhost123
+  [green]#3# foobar
+SUCCESS - Found 3 services, 1 host labels
+----
+
+And now right away we can test the checking process
+(here also limited to `foobar`):
+
+[{shell}]
+----
+{c-omd} cmk --detect-plugins=foobar -v myhost123
+Foobar Sector East   [yellow]#WARN - used 197 out of 200 slots#
+Foobar Sector North  [green]#OK - used 0 out of 50 slots#
+Foobar Sector West   [red]#CRIT - used 100 out of 100 slots#
+----
+
+
+=== The example -- a recap
+
+And here again our example in full. To avoid errors due to undefined function
+names, the functions must always be defined before registering.
+
+.local/lib/check_mk/base/plugins/agent_based/foobar.py
+[{file}]
+----
+from .agent_based_api.v1 import *
+import pprint
+
+def discover_foobar(section):
+    for sector, used, slots in section:
+        yield Service(item=sector)
+
+def check_foobar(item, section):
+    for sector, used, slots in section:
+        if sector == item:
+            used = int(used)    # convert string to int
+            slots = int(slots)  # convert string to int
+            if used == slots:
+                s = State.CRIT
+            elif slots - used < 10:
+                s = State.WARN
+            else:
+                s = State.OK
+            yield Result(
+                state = s,
+                summary = f"used {used} out of {slots} slots")
+            return
+register.check_plugin(
+    name = "foobar",
+    service_name = "Foobar Sector %s",
+    discovery_function = discover_foobar,
+    check_function = check_foobar,
+)
+----
+
+
+== Performance values
+
+=== Determining values in the check function
+
+Not always, but very often checks work with numbers.
+With its link:graphing.html[graphing system] {CMK} has a component to store, evaluate and
+display such numbers. This works completely independently from the generation of
+any resulting {OK}, {WARN} or {CRIT} states.
+
+Such measured values -- or metrics -- are determined by the check function and
+simply returned as an additional result. For this purpose the `metric`
+object is used, which requires at least the two arguments `name` and
+`value`. Here is an example:
+
+.
+[{file}]
+----
+    yield Metrik("fooslots", used)
+----
+
+
+=== Threshold information
+
+Furthermore there are two optional arguments. With the argument `levels`
+you can provide information about thresholds for {WARN} and {CRIT},
+in the form of a pair of two numbers. This is then usually plotted on the graph
+as a yellow and a red line. The first number (yellow line) represents the warning
+threshold, the second (red line) the critical one. The convention is that the
+check already goes to {WARN} when the warning threshold is reached (analogous
+for {CRIT}).
+
+The coding could then look like this (here with hardcoded thresholds):
+
+.
+[{file}]
+----
+    yield Metrik("fooslots", used, levels=(190,200))
+----
+
+Notes:
+
+* If only one of the two thresholds will be defined, simply enter `None` for the other threshold, e.g. `levels=(None, 200)`.
+* Floating point numbers are also allowed, but not strings.
+* Attention: the check function itself is responsible for the _check_ of the thresholds .  The specification of `levels` serves only as marginal information for the graphing system!
+
+
+=== The values range
+
+Analogous to the threshold values, you can also provide the graphing system with
+information about a range of possible values. This denotes the smallest and
+largest possible value. This is done in the `boundaries` argument, where
+`None` can also be optionally used here for one of the two boundaries.
+
+Example:
+
+.
+[{file}]
+----
+    yield Metrik(name="fooslots", value=used, boundaries=(0, 200))
+----
+
+And now once again our check function from the above example, but this time with
+the return of metric information including threshold values and a value range
+(this time of course not with fixed but with calculated values):
+
+.
+[{file}]
+----
+def check_foobar(item, section):
+    for sector, used, slots in section:
+        if sector == item:
+            used = int(used)    # convert string to int
+            slots = int(slots)  # convert string to int
+
+*            yield Metric(*
+*                "fooslots",*
+*                used,*
+*                levels=(slots-10, slots),*
+*                boundaries=(0, slots))*
+
+            if used == slots:
+                s = State.CRIT
+            elif slots - used < 10:
+                s = State.WARN
+            else:
+                s = State.OK
+            yield Result(
+                state = s,
+                summary = f"used {used} out of {slots} slots")
+            return
+----
+
+
+
+
+
+
+
+== Checks with multiple partial results
+
+In order to prevent the number of services on a host from growing out of all
+control, several partial results are often combined in a single service.
+For example, the [.guihint]#Memory used# service under Linux checks not only RAM and swap
+consumption, but also shared memory, page tables and various other information.
+
+The API provided by {CMK} offers a very convenient interface for this. In this
+way, a check function may simply generate a result with `yield` any
+number of times. The overall status for the service is then based on the 'worst'
+partial result according to the scheme {OK} → {WARN} → {UNKNOWN} → {CRIT}.
+
+Here is an abbreviated, fictitious example:
+
+.
+[{file}]
+----
+def check_foobar(section):
+    yield Result(state=State.OK, summary="Knulf rate optimal")
+    # ...
+    yield Result(state=State.WARN, summary="Gnarz required")
+    # ...
+    yield Result(state=State.OK, summary="Last Szork was good")
+----
+
+The summary of the service in the GUI then looks like this:
+{{"Knulf rate optimal, Gnarz required {WARN}, Last Szork was good"}}.
+And the overall status will be {WARN}.
+
+You can return multiple metrics in the same way.
+Simply call `yield metric(...)` once for each metric.
+
+
+== Summary und Details
+
+In the {CMK} monitoring, each service also has a line of text in addition
+to its status {OK}, {WARN}, and so on. Up until version VERSION[1.6.0] this was
+called [.guihint]#Output of check plugin#. As of version VERSION[2.0] this is now called
+[.guihint]#Summary# -- so it has the task of providing a concise summary of the status.
+The idea is that this text does not exceed a length of 60 characters,
+so that it is always easy to read and ensures a clear table display without
+annoying line breaks.
+
+Next to this there is the [.guihint]#Details# field, which used to be called
+[.guihint]#Long output of check plugin (multiline)#. Here all of the details of the state
+are displayed, the idea being that all of the summary information is included
+here as well.
+
+When calling `yield Result(...)` you can determine which information is
+so important that it should be displayed in the summary and for which information
+it is sufficient that it appears in the details. The default rule is that partial
+results that lead to a {WARN}/{CRIT} will _always_ be visible in the summary.
+
+In our examples so far we have always used the following call:
+
+.
+[{file}]
+----
+    yield Result(state=State.OK, summary="some important text")
+----
+
+This will cause `some important text` to always appear in the
+[.guihint]#Summary# -- and additionally in the [.guihint]#Details# -- so you should only use
+this for important information. If a partial result is of secondary importance,
+replace `summary` with `notice` and the text will appear -- if the service is {OK} _only_ in the details.
+
+.
+[{file}]
+----
+    yield Result(state=State.OK, notice="some additional text")
+----
+
+If the state is {WARN} or {CRIT}, the text will then automatically appear as an
+addition in the summary:
+
+.
+[{file}]
+----
+    yield Result(state=State.CRIT, notice="some additional text")
+----
+
+Thus, in the summary it will be immediately clear why the service is not {OK}.
+
+Last but not least, you have -- for both `summary` and `notice` --
+the possibility to specify an _alternative_ text for the details,
+which may contain more information about the partial result:
+
+.
+[{file}]
+----
+    yield Result(state=State.OK,
+                 summary="55% used space",
+                 details="55.2% of 160 GB used (82 GB)")
+----
+
+To summarize, this means:
+
+* The full text of the summary (for services that are {OK}) should not exceed 60 characters.
+* Always use either `summary` or `notice` -- not both, and not neither.
+* Add `details` as necessary if you want the details text to be an alternative one.
+
+
+[#errors]
+== Error handling
+
+
+=== Exceptions and Crash Reports
+
+The correct handling of errors (unfortunately) consumes a large chunk of the
+programming work. The good news is that the {CMK} API already does most of the
+work for you. Consequently, in most cases, it is important for you to simply
+*not* deal with errors.
+
+When Python gets into a situation that is in some way _unexpected_ ,
+it responds with what is known as an _exception_. Here are a few examples:
+
+* You convert a string into a number with `int(...)`, but the string does not actually include a number, e.g. `int("foo")`.
+* You access the fifth element of `bar` with `bar[4]`, but this in fact has only four elements.
+* You are calling a function that does not exist.
+
+Here the important general rule applies: <b>Don't capture exceptions
+yourself!</b> {CMK} will always do this for you in a consistent and efficient
+way -- in most cases accompanied by a _Crashreport_.
+Such a report will look like this, for example:
+
+image::crash_report_1.png[]
+
+By clicking on the icon:icon_crash[] icon, the user is navigated to a page
+where they can
+
+* view a display of the file in which the crash took place.
+* get all information about the crash, for instance any error messages, call stack, agent output, the current values of local variables and much more.
+* send the report to us (tribe29) as feedback.
+
+Submitting the report to tribe29 of course only makes sense for check plug-ins
+which are official {CMK} components. But you can also ask your users to simply
+send you the data. The users can then help you to find the error. It is often
+the case that a check plug-in works for you, but other users may experience
+sporadic errors.
+Working together you can then usually identify these problems very easily.
+
+But if you were to intercept the exception yourself, all of this information
+would simply be unavailable. You would perhaps set the service to {UNKNOWN} and
+issue an error message, but all of the background circumstances that led to an
+error (e.g. the data from the agent) would simply be invisible.
+
+
+=== Viewing exceptions on the command line
+
+If you run your plug-in on the command line, no crash reports will be generated --
+you will only see the summarized error message:
+
+[{shell}]
+----
+{c-omd} cmk -II --detect-plugins=foobar myhost123
+  WARNING: Exception in discovery function of check plugin 'foobar': invalid literal for int() with base 10: 'foo'
+----
+
+BUT: if you simply append the `--debug` option to this, you will then
+receive the Python stack trace:
+
+[{shell}]
+----
+{c-omd} cmk --debug -II --detect-plugins=foobar myhost123
+Traceback (most recent call last):
+  File "/omd/sites/myhost123/bin/cmk", line 82, in <module>
+    exit_status = modes.call(mode_name, mode_args, opts, args)
+  File "/omd/sites/myhost123/lib/python3/cmk/base/modes/__init__.py", line 68, in call
+    return handler(*handler_args)
+  File "/omd/sites/myhost123/lib/python3/cmk/base/modes/check_mk.py", line 1577, in mode_discover
+    discovery.do_discovery(set(hostnames), options.get("checks"), options["discover"] == 1)
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 345, in do_discovery
+    _do_discovery_for(
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 397, in _do_discovery_for
+    discovered_services = _discover_services(
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1265, in _discover_services
+    service_table.update({
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1265, in <dictcomp>
+    service_table.update({
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1337, in _execute_discovery
+    yield from _enriched_discovered_services(hostname, check_plugin.name, plugins_services)
+  File "/omd/sites/myhost123/lib/python3/cmk/base/discovery.py", line 1351, in _enriched_discovered_services
+    for service in plugins_services:
+  File "/omd/sites/myhost123/lib/python3/cmk/base/api/agent_based/register/check_plugins.py", line 69, in filtered_generator
+    for element in generator(*args, **kwargs):
+  File "/omd/sites/myhost123/local/lib/python3/cmk/base/plugins/agent_based/foobar.py", line 5, in discover_foobar
+    int("foo")
+ValueError: invalid literal for int() with base 10: 'foo'
+----
+
+
+=== Invalid outputs from an agent
+
+The question is how to react when the output from the agent is not in the form
+you would normally expect -- whether it is from the 'real' agent or when the data
+comes via link:snmp.html[SNMP]. Let's assume that you always expect three words per line.
+What should you do if only two words were to arrive?
+
+Now -- if this is a _permitted and familiar_ agent behavior, then of course
+you need to capture that and employ case discrimination.
+
+If, however, this is not actually allowed ... then it is best to treat the line
+as if it always contains three words, e.g. with:
+
+.
+[{file}]
+----
+def check_foobar(section):
+    for foo, bar, baz in section:
+        # ...
+----
+
+If there should ever be a line that does not consist of exactly three words,
+a nice exception will be generated and you will receive the very helpful crash
+report that was just mentioned.
+
+
+=== Missing items
+
+What if the agent outputs data correctly, but the item to be checked is missing?
+So, like this, for example:
+
+.
+[{file}]
+----
+def check_foobar(item, section):
+    for sector, used, slots in section:
+        if item == sector:
+            # ... Check state ...
+            yield Result(...)
+            return
+----
+
+If the item you are looking for is not there, the loop is run and Python just
+falls out of the back at the end of the function without 'yielding' a
+result. And that's exactly the correct procedure! Because {CMK} recognizes that
+the item to be monitored is missing and with {UNKNOWN} generates the correct
+status and a suitable standard text for it.
+
+
+[#snmp]
+== SNMP-based checks
+
+=== The fundamentals
+
+Developing checks that work with SNMP is very similar to agent-based checks,
+except that you still need to specify which SNMP ranges (OIDs) the check requires.
+If you don't as yet have any experience with SNMP, we strongly recommend reading
+the article on link:snmp.html[Monitoring via SNMP] as preparation at this point.
+
+The process of discovery and checking via SNMP is somewhat different from that
+for a normal agent. B ecause unlike there -- where the agent sends all of the
+relevant information on its own -- with SNMP we have to say exactly which data
+ranges we require. A complete dump of all data would be theoretically possible
+(via SNMP walk), but this process can take minutes for fast devices and
+over an hour for complex switches. Thus, this is not viable for checking or even
+for discovery. {CMK} therefore proceeds in a more targeted manner.
+
+
+==== SNMP detection
+
+Service detection is divided into two phases. First, the _SNMP detection_
+is performed. This determines which plug-ins on the respective device are of
+actual interest. To do this, a few SNMP OIDs are retrieved -- individually,
+without a walk. The most important of these is the
+`sysDescr` (OID: `1.3.6.1.2.1.1.0`). Under this OID, each SNMP
+device holds a description of itself,
+e.g. '`Cisco NX-OS(tm) n5000, Software (n5000-uk9),...`'.
+
+Based on this text, you can already define for very many plug-ins whether they
+can be useful for this application. If the text is still not specific enough,
+further OIDs are fetched and checked. The result of the SNMP detection will then
+be a list of candidates for check plug-ins.
+
+
+==== Discovery
+
+In the second step, the necessary monitoring data is fetched for each of these
+candidates with SNMP walks. These are then combined into a table and provided to
+the check's discovery function with the `section` argument, which then as
+usual determines the items to be monitored.
+
+
+==== Checking
+
+When running checks, it is already known which plug-ins are to be executed for
+the device and the SNMP detection is now omitted. Here the monitoring data
+needed for the plug-ins are fetched immediately by SNMP walks and from it the
+`section` argument for the check function is filled.
+
+
+==== Summary
+
+So what do you need to do differently with an SNMP check compared to an
+agent-based one?
+
+. You do not need a plug-in for the agent.
+. You must define the single OIDs and search texts required for an SNMP detection.
+. You have to define which SNMP areas must be fetched for monitoring.
+
+
+=== A word about the MIBs
+
+Before we continue, we want to say a word about the infamous SNMP MIBs, because
+there are many prejudices about these. Right at the beginning, some good news:
+{CMK} doesn't need them. Really! But they are an important aid in being able to
+_develop_ an SNMP check.
+
+So what is a MIB? Literally, the abbreviation means
+_Management Information Base_ -- somewhat meaningless really.
+To be concrete, a MIB is a quite easy to read text file which describes a
+certain subtree in the SNMP world. Namely, it states which branch in the
+tree -- that is, which _OID_ -- has which meaning. This includes a name for
+the OID, a comment on what values it can take (e.g. for enumerated data types,
+where things like 1=up, 2=down, etc. are defined) and sometimes a useful comment.
+
+{CMK} provides a set of freely-available MIB files. These describe very general
+areas in the global OID tree, but do not contain any vendor-specific areas.
+Therefore they are of not much help for self-developed checks.
+
+So try to find the MIB files relevant for your particular device somewhere on
+the manufacturer's web pages or even on the device's management interface,
+and install these in the {CMK} instance in `local/share/check_mk/mibs`.
+You can then have SNMP walks convert OID numbers to names and can thus more
+quickly find where the data of interest for your monitoring is located.
+Also, MIBs, if done carefully, contain interesting information in their
+comments, as we noted above. You can easily read an MIB file with a text editor
+or with `less`.
+
+
+=== Locating the correct OIDs
+
+The crucial prerequisite for developing a plug-in is, of course, that you know
+which OIDs contain the necessary information. The first step in doing this (if
+the device doesn't refuse) is to perform a complete SNMP walk.
+This will retrieve _all_ of the available data via SNMP.
+
+{CMK} can accomplish this very easily for you. To do so, first include the
+device (or one of the devices) for which you want to develop a plug-in into your
+monitoring. Let's say this device is called `mydevice01`. Check in the
+device's basic functions to make sure that it can be monitored.
+As a minimum, the [.guihint]#SNMP Info# and [.guihint]#Uptime# services need to be found,
+and probably at least one [.guihint]#Interface# as well.
+This is how you make sure that SNMP access works cleanly.
+
+Then switch to the command line in the ({CMK}) instance. Here you can perform a
+complete walk with the following command. We recommend using the `-v`
+(verbose) option when doing this for the very first time:
+
+[{shell}]
+----
+{c-omd} cmk -v --snmpwalk mydevice01
+mydevice01:
+Walk on ".1.3.6.1.2.1"...3898 variables.
+Walk on ".1.3.6.1.4.1"...6025 variables.
+Wrote fetched data to /omd/sites/heute/var/check_mk/snmpwalks/mydevice01.
+----
+
+As mentioned earlier, such a complete walk can take minutes or even
+hours -- although the latter is rare. So don't become nervous if it takes a
+while to complete this process. The walk will be saved in the file
+`var/check_mk/snmpwalks/mydevice01`.
+This will be a easily-readable text file that starts something like this:
+
+.var/check_mk/snmpwalks/mydevice01
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3
+.1.3.6.1.2.1.1.3.0 546522419
+.1.3.6.1.2.1.1.4.0 hh@example.com
+.1.3.6.1.2.1.1.5.0 sw-ks-01
+.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein
+.1.3.6.1.2.1.1.7.0 3
+.1.3.6.1.2.1.2.1.0 27
+----
+
+In each line there is an OID and then its value. And right there in the first
+line you find the most important one, namely the `sysDescr`.
+
+Now the OIDs themselves are not very informative. If the correct MIBs are
+installed, you can have them converted to names in a second step with
+the `cmk --snmptranslate` command. It is best to redirect the result --
+which would otherwise appear in the terminal -- to a file:
+
+[{shell}]
+----
+OMD[heute]:~$ cmk --snmptranslate mydevice01  > translated
+Processing 9923 lines.
+finished.
+----
+
+The `translated` file reads like the original walk, but has a translated
+value for the OID on each line after the `--&gt;`:
+
+.translated
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots --> *SNMPv2-MIB::sysDescr.0*
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3 --> *SNMPv2-MIB::sysObjectID.0*
+.1.3.6.1.2.1.1.3.0 546522419 --> *DISMAN-EVENT-MIB::sysUpTimeInstance*
+.1.3.6.1.2.1.1.4.0 hh@example.com --> *SNMPv2-MIB::sysContact.0*
+.1.3.6.1.2.1.1.5.0 sw-ks-01 --> *SNMPv2-MIB::sysName.0*
+.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein --> *SNMPv2-MIB::sysLocation.0*
+.1.3.6.1.2.1.1.7.0 3 --> *SNMPv2-MIB::sysServices.0*
+.1.3.6.1.2.1.2.1.0 27 --> *IF-MIB::ifNumber.0*
+.1.3.6.1.2.1.2.2.1.1.1 1 --> *IF-MIB::ifIndex.1*
+.1.3.6.1.2.1.2.2.1.1.2 2 --> *IF-MIB::ifIndex.2*
+----
+
+Example: the OID `.1.3.6.1.2.1.1.4.0` has the translated name
+`SNMPv2-MIB::sysContact.0`. This is an important hint -- the rest is then
+practice, experience and of course experimentation.
+
+
+=== Registering the SNMP section
+
+So, once you have determined the necessary OIDs, it's on to the actual
+development of the plug-in. This is done in three steps:
+
+. For an SNMP detection, specify which OIDs must contain which texts for your plug-in to run.
+. Declare which OID branches need to be fetched for the monitoring.
+. Write a check plug-in analogous to those for agent-based checks.
+
+The first two steps are performed by registering an SNMP section.
+You do this by calling `register.snmp_section()`. Here you specify at
+least three arguments: the name of the section (`name`), the details for
+the SNMP detect `detect`, and the OID branches needed for actually
+monitoring (`fetch`). Here is an example of a hypthetical check plug-in
+with the name `foo`:
+
+.local/lib/check_mk/base/plugins/agent_based/foo.py
+[{file}]
+----
+register.snmp_section(
+    name = "foo",
+    detect = startswith(".1.3.6.1.2.1.1.1.0", "foobar device"),
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+)
+----
+
+
+==== The SNMP Detection
+
+With the keyword `detect` you specify under which conditions the discovery
+function should be executed. In our example, this is the case if the value of the
+OID `.1.3.6.1.2.1.1.0` (i.e. the `sysDescr`) starts with the text
+`foobar device` (case-insensitive in principle). In addition to
+`startswith`, there are a number of other possible attributes. There is
+also a negated form of each of these, which begins with `not_`:
+
+[cols="28,33,~"]
+|===
+|Attribute |Negation |Function 
+
+|equals(oid, needle) |not_equals(oid, needle) |The value of the OID is equal to the text `needle`
+|contains(oid, needle) |not_contains(oid, needle) |The value of the OID at some point contains the text `needle`
+|startswith(oid, needle) |not_startswith(oid, needle) |The value of the OID starts with the text `needle`
+|endswith(oid, needle) |not_endswith(oid, needle) |The value of the OID ends with the text `needle`
+|matches(oid, regex) |not_matches(oid, regex) |The value of OID matches the link:regexes.html[regular expression] `regex`, anchored at the start and at the end -- so with an exact match. If you only need a substring, just add another `pass:[.*]`
+|exists(oid) |not_exists(oid) |Met if the OID is available on the device. The value may be empty.
+|===
+
+
+As well as the above, there is also the possibility of linking multiple tests with
+`all_of` or `any_of`. The option `all_of` requires multiple
+successful attributes for a positive discovery of the plug-in. The following
+example finds the plug-in on a device if `sysDescr` starts with the text
+`foo` (or `FOO` or `Foo`) *and* the
+OID `.1.3.6.1.2.1.2.0` contains the text `.4.1.11863.`:
+
+.
+[{file}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
+    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
+)
+----
+
+The `any_of` option, on the other hand, is satisfied if any single one of
+the criteria is met. Here is an example where different values are allowed for
+the  `sysDescr` keyword:
+
+.
+[{file}]
+----
+detect = any_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
+)
+----
+
+By the way -- are you familiar with link:regexes.html[regular expressions]? If so, with
+these you would probably simplify this whole process and still get by with just
+a single line:
+
+.
+[{file}]
+----
+detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*"),
+----
+
+And one more important note: The OIDs you specify in the `detect`
+declaration from a plug-in will, in case of doubt, be fetched from *every*
+device that is monitored via SNMP. Therefore, be very sparing in your use of
+vendor-specific OIDs. Try to make your discovery absolutely exclusive to the
+`sysDescr` (`.1.3.6.1.2.1.1.1.0`) and the `sysObjectID`
+(`.1.3.6.1.2.1.1.2.0`). If you still need another different OID, then
+reduce the number of devices where it is requested to a minimum by excluding as
+many devices as possible beforehand using the `sysDescr`, e.g. like this:
+
+.
+[{file}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),   # first check sysDescr
+    contains(".1.3.6.1.4.1.4455.1.3", "bar"),  # fetch vendor specific OID
+)
+----
+
+The `all_of()` works in such a way that if the first condition fails,
+the second is not even tried (and thus the OID in question is not fetched).
+Here in the example, the OID `.1.3.6.1.4.1.4455.1.3` is fetched only for
+those devices that have `foo` in their `sysDescr`.
+
+What happens if you have made the declaration incorrectly or at least not quite
+on target?
+
+* If the detection erroneously detects devices that do not have the necessary OIDs, your discovery function will not generate any services -- so nothing 'bad' will happen. However, this will slow down the discovery on such devices, because now every time it will pointlessly try to retrieve the corresponding OIDs.
+* If the detection does _not_ detect devices that are actually allowed, during the discovery no services will be found in the monitoring.
+
+
+=== The OID ranges for monitoring
+
+The most important part of the SNMP declaration is the specification of which
+OIDs are to be fetched for the monitoring. In almost all cases, a plug-in only
+needs selected branches from a single table to do this.
+Let's consider the following example:
+
+.
+[{file}]
+----
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+----
+
+The keyword `base` specifies an OID prefix here.
+All necessary data is below. At `oids` you then specify a list of
+sub-OIDs to be fetched from there. In the above example, a total of three SNMP
+walks are then made, namely on starting from the OIDs
+`.1.3.6.1.4.1.35424.1.2.4.0` and `.1.3.6.1.4.1.35424.1.2.5.0`
+and `.1.3.6.1.4.1.35424.1.2.8.0`. It is important that these walks fetch
+the same number of variables and that they also correspond to each other.
+This means that, for example, the nth element from each of the walks corresponds
+to the same monitored object.
+
+Here is an example from the check plug-in `snmp_quantum_storage_info`:
+.
+[{file}]
+----
+    tree = SNMPTree(
+       base=".1.3.6.1.4.1.2036.2.1.1",  # qSystemInfo
+       oids=[
+           "4",   # qVendorID
+           "5",   # qProdId
+           "6",   # qProdRev
+           "12",  # qSerialNumber
+       ],
+    ),
+)
+----
+
+Here, the vendor ID, the product ID, the product revision and the serial number
+are retrieved from each storage device.
+
+The discovery and check function is presented with this data as a table,
+i.e. as a list of lists. The table is mirrored so that you have all of the data
+for each item per entry in the outer list. Each entry has as many items as you
+specified in `oids`.
+This allows you to loop through the list in a very practical way, e.g.:
+
+.
+[{file}]
+----
+    for vendor_id, prod_id, prod_rev, serial_number in section:
+        ...
+----
+
+Please note:
+
+* All entries are _strings_, even if the OIDs in question are actually numbers.
+* Missing OIDs are presented as empty strings.
+* Remember the ability to output formatted data during development with `pprint`.
+
+
+=== Other SNMP special features
+
+
+
+We will describe here in the future:
+
+* How to retrieve multiple independent SNMP areas.
+* What OIDEnd() is all about
+* Other special cases when dealing with SNMP
+
+
+== Notes for users of the old API
+
+Are you already experienced in developing check plug-ins with the previous
+API -- the one up to version VERSION[1.6.0] of {CMK}?
+Then you will find some notes about important changes summarized here.
+
+
+=== saveint() and savefloat()
+
+The two functions `saveint()` and `savefloat()` have been dropped.
+As a reminder, `saveint(x)` returns `0` if `x` cannot be
+reasonably converted to a number, e.g. because it is an empty string or does not
+consist only of digits.
+
+While there have been a few good use cases for this, it has been used incorrectly
+in the majority of cases, which in the past has resulted in many
+link:devel_check_plugins.html#errors[errors] being obscured.
+
+In a situation in which you want to get a `0` on an empty string --
+which is the most common 'good' use case of `saveint(x)` -- you
+can simply code the following:
+
+.
+[{file}]
+----
+foo = int(x) if x else 0
+----
+
+For `savefloat()` everything applies analogously.
+
+
+== Formatting numbers
+
+
+=== The basics
+
+In the summary or details for a service, numbers are often output. To make it as
+easy as possible for you to format them nicely and correctly, and also to
+standardize the output from all check plug-ins, there are helper functions for
+rendering different kinds of sizes. All of these are sub-functions of the
+`render` module and are consequently called with `render.`.
+For example, `render.bytes(2000)` results in the text `1.95 KiB`.
+
+What all of these functions have in common is that they get their values in a
+so-called _canonical_ or natural unit. Thus one must never think, and there
+are no difficulties or errors with the conversion. For example, times are always
+given in seconds, and the sizes of hard disks, files, etc. are always given in
+bytes and not in kilobytes, kibibytes, blocks or any other confusion of units.
+
+Please use these functions even if you don't like the display so much.
+After all, this is then consistent for the user. And future versions of {CMK}
+may be able to change the display or even make it configurable for the user.
+Your check plug-in will then also benefit from this.
+
+Following the detailed description of all of the display functions
+(render functions), you will find a summary of these in the form of a clear table.
+
+
+=== Times, time spans, frequencies
+
+Absolute time specifications (timestamps) are formatted with
+`render.date()` or `render.datetime()`. The specifications are
+always in _seconds from January 1, 1970, 00:00:00 UTC_ -- the so-called
+epoch time. This is also the format used by the Python function
+`time.time()`. The advantage of this representation is that it can be
+used to calculate very easily, for example, the duration of an operation if the
+start and end times are known. The formula is then simply
+`duration = end - start`. These calculations also work independently of
+the time zone, daylight saving time changes or leap years.
+
+`render.date()` outputs only the date, `render.datetime()` adds
+the time. The output is done according to the current time zone for the (.CMK)
+server that is running the check!
+
+Examples:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.date(0) |Jan 01 1970
+|render.datetime(0) |Jan 01 1970 01:00:00
+|render.date(1600000000) |Sep 13 2020
+|render.datetime(1600000000) |Sep 13 2020 14:26:40
+|===
+
+
+Now please don't be surprised that `render.date(0)` outputs 01:00 as the
+time instead of 00:00! This is because we are writing this manual in the time zone
+for Germany, which is one hour ahead of UTC standard time (at least during
+standard time, because, as you know, January 1 is not in (the European Summer)
+daylight saving time)
+
+For _timespan_ there is still the function `render.timespan()`.
+This produces a duration in seconds and outputs it in a human readable form.
+For larger time spans, seconds or minutes are omitted.
+
+
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.timespan(1) |1 second
+|render.timespan(123) |2 minutes 3 seconds
+|render.timespan(12345) |3 hours 25 minutes
+|render.timespan(1234567) |14 days 6 hours
+|===
+
+
+A _frequency_ is effectively the reciprocal of time.
+The canonical unit is _Hz_, which is equivalent to once per second.
+A field of application is, for example, for the clock rate of a CPU:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.frequency(111222333444) |111 GHz
+|===
+
+
+
+=== Bytes
+
+Whenever memory, files, hard disks, file systems and the like are concerned,
+the canonical unit is the _byte_. Since computers usually organize such
+things in powers of two, e.g. in units of 512, 1024 or 65536 bytes, from the
+beginning it has been accepted that a _kilobyte_ is not 1000 but 1024 bytes.
+This is in itself very practical, because in this way mostly round numbers
+came out. The legendary Commodore C64 had a 64 kilobyte memory and not 65,536.
+
+Unfortunately, at some point hard disk manufacturers came up with the idea of
+specifying the sizes of their disks in 1000's of units. Since the difference
+between 1000 and 1024 is 2.4% for each size, and these are multiplied,
+a 1 GB disk (1024 times 1024 * 1024) suddenly becomes 1.07 GB. That sells better.
+
+This annoying confusion persists to this day and continues to cause errors.
+As a remedy, new prefixes based on the binary system were defined by the
+International Electrotechnical Commission. Accordingly, nowadays a kilobyte is
+officially 1000 bytes, and a _kibibyte_ is 1024 bytes (2 to the power of 10).
+In addition one should say _Mebibyte_ and _Gibitbyte_ and
+_Tebibyte_ (ever heard of these?). The abbreviations are (attention,
+here at once always *i*, instead of *e*!) _KiB_, _MiB_,
+_GiB_ and _TiB_.
+
+{CMK} adapts itself to this standard and helps you with multiple adapted render
+functions so that you can always produce correct outputs. So specifically for
+hard disks and file systems there is the `render.disksize()` function,
+which gives the output in powers of 1000.
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.disksize(1000) |1.00 kB
+|render.disksize(1024) |1.02 kB
+|render.disksize(2000000) |2.00 MB
+|===
+
+
+For the sizes of _files_ it is common to specify the exact size in
+bytes _without rounding_. This has the advantage that you can see very
+quickly if a file has changed even minimally or that two files are (probably)
+the same. The `render.filesize()` function is responsible for this:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.filesize(1000) |1,000 B
+|render.filesize(1024) |1,024 B
+|render.filesize(2000000) |2,000,000 B
+|===
+
+
+If you want to output a size that is not a disk or a file size, just use the
+generic `render.bytes()`.
+This will give you the output in the classic 1024's in the new official notation:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.bytes(1000) |1000 B
+|render.bytes(1024) |1.00 KiB
+|render.bytes(2000000) |1.91 MiB
+|===
+
+
+
+=== Bandwidths and data rates
+
+Networkers have their own terms and ways of expressing things. And as always,
+in each domain {CMK}-tries hard to adopt the way of communicating that is
+customary there. That's why there are three different rendering functions for
+data rates and speeds. All of these have in common that the rates are passed in
+_bytes per second_, even when the output is in bits!
+
+`render.nicspeed()` represents the maximum speed of a network card or
+switch port. Since they are not measured values, there is no need to do any
+rounding. Although no port can send single bits, the specifications are in bits
+for historical reasons. Attention: you must however always pass bytes per second
+here as well!
+
+Examples:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.nicspeed(12500000) |100 MBit/s
+|render.nicspeed(100000000) |800 MBit/s
+|===
+
+
+`render.networkbandwidth()` is for an actual measured transmission speed
+on the network. The input value is again bytes per second (or 'octets' as a
+networker would say):
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.networkbandwidth(123) |984 Bit/s
+|render.networkbandwidth(123456) |988 kBit/s
+|render.networkbandwidth(123456789) |988 MBit/s
+|===
+
+
+Where the network is not involved and data rates are nevertheless output,
+bytes are again common. The most prominent examples are the IO rates of hard
+disks. For this there is the render function `render.iobandwidth()`,
+which in {CMK} works with powers of 1000:
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.iobandwidth(123) |123 B/s
+|render.iobandwidth(123456) |123 kB/s
+|render.iobandwidth(123456789) |123 MB/s
+|===
+
+
+
+=== Percentages
+
+The `render.percent()` function represents a percentage value --
+rounded to two decimal places. It is an exception to the other functions in that the
+actual natural value -- that is, the ratio -- is not passed here, but really the
+percentage.
+So if something is half full, for example, rather than 0.5. you must pass 50.
+
+Because it can sometimes be interesting to know whether a value is almost zero or exactly zero, values that are greater than zero but less than 0.01 are marked by adding a "<" sign.
+
+[cols="50,~"]
+|===
+|Call |Output 
+
+|render.percent(0.004) |<0.01%
+|render.percent(18.5) |18.50%
+|render.percent(123) |123.00%
+|===
+
+
+
+=== Summary
+
+Here to recap is an overview of all of the render functions:
+
+[cols="10,10,40,~"]
+|===
+|Function |Entry |Description |Output example 
+
+|date |Epoch |Date |Dec 18 1970
+|datetime |Epoche |Date and time |Dec 18 1970 10:40:00
+|timespan |Seconds |Duration / Age |3d 5m
+|frequency |Hz |Frequency (e.g. Clock rate) |110 MHz
+|disksize |Bytes |Hard disk size, Basis 1000 |1,234 GB
+|filesize |Bytes |Size of files, exact |1,334,560 B
+|bytes |Bytes |Size in bytes, base 1024 |23,4 KiB
+|nicspeed |Octets/sec |Network card speed |100 MBit/s
+|networkbandwidth |Octets/sec |Transmission speed |23.50 GBit/s
+|iobandwidth |Bytes/sec |IO-Bandwidth |124 MB/s
+|percent |Prozent |Percentage value, meaningfully rounded |99.997%
+|===
+
+
+
+== Further aspects
+
+More aspects of plug-in development will be discussed in future additions
+to this article. The most important of these will be:
+
+[#parameters]
+=== Threshold values and other check parameters
+[#check_levels]
+==== The auxiliary function `check_levels`
+_... is still being updated ..._
+
+
+=== Checks in Clusters
+=== Checks with a rule set that controls a discovery
+=== Counters and other persistent data
+=== Creating host and service labels
+=== Include functions, split code
+=== Definition of perf-o-meters, graph templates, metrics.
+=== Writing Man Pages
+=== Checks that use more than one section
+=== Declarators in the sections, e.g. sep(...)
+=== Multiple checks for the same section
+=== A check that evaluates multiple sections
+
+
+== Outlook
+
+If that has been successful, you are actually done. However, you can still
+extend the whole process with a number of additional features, such as:
+
+* Definitions for the link:graphing.html[performance data] provided by the services for producing nice and well-labelled graphs and 'Perf-O-Meters'.
+* A set of rules that you can use to configure the parameters in the check plug-in.
+* A set of rules which configures the agent plug-in for the link:wato_monitoringagents.html#bakery[Agent Bakery].
+* A set of rules with which the special agent can be configured.
+* A manual page (man page) documenting the check plug-in for the user.
+* An link:mkps.html[MKP package] in which the plug-in is packaged and easy to install.
+
+Articles on this will follow here shortly...
+
+
+== Files and directories
+
+.
