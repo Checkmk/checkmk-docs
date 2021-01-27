@@ -31,9 +31,11 @@ endif
 default: help
 
 html:
-	@rsync -a images/ /var/www/docs/images/
 
 	@if [ -d $(DOCS) ]; then \
+		@mkdir -p /var/www/docs/images; \
+		@rsync -a images/ /var/www/docs/images/; \
+		@mkdir -p /var/www/docs/assets; \
 		rsync -a $(DOCS)/assets/ /var/www/docs/assets/; \
 		asciidoctor $(OPTIONS_INDEX) de/menu.asciidoc -D $(DOCS)/de/; \
 		asciidoctor $(OPTIONS_INDEX) en/menu.asciidoc -D $(DOCS)/en/; \
