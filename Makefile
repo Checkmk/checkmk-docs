@@ -1,12 +1,9 @@
 #!/bin/bash
 
 # Prerequisites
-ifndef $(command -v asciidoctor)
+ASCIIDOCTOR := $(shell command -v asciidoctor 2> /dev/null)
+ifndef ASCIIDOCTOR
 $(error "no asciidoctor installed!")
-endif
-
-ifndef $(command -v slimrb)
-$(error "no slim or even no ruby installed. Please run 'gem install slim'")
 endif
 
 DOCS=../checkmkdocs-styling
@@ -18,6 +15,10 @@ GENERIC_OPTIONS=-E slim -a toc=right
 ATTRIBUTES=-a sectnums
 
 ifneq ($(wildcard $(DOCS)),)
+SLIMRB := $(shell command -v slimrb 2> /dev/null)
+ifndef SLIMRB
+$(error "no slim or even no ruby installed. Please run 'gem install slim'")
+endif
 CSS=-a stylesheet=../$(DOCS)/assets/css/checkmk.css
 OPTIONS_INDEX=$(CSS) $(ATTRIBUTES) -T $(TEMPLATES)/index $(GENERIC_OPTIONS)
 OPTIONS_ARTICLE=$(CSS) $(ATTRIBUTES) -T $(TEMPLATES)/slim $(GENERIC_OPTIONS)
