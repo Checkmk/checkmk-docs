@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Prerequisites
-ifdef $(command -v asciidoctor)
+ifndef $(command -v asciidoctor)
 $(error "no asciidoctor installed!")
 endif
 
-ifdef $(command -v slimrb)
+ifndef $(command -v slimrb)
 $(error "no slim or even no ruby installed. Please run 'gem install slim'")
 endif
 
