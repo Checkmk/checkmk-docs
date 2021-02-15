@@ -803,13 +803,13 @@ def check_foobar(item, section):
             slots = int(slots)   # convert string to int
             if used == slots:
                 s = State.CRIT
-            elif slots - used < 10:
+            elif slots - used <= 10:
                 s = State.WARN
             else:
                 s = State.OK
             yield Result(
                 state = s,
-                summary = f"used {used} out of {slots} slots")
+                summary = f"Used {used} out of {slots} slots")
             return
 ----
 
@@ -859,9 +859,11 @@ müssen die Funktionen immer vor dem Registrieren definiert werden.
 from .agent_based_api.v1 import *
 import pprint
 
+
 def discover_foobar(section):
     for sector, used, slots in section:
         yield Service(item=sector)
+
 
 def check_foobar(item, section):
     for sector, used, slots in section:
@@ -870,7 +872,7 @@ def check_foobar(item, section):
             slots = int(slots)  # convert string to int
             if used == slots:
                 s = State.CRIT
-            elif slots - used < 10:
+            elif slots - used <= 10:
                 s = State.WARN
             else:
                 s = State.OK
@@ -878,6 +880,7 @@ def check_foobar(item, section):
                 state = s,
                 summary = f"used {used} out of {slots} slots")
             return
+
 
 register.check_plugin(
     name = "foobar",
@@ -902,7 +905,7 @@ Hier ist ein Beispiel:
 
 [{file}]
 ----
-    yield Metrik("fooslots", used)
+    yield Metric("fooslots", used)
 ----
 
 === Informationen zu den Schwellwerten
@@ -918,7 +921,7 @@ Das sieht dann z.B. so aus (hier mit hartkodierten Schwellwerten):
 
 [{file}]
 ----
-    yield Metrik("fooslots", used, levels=(190,200))
+    yield Metric("fooslots", used, levels=(190,200))
 ----
 
 Hinweise:
@@ -937,7 +940,7 @@ für eine der beiden Grenzen `None` eingesetzt werden kann. Beispiel:
 
 [{file}]
 ----
-    yield Metrik(name="fooslots", value=used, boundaries=(0, 200))
+    yield Metric(name="fooslots", value=used, boundaries=(0, 200))
 ----
 
 Und jetzt unsere Check-Funktion aus dem obigen Beispiel nochmal, aber
@@ -960,7 +963,7 @@ def check_foobar(item, section):
 
             if used == slots:
                 s = State.CRIT
-            elif slots - used < 10:
+            elif slots - used <= 10:
                 s = State.WARN
             else:
                 s = State.OK
@@ -1005,7 +1008,7 @@ Die Summary des Services in der GUI sieht dann so aus:
 Und der Gesamtstatus ist {WARN}.
 
 Auf die gleiche Art können Sie auch mehrere Metriken zurückgeben.
-Rufen Sie einfach für jede Metrik einmal `yield Metrik(...)`
+Rufen Sie einfach für jede Metrik einmal `yield Metric(...)`
 auf.
 
 
@@ -1876,6 +1879,383 @@ besprochen werden. Die wichtigsten sind:
 [#parameters]
 === Schwellwerte und andere Checkparameter
 
+Dieser Abschnitt ist nocht nicht fertig!
+
+==== Anlegen einer WATO Regelkette
+
+Um Ihr Checkplugin parameterisieren, benötigen Sie zunächst eine geeignete Maske für die WATO Regelkette. Die ausgelieferten befinden sich in dem Verzeichnis cmk/gui/plugins/wato/check_parameters/.
+
+Falls Sie dort eine geeignete Regel finden, können Sie diese benutzen (Beispiel: memory_simple.py, "Memory levels for simple devices not running more complex OSs", Levels für RAM/Swap).
+
+Wir wollen für unser Beispiel eine eigene Maske entwerfen. Dazu erzeugen wir eine Datei im Verzeichnis '~/local/share/check_mk/web/plugins/wato'
+
+
+.local/share/check_mk/web/plugins/wato/foobar_parameters.py
+[{file}]
+----
+
+from cmk.gui.i18n import _
+from cmk.gui.valuespec import (
+    Dictionary,
+    Integer,
+    TextAscii,
+)
+
+from cmk.gui.plugins.wato import (
+    CheckParameterRulespecWithItem,
+    rulespec_registry,
+    RulespecGroupCheckParametersOperatingSystem,
+)
+
+
+def _item_valuespec_foobar():
+    return TextAscii(title=_("Sector name"))
+
+
+def _parameter_valuespec_foobar():
+    return Dictionary(
+        elements=[
+            ("warning_lower", Integer(title=_("Warning below free slots"),
+        ],
+    )
+
+rulespec_registry.register(
+    CheckParameterRulespecWithItem(
+        check_group_name="foobar",
+        group=RulespecGroupCheckParametersOperatingSystem,
+        match_type="dict",
+        item_spec=_item_valuespec_foobar,
+        parameter_valuespec=_parameter_valuespec_foobar,
+        title=lambda: _("Free slots for Foobar sectors"),
+    ))
+----
+
+
+
+*  Mit Hilfe der Registrierungsfunktion "rulespec_registry.register" geben wir eine Rulespec bekannt. Da unser Beispiel Check ein Item bekommen hat wählen wir "CheckParameterRulespecWithItem". Falls unser Checkplugin keine Items erzeugt können wir "CheckParameterRulespecWithoutItem" wählen, und das Keyword Argument "item_spec" weg lassen.
+
+*  check_group_name: Hier geben wir unserer Regel einen eindeutigen Namen. Über ihn wird das Plugin diese Regel später finden.
+
+*  group: Dieses Argument steuert, wo unsere Regel später im Regelkatalog zu finden sein wird.
+
+*  match_type: Dieses Argument steuert, wie {CMK} sich verhält, falls mehrere Regeln für einen Bestimmten Service greifen. Bei 'merge' werden alle greifenden Regeln miteinander kombiniert. In der Regel sollten sie diesen Matchtype wählen.
+
+*  item_spec: Bei einem plugin mit Items kann der User, der die Regel anlegt, mittels einer Regex einschränken, für welche der Items seine Regel greifen soll. Zu diesem Zweck übergeben wir ein Textfeld. Als Titel wählen wir eine gurze Beschreibung des Items.
+
+*  parameter_valuespec: Hier übergeben wir eine Funktion, die die eigentliche Maske zum anlegen der Parameter erzeugt. Diese Funktion muss bei Regelketten für Checkplugins immer ein Dictionary zurück geben. In unserem Fall enthält das Dictionary genau ein Element: Eine ganze Zahl. Wenn die Anzahl der freien "Slots" in unserem Beispiel auf oder unter die hier angegehene Zahl fällt, soll unser Service in den WARN Zustand wechseln.
+
+*  title: Hier geben wir noch einen griffigen Titel für unsere Regel an.
+
+Jetzt: omd restart apache, eine Regel im Hauptmenü anlegen, damit wir das gleich im Checkplugin auspobieren können.
+
+
+====  Die Regel im Checkplugin benutzen
+
+Damit die Regel zum Greifen kommt, müssen wir dem Checkplugin erlauben Checkparameter entgegen zu nehmen, und ihm sagen welche Regel benutzt werden soll.
+
+Dass wir ein Checkplugin mit Parametern programmieren wollen, teilen wir {CMK} mit, indem wir bei der Registrierung "check_default_parameters" setzen. Im einfachsten Fall übergeben wir ein leeres Dictionary.
+
+Nun wird {CMK} versuchen der Checkfunktion Parameter zu übergeben. Damit das klappen kann, müssen wir die Checkfunktion so erweitern, dass sie als zweites das Argument 'params' in der Signatur hat.
+
+Als drittes übergen wir der Registrierungsfunktion noch den "check_ruleset_name", also den Namen, den wir oben mittels "check_group_name" an die Regelkette vergeben haben.
+So weiß {CMK} aus welcher Regelkette die Parameter bestimmt werden sollen.
+
+[{file}]
+----
+
+def check_foobar(item, params, section):
+    print(params)
+    for sector, used, slots in ...
+
+
+register.check_plugin(
+    name = "foobar",
+    service_name = "Foobar Sector %s",
+    discovery_function = discover_foobar,
+    check_function = check_foobar,
+    check_default_parameters={},
+    check_ruleset_name="foobar",
+)
+----
+
+Durch das print Statement können wir überprüfen, dass die Parameter ankommen:
+
+
+Nun passen wir unsere Checkfunktion an, so dass der übergebene Parameter seine Wirkung entfalten kann. Wir holen uns den Wert mit dem in der Regel gewählten Key aus den Parametern:
+
+[{file}]
+----
+
+def check_foobar(item, params, section):
+    warn = params["warning_lower"]
+    for sector, used, slots in section:
+        if sector == item:
+            used = int(used)    # convert string to int
+            slots = int(slots)  # convert string to int
+            if used == slots:
+                s = State.CRIT
+            elif slots - used <= warn:
+                s = State.WARN
+            else:
+                s = State.OK
+            yield Result(
+                state = s,
+                summary = f"used {used} out of {slots} slots")
+            return
+----
+
+Falls eine Regel konfiguriert ist, können wir nun die "freien Slots" in unserem Beispiel überwachen.
+Wenn allerdings keine Regel definiert ist, wird diese Checkfunktion crashen: Da die default Parameter des Plugins nicht befüllt sind, wird das Plugin bei Abwesenheit einer Regel einen "KeyError" werfen.
+
+Dieses Probem können wir beheben, indem wir bei der Registrierung einen passenden Parameter einfügen:
+
+[{file}]
+----
+register.check_plugin(
+    name = "foobar",
+    service_name = "Foobar Sector %s",
+    discovery_function = discover_foobar,
+    check_function = check_foobar,
+    check_default_parameters={"warning_lower"},
+    check_ruleset_name="foobar",
+)
+----
+
+Sie sollten Defaultwerte immer auf diese Weise übergeben (und den Fall fehlender Parameter nicht im Checkplugin abfangen), da diese Defaultparameter auch in der GUI angezeigt werden können (Beispiel: "Discovery -> View -> Show Check parameters").
+
+Ein einzelner Wert als Parameter ist in {CMK} allerdings sehr unüblich. Da Services in den Zuständen OK, WARN, CRIT sein können, ist es naheliegend die Parameter immer als Tuple zu definieren, also Schwellen für den WARN und den CRIT Zustand. Dazu passen wir die WATO Regel wie folgt an:
+
+[{file}]
+----
+
+def _parameter_valuespec_foobar():
+    return Dictionary(
+        elements=[
+            ("warning_lower", Tuple(
+                title=_("Levels on free slots"),
+                elements=[
+                    Integer(title=_("Warning below")),
+                    Integer(title=_("Critical below")),
+                ],
+            )),
+        ],
+    )
+----
+
+Beachten Sie, das eine solche Änderung des Datentyps eine incompatible Änderung darstellt: Existierende Regeln können jetzt nicht mehr von der GUI geladen werden.
+
+Hier noch ein Überblick über einige der wichtigsten Valuespecs:
+
+
+Float
+
+Nicht so spannend, genau wie Integer.
+
+
+Percentage
+
+Oft möchte man Schwellen nicht in absoluten Zahlen, sonden in Prozent angeben:
+
+[{file}]
+----
+def _parameter_value_spec_foobar():
+    return Dictionary(
+        elements=[
+            ("levels_percent", Tuple(
+                title=_("Relative levels"),
+                elements=[
+                    Percentage(title=_("Warning at"), default_value=80),
+                    Percentage(title=_("Critical at"), default_value=90)
+                ],
+            )),
+        ],
+    )
+----
+
+Bei dieser Valuespec würde das Checkplugin die paramerter '{"levels_percent": (80.0, 90.0)}' übergeben bekommen.
+
+
+MonitoringState
+
+Wenn man einen nicht numerischen Zustand erfasst, möchte man für bestimmte Zustände einen konfigurierbaren Servicestate auslösen. Hier kann man einstellen, welchen Zustand  der Service bekommen soll, falls kein Backup konfiguriert bzw vorhanden ist:
+
+[{file}]
+----
+def _parameter_valuespec_plesk_backups():
+    return Dictionary(
+        help=_("This check monitors backups configured for domains in plesk."),
+        elements=[
+            ("no_backup_configured_state",
+             MonitoringState(title=_("State when no backup is configured"), default_value=1)),
+            ("no_backup_found_state",
+             MonitoringState(title=_("State when no backup can be found"), default_value=1)),
+        ...
+----
+
+Bei dieser Valuespec würde das Checkplugin die paramerter '{"no_backup_configured_state": 1, "no_backup_found_state": 1}' übergeben bekommen.
+Sie können die Zahl einfach in ein 'State' Objekt umwandeln:
+
+[{file}]
+----
+    yield Result(
+        state=State(params["no_backup_configured_state"]),
+        summary="No backup is configured!",
+    )
+----
+
+
+Age
+
+Hier kann man ein Alter angeben:
+
+[{file}]
+----
+def _parameter_valuespec_antivir_update_age():
+    return Tuple(elements=[
+        Age(title=_("Warning level for time since last update")),
+        Age(title=_("Critical level for time since last update")),
+    ],)
+----
+
+(Siehe: Ruleset "AntiVirus last update age")
+
+
+Filesize
+
+[{file}]
+----
+    Tuple(
+        title=_("Maximum size of all files on backup space"),
+        help=_("The maximum size of all files on the backup space. "
+               "This might be set to the allowed quotas on the configured "
+               "FTP server to be notified if the space limit is reached."),
+        elements=[
+            Filesize(title=_("Warning at")),
+            Filesize(title=_("Critical at")),
+        ],
+    ),
+----
+
+(Siehe: Ruleset "Plesk Backups").
+
+Beachtes Sie die freundliche Hilfe!
+
+
+Hinweis: Dropdown statt Checkbox!
+
+
+=== Definition von Perf-O-Metern, Graphtemplates, Metriken
+
+In userem obigen Beispiel haben wir das Plugin "foobar" die Metrik "fooslots" erzeugen lassen. In der GUI können wir sie bereits sehen, allerdings ist die
+Darstellung etwas dürftig, da wir dem Metriksystem noch nichts über die Metrik mitrgeteilt haben.
+
+Bevor wir das tun sollten wir -- wie bei der WATO Regel auch -- zunächst prüfen, ob {CMK} nich bereits eine geeignete Metrik mitbringt.
+Die vordefinierten Metriken finden wir in dem Verzeichnis "cmk/gui/plugins/metrics/". In der Datei "fs.py" finden wir beispielsweise eine Metric für freien Platz eines Dateisystems:
+
+[{file}]
+----
+metric_info["fs_free"] = {
+    "title": _("Free filesystem space"),
+    "unit": "bytes",
+    "color": "#e3fff9",
+}
+----
+
+Falls diese für unser Plugin geeignet ist, müssen wir lediglich in unserem Aufruf der Metric Klasse den Namen "fs_free" zu benutzen.
+
+In unserem Beispiel wollen wir einen eigene Metrik für unsere "fooslots" definieren. Dazu legen wir eine weitere Datei in "~/local/share/check_mk/web/plugins/metrics" an:
+
+
+.local/share/check_mk/web/plugins/metrics/foobar_metric.py
+[{file}]
+----
+
+from cmk.gui.i18n import _
+from cmk.gui.plugins.metrics import metric_info
+
+metric_info["fooslots"] = {
+    "title": _("Used slots"),
+    "unit": "count",
+    "color": "#e3fff9",
+}
+----
+
+*  key: der Name der Metrik, wie im Aufruf von "Metric" verwendet
+*  title: ein verständlicher Titel für den Graphen
+*  unit: Hier können sie eine Einheit angeben, für die korrekte Beschriftung der y-Achse. Zur Auswahl stehen etwa 30 Einheiten wie "count", "%", "s" und "bytes". Eine vollstängige Liste findet man (derzeit) in "cmk/gui/plugins/metrics/unit.py".
+
+
+Im Graph der GUI können wir nun den angepassten Titel und die Farbe sehen.
+
+Auf analoge Weise kann man üer einen "graph_info" eintrag mehrere Metriken zu einem Graphen kombinieren.
+
+.local/share/check_mk/web/plugins/metrics/foobar_metric.py
+[{file}]
+----
+
+from cmk.gui.i18n import _
+from cmk.gui.plugins.metrics import (
+    metric_info,
+    graph_info,
+)
+
+metric_info["fooslots"] = {
+    "title": _("Used slots"),
+    "unit": "count",
+    "color": "#e3fff9",
+}
+
+metric_info["fooslots_free"] = {
+    "title": _("Free slots"),
+    "unit": "count",
+    "color": "#ffe3f9",
+}
+
+graph_info["fooslots_combined"] = {
+    "metrics": [
+        ("fooslots", "line"),
+        ("fooslots_free", "line"),
+    ],
+}
+
+----
+
+Auch mal "stack" statt "line" ausprobieren!
+
+
+==== Darstellung der Metriken im Perf-O-meter
+
+
+Möchten wir zu inserer Metrik noch ein Perf-O-Meter in der Servicezeile anzeigen, benötigen wir eine weitere Datei in '~/local/share/check_mk/web/plugins/perfometer'
+
+
+.local/share/check_mk/web/plugins/perfometer/foobar_perfometer.py
+[{file}]
+----
+
+from cmk.gui.plugins.metrics import perfometer_info
+
+perfometer_info.append({
+    "type": "logarithmic",
+    "metric": "fooslots",
+    "half_value": 5,
+    "exponent": 2.0,
+}) 
+
+----
+
+Wir benutzen hier "logarithmic", da uns keine maximal möglich Anzahl von "Fooslots" bekannt ist. Bei anderen Werten (wie z.B. Prozent) könnten wir ein Perf-O-Meter auch linear darstellen:
+
+[{file}]
+----
+perfometer_info.append({
+    "type": "linear",
+    "segments": ["fooslots_used_percent"],
+    "total": 100.0,
+})
+----
+
+
 [#check_levels]
 ==== Die Hilfsfunktion `check_levels`
 _... wird noch ergänzt ..._
@@ -1884,12 +2264,12 @@ _... wird noch ergänzt ..._
 === Checks im Cluster
 === Checks mit einem Regelsatz, der die Discovery steuert
 === Counter und andere persistierte Daten
+// siehe Sphinx doc, 'get_rate', 'get_average'.
 === Host- und Servicelabels erzeugen
 === Includefunktionen, geteilter Code
-=== Definition von Perf-O-Metern, Graphtemplates, Metriken
 === Man Pages schreiben
-=== Checks, die mehr als eine Sektion verwenden
 === Deklaratoren in den Sektionen, z.B. sep(...)
+// wichtig: global VS. lokal
 === Mehrere Checks für die gleiche Sektion
 === Ein Check, der mehrere Sektionen auswertet
 
