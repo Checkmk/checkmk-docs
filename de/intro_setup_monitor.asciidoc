@@ -1,0 +1,469 @@
+include::global_attr.adoc[]
+= Das Monitoring einrichten
+:revdate: 2021-03-08
+:title: Das Monitoring einrichten
+:description: Um {CMK} für das Monitoring einzurichten, muss der erste Host aufgenommen, seine Services konfiguriert und die Änderungen aktiviert werden. Um diese Themen geht es im aktuellen Kapitel des Leitfadens für {CMK} Einsteiger, der kompakt durch die ersten Schritte führt, um das IT-Monitoring mit {CMK} optimal einzurichten.
+
+{related-start}
+link:intro_tools.html[Die Monitoring-Werkzeuge]
+link:wato_hosts.html[Verwaltung der Hosts]
+link:agent_linux.html[Linux überwachen]
+{related-end}
+
+
+[#hosts]
+== Hosts, Services und Agenten
+
+So, {CMK} steht bereit. Doch bevor wir mit dem eigentlichen Monitoring beginnen,
+werden wir kurz einige wichtige Begriffe erläutern. Das beginnt mit dem
+*Host*: Ein Host ist in {CMK} in der Regel ein Server, eine virtuelle Maschine (VM), ein
+Netzwerkgerät, eine Appliance -- oder generell ein Ding mit einer IP-Adresse,
+das von {CMK} überwacht wird. Allerdings gibt es auch Hosts ohne IP-Adresse,
+z.B. Docker-Container. Jeder Host hat immer einen der Zustände {UP}, {DOWN} oder
+{UNREACH}.
+
+Auf jedem Host wird eine Anzahl von *Services* überwacht. Ein Service kann dabei alles Mögliche sein, zum Beispiel ein Dateisystem, ein Prozess, ein Hardware-Sensor, ein Switchport -- aber auch einfach nur eine bestimmte Metrik wie die CPU-Auslastung oder der RAM-Verbrauch. Jeder Service hat einen der Zustände {OK}, {WARN}, {CRIT} oder {UNKNOWN}.
+
+Damit {CMK} von einem Host Daten abfragen kann, ist in der Regel ein *Agent* notwendig. Das ist ein kleines Programm, das auf dem Host installiert wird, und auf Anfrage Daten über den Zustand (oder die „Gesundheit“) des Hosts liefert. Server, auf denen Windows, Linux oder Unix läuft, können von {CMK} nur dann sinnvoll überwacht werden, wenn Sie dort einen von uns gelieferten {CMK}-Agenten installieren. Bei Netzwerkgeräten und vielen Appliances hat meist der Hersteller bereits einen Agenten eingebaut, den {CMK} ohne Weiteres mit dem standardisierten Protokoll SNMP abfragen kann. Cloud-Dienste wie Amazon Web Services (AWS) oder Azure stellen stattdessen eine Schnittstelle („API“) bereit, die von {CMK} per HTTP abgefragt werden kann.
+
+
+[#dns]
+== Vorüberlegungen zu DNS
+
+Auch wenn {CMK} keine Namensauflösung von Hosts voraussetzt, erleichtert ein gut gepflegtes Domain Name System (DNS) die Konfiguration erheblich und vermeidet Fehler, denn {CMK} kann dann die Namen der Hosts selbständig auflösen, ohne dass Sie IP-Adressen in {CMK} eintragen müssen.
+
+Der Aufbau des Monitoring ist daher ein guter Anlass, zu überprüfen, ob Ihr DNS auf dem neuesten Stand ist und gegebenenfalls dort fehlende Einträge zu ergänzen.
+
+
+[#folders]
+== Ordnerstruktur für Hosts
+
+{CMK} verwaltet Ihre Hosts in einem hierarchischen Baum von Ordnern -- ganz analog
+zu dem, was Sie von Dateien in Ihrem Betriebssystem kennen. Wenn Sie nur eine Handvoll
+Hosts überwachen, mag das für Sie weniger wichtig sein. Aber erinnern
+Sie sich: {CMK} ist für das Überwachen von Tausenden und Zigtausenden Hosts
+geschaffen -- und dabei ist Ordnung die halbe Miete.
+
+Bevor Sie die ersten Hosts in {CMK} aufnehmen, ist es daher von Vorteil, wenn
+Sie sich Gedanken über die Struktur dieser Ordner machen. Die Ordnerstruktur ist
+zum einen für Ihre eigene Übersicht nützlich. Wichtiger aber ist, dass sie für die Konfiguration von {CMK} verwendet werden kann: Alle Konfigurationsparameter von Hosts können in einem Ordner definiert werden, die dann automatisch an die dort enthaltenen Unterordner und Hosts *vererbt* werden. Daher ist es nicht nur, aber insbesondere für die Konfiguration großer Umgebungen elementar, von Beginn an eine wohlüberlegte Ordnerstruktur aufzusetzen.
+
+Eine einmal erstellte Ordnerstruktur können Sie verändern -- müssen dabei allerdings sehr gewissenhaft vorgehen. Das Verschieben eines Hosts
+in einen anderen Ordner kann nämlich zur Folge haben, dass sich dessen Parameter
+ändern, ohne dass Sie sich dessen vielleicht bewusst sind.
+
+Die eigentliche Frage beim Aufbau einer für Sie sinnvollen Ordnerstruktur ist,
+nach welchen Kriterien Sie die Ordner organisieren möchten. Die Kriterien können in jeder Ebene des Baums andere sein. So können Sie z.B. in der ersten
+Ebene nach Standorten unterscheiden und in der zweiten Ebene nach
+Technologie.
+
+Folgende Ordnungskriterien haben sich in der Praxis bewährt:
+
+* Standort/Geographie
+* Organisation
+* Technologie
+
+Eine Sortierung nach Standort ist vor allem in größeren
+Unternehmen sehr naheliegend, insbesondere dann, wenn Sie das Monitoring über
+mehrere {CMK}-Server verteilen. Jeder Server überwacht dann z.B. eine Region
+oder ein Land. Wenn Ihre Ordner diese Aufteilung abbilden, dann können
+Sie z.B. im Ordner „München“ definieren, dass alle Hosts in diesem
+Ordner von der {CMK}-Instanz „muc“ aus überwacht werden sollen.
+
+Alternativ dazu kann die Organisation (d.h. die Antwort auf die Frage "Wer ist für einen Host zuständig?“) ein sinnvolleres Kriterium sein, denn nicht
+immer ist Standort und Verantwortung das Gleiche. So mag es sein, dass eine
+Gruppe Ihrer Kollegen für die Administration von Oracle zuständig ist,
+und zwar unabhängig davon, an welchem Standort die entsprechenden Hosts stehen.
+Ist also z.B. der Ordner „Oracle“ für die Hosts der Oracle-Kollegen
+vorgesehen, so ist es in {CMK} einfach zu konfigurieren, dass alle Hosts
+unterhalb dieses Ordners nur für diese Kollegen sichtbar sind oder, dass
+diese ihre Hosts dort sogar selbst pflegen können.
+
+Eine Strukturierung nach Technologie könnte z.B. einen Ordner
+für Windows-Server und einen für Linux-Server vorsehen. Das würde die Umsetzung des Schemas „Auf allen Linux-Servern muss der Prozess `sshd` laufen.“ vereinfachen. Ein anderes Beispiel ist die Überwachung von Geräten via SNMP,
+wie beispielsweise Switches oder Router. Hier kommt kein {CMK}-Agent zum Einsatz, sondern die Geräte werden über das Protokoll SNMP abgefragt. Sind diese Hosts in
+eigenen Ordnern zusammengefasst, so können Sie direkt am Ordner die für
+SNMP notwendigen Einstellungen wie etwa die „Community“ vornehmen.
+
+Da eine Ordnerstruktur nur in seltenen Fällen die Komplexität der Wirklichkeit abbilden kann, bietet {CMK} mit den Host-Merkmalen (_host tags_) eine weitere ergänzende Möglichkeit zur Strukturierung: doch dazu in einem link:intro_finetune.html#host_tags[anderen Kapitel] mehr. Weiterführende Informationen unter anderem zur Ordnerstruktur finden Sie im link:wato_hosts.html[Artikel über Hosts].
+
+
+[#create_folders]
+== Ordner erstellen
+
+Den Einstieg in die Verwaltung von Ordnern und Hosts finden Sie über die Navigationsleiste, das [.guihint]#Setup#-Menü, das Thema [.guihint]#Hosts# und den Eintrag [.guihint]#Hosts#. Dann wird die Seite [.guihint]#Main directory# angezeigt:
+
+image::empty_main_directory.png[]
+
+Bevor wir den ersten Ordner erstellen, werden wir kurz auf den Aufbau dieser
+Seite eingehen, da Sie die verschiedenen Elemente auf den meisten {CMK}-Seiten
+so oder so ähnlich wiederfinden werden. Unterhalb des Seitentitels
+[.guihint]#Main directory# finden Sie den Breadcrumb-Pfad, der Ihnen zeigt, wo Sie sich
+innerhalb der {CMK}-Oberfläche gerade befinden. Darunter wird die Menüleiste
+angezeigt, die die möglichen Aktionen auf dieser Seite in Menüs und
+Menüeinträgen zusammenfasst. Die Menüs sind in {CMK} stets kontext-spezifisch,
+d.h. sie finden nur Menüeinträge für Aktionen, die auf der aktuellen Seite Sinn
+ergeben.
+
+Unter der Menüleiste finden Sie die Aktionsleiste, in der die wichtigsten
+Aktionen aus den Menüs als Knöpfe zum direkten Anklicken angeboten werden. Die
+Aktionsleiste können Sie mit dem Knopf icon:button_hide_toolbar[] rechts
+neben dem [.guihint]#Help#-Menü ausblenden und mit icon:button_show_toolbar[] wieder
+einblenden. Bei ausgeblendeter Aktionsleiste werden die Symbole in der
+Menüleiste rechts neben icon:button_show_toolbar[] angezeigt.
+//SK: Reminder für später. Bitte stehen lassen: Hier fehlt noch alt-text für die Knöpfe "Show suggested actions" und "Hide suggested actions"
+
+Da wir uns zurzeit auf einer leeren Seite befinden (ohne Ordner und ohne Hosts), werden die wichtigen Aktionen zum Erstellen des ersten Objekts zusätzlich über noch größere Knöpfe angeboten -- damit die Möglichkeiten auch nicht übersehen werden, die die Seite bietet. Diese Knöpfe werden nach dem Erstellen des ersten Objekts verschwinden.
+
+Nun aber zurück zum Thema, weswegen wir uns eigentlich auf dieser Seite befinden: dem Anlegen von Ordnern. _Einen_ Ordner -- den Hauptordner -- gibt es in jedem frisch aufgesetzten {CMK}-System. Er heißt [.guihint]#Main directory#, wie Sie im Titel der Seite sehen können. Unterhalb des Hauptordners werden wir nun für ein einfaches Beispiel die drei Ordner [.guihint]#Windows#, [.guihint]#Linux# und [.guihint]#Network# erstellen.
+
+Legen Sie den ersten der drei Ordner an, indem Sie eine der angebotenen
+Aktionen zum Erstellen eines Ordners auswählen (z.B. den Aktionsknopf icon:icon_newfolder[] [.guihint]#Add subfolder#). Auf der neuen Seite
+[.guihint]#Create new folder# tragen Sie im ersten Kasten [.guihint]#Basic settings# den Ordnernamen ein:
+
+image::folder_basic_settings.png[]
+
+Im obigen Bild ist der link:intro_gui.html#show_less_more[Show less-Modus] aktiv und es wird nur derjenige Eintrag angezeigt, der zum Erstellen eines Ordners unbedingt notwendig ist. Bestätigen Sie die Eingabe mit [.guihint]#Save#.
+
+Erstellen Sie analog zum Ordner [.guihint]#Windows# die anderen beiden Ordner [.guihint]#Linux# und [.guihint]#Network#. Danach sieht die Situation so aus:
+
+image::three_empty_folders.png[]
+
+*Tipp:* Wenn Sie mit der Maus auf den Reiter oder den oberen Bereich eines Ordner-Symbols zeigen, klappt der Ordner auf und enthüllt die Symbole, die Sie benötigen, um wichtige Aktionen mit dem Ordner auszuführen (die Eigenschaften ändern, den Ordner verschieben oder ihn löschen).
+
+*Noch ein Tipp:* Rechts oben auf jeder Seite finden Sie die Information, ob -- und wenn ja, wie viele -- Änderungen inzwischen bereits aufgelaufen sind. Da wir drei Ordner erstellt haben, gibt es drei Änderungen, die jetzt aber noch nicht aktiviert werden müssen. Wir werden uns mit dem Aktivieren von Änderungen weiter unten genauer beschäftigen.
+
+
+[#linux]
+== Den ersten Host aufnehmen
+
+Jetzt ist alles dafür vorbereitet, um den ersten Host in das Monitoring
+aufzunehmen -- und was wäre naheliegender, als den {CMK}-Server selbst
+zu überwachen? Natürlich wird dieser nicht seinen eigenen Totalausfall
+melden können, aber nützlich ist das trotzdem, denn Sie erhalten so nicht
+nur eine Übersicht über die CPU- und RAM-Nutzung, sondern auch etliche
+Metriken und Checks, die das {CMK}-System selbst betreffen.
+
+Das Vorgehen zum Aufnehmen eines Linux-Hosts (wie übrigens auch eines Windows-Hosts) ist im Prinzip stets das Folgende:
+
+. Agent herunterladen
+. Agent installieren
+. Host erstellen
+
+Nach der Erstellung des Hosts wird die Einrichtung komplettiert durch die Konfiguration der Services und die Aktivierung der Änderungen, die wir im Anschluss beschreiben werden.
+
+//TK: Ungünstige Kapitelstruktur, weil die 5 notwendigen Schritte wg. des Einschubs 5.4. "Diagnose" auf unterschiedlichen Ebenen liegen (5.1, 5.2, 5.3, 6 und 7)
+
+
+[#download_agent]
+=== Agent herunterladen
+
+Da der {CMK}-Server ein Linux-Rechner ist, benötigen Sie den {CMK}-Agenten für Linux.
+
+{cee-only}
+In den {EE} gelangen Sie mit [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX#
+zu einer Seite, die Ihnen auch den Zugang zur
+link:wato_monitoringagents.html#bakery[Agentenbäckerei] (_agent bakery_) bietet, mit
+dem Sie sich individuell konfigurierte Agentenpakete „backen“ können. Zusätzlich
+wird aber auch immer ein generischer Agent angeboten, den Sie sofort
+herunterladen können:
+
+image::agent_download_cee.png[]
+
+{cre-only}
+Die {RE} verfügt über keine Agentenbäckerei. Hier kommen Sie über
+[.guihint]#Setup > Agents > Linux# direkt zur Download-Seite, auf der Sie
+vorkonfigurierte Agenten und Agenten-Plugins finden. (Diese finden Sie in den
+{EE} über [.guihint]#Setup > Agents > Other operating systems#.)
+
+image::agent_download_page.png[]
+
+Laden Sie die Paketdatei herunter: Wählen Sie das RPM-Dateiformat für Red Hat, CentOS und SLES oder das DEB-Dateiformat für Debian und Ubuntu.
+
+
+[#install_agent]
+=== Agent installieren
+
+//SK: Wurde die Datei erst heruntergeladen, müsste sie per scp oder sonstwie wieder nach /root auf dem {CMK}-Server kopiert werden.
+//SK: Wir gehen im Beispiel aber doch explizit davon aus, dass wir mit dem {CMK}-Server starten wollen. Warum zeigen wir dem Nutzer nicht einfach, wo der generische Agent liegt (/omd/sites/mysite/share/check_mk/agents)
+//SK: und kopieren oder installieren von dort? Anschließend weisen wir darauf hin, dass er denn auf andere Hosts natürlich per geeignetem Werkzeug (scp oder was auch immer) kopieren muss.
+//SK: Und wenn das hier doch so bleiben soll: Wo ist dieses Verzeichnis /root? Ja, in diesem Fall auf dem {CMK}-Server, aber wenn ich den in Schritt 5.1 erstmal auf meine Kiste runtergeladen habe, dann stehe ich hier im Regen.
+//TK2SK: Verstehe die Kritik, aber auch nur zum Teil: Habe die folgenden Abschnitte überarbeitet, um einige der Punkte zu berücksichtigen.
+//TK2SK: Wer es bis hierhin geschafft hat, musste sich bereits durch die CMK-Linux-Installation kämpfen (ist zwar nicht im intro, aber verlinkt und wird vorausgesetzt) und da geht es ums gleiche Thema. Das ist also nicht neu für den Leser - und das Bsp. ist doch so gewählt, dass alle Aktionen auf dem gleichen Host ablaufen, von daher sollte scp gar nicht nötig sein.
+//TK2SK: Download-Seite muss m.E. sein. Ich weiß nicht, ob man das Verzeichnis mit den generischen Agenten hier erwähnen soll (für mich interessant, ich kannte es auch nicht), aber das ist für den Leser vielleicht doch Information-Overkill. Da bin ich mir unsicher...
+
+Für das folgende Installationsbeispiel nehmen wir an, dass sich die heruntergeladene Paketdatei im Verzeichnis `/root` befindet, also im Home-Verzeichnis des `root`-Benutzers. Falls Sie die Datei in ein anderes Verzeichnis heruntergeladen haben, ersetzen Sie im folgenden Installationskommando das Verzeichnis `/root` mit eben diesem Verzeichnis. Ähnliches gilt für den Namen der Paketdatei, den Sie mit dem Namen der von Ihnen heruntergeladene Datei ersetzen.
+
+Die Paketdatei wird nur während der Installation benötigt. Sie können sie nach der Installation löschen.
+
+*Hinweis:* In unserem Beispiel wird der Agent auf dem {CMK}-Server installiert, d.h. Sie brauchen die Paketdatei nicht auf einen anderen Rechner zu kopieren. Falls sich die heruntergeladene Datei nicht auf dem Ziel-Host für die Installation des Agenten befinden sollte, müssen Sie die Datei zuerst auf den Ziel-Host kopieren, zum Beispiel mit dem Kommandozeilentool `scp`. Das passiert auf die gleiche Weise wie bei der Installation der {CMK}-Software und wie es für die Linux-Installation beschrieben ist, z.B. für die link:install_packages_debian.html[Installation unter Debian und Ubuntu].
+
+Die Installation erfolgt als `root` auf der Kommandozeile, für die RPM-Datei mit `rpm`, am besten mit der Option `-U`, die für _Upgrade_ steht und dafür sorgt, dass die Installation auch dann fehlerlos durchläuft, wenn bereits eine alte Version des Agenten installiert ist:
+
+[{shell}]
+----
+{c-root} rpm -U /root/check-mk-agent-2.0.0b5-a38356026f314d52.noarch.rpm
+----
+
+&#8230; oder für die DEB-Datei mit dem Befehl `dpkg -i`:
+
+[{shell}]
+----
+{c-root} dpkg -i /root/check-mk-agent_2.0.0b5-a38356026f314d52_all.deb
+----
+
+*Wichtig:* Der Agent benötigt zum Funktionieren entweder das Hintergrundprogramm (_daemon_) `systemd`, das bei neueren Linux-Distributionen Standard ist, oder den Hilfs-Daemon `xinetd`.
+Welcher Daemon auf Ihrem Rechner läuft, können Sie an der Ausgabe beim Installieren des Agenten sehen:
+
+[cols="20,~"]
+|===
+|Agent läuft ... |Ausgabe 
+
+|mit `xinetd` |`Reloading xinetd...`
+|mit `systemd` |`Enable {CMK} agent in systemd...`
+|überhaupt nicht |Keine der beiden anderen Meldungen, dafür: `This package needs xinetd to be installed for full functionality.`
+|===
+
+
+Falls bei Ihnen weder `systemd` noch `xinetd` vorhanden
+ist, installieren Sie `xinetd` einfach nach. Das geht auf RedHat/CentOS mit:
+
+[{shell}]
+----
+{c-root} yum install xinetd
+----
+
+auf SLES mit:
+
+[{shell}]
+----
+{c-root} zypper install xinetd
+----
+
+und auf Debian/Ubuntu mit:
+
+[{shell}]
+----
+{c-root} apt install xinetd
+----
+
+//TK2SK: Falls xinetd nachinstalliert werden muss: Muss der Agent danach neu installiert werden?
+
+Damit ist die Installation des Agenten abgeschlossen.
+
+Der {CMK}-Agent für Linux ist ein ausführbares Programm (Shell-Skript), das
+Sie sehr leicht testen können, indem Sie den Befehl `check_mk_agent` aufrufen:
+
+[{shell-raw}]
+----
+{c-root} check_mk_agent
+<<<check_mk>>>
+Version: 2.0.0b5
+AgentOS: linux
+Hostname: mycmkserver
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+...
+----
+
+Die Ausgabe des `check_mk_agent`-Kommandos ist sehr, sehr lang, daher haben wir nur die ersten Zeilen aufgelistet.
+
+Um die Erreichbarkeit des Agenten von außen zu testen, können Sie von
+einem anderen Rechner aus mit `telnet` eine Verbindung auf Port
+6556 versuchen. Hier sollte der Agent mit der gleichen Ausgabe antworten:
+
+[{shell-raw}]
+----
+{c-root} telnet mycmkserver 6556
+Trying 192.168.178.34...
+Connected to mycmkserver.
+Escape character is '^]'.
+<<<check_mk>>>
+Version: 2.0.0b5
+AgentOS: linux
+Hostname: mycmkserver
+...
+----
+
+*Hinweis:* Der Agent ist standardmäßig aus dem ganzen Netz erreichbar und ohne Passwort abfragbar. Da der Agent aber grundsätzlich keine Befehle aus dem Netz annimmt, kann sich ein möglicher Angreifer keinen Zugriff verschaffen. Allerdings sind Informationen wie die Liste der aktuellen Prozesse sichtbar. Wie Sie den Agenten absichern, erfahren sie im link:agent_linux.html[Artikel über den Linux-Agenten].
+
+
+[#create_host]
+=== Host erstellen
+
+Nachdem der Agent auf dem Host installiert ist, können Sie den Host ins Monitoring aufnehmen -- und zwar in den  vorbereiteten Ordner [.guihint]#Linux#. Nur zur Erinnerung: In diesem Beispiel sind der {CMK}-Server und der zu überwachende Host identisch.
+
+Öffnen Sie in der {CMK}-Oberfläche die gleiche Seite [.guihint]#Main directory#, auf der Sie bereits die drei Ordner erstellt haben: [.guihint]#Setup > Hosts > Hosts#. Wechseln Sie dort in den Ordner [.guihint]#Linux#, indem Sie den Ordner anklicken.
+
+Klicken Sie [.guihint]#Add host# und die Seite [.guihint]#Create new host# wird geöffnet:
+
+image::host_allsettings_less.png[]
+
+Wie schon beim Anlegen der drei Ordner weiter oben ist immer noch der
+link:intro_gui.html#show_less_more[Show less-Modus] aktiv. Daher zeigt {CMK} im Formular nur die wichtigsten und zum Erstellen eines Hosts notwendigen Host-Parameter an. Falls es sie interessiert, können Sie sich den Rest ansehen, indem Sie bei jedem der geöffneten Kästen die drei Auslassungszeichen
+icon:button_showmore[] anklicken und die beiden zugeklappten Kästen am Ende der Seite öffnen. Wie am Anfang erwähnt, ist {CMK} ein komplexes System,
+das auf jede Frage eine Antwort hat. Deswegen kann man bei einem Host (aber nicht nur dort) auch sehr viel konfigurieren.
+
+*Tipp:* Auf vielen Seiten -- auch auf dieser -- können Sie sich zusätzlich Hilfetexte zu den Parametern anzeigen lassen. Wählen Sie dazu im [.guihint]#Help#-Menü den Eintrag [.guihint]#Show inline help#. Die gewählte Einstellung bleibt auch auf anderen Seiten aktiv, bis Sie die Hilfe wieder abschalten.
+
+Aber nun zu den Eingaben, um den ersten Host zu erstellen. Sie müssen nur ein
+einziges Feld ausfüllen, nämlich [.guihint]#Hostname# bei den [.guihint]#Basic settings#.
+
+Diesen Namen können Sie frei vergeben. Dabei sollten Sie aber wissen, dass der Hostname von zentraler Bedeutung ist, denn er dient im Monitoring an allen Stellen als interne ID (oder Schlüssel) zur eindeutigen Identifizierung des Hosts. Da er in {CMK} so wichtig ist und oft genutzt wird, sollten Sie sich die Benamsung Ihrer Hosts gut überlegen. Ein Hostname kann später geändert werden, aber da dies ein aufwendiger Vorgang ist, sollten Sie ihn vermeiden.
+
+Am besten ist es, wenn der der Host unter seinem Namen im DNS auflösbar ist. Dann sind Sie mit diesem Formular auch schon fertig. Falls nicht, oder falls Sie kein DNS verwenden möchten, können Sie die IP-Adresse aber auch von Hand im Feld [.guihint]#IPv4 Address# eintragen.
+
+*Hinweis:* Damit {CMK} immer stabil und performant laufen kann, unterhält es einen eigenen Cache für die Auflösung der Hostnamen. Daher führt der Ausfall des DNS-Dienstes nicht zum Ausfall des Monitorings. Die Details zu Hostnamen, IP-Adressen und DNS finden Sie im link:wato_hosts.html#dns[Artikel über die Verwaltung der Hosts].
+
+Bevor es weitergeht, muss der erste Host zuerst einmal komplett erstellt werden. Soweit sind wir noch nicht -- auch wenn wir kurz davor stehen.
+
+
+[#diagnosis]
+=== Diagnose
+
+Murphys Gesetz („Alles, was schiefgehen kann, wird auch schiefgehen.“) kann leider auch von {CMK} nicht außer Kraft gesetzt werden. Schiefgehen kann vor allem dann etwas, wenn man es zum ersten Mal probiert. Daher sind gute Möglichkeiten zur Fehlerdiagnose wichtig.
+
+Bereits bei der Erstellung eines Hosts bietet {CMK} an, nicht nur die Eingaben (Hostname und IP-Adresse) auf der Seite [.guihint]#Create new host# zu sichern, sondern zusätzlich die Verbindung zum Host zu testen. In der Aktionsleiste der Seite [.guihint]#Create new host# finden Sie unter anderem den Knopf [.guihint]#Save & go to connection tests#. Klicken Sie auf diesen.
+
+Die Seite [.guihint]#Test connection to host# wird angezeigt und {CMK} versucht, den Host auf den verschiedensten Wegen zu erreichen. Für Linux- und Windows-Hosts sind dabei nur die beiden oberen Kästen interessant:
+
+image::host_diagnostics.png[]
+
+Durch die Ausgabe im Kasten [.guihint]#Agent# erhalten Sie die Gewissheit, dass {CMK} erfolgreich mit dem Agenten kommunizieren kann, den Sie zuvor auf dem Host manuell installiert hatten.
+
+In weiteren Kästen sehen Sie, wie {CMK} versucht, per SNMP Kontakt aufzunehmen. Das führt in diesem Beispiel erwartbar zu SNMP-Fehlern, ist aber sehr nützlich für Netzwerkgeräte, die wir weiter unten besprechen werden.
+
+Auf dieser Seite können Sie im Kasten [.guihint]#Host Properties# bei Bedarf
+eine andere IP-Adresse ausprobieren, den Test erneut durchführen und die geänderte IP-Adresse mit [.guihint]#Save & go to host properties# sogar direkt in die Host-Eigenschaften übernehmen.
+
+Klicken Sie diesen Knopf (ob Sie die IP-Adresse geändert haben oder nicht) und Sie landen auf der Seite [.guihint]#Properties of host#.
+
+
+[#services]
+== Die Services konfigurieren
+
+Nachdem der Host selbst aufgenommen wurde, kommt das eigentlich Interessante:
+die Konfiguration seiner Services. Auf der oben genannten Seite der Host-Eigenschaften klicken Sie [.guihint]#Save & go to service configuration# und die Seite [.guihint]#Services of host# wird angezeigt.
+
+Auf dieser Seite legen Sie fest, welche Services Sie auf dem Host überwachen
+möchten. Wenn der Agent auf dem Host erreichbar ist und korrekt läuft,
+findet {CMK} automatisch eine Reihe von Services und schlägt diese für das
+Monitoring vor (hier gekürzt dargestellt):
+
+image::intro_setup_monitor_services_of_host.png[]
+
+Für jeden dieser Services gibt es prinzipiell die folgenden Möglichkeiten:
+
+* [.guihint]#Undecided# : Sie haben sich noch nicht entschieden, ob dieser Service überwacht werden soll.
+* [.guihint]#Monitored# : Der Service wird überwacht.
+* [.guihint]#Disabled# : Sie haben sich dafür entschieden, den Service grundsätzlich nicht zu überwachen.
+* [.guihint]#Vanished# : Der Service wurde überwacht, existiert aber jetzt nicht mehr.
+
+Die Seite zeigt alle Services nach diesen Kategorien in Tabellen an. Da Sie noch keinen Service konfiguriert haben, sehen Sie nur die Tabelle [.guihint]#Undecided#. Für den Anfang ist es am einfachsten, wenn Sie jetzt auf [.guihint]#Monitor undecided services# klicken. Dann werden alle Services direkt in das Monitoring übernommen und alle [.guihint]#Undecided# zu [.guihint]#Monitored# Services.
+
+Sie können diese Seite jederzeit später aufrufen, um die Konfiguration
+der Services anzupassen. Manchmal entstehen durch Änderungen an einem Host
+neue Services, z.B. wenn Sie eine Logical Unit Number (LUN) als Dateisystem einbinden oder eine neue Oracle Datenbankinstanz konfigurieren. Diese Services erscheinen dann wieder als [.guihint]#Undecided#, und Sie können sie einzeln oder alle auf einmal in das Monitoring aufnehmen.
+
+Umgekehrt können Services auch verschwinden, z.B. weil ein Dateisystem entfernt wurde. Diese erscheinen dann im Monitoring als {UNKNOWN} und auf dieser Seite als [.guihint]#Vanished# und können mit [.guihint]#Remove vanished services# aus dem Monitoring entfernt werden.
+
+Der Knopf [.guihint]#Fix all# macht alles auf einmal: fehlende Services hinzufügen und überflüssige entfernen.
+
+
+[#activate_changes]
+== Änderungen aktivieren
+
+{CMK} speichert alle Änderungen, die Sie vornehmen, zunächst nur in einer vorläufigen „Konfigurationsumgebung“, die das aktuell laufende Monitoring noch nicht beeinflusst. Erst durch das „Aktivieren der aufgelaufenen Änderungen“ werden diese in das Monitoring übernommen. Mehr über die Hintergründe dazu erfahren Sie im link:wato.html[Artikel über die Konfiguration von {CMK}].
+
+Wie wir schon oben erwähnt hatten, finden Sie auf jeder Seite rechts oben die Information, wie viele Änderungen sich bisher angesammelt haben, die noch nicht aktiviert sind. Klicken Sie auf den Link mit der Anzahl der Änderungen. Dies bringt Sie auf die Seite [.guihint]#Activate pending changes#, die unter anderem bei [.guihint]#Pending changes# die noch nicht aktivierten Änderungen auflistet:
+
+image::activate_changes.png[]
+
+Klicken Sie jetzt auf den Knopf [.guihint]#Activate on affected sites#, um die Änderungen anzuwenden.
+
+Kurz danach können Sie das Resultat in der Seitenleiste im [.guihint]#Overview# sehen, das nunmehr die Zahl der Hosts (1) und die Zahl der zuvor von Ihnen ausgewählten Services anzeigt. Auch im Standard-Dashboard,
+das Sie mit einem Klick auf das {CMK}-Logo links oben in der Navigationsleiste erreichen, können Sie jetzt sehen, dass sich das System mit Leben gefüllt hat.
+
+Damit haben Sie den ersten Host mit seinen Services erfolgreich ins Monitoring übernommen: Gratulation!
+
+
+[#windows]
+== Windows überwachen
+
+Ebenso wie für Linux hat {CMK} auch für Windows einen eigenen Agenten. Dieser
+ist als MSI-Paket verpackt. Sie finden ihn an der gleichen Stelle wie auch den
+link:intro_setup_monitor.html#download_agent[Linux-Agenten] (in der {CRE} knapp daneben
+unter [.guihint]#Setup > Agents > Windows#). Sobald Sie das MSI-Paket
+heruntergeladen und auf Ihren Windows-Rechner kopiert haben, können Sie es wie
+bei Windows üblich per Doppelklick installieren.
+
+*Hinweis:* Es kann sein, dass Sie die link:agent_windows.html#firewall[Firewall-Einstellungen unter Windows] anpassen müssen, damit {CMK} über das Netzwerk zugreifen kann.
+
+Sobald der Agent installiert ist, können Sie den Host ins Monitoring
+aufnehmen. Dabei gehen Sie nach dem gleichen Ablauf vor, wie oben für den Linux-Host beschrieben, allerdings sollten Sie den Host im dafür vorgesehenen Ordner [.guihint]#Windows# erstellen. Da Windows anders aufgebaut ist als Linux, findet der Agent natürlich andere Services. Die detaillierte Einführung ins Thema finden Sie im link:agent_windows.html[Artikel über die Überwachung von Windows].
+
+
+[#snmp]
+== Mit SNMP überwachen
+
+Professionelle Switches, Router, Drucker und viele andere Geräte und Appliances
+haben bereits vom Hersteller eine eingebaute Schnittstelle für das Monitoring:
+das Simple Network Management Protocol (SNMP). Solche Geräte lassen
+sich sehr einfach mit {CMK} überwachen -- und Sie müssen noch nicht einmal
+einen Agenten installieren.
+
+Das grundsätzliche Vorgehen ist dabei immer gleich:
+
+. In der Management-Oberfläche des Geräts schalten Sie SNMP frei für *lesende* Zugriffe von der IP-Adresse des {CMK}-Servers.
+
+. Vergeben Sie dabei eine *Community*. Das ist nichts anderes als ein Passwort für den Zugriff. Da dieses im Netzwerk in der Regel im Klartext übertragen wird, ist es nur begrenzt sinnvoll, das Kennwort sehr kompliziert zu wählen. Die meisten Anwender verwenden für alle Geräte innerhalb eines Unternehmens einfach die gleiche Community. Das vereinfacht auch die Konfiguration in {CMK} sehr.
+
+. Erstellen Sie in {CMK} den Host für das SNMP-Gerät wie link:intro_setup_monitor.html#create_host[oben beschrieben], diesmal im dafür vorgesehenen Ordner [.guihint]#Network#.
+
+. In den Eigenschaften des Hosts, im Kasten [.guihint]#Data sources# aktivieren Sie  [.guihint]#{CMK} Agent# und wählen Sie [.guihint]#No agent# aus.
+
+. Im gleichen Kasten [.guihint]#Data sources# aktivieren Sie [.guihint]#SNMP# und wählen Sie [.guihint]#SNMP v2 or v3# aus.
+
+. Falls die Community nicht `public` lautet, aktivieren Sie wieder unter [.guihint]#Data sources# den Eintrag [.guihint]#SNMP credentials#, wählen Sie [.guihint]#SNMP community (SNMP Versions 1 and 2c)# aus und tragen Sie im Eingabefeld darunter  die Community ein.
+
+//SK: Das die Community hier irgendwie per Default auf "public" steht kann ich in der 1.6 und der 2.0 nicht nachvollziehen. Kann sein, dass das mal so war. Scheint aber nicht mehr so zu sein.
+//TK2SK: Hier geht es doch um die Community-Einstellung der SNMP-Geräte. Falls die nicht "public" ist, muss ich das in CMK entsprechend eintragen. Da ist es doch egal, welche Default-Einstellung CMK hat. Oder meinst Du was anderes?
+
+Für die letzten 3 Punkte sollte das Ergebnis so aussehen wie im folgenden Bild:
+
+image::host_snmp_configuration.png[]
+
+*Tipp:* Wenn Sie alle SNMP-Geräte in einem eigenen Ordner angelegt haben, führen Sie die Konfiguration der [.guihint]#Data sources# einfach für den Ordner aus. Damit gelten die Einstellungen automatisch für alle Hosts in diesem Ordner.
+
+Der Rest läuft wie gehabt. Wenn Sie möchten, können Sie noch mit dem  Knopf [.guihint]#Save & go to connection tests# einen Blick auf die Seite [.guihint]#Test connection to host# werfen. Dort sehen Sie auch sofort, ob der Zugriff via SNMP funktioniert, hier z.B. für einen Switch vom Typ Cisco Catalyst 4500:
+
+image::snmp_diagnostics.png[]
+
+Klicken Sie auf der Seite [.guihint]#Properties of host# anschließend auf
+[.guihint]#Save & go to service configuration#, um die Liste aller Services angezeigt zu
+bekommen. Diese sieht natürlich komplett anders aus als bei Linux oder Windows.
+Auf allen Geräten überwacht {CMK} per Default alle Ports, die aktuell in
+Benutzung sind. Dies können Sie später nach Belieben anpassen. Außerdem zeigt Ihnen ein Service, der immer {OK} ist, die allgemeinen Informationen zu dem Gerät, und ein anderer Service die Uptime an.
+
+Die ausführliche Beschreibung finden Sie im link:snmp.html[Artikel über die Überwachung via SNMP].
+
+
+[#cloud]
+== Cloud, Container und virtuelle Maschinen
+
+Auch Cloud-Dienste, Container und  virtuelle Maschinen (VM) können Sie mit {CMK}  überwachen, selbst wenn Sie keinen Zugriff auf die eigentlichen Server haben. {CMK} nutzt dafür die von den Herstellern vorgesehenen Anwendungsprogrammierschnittstellen (API). Diese verwenden für den Zugriff durchgehend HTTP bzw. HTTPS.
+
+Das Grundprinzip ist immer das Folgende:
+
+. Richten Sie in der Management-Oberfläche des Herstellers einen Account für {CMK} ein.
+. Erstellen Sie in {CMK} einen Host für den Zugriff auf die API.
+. Richten Sie für diesen Host eine Konfiguration zum Zugriff auf die API ein.
+. Für die überwachten Objekte wie VMs, EC2-Instanzen, Container usw. legen Sie weitere Hosts in {CMK} an bzw. automatisieren die Erstellung.
+
+Sie finden im Handbuch Schritt-für-Schritt-Anleitungen zur Einrichtung der Überwachung von link:monitoring_aws.html[Amazon Web Services (AWS)], link:monitoring_azure.html[Microsoft Azure], link:monitoring_docker.html[Docker], link:monitoring_kubernetes.html[Kubernetes] und link:monitoring_vmware.html[VMWare ESXi].
+
+link:intro_tools.html[Weiter geht es mit den Monitoring-Werkzeugen]
+
