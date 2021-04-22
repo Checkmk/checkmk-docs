@@ -1,12 +1,13 @@
 include::global_attr.adoc[]
 = {CMK}-Server im Docker-Container
-:revdate: 2018-12-12
-:title: {CMK} als Container verwalten
-:description: Nach dem Start eines Containers folgt seine Pflege. Dieser Artikel beschreibt, welche Besonderheiten zu beachten sind, wenn checkmk im Container läuft.
+:revdate: 2021-04-22
+:title: {CMK}-Server im Docker-Container
+:description: Nach dem Start eines Containers folgt seine Pflege. Dieser Artikel beschreibt, welche Besonderheiten zu beachten sind, wenn {CMK} im Container läuft.
 
 {related-start}
 link:introduction_docker.html[Installation als Docker-Container]
 link:introduction_virt1.html[Installation der virtuellen Appliance]
+link:update.html[Updates und Upgrades]
 {related-end}
 
 
@@ -132,142 +133,6 @@ Addons ein. Sie finden diese in dem Untermenü `Addons`:
 ----
 
 
-[#update_easy]
-== Einen {CMK}-Container aktualisieren
-
-=== Einfaches Update für aktuelle {CMK}-Images
-
-Die Aktualisierung einer {CMK}-Instanz unterscheidet sich je nach Version
-des Images. Ab {v15}p13 gestaltet sich der Update-Prozess sehr einfach und
-es gibt lediglich die folgenden Vorausetzungen:
-
-* Der Container wird nicht gelöscht, wenn der Container gestoppt wird. Das heißt, die Option `--rm` wurde beim Starten nicht benutzt.
-* Sie kennen die ID des Datenspeichers (Volume) zu dem Container. Normalerweise sollten Sie beim Start des Containers seinem Speicher eine eindeutige ID gegeben haben. Wenn Sie sich unsicher sind, wie die ID Ihres Volumes ist, finden Sie link:managing_docker.html#commands[weiter unten Hilfe].
-
-Wenn Sie der link:introduction_docker.html[Einführung zu {CMK} im Container] gefolgt
-sind, sollten Sie die ersten beiden Vorausetzungen automatisch erfüllen. Wenn
-Ihr Container ein Image nutzt, welches älter als {v15}p13 ist,
-folgen Sie bitte den Anweisungen link:managing_docker.html#update_complex[weiter unten].
-Ansonsten ist der Aktualisierungsprozess in 3 Schritten erledigt:
-
-. Stoppen Sie den Container. Wenn der {CMK}-Container `myContainer` heißt, lautet der Befehl zum Beispiel: `docker stop myContainer`.
-. Entfernen Sie den Container. Der Befehl dazu ist: `docker rm myContainer`.
-. Starten Sie einen neuen Container mit der gewünschten Version und binden Sie das bekannte Volume ein. Wenn Ihr Volume `myVolume` heißt, heißt die entsprechende Option `-v myVolume:/omd/sites`.
-
-Danach wird {CMK} automatisch den Rest erledigen und Ihre {CMK}-Instanz
-aktualisieren und starten. Sie können sich danach wie gewohnt einloggen.
-
-
-[#update_complex]
-=== Detailliertes Update für frühere {CMK}-Images
-
-Eine Aktualisierung einer {CMK}-Instanz vor {v15}p13 ist komplexer.
-Der Grund liegt vor allem in der Architektur von {CMK}, da die Konfiguration
-einer Instanz und andere Daten im Zuge eines Versionswechsels ebenfalls
-aktualisiert werden müssen. Eine Aktualisierung erfolgt daher -- anders
-als oben beschrieben oder link:update.html#execute[auf einem Server direkt] -- in den
-folgenden Schritten:
-
-
-==== Den {CMK}-Container sichern
-
-Wenn Sie den Container wie empfohlen erstellt haben, werden alle Daten in einem
-persistenten Dateisystem gespeichert, welches unabhängig von dem Container
-ist. Es ist daher nicht ausreichend, von dem Container einen Snapshot zu
-erstellen, um die Daten zu sichern. Stoppen Sie daher den Container und
-sichern die Daten aus dem Container heraus an eine geeignete Stelle:
-
-[{shell}]
-----
-{c-root} docker stop monitoring
-monitoring
-{c-root} docker cp monitoring:/omd/sites - > /my/path/to/backup.tar
-----
-
-
-==== Den {CMK}-Container updaten
-
-Erstellen Sie nun einen zweiten Container mit der neuen Version, damit für
-das Update sowohl die alte Version, als auch die gewünschte zur Verfügung
-steht. Dabei wird ein Kommando übergeben, um zu verhindern, dass die dabei
-gestartet wird. Halten Sie diese Shell offen, um das später das Update
-durchführen zu können:
-
-[{shell}]
-----
-{c-root} sudo docker container run -it --rm --volumes-from monitoring --name monitoring_update checkmk/check-mk-enterprise:1.5.0p6 bash
-root@801beb91d3b6:/#
-----
-
-{CMK} setzt immer einen Standard, welche {CMK}-Version genutzt werden
-soll. Ändern Sie diesen Eintrag auf dem zweiten Container mit dem folgenden
-Befehl:
-
-[{shell}]
-----
-{c-root} docker cp -L monitoring:/omd/versions/default - | docker cp - monitoring_update:/omd/versions/
-----
-
-Nun können Sie das Update auf dem zweiten Container durchführen. Beenden
-Sie gegebenenfalls die offene Shell, nachdem das Update beendet ist:
-
-[{shell}]
-----
-{c-root} docker exec -it -u cmk monitoring_update omd update
-2018-10-12 14:32:29 - Updating site 'mytest' from version 1.5.0p4.cee to 1.5.0p5.cee...
-
- [green]#** Updated        *etc/apache/conf.d/omd.conf*
-Finished update.
-----
-
-
-==== Den {CMK}-Container austauschen
-
-Nachdem Sie die (Konfigurations-)Daten aktualisiert haben, können sie den
-alten Container durch einen neuen ersetzen. Benennen Sie dazu den alten
-Container zunächst um:
-
-[{shell}]
-----
-{c-root} docker rename monitoring monitoring_old
-{c-root} 
-----
-
-Sie können nun einen Container mit der neuen {CMK}-Version starten und
-diesem das aktualisierte Dateisystem von dem alten Container zuordnen:
-
-[{shell}]
-----
-{c-root} docker container run -dit -p 8080:5000 --tmpfs /omd/sites/cmk/tmp --volumes-from monitoring_old --name monitoring checkmk/check-mk-enterprise:1.5.0p6
-----
-
-Auch hier können Sie wieder in Logs sehen, ob der ohne Probleme gestartet
-wurde:
-
-[{shell}]
-----
-{c-root} docker container logs monitoring
-// STARTING SITE
-Preparing tmp directory /omd/sites/cmk/tmp...OK
-Starting mkeventd...OK
-Starting liveproxyd...OK
-Starting mknotifyd...OK
-Starting rrdcached...OK
-Starting cmc...OK
-Starting apache...OK
-Initializing Crontab...OK
-// STARTING CRON
-// CONTAINER STARTED
-----
-
-Abschließend entfernen Sie noch den alten Container:
-
-[{shell}]
-----
-{c-root} docker rm monitoring_old
-----
-
-
 == Eigene Container-Images erstellen
 
 Sie können mit Hilfe unseres Respository auch eigene Images
@@ -278,7 +143,7 @@ Kundendaten ein eigenes Image erstellen:
 
 [{shell}]
 ----
-UP(myuser@myhost:~/git/check_mk/docker#):docker build \
+myuser@myhost:~/git/check_mk/docker$ docker build \
     --build-arg CMK_VERSION=1.5.0p5 \
     --build-arg CMK_EDITION=enterprise \
     --build-arg CMK_DL_CREDENTIALS='myusername:mypassword' \
@@ -294,13 +159,14 @@ manuell laden und in dem `docker`-Verzeichnis ablegen:
 *  Der öffentliche GPG-Schlüssel zu dem Installationspaket
 
 
+[#commands]
 == Nützliche Befehle
 
 [cols=2]
 |===
 |Befehl |Beschreibung 
 
-|docker inspect myContainer |Mit diesem Befehl können Sie allerlei Informationen über einen laufenden Container mit dem Namen `myContainer` bekommen. Unter anderem finden Sie hier, welche Datenspeicher (Volumes) eingebunden sind. Das ist vor allem dann nützlich, wenn Sie dem Volume keinen menschenlesbaren Namen gegeben haben und Ihren Container aktualisieren wollen.
+|docker inspect myContainer |Mit diesem Befehl können Sie allerlei Informationen über einen laufenden Container mit dem Namen `myContainer` bekommen. Unter anderem finden Sie hier, welche Datenspeicher (Volumes) eingebunden sind. Das ist vor allem dann nützlich, wenn Sie dem Volume keinen menschenlesbaren Namen gegeben haben und Ihren xref:update#updatedocker[Container aktualisieren] wollen.
 |===
 
 
