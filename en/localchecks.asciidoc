@@ -1,6 +1,6 @@
 include::global_attr.adoc[]
 = Local checks
-:revdate: draft
+:revdate: 2021-04-27
 :title: Local checks
 :description: {CMK} can be easily extended even without much programming knowledge. Find out here how to provide your own script to an agent.
 
@@ -58,7 +58,8 @@ and the first text of the detailed status.
 Everything following will then count as status detail, which is why blank characters are allowed.
 
 If there is uncertainty about a possible output, it can be simply tested by writing a small script with the `echo` command.
-Insert the output to be tested into the `echo` command, making sure to escape the quotes for the service name with `\`:
+Insert the output to be tested into the `echo` command.
+Make sure to mask the quotes for the service name with `\` so that these characters are not interpreted by the `echo` command:
 
 .mylocalcheck
 [{file}]
@@ -75,6 +76,15 @@ For Windows hosts, such a script will look very similar to this:
 @echo off
 echo 0 "My 1st service" - This static service is always OK
 ----
+
+Both scripts lead to the same result in the output:
+
+[{shell}]
+----
+0 "My 1st service" - This static service is always OK
+----
+
+For {CMK} only this output is relevant, not how you created this output.
 
 By the way -- you can write any number of outputs in a script.
 Each output line will have its own service created in {CMK}.
@@ -214,7 +224,7 @@ In the general syntax, it looks like this:
 
 [{shell}]
 ----
-parameter=value;warn_lower:warn_upper;crit_lower:crit_upper
+metricname=value;warn_lower:warn_upper;crit_lower:crit_upper
 ----
 
 &#8230; and in the example like this:
@@ -222,12 +232,22 @@ parameter=value;warn_lower:warn_upper;crit_lower:crit_upper
 [{shell}]
 ----
 {c-root} /usr/lib/check_mk_agent/local/mylocalcheck
-0 "My 3rd service" humidity=27;40:60;30:70 A service with lower and upper thesholds
+P "My 3rd service" humidity=37;40:60;30:70 A service with lower and upper thresholds
 ----
 
 &#8230; and in the display of a service view like this:
 
 image::localchecks_lower.png[]
+
+If you are only concerned with lower thresholds, leave out the upper threshold fields:
+
+[{shell}]
+----
+{c-root} /usr/lib/check_mk_agent/local/mylocalcheck
+P "My 4th dynamic service" count_lower=37;40:;30: A service with lower thresholds only
+----
+
+With this output, you specify that the service should become {WARN} if the value is less than 40 and {CRIT} if it is less than 30: thus, at the specified value of 37, the service will get the {WARN} state.
 
 
 [#multi-line]
@@ -240,7 +260,7 @@ Even if due to the scripting language the backslash itself needs to be escaped, 
 [{shell}]
 ----
 {c-root} /usr/lib/check_mk_agent/local/mylocalcheck
-P "My service" humidity=37;40:60;30:70 My service output\\nA line with details\\nAnother line with details
+P "My service" humidity=37;40:60;30:70 My service output\nA line with details\nAnother line with details
 ----
 
 In the service's details these additional lines will be visible under the [.guihint]#Summary#:
@@ -285,7 +305,7 @@ image::localchecks_srv_cached.png[]
 Under Windows, the configuration is also analogous to that of a xref:agent_windows#customizeexecution[plug-in].
 Instead of using a special subdirectory as with Linux & Co, the options are set in a configuration file:
 
-.C:ProgramData\checkmk\agent\check_mk.user.yml
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
 [{file}]
 ----
 local:
@@ -322,7 +342,7 @@ The subsequent `local` directory then allocates the file explicitly.
 Place the script with the local check in this directory.
 
 *Important:* On Linux, you can configure asynchronous execution analogously as described in the xref:cache[previous chapter] by now creating a directory under `custom/mycustompackage/lib/local/` with the number of seconds of the execution interval and placing the script there.
-Under Windows you can use rule sets for this (and for other options), which you can find in the Agent Bakery under [.guihint]#Agent rules > Windows Agent#.
+Under Windows, you can use the rule sets [.guihint]#Set execution mode for plugins and local checks# and [.guihint]#Set cache age for plugins and local checks#. These and other rule sets for local checks under Windows can be found in the Agent Bakery under [.guihint]#Agent rules > Windows Agent#.
 
 In the configuration environment of {CMK}, the package directory `mycustompackage` will be shown as a new option:
 Open [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX#, create a new rule with [.guihint]#Agents > Agent rules > Generic options > Deploy custom files with agent# and select the newly-created package:
@@ -367,41 +387,45 @@ This number can be customised to suit the number of expected output lines:
 ----
 {c-root} check_mk_agent | grep -v grep | grep -A2 "<<<local"
 <<<local:sep(0)>>>
-P "My service" humidity=37;40:60;30:70 My service output\\nA line with details\\nAnother line with details
+P "My service" humidity=37;40:60;30:70 My service output\nA line with details\nAnother line with details
 cached(1618580356,600) 2 "My cached service" count=4 Some output of a long running script
 ----
 
 In the last line, you can recognise a cached service by the preceding `cache` information with the current Unix time and the execution interval in seconds.
 
-Under Windows the output can be diverted to a text file, in which the expected outputs can likewise be searched for in the `local`-section using Notepad, for example:
+Under Windows, you can achieve a very similar result with PowerShell and the `Select-String` cmdlet as with the `grep` command under Linux. In the following command, the two digits behind the `Context` parameter determine how many lines are to be output before and after the hit:
 
 [{shell}]
 ----
-C:\Program Files (x86)\checkmk\service>check_mk_agent.exe test > out.txt
+PS C:\Program Files (x86)\checkmk\service> ./check_mk_agent.exe test | Select-String -Pattern "<<<local" -Context 0,3
+> <<<local:sep(0)>>>
+  0 "My 1st service" - This static service is always OK
+
+  cached(1618580520,600) 1 "My cached service on Windows" count=4 Some output of a long running script
 ----
 
 
 === Testing agent output on the {CMK} server
 
-As a last step the processing of the script output can also be tested on the {CMK} server with the `cmk` command -- once for the service discovery:
+As a last step the processing of the script output can also be tested on the {CMK} server with the `cmk` command -- once for the service discovery (shortened by the lines not relevant in the current context):
 
 [{shell}]
 ----
 {c-omd} cmk -IIv --detect-plugins=local mycmkserver
 Discovering services and host labels on: mycmkserver
+mycmkserver:
 ...
 + EXECUTING DISCOVERY PLUGINS (1)
   [green]#2# local
 [green]#SUCCESS# - Found 2 services, no host labels
 ----
 
-&#8230; and also the processing of the service output with a similar command:
+&#8230; and also the processing of the service output with a similar command (also shortened):
 
 [{shell}]
 ----
 {c-omd} cmk -nv --detect-plugins=local mycmkserver
 Checkmk version 2.0.0p2
-...
 + FETCHING DATA
 ...
 + PARSE FETCHER RESULTS
