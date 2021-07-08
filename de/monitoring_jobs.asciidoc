@@ -1,0 +1,165 @@
+include::global_attr.adoc[]
+= Zeitbasierte Prozesse (Cronjobs) überwachen
+:revdate: draft
+:title: Zeitbasierte Prozesse (Cronjobs) überwachen
+:description: Lernen Sie, wie sie die korrekte und erfolgreiche Ausfḧrung von zeitbasierten Prozessen - cronjobs - mit Checkmk überwachen können.
+
+{related-start}
+link:agent_linux.html[Linux überwachen]
+{related-end}
+
+include::inc_disclaimer_20gui.asciidoc[]
+
+== Einleitung
+
+Wenn Sie _unixoide_ Betriebssysteme benutzen,
+sind Sie sehr warscheinlich bereits mit den sogenannten _cronjobs_ vertraut.
+Dabei ist `cron` eigentlich ein Daemon,
+welcher im Hintergrund wiederkehrende Prozesse verwaltet und dafür sorgt,
+dass sie in vorher festgelegten Intervallen ausgeführt werden.
+Grundsätzlich muss das natürlich nicht über das Programm `Cron` laufen
+ -- es ist lediglich die gängigste Methode,
+um unter Linux, aber auch unter AIX oder Solaris,
+immer wiederkehrende Jobs zuverlässig zu automatisieren.
+
+Manche dieser Jobs sind essentiell für den sicheren Betrieb,
+weswegen diese in die Überwachung des Servers einbezogen werden sollte.
+In {CMK} können Sie das mit dem Plugin-Programm `mk-job` erreichen.
+Das kleine Programm wird dem eigentlichen Job vorangestellt und führt dann dieses Aufabe aus.
+Dabei zeichnet `mk-job` eine Vielzahl an Messdaten auf und liefert sie an {CMK} weiter.
+Zu den drei wichtigstens Messdaten zählen wahrscheinlich die Ausführungszeit,
+wann die Jobs das letzte Mal und natürlich ob sie erfolgreich ausgeführt wurden.
+
+Das Programm `mk-job` ist -- wie in {CMK} oft üblich -- ein einfaches Shell-Skript, welches Sie jederzeit überprüfen können. Sie haben also auch bei den wichtigen Jobs auf Ihrem Server jederzeit die maximale Transparenz und Kontrolle.
+
+== Das Plugin einrichten
+
+=== Einrichten des mk-job-Programms
+
+Richten Sie als erstes das kleine Programm auf ihrem Server ein,
+um es nutzen zu können.
+Dabei ist es die einfachste Methode,
+das Programm mit `wget` direkt von dem {CMK}-Server zu holen und ausführbar zu machen.
+In dem folgenden Beispiel für einen Linux-Server:
+
+[{shell}]
+----
+{c-root} wget -o /usr/local/bin/mk-job \https://myserver/mysite/check_mk/agents/mk-job
+{c-root} chmod +x /usr/local/bin/mk-job
+----
+
+Falls Sie das Programm unter AIX oder Solaris installieren wollen,
+haben laden stattdessen `mk-job.aix` oder `mk-job.solaris`. Und wenn der {CMK}-Server nicht erreichbar ist, oder auf dem Server das Programm `wget` nicht verfügbar, können Sie es natürlich auch mit `scp` kopieren.
+
+[#first_steps]
+=== Den ersten Job überwachen
+
+Um den ersten Job zu überwachen nehmen wir wieder `cron` als gängiges Beispiel. Nehmen wir an, Sie haben einen cronjob, wie diesen hier:
+
+./etc/cron.d/backup
+[{file}]
+----
+5 0 * * * root /usr/local/bin/backup >/dev/null
+----
+
+Um diesen Job zu überwachen,
+stellen Sie mit einem Editor Ihres Vertrauens dem Kommando in der Zeile das Programm `mk-job` zusammen mit einem Namen voran.
+Der Name wird dann später als Service-Name in {CMK} genutzt
+und muss daher für jeden Host einzigartig sein:
+
+.crontab
+[source,subs=macros]
+----
+# Syntax:
+# 5 0 * * * {BENUTZER} mk-job {SERVICENAME} {KOMMANDO}
+5 0 * * * root pass:q[*mk-job nightly-backup*] /usr/local/bin/backup >/dev/null
+----
+
+`mk-job` versucht nun die Ergebnisse aus der Messung unterhalb des Verzeichnis `/var/lib/check_mk_agent/job/root` abzulegen.
+Da das `job`-Verzeichnis ebenfalls dem Benutzer `root` gehört,
+ist es auch kein Problem das Benutzerverzeichnis anzulegen,
+sollte es nicht vorhanden sein.
+
+Bei jedem Aufruf wird der Agent nun in den Verzeichnissen unterhalb von `/var/lib/check_mk_agent/job/` schauen,
+welche Daten dort liegen und diese der Ausgabe hinzufügen.
+So ein Ergebnis könnte also etwa so aussehen.
+Der Übersicht halber hier nur der relevante der Teil der Agenten-Ausgabe:
+
+[{shell-raw}]
+----
+<<<job>>>
+==> nightly-backup <==
+start_time 1613509201
+exit_code 0
+real_time 2:06.03
+user_time 0.62
+system_time 0.58
+reads 200040
+writes 35536
+max_res_kbytes 28340
+avg_mem_kbytes 0
+invol_context_switches 1624
+vol_context_switches 2086
+----
+
+== Den Service in {CMK} aufnehmen
+
+Auf der {CMK}-Seite werden Sie den Service automatisch finden, sobald der Job einmal ausgeführt und entsprechend die Ergebnisse gespeichert wurden. Gehen Sie also wie üblich in die Service-Erkennung durch und aktivieren Sie den Service:
+
+//image::discover_mkjob.png[]
+
+Sie finden in dem Service zum einen alle oben gezeigten Messpunkte als Metrik und in vordefinierten Zeitreihen-Graphen. Zum anderen bekommen sie die Messpunkte auch in der Zusammenfassung und den Details des Service:
+
+//image::service_mkjob.png[]
+
+== Jobs von nicht-priviligierten Benutzern überwachen
+
+Möchten Sie auch Jobs von Benutzern überwachen,
+legen Sie zunÄchst ein Benutzerverzeichnis in dem `job`-Verzeichnis an
+und weisen die Rechte dem entsprechenden Benutzer zu.
+Dadurch ist es dem `mk-job` überhaupt erst möglich,
+im Namen des Benutzern die Ergebnisse in dem entsprechenden Verzeichnis abzuspeichern:
+
+[{shell}]
+----
+{c-root} cd /var/lib/check_mk_agent/job/ && mkdir myuser && chown myuser:myuser myuser
+----
+
+== Diagnosemöglichkeiten
+
+Wenn die Einrichtung nicht funktioniert,
+haben Sie verschiedene Möglichkeiten,
+um dem Problem oder den Probleme auf die Spur zu kommen.
+Fangen Sie grundsätzlich immer beim Startpunkt der Kette an
+und prüfen Sie als erstes,
+ob sie das Programm `mk-job` korrekt eingebunden haben,
+wie in den xref:monitoring_jobs#first_steps[ersten Schritten] beschrieben.
+Eine mögliche Fehlerquellen sind:
+
+* mk-jobs kann von `cron` nicht gefunden werden, weil es in einem Pfad liegt,
+der von `cron` nicht berücksichtigt wird.
+Geben Sie in diesem Fall den vollen Pfad zu `mk-jobs` an.
+* Der Servicename enthält Leerzeichen und wurde nicht Anführungszeichen (") umschlossen.
+* Der Job wird mit einem Benutzer ausgeführt,
+welcher noch kein eigenes Verzeichnis für die Speicherung der Ergebnisse hat.
+
+Sollten die Messergebnisse korrekt erfasst und abgespeichert werden,
+prüfen Sie als nächstes auf dem {CMK}-Server,
+ob die Ergebnisse auch vom Agenten korrekt weitergegeben werden. Sie können das beispielsweise mit `less` prüfen. Üblicherweise befindet sich die Ausgabe sehr weit unten:
+
+[{shell}]
+----
+{c-omd} cmk -d myhost | less
+----
+
+Sind die Ergebnisse hier nicht zu sehen, kann das daran liegen, dass der Agent nicht über die nötigen Berechtigungen verfügt, um die entsprechenden Dateien zu lesen. Korrigieren Sie das gegebenenfalls.
+
+== Dateien und Verzeichnisse
+
+[cols="55,~"]
+|===
+|Pfad |Bedeutung
+
+|`/usr/bin/mk-job` | Das Programm `mk-job` sollte hier abgelegt werden, damit es unkompliziert aufgerufen werden kann.
+|`/var/lib/check_mk/job/` |Das übliche Verzeichnis unter dem die Ergebnisse geordnet nach Benutzer gespeichert werden. Beachten Sie, dass der Pfad unter *AIX* anders ist: `/tmp/check_mk/job/`
+|===
