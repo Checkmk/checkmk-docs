@@ -1,0 +1,207 @@
+// include::global_attr.adoc[]
+// = Zeitbasierte Prozesse (Cronjobs) überwachen
+// :revdate: 2021-07-21
+// :title: Zeitbasierte Prozesse (Cronjobs) überwachen
+// :description: Lernen Sie, wie sie die korrekte und erfolgreiche Ausführung von zeitbasierten Prozessen - Cronjobs - mit {CMK} überwachen können.
+// 
+// {related-start}
+// link:agent_linux.html[Linux überwachen]
+// {related-end}
+// 
+// 
+// == Einleitung
+// 
+// Wenn Sie _unixoide_ Betriebssysteme benutzen,
+// sind Sie sehr wahrscheinlich bereits mit den sogenannten _Cronjobs_ vertraut.
+// Dabei ist `cron` eigentlich ein Daemon,
+// welcher im Hintergrund wiederkehrende Prozesse verwaltet und dafür sorgt,
+// dass sie in vorher festgelegten Intervallen ausgeführt werden.
+// Grundsätzlich muss das natürlich nicht über das Programm `cron` laufen
+//  -- es ist lediglich die gängigste Methode,
+// um unter Linux, aber auch unter AIX oder Solaris,
+// immer wiederkehrende Jobs zuverlässig zu automatisieren.
+// 
+// 
+// Manche dieser Jobs sind essentiell für den sicheren Betrieb,
+// weswegen diese in die Überwachung des Hosts einbezogen werden sollten.
+// In {CMK} können Sie das mit dem Skript `mk-job` erreichen.
+// Das kleine Skript wird dem eigentlichen Job vorangestellt und führt dann diese Aufgabe aus.
+// Dabei zeichnet `mk-job` eine Vielzahl an Messdaten auf und liefert sie an {CMK} weiter.
+// Zu den wichtigsten Messdaten zählen dabei, wann der Job zuletzt und ob er erfolgreich ausgeführt wurde.
+// 
+// Das Skript `mk-job` ist -- wie in {CMK} oft üblich -- ein einfaches Shell-Skript, welches Sie jederzeit überprüfen können. Sie haben also auch bei den wichtigen Jobs auf Ihrem Host jederzeit die maximale Transparenz und Kontrolle.
+// 
+// 
+// == Das Plugin einrichten
+// 
+// === Einrichten des mk-job-Programms
+// 
+// Richten Sie als erstes das kleine Skript auf dem überwachten Host ein, um es nutzen zu können.
+// Dabei ist es die einfachste Methode,
+// das Programm mit `wget` direkt von Ihrem {CMK}-Server zu holen und ausführbar zu machen,
+// im folgenden Beispiel für einen Linux-Server:
+// 
+// [{shell}]
+// ----
+// {c-root} wget -o /usr/local/bin/mk-job \https://myserver/mysite/check_mk/agents/mk-job
+// {c-root} chmod +x /usr/local/bin/mk-job
+// ----
+// 
+// Falls Sie das Skript unter AIX oder Solaris installieren wollen,
+// laden Sie stattdessen `mk-job.aix` oder `mk-job.solaris`.
+// Wenn das Programm `wget` nicht verfügbar ist,
+// können Sie die Datei natürlich auch auf anderem Weg,
+// zum Beispiel mit `scp`, kopieren.
+// 
+// 
+// [#first_steps]
+// === Den ersten Job überwachen
+// 
+// Um den ersten Job zu überwachen nehmen wir wieder `cron` als gängiges Beispiel. Nehmen wir an, Sie haben einen Cronjob, wie diesen hier:
+// 
+// ./etc/cron.d/backup
+// [{file}]
+// ----
+// 5 0 * * * root /usr/local/bin/backup >/dev/null
+// ----
+// 
+// Um diesen Job zu überwachen,
+// stellen Sie mit einem Editor Ihres Vertrauens dem Kommando in der Zeile das Skript `mk-job` zusammen mit einem Namen voran.
+// Der Name wird dann später als Service-Name in {CMK} genutzt
+// und muss daher auf diesem Host einzigartig sein:
+// 
+// .crontab
+// [source,subs=macros]
+// ----
+// # Syntax:
+// # 5 0 * * * pass:c[<Benutzer> mk-job <Service-Name> <Kommando>]
+// 5 0 * * * root pass:q[*mk-job nightly-backup*] /usr/local/bin/backup >/dev/null
+// ----
+// 
+// Bei Ausführung des soeben definierten Cronjobs wird `mk-job` versuchen, die Ergebnisse aus der Messung unterhalb des Verzeichnisses `/var/lib/check_mk_agent/job/root` abzulegen.
+// Da das Verzeichnis `job` ebenfalls dem Benutzer `root` gehört,
+// ist es für `mk-job` auch kein Problem, das Benutzerverzeichnis `root` anzulegen, sollte es nicht vorhanden sein.
+// 
+// Bei jedem Aufruf wird der Agent in den Verzeichnissen unterhalb von `/var/lib/check_mk_agent/job/` schauen,
+// welche Daten dort liegen und diese der Ausgabe hinzufügen.
+// 
+// So ein Ergebnis könnte also etwa wie das folgende aussehen, wobei der Übersicht halber hier nur der relevante der Teil der Agentenausgabe gezeigt wird:
+// 
+// [{shell-raw}]
+// ----
+// <<<job>>>
+// ==> nightly-backup <==
+// start_time 1613509201
+// exit_code 0
+// real_time 2:06.03
+// user_time 0.62
+// system_time 0.58
+// reads 200040
+// writes 35536
+// max_res_kbytes 28340
+// avg_mem_kbytes 0
+// invol_context_switches 1624
+// vol_context_switches 2086
+// ----
+// 
+// 
+// == Den Service in {CMK} aufnehmen
+// 
+// In {CMK} werden Sie den Service automatisch finden, sobald der Job einmal ausgeführt und entsprechend die Ergebnisse gespeichert wurden. Gehen Sie also wie üblich in die Service-Erkennung und aktivieren Sie den Service:
+// 
+// image::discover_mkjob.png[]
+// 
+// Sie finden in dem Service zum einen alle oben gezeigten Messpunkte als Metrik und in vordefinierten Zeitreihen-Graphen. Zum anderen bekommen sie die Messpunkte auch in der Zusammenfassung und den Details des Services:
+// 
+// image::service_mkjob.png[]
+// 
+// 
+// == Jobs nicht-privilegierter Benutzer überwachen
+// 
+// Möchten Sie auch Jobs von anderen Benutzern als `root` überwachen,
+// legen Sie zunächst ein Benutzerverzeichnis im `job`-Verzeichnis `/var/lib/check_mk_agent/job/` an
+// und weisen die Rechte dem entsprechenden Benutzer zu, im folgenden Beispielkommando dem Benutzer `myuser`:
+// 
+// [{shell}]
+// ----
+// {c-root} cd /var/lib/check_mk_agent/job/ && mkdir myuser && chown myuser:myuser myuser
+// ----
+// 
+// Dadurch ist es `mk-job` überhaupt erst möglich,
+// im Namen des Benutzers die Ergebnisse in dieses Verzeichnis abzulegen.
+// 
+// 
+// == Diagnosemöglichkeiten
+// 
+// Wenn die Einrichtung nicht funktioniert,
+// haben Sie verschiedene Möglichkeiten,
+// um dem Problem oder den Problemen auf die Spur zu kommen.
+// Fangen Sie grundsätzlich immer beim Startpunkt der Kette an
+// und prüfen Sie als erstes,
+// ob sie das Skript `mk-job` korrekt eingebunden haben,
+// wie in den xref:first_steps[ersten Schritten] beschrieben.
+// Mögliche Fehlerquellen sind:
+// 
+// * `mk-job` kann von `cron` nicht gefunden werden, weil es in einem Pfad liegt,
+// der von `cron` nicht berücksichtigt wird.
+// Geben Sie in diesem Fall den vollen Pfad zu `mk-job` an.
+// * Der Service-Name enthält Leerzeichen und wurde nicht in Anführungszeichen (") umschlossen.
+// * Der Job wird mit einem Benutzer ausgeführt,
+// welcher noch kein eigenes Verzeichnis für die Speicherung der Ergebnisse hat.
+// 
+// Sollten die Messergebnisse korrekt erfasst und abgespeichert werden,
+// prüfen Sie als nächstes auf dem {CMK}-Server,
+// ob die Ergebnisse auch vom Agenten korrekt weitergegeben werden.
+// 
+// Sie können sich die Agentenausgabe mit dem folgenden xref:cmk_commandline#utilities[Kommando] anzeigen und die Ausgabe in das Kommando `less` weiterleiten:
+// 
+// [{shell}]
+// ----
+// {c-omd} cmk -d myhost | less
+// ----
+// 
+// Üblicherweise befindet sich die relevante Sektion `pass:c[<<<job>>>]` in der Ausgabe sehr weit unten.
+// 
+// Sind die Ergebnisse hier nicht zu sehen, kann das daran liegen,
+// dass der Agent nicht über die nötigen Berechtigungen verfügt,
+// um die entsprechenden Dateien zu lesen.
+// Das kann zum Beispiel auftreten, wenn Sie den Agenten nicht mit dem Benutzer `root` aufrufen,
+// die Ergebnisse aber nicht von anderen Benutzern gelesen werden dürfen:
+// 
+// [{shell}]
+// ----
+// {c-root} ls -l /var/lib/check_mk_agent/job/myUser/
+// total 5
+// -rw-rw---- 1 myUser   myUser   186 Jul 21 11:58  nightly-backup
+// ----
+// 
+// Fügen Sie in solchen Fällen entweder die Berechtigung hinzu, dass alle Benutzer die Ergebnisse lesen dürfen:
+// 
+// [{shell}]
+// ----
+// {c-root} chmod 664 /var/lib/check_mk_agent/job/myUser/nightly-backup
+// ----
+// 
+// Oder Sie erstellen eine Gruppe und ordnen diese Gruppe allen Job-Dateien zu.
+// Mit dem folgenden Kommando ändern Sie nur die Gruppenberechtigung.
+// Der Besitzer wird nicht geändert, da dieser unangetastet bleibt,
+// wenn vor dem Doppelpunkt nichts eingetragen wird:
+// 
+// [{shell}]
+// ----
+// {c-root} chown :myJobGroup /var/lib/check_mk_agent/job/myUser/nightly-backup
+// ----
+// 
+// Achten Sie darauf, dass Sie die Gruppe vorher angelegt und den Benutzer,
+// mit dem der Agent aufgerufen wird, auch als Mitglied hinzugefügt haben.
+// 
+// 
+// == Dateien und Verzeichnisse
+// 
+// [cols="35,~"]
+// |===
+// |Pfad |Bedeutung
+// 
+// |`/usr/local/bin/` | Das Skript `mk-job` sollte in diesem Verzeichnis abgelegt werden, damit es unkompliziert aufgerufen werden kann.
+// |`/var/lib/check_mk_agent/job/` |Das übliche Verzeichnis unter dem die Ergebnisse geordnet nach Benutzern gespeichert werden. Beachten Sie, dass der Pfad unter *AIX* anders ist: `/tmp/check_mk/job/`
+// |===
