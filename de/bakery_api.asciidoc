@@ -1,0 +1,516 @@
+include::global_attr.adoc[]
+= Die Bakery-API
+:revdate: draft
+:title: Die Bakery-API 
+:description: Die Bakery-API bietet eine Schnittstelle, um eigene Plugins zu schreiben, die Funktionen in die Agentenpakete der Agentenbäckerei einbinden. 
+
+{related-start}
+link:wato_monitoringagents.html[Monitoring-Agenten]
+xref:agent_deployment#[Automatische Agenten-Updates]
+xref:notifications#[]
+link:notifications.html[]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+{cee-only} Die Bakery-API können Sie nutzen, um eigene Plugins zu schreiben, die Funktionen in die Agentenpakete der xref:wato_monitoringagents#bakery[Agentenbäckerei] (_Agent Bakery_) einbinden. 
+In den meisten Fällen handelt es sich dabei um Plugins in Form von zusätzlichen Skripten, die vom {CMK}-Agenten ausgeführt werden sollen (Agentenplugins), sowie deren Konfigurationsdateien.
+
+Es können aber auch Funktionalitäten implementiert werden, die sich auf die Struktur des Pakets selbst beziehen, sofern diese abgebildet werden können durch das Einbinden von Dateien, das Ausführen von Paket-Skriptlets (für die Paketformate RPM, DEB und Solaris PKG) oder die Angabe von spezifischen Konfigurationseinträgen für den Windows-Agenten (in YAML).
+All diese „Artefakte“ können mit der Bakery-API in einer einheitlichen Syntax beschrieben werden.
+
+Design und Umsetzung der Bakery-API orientieren sich an der xref:devel_check_plugins#[Check-API].
+
+Nicht abgedeckt von der Bakery-API ist die Definition der zum Plugin gehörigen Konfiguration und die Bereitstellung/Ablage zusätzlicher Dateien, die für das Plugin benötigt werden.
+
+So wie die Agentenbäckerei ist auch die Bakery-API nur für die {CEE} verfügbar.
+
+
+[#api_doc]
+== Die API-Dokumentation
+
+
+[#versioning]
+=== Versionierung
+
+Software und Dokumentation der Bakery-API stammen aus der gleichen Quelle. 
+Daher passt die API-Dokumentation stets zur Software und beschreibt genau das, was die API kann --
+und daher ist es auch nicht nötig, den Referenzteil der verfügbaren Funktionen, Klassen, Parameter etc. im {CMK}-Handbuch zu beschreiben.
+Stattdessen finden Sie die API-Dokumentation außerhalb dieses Handbuchs, direkt in ihrer {CMK}-Instanz.
+
+Die API mit ihrer Dokumentation ist versioniert und nutzt dabei eine zweistufige Nummerierung nach dem „Semantic Versioning 2.x“ Standard im Format `X.Y`, wobei `X` für eine Main Version steht und `Y` für eine Minor Version. 
+Eine neue Minor Version enthält neue, rückwärtskompatible Funktionen. 
+Eine neue Main Version kann dagegen Änderungen enthalten, die die API inkompatibel mit der vorherigen Main Version machen. 
+
+Die Version `1` ist die aktuelle Version der Bakery-API, die in diesem Artikel beschrieben wird.
+Jedes Plugin deklariert beim xref:access_api[Zugriff auf die API] explizit die API-Version, auf der es basiert.
+
+Die API folgt einer anderen Versionierung als die {CMK}-Software. 
+Trotzdem ist die Zuordnung der Versionen von API-Dokumentation und {CMK}-Software sehr einfach, wie Sie im nächsten Kapitel erfahren.
+
+
+[#access_doc]
+=== Zugriff auf die API-Dokumentation
+
+Die Bakery-API-Dokumentation steht im HTML-Format zur Ansicht im Web-Browser bereit und kann über die {CMK}-GUI geöffnet werden: über die Navigationsleiste im Menü [.guihint]#Help > APIs > Plugin API reference#:
+
+image::bakeryapi_help_menu.png[alt="Help-Menü in der Navigationsleiste.",width=65%]
+
+Die Plugin-API-Dokumentation wird in einem neuen Browser-Fenster (bzw. Browser-Tab) angezeigt:
+
+[{image-border}]
+image::bakeryapi_sphinx.png[alt="Beispielseite der Bakery-API-Dokumentation."]
+
+In diesem Fenster wird die für die Entwicklung von {CMK}-Plugins relevante API-Dokumentation angezeigt, 
+d.h. Sie finden hier neben der Dokumentation zur Bakery-API auch die zur Check-API.
+Diese API-Dokumentation wird mit link:https://www.sphinx-doc.org/[Sphinx] generiert und angezeigt.
+
+Sie finden die Dokumentation der Bakery-API in den Versionen, die in der {CMK}-Version unterstützt werden, die in Ihrer Instanz installiert ist.
+
+
+[#using]
+== Die API nutzen
+
+
+[#example]
+=== Ein Beispielszenario
+
+Wir werden den Gebrauch der API an folgendem Beispielszenario demonstrieren:
+
+* Mit dem {CMK}-Agenten soll ein Plugin bereitgestellt werden mit dem Namen `my_example_plugin`.
+
+* Das Agentenplugin gibt es in drei Varianten für Linux, Solaris und Windows und soll auch für diese drei Betriebssysteme in die Agentenpaketen eingebunden werden. 
+Die zugehörigen Dateien liegen vor und heißen: `my_example_plugin.linux.py`, `my_example_plugin.solaris.sh` und `my_example_plugin.vbs` +
+Python-, Shell- und VB-Skripte sind nur Beispiele. Ein Agentenplugin kann eine beliebige, auf dem Zielsystem ausführbare Datei sein. +
+Der Inhalt der Dateien interessiert uns hier nicht. Die Funktion der Agentenplugins ist nicht Gegenstand der Bakery-API.
+
+* Es soll konfigurierbar sein, ob die Ausgabe des Plugins zwischengespeichert werden soll (_cache_), d.h. in diesem Fall wird das Plugin vom Agenten erst nach Ablauf der konfigurierten Zeit wieder ausgeführt.
+
+* Das Plugin kann mit den Variablen `user` und `content` konfiguriert werden. 
+Die beiden Linux- und Solaris-Plugins lesen diese Konfiguration aus einer Konfigurationsdatei `my_example_plugin.conf` ein. 
+Das Windows-Plugin liest die Einträge `my_example_plugin.user` und `my_example_plugin.content` aus der YAML-Konfigurationsdatei des Windows-Agenten ein. +
+Der Zugriff auf diese Ressourcen muss jeweils im Agentenplugin umgesetzt werden und ist nicht Gegenstand der Bakery-API.
+
+* Für Linux und Solaris gibt es zusätzlich ein Programm `my_example`, das mit ausgeliefert werden soll, z.B. ein kleines Shell-Skript, um  das Plugin auch per Kommando unabhängig vom {CMK}-Agenten starten zu können.
+
+* Unter Linux und Solaris soll nach der Installation des Agenten in das Syslog geschrieben werden, dass `my_example` installiert wurde. 
+Nach der Deinstallation des Agenten soll analog in Syslog geschrieben werden, dass `my_example` deinstalliert wurde. +
+Das ist nicht modern und vielleicht auch gar nicht sinnvoll, liefert dafür aber ein einfaches Beispiel.
+
+
+[#create_plugin]
+=== Plugin-Datei erstellen
+
+Die Plugin-Datei `my_example_plugin.py` wird im lokalen Teil der Instanzverzeichnisstruktur erstellt unter `local/lib/check_mk/base/cee/plugins/bakery/`.
+
+Bakery Plugins werden in Form einer Datei angelegt, die als Python 3-Modul importiert werden. 
+Um dies zu markieren, beginnt eine Plugin-Datei immer mit den folgenden Zeilen:
+
+.my_example_plugin.py
+[{python}]
+----
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+----
+
+Da es sich um ein Modul handelt, müssen alle benötigten Namen zu Beginn importiert werden.
+
+
+[#access_api]
+=== Auf die API zugreifen
+
+Alle Objekte der Bakery-API stehen unter `cmk.base.cee.plugins.bakery.bakery_api.vX` zur Verfügung, wobei X die API-Versionnummer bezeichnet, im Beispiel `1`. 
+Da die Plugin-Datei selbst im Namespace `cmk.base.cee.plugins.bakery` liegt, funktioniert auch ein relativer Import aus `.bakery_api.v1`:
+
+.my_example_plugin.py
+[{python}]
+----
+from .bakery_api.v1 import (
+    OS,
+    DebStep,
+    RpmStep,
+    SolStep,
+    Plugin,
+    PluginConfig,
+    SystemBinary,
+    Scriptlet,
+    WindowsConfigEntry,
+    FileGenerator,
+    ScriptletGenerator,
+    WindowsConfigGenerator,
+    register,
+    quote_shell_string,
+)
+----
+
+Im obigen Beispiel werden nur die Namen importiert, die für das Beispielszenario benötigt werden.
+
+
+[#objects]
+=== Die verfügbaren Objekte der API
+// TK: Dieses Kapitel passt nicht so richtig in die Reihe, da es hier nur um die Liste der Objekte geht, ohne Bezug zum Beispiel.
+// TK: Man könnte es auch vor das Beispiel ziehen: finde ich aber schlechter als die aktuelle Position.
+
+Die Namen, die in der Bakery-API zur Verfügung stehen, werden in der xref:api_doc[API-Dokumentation] detailliert beschrieben. 
+In diesem Kapitel werden die Objekte trotzdem kurz vorgestellt, da dies hilfreich ist, um die Umsetzung des Beispielszenarios nachvollziehen zu können. 
+
+
+[#enums]
+==== Identifier / Enums
+
+Zur Spezifikation der einzelnen Plugin-xref:artefacts[Artefakte] stehen `enum.Enums` zur Verfügung, mit denen verschiedene Eigenschaften, meist in Form eines Arguments, angegeben werden können:
+
+* `OS` - Das Betriebssystem im Kontext der Bakery-API.
+* `DebStep` - Ein Transaktionsschritt für ein DEB „Maintainer Script“.
+* `RpmStep` - Ein Transaktionsschritt für ein RPM „Scriptlet“.
+* `SolStep` - Ein Transaktionsschritt für ein Solaris PKG „Installation Script“.
+
+
+[#artefacts]
+==== Artefakte
+
+Artefakte werden die Dateien und Dateiinhalte genannt, die die eigentlichen Bestandteile eines Plugins sind. 
+Sie werden mit Hilfe von geeigneten Klassen beschrieben, die sich in folgende Kategorien unterteilen lassen:
+
+* Dateien (`Plugin`, `SystemBinary`, `PluginConfig`, `SystemConfig`) - 
+Jede Datei, die dem {CMK}-Agenten bereitgestellt werden soll, wird mit einem Objekt beschrieben. 
+Der Dateityp wird durch die Klasse beschrieben. 
+Dabei muss für jedes Betriebssystem, auf dem die Datei bereitgestellt werden soll, ein separates Objekt definiert werden.
+
+* Scriptlets (`Scriptlet`) - 
+Ein DEB „Maintainer Script“, RPM „Scriptlet“ oder Solaris PKG „Installation Script“, das bei der Installation, Deinstallation oder Update des Agentenpakets zum angegebenem Transaktionsschritt (z.B. preinstall, postremove) ausgeführt werden soll.
+
+* Windows-Konfigurationseinträge (`WindowsConfigEntry`, `WindowsConfigItems`, `WindowsGlobalConfigEntry`, `WindowsSystemConfigEntry`) - 
+Einträge in der YAML-Konfigurationsdatei für den Windows-Agenten werden ebenfalls mit Hilfe geeigneter Klassen beschrieben.
+
+Diese Artefakte werden jeweils in Funktionen beschrieben, die ihrer Kategorie entsprechen.
+Die einzelnen Funktionen werden der xref:register_function[Registrierungsfunktion] mit den Argumenten `files_function`, `scriptlets_function`, `windows_config_function` übergeben. 
+Dabei handelt es sich um Generatorfunktionen, die die einzelnen spezifizierten Artefakte zurückgeben. 
+
+Den Funktionen werden als Argumente verschiedene Parameter übergeben, die zur Konstruktion und der Bestimmung der zurückgegebenen Artefakte ausgewertet werden können. 
+Dabei handelt es sich zum einen um die GUI-Konfiguration des jeweiligen Agenten, der gerade gebacken werden soll (`conf`) und zum anderen um den Hash der aktuellen Agentenkonfiguration und Plugin-Dateien (`aghash`).
+
+
+[#register_function]
+==== Registrierungsfunktion
+
+Die Registrierung erfolgt mit der Funktion `register`, die beim Import des Bakery Plugins als Modul aufgerufen wird.
+
+Der Funktion werden als Argumente die einzelnen Bestandteile des Bakery Plugins übergeben: 
+der Plugin-Name (`name`) und die Funktionen (`files_function`, `scriptlets_function`, `windows_config_function`), die jeweils eine Kategorie der Artefakte zurückliefern.
+
+
+[#register]
+=== Registrieren
+
+Die Registrierung des Plugins bei {CMK} mit Plugin-Namen und Funktionen erfolgt über die Funktion `register.bakery_plugin()`:
+
+.my_example_plugin
+[{file}]
+----
+register.bakery_plugin(
+    name="my_example_plugin",
+    files_function=get_my_example_plugin_files,
+    scriptlets_function=get_my_example_scriptlets,
+    windows_config_function=get_my_example_windows_config,
+)
+----
+
+Die hier festgelegten Funktionen `get_my_example_windows_config`, `get_my_example_scriptlets` und `get_my_example_plugin_files` werden in den folgenden Kapiteln näher erläutert.
+
+
+[#windows_config_function]
+=== Konfiguration für den Windows-Agenten
+
+Im Beispiel soll das Intervall zur Ausführung festgelegt und die Konfiguration des Plugins über zwei Variablen erfolgen können:
+
+.my_example_plugin.py
+[{python}]
+----
+class MyExampleConfig(TypedDict, total=False):
+   interval: int
+   user: str
+   content: str
+
+def get_my_example_windows_config(conf: MyExampleConfig) -> WindowsConfigGenerator:
+   yield WindowsConfigEntry(path=["my_example_plugin", "user"], content=conf["user"])
+   yield WindowsConfigEntry(path=["my_example_plugin", "content"], content=conf["content"])
+)
+----
+
+Die Klasse `MyExampleConfig`, die übrigens auch in den beiden anderen Funktionen genutzt wird, definiert das Zeitintervall für die erneute Ausführung bei zwischengespeicherter Ausgabe (`interval`) und die beiden Variablen, mit denen das Plugin konfiguriert werden kann (`user`, `content`).
+
+Anschließend werden mit `WindowsConfigEntry` die Einträge in der YAML-xref:agent_windows#agent_architecture[Konfigurationsdatei des Windows-Agenten] festgelegt, aus denen die Werte für `user` und `content` gelesen werden.
+
+
+[#scriptlets_function]
+=== Installationsskripte für Linux
+
+Unter Linux und Solaris soll das Programm `my_example` ausgeliefert werden und bei der Installation und Deinstallation des Agenten  entsprechende Syslog-Meldungen geschrieben werden. 
+Wir zeigen hier nur die Implementierung für die Linux-Distribution Debian:
+
+.my_example_plugin.py
+[{python}]
+----
+def get_my_example_scriptlets(conf: MyExampleConfig) -> ScriptletGenerator:
+   installed_lines = ['logger -p Checkmk_Agent "Installed my_example"']
+   uninstalled_lines = ['logger -p Checkmk_Agent "Uninstalled my_example"']
+
+   yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
+   yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
+----
+
+Zuerst werden die Befehle für die Syslog-Meldungen definiert und anschließend die Installationsskripte für Debian (`DebStep`), die nach der Installation (`POSTINST`) und nach der Deinstallation (`POSTRM`) ausgeführt werden sollen.
+
+
+[#files_function]
+=== Agentenplugin für Linux
+
+Die Konfiguration für das Linux-Agentenplugin sieht so aus:
+
+.my_example_plugin.py
+[{python}]
+----
+def get_my_example_plugin_files(conf: MyExampleConfig) -> FileGenerator:
+   interval = conf.get('interval')
+
+   yield Plugin(
+      base_os=OS.LINUX,
+      source=Path('my_example_plugin.linux.py'),
+      target=Path('my_example_plugin'),
+      interval=interval,
+   )
+
+   yield PluginConfig(base_os=OS.LINUX,
+                     lines=_get_linux_cfg_lines(conf['user'], conf['content']),
+                     target=Path('my_example_plugin.cfg'),
+                     include_header=True)
+
+   for base_os in [OS.LINUX]:
+      yield SystemBinary(
+            base_os=base_os,
+            source=Path('my_example'),
+      )
+
+def _get_linux_cfg_lines(user: str, content: str) -> List[str]:
+   # Let's assume that our Linux example plugin uses json as a config format
+   config = json.dumps({'user': user, 'content': content})
+   return config.split('\n')
+----
+
+In der Funktion `get_my_example_plugin_files` wird zuerst die Python-Datei `my_example_plugin.linux.py` als `Plugin` definiert, d.h. als ausführbare Datei, die vom {CMK}-Agenten als Agentenplugin ausgeführt werden soll. 
+Dann wird mit `PluginConfig` die zu generierende Konfigurationsdatei `my_example_plugin.conf` für das Linux-Agentenplugin mit den Einträgen `user` und `content` festgelegt. 
+Mit der zweiten Funktion `_get_linux_cfg_lines` werden diese Zeilen im JSON-Format ausgelesen.
+
+Schließlich soll das zusätzlich auszuliefernde Shell-Skript `my_example` als `SystemBinary` auf dem Zielsystem im Verzeichnis für Benutzerprogramme abgelegt werden (standardmäßig `/usr/bin`).
+
+
+[#plugin_code]
+=== Das Plugin zum Beispielszenario
+
+Setzt man die bisher vorgestellten Teile zusammen -- und komplettiert sie, dann sieht ein mögliches, vollständiges Plugin für das  xref:example[Beispielszenario] so aus:
+
+.my_example_plugin.py
+[{python}]
+----
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import json
+from pathlib import Path
+from typing import Iterable, TypedDict, List
+
+from .bakery_api.v1 import (
+   OS,
+   Plugin,
+   PluginConfig,
+   Scriptlet,
+   WindowsConfigEntry,
+   DebStep,
+   RpmStep,
+   SolStep,
+   SystemBinary,
+   register,
+   quote_shell_string,
+   FileGenerator,
+   ScriptletGenerator,
+   WindowsConfigGenerator,
+)
+
+class MyExampleConfig(TypedDict, total=False):
+   interval: int
+   user: str
+   content: str
+
+def get_my_example_plugin_files(conf: MyExampleConfig) -> FileGenerator:
+   interval = conf.get('interval')
+
+   yield Plugin(
+      base_os=OS.LINUX,
+      source=Path('my_example_plugin.linux.py'),
+      target=Path('my_example_plugin'),
+      interval=interval,
+   )
+   yield Plugin(
+      base_os=OS.SOLARIS,
+      source=Path('my_example_plugin.solaris.sh'),
+      target=Path('my_example_plugin'),
+      interval=interval,
+   )
+   yield Plugin(
+      base_os=OS.LINUX,
+      source=Path('my_example_plugin.vbs'),  # target=source
+      interval=interval,
+   )
+
+   yield PluginConfig(base_os=OS.LINUX,
+                     lines=_get_linux_cfg_lines(conf['user'], conf['content']),
+                     target=Path('my_example_plugin.cfg'),
+                     include_header=True)
+   yield PluginConfig(base_os=OS.SOLARIS,
+                     lines=_get_solaris_cfg_lines(conf['user'], conf['content']),
+                     target=Path('my_example_plugin.cfg'),
+                     include_header=True)
+
+   for base_os in [OS.LINUX, OS.SOLARIS]:
+      yield SystemBinary(
+            base_os=base_os,
+            source=Path('my_example'),
+      )
+
+def _get_linux_cfg_lines(user: str, content: str) -> List[str]:
+   # Let's assume that our Linux example plugin uses json as a config format
+   config = json.dumps({'user': user, 'content': content})
+   return config.split('\n')
+
+def _get_solaris_cfg_lines(user: str, content: str) -> List[str]:
+   # To be loaded with 'source' in Solaris shell script
+   return [
+      f'USER={quote_shell_string(user)}',
+      f'CONTENT={quote_shell_string(user)}',
+   ]
+
+def get_my_example_scriptlets(conf: MyExampleConfig) -> ScriptletGenerator:
+   installed_lines = ['logger -p Checkmk_Agent "Installed my_example"']
+   uninstalled_lines = ['logger -p Checkmk_Agent "Uninstalled my_example"']
+
+   yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
+   yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
+   yield Scriptlet(step=RpmStep.POST, lines=installed_lines)
+   yield Scriptlet(step=RpmStep.POSTUN, lines=uninstalled_lines)
+   yield Scriptlet(step=SolStep.POSTINSTALL, lines=installed_lines)
+   yield Scriptlet(step=SolStep.POSTREMOVE, lines=uninstalled_lines)
+
+def get_my_example_windows_config(conf: MyExampleConfig) -> WindowsConfigGenerator:
+   yield WindowsConfigEntry(path=["my_example_plugin", "user"], content=conf["user"])
+   yield WindowsConfigEntry(path=["my_example_plugin", "content"], content=conf["content"])
+
+register.bakery_plugin(
+   name="my_example_plugin",
+   files_function=get_my_example_plugin_files,
+   scriptlets_function=get_my_example_scriptlets,
+   windows_config_function=get_my_example_windows_config,
+)
+----
+
+
+[#ruleset]
+=== Regelsatz erstellen
+
+Zu einem Bakery Plugin muss es einen Regelsatz für das Setup geben, mit dem es auf der GUI konfiguriert werden kann. 
+Im einfachsten Fall ist dies die Aktivierung des Plugins, im allgemeinen Fall kann die Konfiguration innerhalb der Funktionen `files_function`, `scriptlets_function` und `windows_config_function` beliebig ausgewertet werden und auf die zurückgegebenen xref:artefacts[Artefakte] Einfluss nehmen. 
+Den eben genannten Funktionen steht die Konfiguration des Plugins dabei über das Argument `conf` zur Verfügung.
+
+Der benötigte Regelsatz muss als Plugin-Datei spezifiziert und ebenfalls abgelegt werden -- als nach dem Plugin benannte Datei mit `.py` Suffix. 
+
+Die Erstellung eines Regelsatz ist nicht Bestandteil der Bakery-API.
+Sie finden aber zu diesem Thema eine Einführung im Artikel zum xref:devel_check_plugins#parameters[Schreiben eigener Check-Plugins].
+Da der Regelsatz aber eng mit dem Bakery Plugin verknüpft ist, zeigen wir eine mögliche Implementierung zum Beispielszenario:
+
+// TK: Beispiel-Code (kopiert aus dem Bakery-Wiki) ist out of scope des Artikels - aber ohne wäre der Leser komplett alleine. 
+.my_example_plugin.py
+[{python}]
+----
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from cmk.gui.i18n import _
+from cmk.gui.plugins.wato import (
+    HostRulespec,
+    rulespec_registry,
+)
+from cmk.gui.cee.plugins.wato.agent_bakery.utils import RulespecGroupMonitoringAgentsAgentPlugins
+from cmk.gui.valuespec import (
+    Age,
+    Dictionary,
+    TextAscii,
+)
+
+def _valuespec_my_example_plugin():
+    return Dictionary(
+        title=_("My example plugin (Linux, Solaris, Windows)"),
+        help=_("This will deploy my example plugin."),
+        elements=[
+            ("user", TextAscii(
+                title=_("User for example plugin"),
+                allow_empty=False,
+            )),
+            ("content", TextAscii(
+                title=_("The actual content"),
+                allow_empty=False,
+            )),
+            ("interval",
+             Age(
+                 title=_("Run asynchronously"),
+                 label=_("Interval for collecting data"),
+                 default_value=300, # default: 5 minutes
+             )),
+        ],
+        optional_keys=["interval"],
+    )
+
+rulespec_registry.register(
+    HostRulespec(
+        group=RulespecGroupMonitoringAgentsAgentPlugins,
+        name="agent_config:my_example_plugin",
+        valuespec=_valuespec_my_example_plugin,
+    ))
+----
+
+Die Konfiguration findet über den Namen, unter dem der Regelsatz registriert wird, zum Bakery Plugin. 
+Dabei muss der Regelsatz unter dem gleichen Namen wie das Bakery Plugin registriert werden, jedoch mit dem zusätzlichen Präfix `agent_config:`.
+
+
+[#deploy]
+=== Dateien bereitstellen
+
+Damit ein Bakery Plugin funktionieren kann, müssen alle beteiligten Dateien an die jeweils korrekten Stelle in der lokalen Struktur des Instanzverzeichnisses abgelegt bzw. geschrieben werden. 
+
+Dabei handelt es sich zum einen um die Plugin-Datei selbst und zum anderen um die von der `files_function` zurückgegebenen Objekte. Diese Objekte beschreiben entweder Konfigurationsdateien, die direkt vom Bakery Plugin erzeugt werden, oder sie beziehen sich auf Dateien, die richtig abgelegt werden müssen, damit sie beim Verpacken der Agentenpakete gefunden werden.
+
+Objekte der Klassen `Plugin` und `SystemBinary` bezeichnen existierende Dateien, die abgelegt werden müssen.
+Die als `PluginConfig` und `SystemConfig` beschriebenen Dateien werden anhand des `lines`-Arguments erst noch generiert, daher müssen hier keine Dateien abgelegt werden.
+
+Schließlich gehört zum Satz der Dateien auch die xref:ruleset[Regelsatzdatei] zum Plugin.
+
+Im xref:files[letzten Kapitel] finden Sie die Zusammenstallung aller Verzeichnisse.
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+In den folgenden Verzeichnissen müssen Dateien für die Bereitstellung eines Bakery Plugins abgelegt werden.
+Wie immer sind alle Angaben hier relativ zum Instanzverzeichnis (z.B. `/omd/sites/mysite`).
+
+[cols="50,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`local/lib/check_mk/base/cee/plugins/bakery/` |Verzeichnis für das Bakery-Plugin (im Beispiel `my_example_plugin.py`).
+|`local/share/check_mk/agents/plugins/` |Verzeichnis zur Ablage der unixoiden Agentenplugins.
+|`local/share/check_mk/agents/windows/plugins` |Verzeichnis zur Ablage der Windows Agentenplugins.
+|`local/share/check_mk/agents/` |Verzeichnis für mitgelieferte Programme oder Shell-Skripte für unixoide Betriebssysteme (im Beispiel `my_example`).
+|`local/share/check_mk/agents/windows/` |Verzeichnis für mitgelieferte Programme oder Shell-Skripte für Windows.
+|`local/share/check_mk/web/plugins/wato` |Verzeichnis für die Regelsatzdatei zum Plugin, vorzugsweise mit dem gleichen Namen wie das Plugin (im Beispiel `my_example_plugin.py`).
+|===
