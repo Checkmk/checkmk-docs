@@ -1,0 +1,287 @@
+include::D:\Arbeit\git\checkmk-docs\attributes\global_attr.adoc[]
+= Dateien überwachen
+:revdate: draft
+:title: Dateien überwachen
+:description: Mit {CMK} können Sie einzelne oder Gruppen von Dateien bezüglich Alter, Größe und Anzahl überwachen, sowohl unter Linux als auch Windows.
+
+{related-start}
+xref:wato#[Die Konfiguration von {CMK}]
+xref:wato_services#[Services verstehen und konfigurieren]
+{related-end}
+
+////
+ML: 
+- mk_filestats, klar Plugin - zur Unterscheidung nenne ich fileinfo Agenten-eigenes Feature, bin da offen für Besseres.
+- fileinfo ist ein wenig kürzer, da es ja eh verschwinden soll - immer noch verständlich?
+- Braucht es mehr Erklärung für die Konfiguration über Textdateien?
+////
+
+
+[#basics]
+== Grundlagen: Dateien überwachen
+Mit {CMK} können Sie Dateien bezüglich Anzahl, Größe und Alter überwachen, einzeln oder in Gruppen. Diese Funktion lässt sich äußerst vielfältig einsetzen. Beispielsweise ließen sich damit Backup-Strategien monitoren: Ist die richtige Anzahl an Archiven vorhanden? Ist keines der Backups älter als X Tage? Ist eines der Backups verdächtig groß oder klein? Sie könnten auch unternehmensweite Dateiserver darauf abklopfen, ob Nutzer diese als private Ablage für Filme missbrauchen. Oder ganz klassisch Auslagerungs- oder flüchtige Dateien wie Container im Auge behalten.
+
+Das grundsätzliche Vorgehen entspricht dem {CMK}-Standard: Im Agenten wird ein Plugin/eine Konfiguration installiert, das die gewünschten Informationen über Dateien oder Dateigruppen ins Monitoring bringt. Dort wird dann über entsprechende Regelsätze bestimmt, welche Eigenschaften zu welchen Status führen.
+
+Die eigentliche Filterung, also welche Daten überhaupt im Monitoring landen, geschieht im Agenten. Sie können hier über Globbing-Patterns beispielsweise Dateien ganzer Verzeichnisse rekursiv einbeziehen oder auch nur bestimmte Dateitypen oder gar einzene Dateien. Über Globbing-Patterns wie [.guihint]#/myfiles/\*.*#  können dabei unter Umständen enorm große Dateilisten entstehen, obwohl Sie vielleicht nur an besonders alten oder großen Dateien interessiert sind. Diesem Umstand ist es geschuldet, dass es derzeit zwei Agenten- und zugehörige Monitoring-Regelsätze gibt: Das ältere *Agenten-eigene Feature* [.guihint]#fileinfo# filtert nur nach Globbing-Pattern/Pfad, das neuere *Plugin* [.guihint]#mk_filestats# nach weiteren Eigenschaften.
+
+Es gibt noch weitere Unterschiede zwischen [.guihint]#fileinfo# und [.guihint]#mk_filestats#, die wir im Folgenden aufzeigen. Der wichtigste Unterschied: [.guihint]#mk_filestats# kann nur Linux-Hosts überwachen, [.guihint]#fileinfo# hingegen auch Windows-Hosts. Für Linux-Hosts sollten Sie in der Regel das aktuellere [.guihint]#mk_filestats# verwenden.
+
+[#differences]
+=== Unterschiede fileinfo und mk_filestats
+Wenn Sie die Regelsätze der beiden Varianten der Übersicht halber nebeneinander sehen wollen, geben Sie einfach im [.guihint]#Setup-Menü# 'size age' an. Die Regeln für einzelne Dateien und Gruppen heißen (weitgehend) identisch, die [.guihint]#mk_filestats#-Regeln sind aber explizit als solche ausgewiesen. Beide Varianten von Service-Regeln gibt es zusätzlich als xref:wato_services.html#enforced_services[erzwungene Services.]
+
+image::filestats_setup_menu.png[alt="Setup-Menü mit mk_filestats- und fileinfo-Einträgen."]
+
+Unterschiede der beiden Varianten gibt es auf Agenten- und Serviceebene. Hier zunächst die groben theoretischen Unterschiede. Die Details sehen Sie dann im Anschluss in den konkreten Anleitungen für beide Plugins.
+
+Beim *Agenten* gib es zwei große Unterschiede: [.guihint]#mk_filestats# bietet zum einen die bereits erwähnten zusätzlichen Filtermöglichkeiten, nämlich nach Dateigröße, -anzahl und -name, letzteres in Form regulärer Ausdrücke. So könnten Sie bei einem Globbing-Pattern [.guihint]#/myfiles/*# beispielsweise nur die Dateien ins Monitoring holen, die größer als 1 KB sind und 'backup' irgendwo im Dateinamen haben. Zum anderen werden bei [.guihint]#mk_filestats# auch Dateigruppen direkt in der Plugin-Konfiguration festgelegt, ganz einfach, indem mehrere Filter angelegt werden, die dann jeweils als eigene xref:wato_monitoringagents#diagnostics[Sektion] in der Agentenausgabe landen und später über die Sektionsnamen von Regeln angesprochen werden können.
+
+Bei den *Service-Monitoring-Regeln* unterscheiden sich die Wege von [.guihint]#fileinfo# und [.guihint]#mk_filestats# eher im Detail. In beiden Fällen können Auswertungen auf bestimmte xref:timeperiods#[Zeitperioden] beschränkt werden, aber nur [.guihint]#fileinfo# ermöglicht die explizite Angabe von Zeitfenstern pro Tag direkt in der Regel. Ebenfalls exklusiv für das ältere [.guihint]#fileinfo:# Für Dateigruppen können so genannte [.guihint]#Conjunctions# konfiguriert werden. Dabei wird für jeden Status eine Reihe von Bedingungen verknüpft, also zum Beispiel: Der Status geht auf {CRIT}, sobald die älteste Datei der Gruppe genau 5 Stunden alt *und* die kleinste Datei genau 8 Megabyte groß ist. Im Gegenzug liefert das neuere [.guihint]#mk_filestats# für Dateigruppen die Option, Ausreißer zu definieren: Angenommen eine Dateigruppe soll auf {CRIT} gehen, sobald die Gruppengröße 2 Gigabyte übersteigt. Wenn die Gruppe aber *nicht* auf {CRIT} gehen soll, wenn eine bestimmte einzelne Datei allein schon auf über 1 Gigabyte kommt (etwa eine temporäre Datei), so können Sie dies als Sonderfall definieren und die Gruppenregel damit fallweise überschreiben.
+
+// ML: Weitere Unterschiede, die (erstmal?) außen vor bleiben: Abarbeitung der Regeln
+// ML: Übersicht vielleicht besser als Tabelle?
+
+Nochmal in der Übersicht: Das neuere Plugin [.guihint]#mk_filestats#
+
+- läuft nur unter Linux,
+- filtert direkt im Agenten nach Globbing-Pattern und Eigenschaften,
+- liefert schlanke Dateilisten,
+- gruppiert direkt im Agenten,
+- zeigt optional Dateien in den Service-Details und
+- kann Ausreißer bei den Dateien berücksichtigen.
+
+Das ältere Feature [.guihint]#fileinfo#
+
+- läuft unter Linux und Windows,
+- filtert im Agenten nur nach Globbing-Pattern,
+- liefert bisweilen ausschweifende Dateilisten,
+- gruppiert über einen separaten Monitoring-Regelsatz,
+- zeigt immer Dateien in den Service-Details und
+- kann Zusammenhänge zwischen Dateien berücksichtigen.
+
+Folgend sehen Sie nun die beiden Funktionen einzeln im praktischen Einsatz -- dabei sollten die geschilderten Unterschiede und Features deutlich werden. [.guihint]#mk_filestats# liefert zudem selbst ausführliche Informationen über den Aufruf 'filestats.py --help'.
+
+[#mk_filestats]
+== Dateien überwachen mit mk_filestats (Linux)
+Im folgenden Beispiel sehen Sie das Vorgehen für Gruppen von Dateien, bei einzelnen Dateien ist das Prozedere identisch, es gibt lediglich weniger Optionen. Angenommen, Sie möchten eine *Gruppe* von Backup-Dateien (mybackup_01.zip etc.) überwachen, die eine bestimmte Anzahl haben und eine minimale Größe nicht unterschreiten sollen, dann können Sie wie folgt vorgehen:
+
+[#mk_filestats_agent_rule]
+=== Agenten-Plugin-Regel konfigurieren
+==== Konfiguration über Agentenbäckerei
+{cee-only} Rufen Sie zunächst die Regel für das Agenten-Plugin [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Count, size and age of files - mk_filestats (Linux)# auf. Unter [.guihint]#Section name# vergeben Sie einen beliebigen Namen, der so später in der Agentenausgabe als eigenständige Sektion erscheint.
+
+Unter [.guihint]#Globbing pattern for input files# geben Sie dann an, welche Dateien überwacht werden sollen. Dabei können Sie Globbing nutzen, also letztlich Pfadangaben mit Platzfreihaltern. Hier soll es bei einer absoluten Pfadangabe bleiben, die alle Dateien im angegebenen Ordner einbezieht.
+
+Die weitere Filterung übernehmen hier die nächsten beiden Optionen: [.guihint]#Filter files by matching regular expression# inkludiert Dateien nach angegebenem Muster, hier Dateien mit *my* irgendwo im Namen. [.guihint]#Filter files by not matching regular expression# exkludiert dann Dateien, hier solche, die auf *tmp* enden.
+
+image::filestats_agent_rule.png[alt="Eingabemaske für das Agenten-Plugin von mk_filestats."]
+
+Damit ist die Konfiguration abgeschlossen und Sie können das Plugin samt Konfiguration über die xref:agent_linux#_plugins_über_die_agentenbäckerei_installieren[Agentenbäckerei verteilen.]
+
+==== Manuelle Konfiguration
+{cre-only} In der {RE} konfigurieren Sie das Plugin wie üblich über eine Textdatei: Ein Beispielkonfiguration finden Sie als Instanznutzer unter 'share/check_mk/agents/cfg_examples/filestats.cfg'. Eine Konfiguration gemäß obiger Vorgaben sieht dann so aus:
+
+./etc/check_mk/filestats.cfg
+[{file}]
+----
+[myfiles]
+input_patterns: /media/evo/myfiles/
+filter_regex: .*my.*
+filter_regex_inverse: .*bak
+----
+
+Damit ist die Konfiguration abgeschlossen und Sie können das Plugin xref:agent_linux#manualplugins[manuell installieren.]
+
+==== Daten in der Agentenausgabe
+Das Ergebnis Ihrer Konfiguration finden Sie dann in Form von Rohdaten in der Agentenausgabe:
+
+.mysite-myhost-agent.txt
+[{file}]
+----
+<<<filestats:sep(0)>>>
+[[[file_stats myfiles]]]
+{'type': 'file', 'path': '/media/evo/myfiles/mybackup_01.zip', 'stat_status': 'ok', 'size': 13146562, 'age': 339080, 'mtime': 1633966263}
+{'type': 'file', 'path': '/media/evo/myfiles/mybackup_02.zip', 'stat_status': 'ok', 'size': 13145766, 'age': 325141, 'mtime': 1633980202}
+{'type': 'file', 'path': '/media/evo/myfiles/mybackup_03.zip', 'stat_status': 'ok', 'size': 13151050, 'age': 325352, 'mtime': 1633979991}
+...
+----
+
+[#mk_filestats_service_rule]
+=== Service-Regel konfigurieren
+Über den Agenten stehen dem Monitoring jetzt also die Daten zu den Dateien zur Verfügung. Zur Auswertung rufen Sie die Regel [.guihint]#Setup > Services > Service monitoring rules > Size, age and count of file groups (mk_filestats)# auf. In unserem Beispiel soll gewarnt werden, sobald eine bestimmte Anzahl von Dateien über- oder unterschritten wird. Das erledigen die Optionen [.guihint]#Minimal file count# und [.guihint]#Maximal file count#, über die schlicht Grenzwerte eingetragen werden. Alle anderen Minimal-Maximal-Optionen arbeiten analog.
+
+image::filestats_service_rule_group_value_1.png[alt="Eingabemaske mit Grenzwerten für Dateiüberwachung."]
+
+Aber welche Datei provoziert dann einen solchen {CRIT}-Status? Dabei hilft die Option [.guihint]#Show files in service details#: Ist diese aktiviert, sehen Sie alle betroffenen Dateien aufgelistet in der Detailansicht des Services.
+
+image::filestats_service_rule_group_value_2.png[alt="Eingabemaske mit Grenzwerten für Dateiüberwachung."]
+
+Nun könnte es natürlich sein, dass zwar die richtige Anzahl an Dateien vorhanden ist, es aber beispielsweise Ausreißer bezüglich der Größe gibt. Für solche Ausnahmen können Sie die Option [.guihint]#Additional rules for outliers# einsetzen: Hier wird zum Beispiel festgelegt, dass für Dateien unterhalb von 5 Megabyte der Status {WARN} gesetzt wird, unter 1 Megabyte geht der Service auf {CRIT}. Nützlich ist das zum Beispiel, um auf defekte Backups aufmerksam zu werden.
+
+image::filestats_service_rule_group_value_3.png[alt="Eingabemaske mit Grenzwerten für Dateiüberwachung."]
+
+Im Kasten [.guihint]#Conditions# können Sie nun noch bestimmen, dass die Regel ausschließlich für die im Agenten-Plugin konfigurierte Dateigruppe *myfiles* gelten soll: Geben Sie dazu unter [.guihint]#File Group Name# den Namen ein, den Sie im Agenten-Plugin unter [.guihint]#Section name# vergeben haben.
+
+image::filestats_service_rule_group_condition.png[alt="Filter auf Dateien der Gruppe myfiles."]
+
+Damit ist auch die Service-Regel fertig, optional könnten Sie die Auswertung noch auf eine xref:timeperiods#[Zeitperiode] beschränken. Fügen Sie anschließend wie üblich den neuen Service zu den Betroffenen Hosts hinzu und aktivieren Sie die Änderungen.
+
+// ML: Eigentlich sind mir Boxen im Ganzen lieber -- die scheint mir aber zu groß, daher oben aufgeteilt. Löschen falls so okay. 
+// image::filestats_service_rule_group_value.png[alt="Eingabemaske mit Grenzwerten für Dateiüberwachung."]
+
+[#mk_filestats_monitoring]
+=== mk_filestats im Monitoring
+Die Auswertung sehen Sie dann in Listen und natürlich in den Details. Neben den Parametern des Services sehen Sie hier nun auch die Dateien, die für den Status {WARN} beziehungsweise {CRIT} verantwortlich sind.
+
+image::filestats_service_monitoring.png[alt="Status der Dateiüberwachung im Monitoring."]
+
+Bei der Option [.guihint]#Show files in service details# ist jedoch Vorsicht angeraten: Wenn viele Dateien für eine Statusänderung sorgen, werden sie auch alle aufgeführt, was zu langen Listen und damit verbundenen Problemen mit Performance und Ansichten führen kann.
+
+image::filestats_many_files.png[alt="Liste aller crit-Dateien im Monitoring."]
+
+
+[#fileinfo]
+== Dateien überwachen mit fileinfo (Linux, Windows)
+Die Überwachung von Dateien mit [.guihint]#fileinfo# läuft prinzipiell genauso wie mit [.guihint]#mk_filestats,# daher das Prozedere hier leicht verkürzt, abermals für *Dateigruppen.*
+
+[#fileinfo_agent_rule]
+=== Agenten-Regel konfigurieren
+==== Konfiguration über Agentenbäckerei
+{cee-only} Die Konfiguration des Agenten-Plugins unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIXAgent rules > Count, size and age of files (Linux, Windows)# ist deutlich einfacher gehalten: Sie definieren hier lediglich den Pfad für die Dateien in Form eines Globs. Das wirft eben auch das Problem auf, dass eventuell extrem lange Dateilisten übertragen werden, die das Monitoring spürbar verlangsamen können. Außerdem wird standardmäßig für jede gefundene Datei ein eigener Service angelegt, was sich lediglich durch Gruppenbildung verhindern lässt.
+
+image::filestats_fileinfo_agent_rule.png[alt="Agenten-Regel mit Filterung auf Windows-Pfad."]
+
+*Zusätzliches Datum:* Es gibt aber noch eine leicht versteckte Filtermöglichkeit: Im Globbing-Muster können Sie die Variable [.guihint]#$DATE# nutzen, um nur Dateien einzubeziehen, deren Name das aktuelle Datum enthält. Die Angabe des Datumsformats entspricht dabei dem Linux-Programm date.
+
+image::filestats_fileinfo_date_rule.png[alt="Fileinfo-Filter über Datumsvariable."]
+
+Eine Angabe wie [.guihint]#/backups/mybackup_*_$DATE:%Y%m%d$# würde -- Stand heute, dem 22.10.2021 -- folglich Dateien wie [.guihint]#mybackup_01_20211022# und [.guihint]#mybackup_foobar_20211022# finden.
+
+image::filestats_fileinfo_date_monitoring.png[alt="Datei im Monitoring, gefiltert nach Datum im Dateinamen."]
+
+Weitere Informationen finden Sie direkt auf der Seite der Regel sowie in der zugehörigen [.guihint]#Inline-Hilfe.#
+
+Damit ist die Konfiguration abgeschlossen und Sie können das Plugin samt Konfiguration über die xref:agent_linux#_plugins_über_die_agentenbäckerei_installieren[Agentenbäckerei verteilen.]
+
+==== Manuelle Konfiguration
+{cre-only} In der {RE} müssen Sie auch bei [.guihint]#fileinfo# wieder über Dateien konfigurieren, unterschiedlich je nach Betriebssystem:
+
+*Linux:* Konfiguration über eine separate Datei:
+
+./etc/check_mk/fileinfo.cfg
+[{file}]
+----
+C:\myfiles\*
+/myfiles/*
+/media/evo/test_$DATE:%Y%m%d$
+----
+
+*Windows:* Konfiguration über die globale Nutzerkonfiguration:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+fileinfo:
+  enabled: yes
+  path:
+  - 'c:\myfiles\*.*'
+  - "c:\\myfiles\\*.*"
+  - /media/evo/test_$DATE:%Y%m%d$
+----
+
+Beachten Sie hier die unterschiedlichen Schreibweisen von Windows-Pfaden -- in doppelten Anführungsstrichen müssen die Backslashes escaped werden.
+
+Damit ist die Konfiguration abgeschlossen und Sie können das Plugin xref:agent_linux#manualplugins[manuell installieren.]
+
+==== Daten in der Agentenausgabe
+Das Ergebnis Ihrer Konfiguration finden Sie dann in Form von Rohdaten in der Agentenausgabe:
+
+.mysite-myhost-agent.txt
+[{file}]
+----
+ <<<fileinfo:sep(124)>>>
+1634131485
+C:\myfiles\myfile|12|1632490780
+C:\myfiles\myfile2|12|1632490780
+C:\myfiles\myfile3|12|1632490780
+...
+----
+
+[#fileinfo_service_rule]
+=== Service-Regel konfigurieren
+Im zweiten Schritt wird auch hier wieder die Service-Regel [.guihint]#Setup > Services > Service monitoring rules > Size, age and count of file groups# konfiguriert: Die Minimal-Maximal-Optionen entsprechen denen von mk_filestats, die Optionen zum Anzeigen der betroffenen Dateinamen in den Service-Details und für Ausreißer sind hier nicht vorhanden. Dafür gibt es zwei zusätzliche Optionen: Zum einen können Sie über [.guihint]#Add time range# direkt einen Zeitraum eingeben -- außerhalb dieses Zeitraums hat der Service immer den Status {OK}.
+
+Zum anderen steht Ihnen das mächtige Feature [.guihint]#Level conjunctions# zur Verfügung: Hierüber können Sie für jeden der vier Zustände {OK}, {WARN}, {CRIT} und {UNKNOWN} Reihen von Bedingungen setzen. So könnten Sie zum Beispiel festlegen, dass der Service auf {CRIT} geht, wenn
+
+- die älteste Datei genau 5 Tage alt ist,
+- die kleinste Datei unterhalb von 300 Byte liegt,
+- es exakt 12 Dateien gibt und
+- die neueste Datei weniger als 2 Tage alt ist.
+
+image::filestats_fileinfo_service_rule.png[alt="Bedinungen im fileinfo-Agenten-Plugin."]
+
+Und auch diese Regel können Sie wieder im Kasten [.guihint]#Conditions# auf die gewünschte Gruppe beschränken: Beim mk_filestats-Plugin haben Sie im Agenten-Plugin den Namen für die eigene Sektion in der Agentenausgabe festgelegt. Bei fileinfo läuft die Gruppenbildung erst im Monitoring über die Service-Regel [.guihint]#Setup > Services > Service monitoring rules > File Grouping Patterns#. Die Angabe der Muster für ein- und auszuschließende Dateien geschieht hier *standardmäßig* nicht über reguläre Ausdrücke, sondern lediglich über Globbing. Wenn Sie eine Tilde (~) voranstellen, können Sie aber auch hier reguläre Ausdrücke verwenden.
+
+// ML: Das mit der Tilde finde ich "beachtenswert" - genügt das so?
+
+image::filestats_fileinfo_grouping_pattern.png[alt="Filter für fileinfo-Dateigruppen."]
+
+*Zusätzliches Datum:* Wieder ist die Verwendung der Variablen [.guihint]#$DATE# möglich, mehr noch: Alternativ können Sie auch [.guihint]#$YESTERDAY# zum Filtern verwenden, was schlicht einen Tag von [.guihint]#$DATE# abzieht. Weitere Infos dazu erhalten Sie wie immer in der [.guihint]#Inline-Hilfe.#
+
+[#fileinfo_monitoring]
+=== fileinfo im Monitoring
+Im Monitoring unterscheidet sich die Ansicht einer Gruppe nicht sonderlich von [.guihint]#mk_filestats.# Allerdings werden hier immer alle betroffenen Dateien explizit aufgeführt, egal, ob sie für eine Statusänderung verantwortlich sind oder nicht. Hier im Beispiel sehen Sie etwa die beiden Dateien *yourfile* mit 0 Megabyte ohne Auswirkungen auf den Status und *yourfile_2.exe* mit knapp 11 Megabyte, die damit den Status {CRIT} auslöst.
+
+image::filestats_fileinfo_service_monitoring.png[alt="Eine fileinfo-Gruppe im Monitoring."]
+
+Alle Dateien, die von [.guihint]#fileinfo# ins Monitoring geliefert und keiner Gruppe zugeordnet werden, bleiben als einzelne Services erhalten.
+
+image::filestats_fileinfo__service_monitoring_singlefiles.png[alt="Einzelne Dateien als separate Services im Monitoring."]
+
+Genau diese Liste zeigt, warum es so wichtig ist, bei [.guihint]#fileinfo# genau auf die Filter zu achten: Wenn hier etwa nur etwas wie [.guihint]#C:\# ohne jegliche Einschränkungen angegeben würde, gäbe es es anschließend mehrere Hundertausend einzelne Services im Monitoring.
+
+[#troubleshooting]
+== Troubleshooting
+=== Keine/zu viele Dateien im Monitoring
+Egal, ob Sie mit [.guihint]#mk_filestats# oder [.guihint]#fileinfo# arbeiten, fehlende Dateien oder auch zu viele Einträge im Monitoring liegen häufig an falschen Filtern. Dafür gibt es vor allem zwei Quellen: Eine Verwechslung von Globbing-Muster und regulärem Ausdruck oder eine falsche Konfiguration. Beispielsweise verhält sich das Sternchen in beiden Varianten anders: Beim Globbing steht [.guihint]#\*# als Platzfreihalter für beliebig viele beliebige Zeichen, in einem regulären Ausdruck für ein oder mehrere Vorkommen des davor stehenden Zeichens. Um per Regex beliebige Zeichen in beliebiger Menge zu matchen, müsste entsprechend mit [.guihint]#.*# gearbeitet werden.
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== mk_filestats
+[cols="15,20,~"]
+|===
+|Ort |Pfad |Bedeutung
+|Instanznutzer |share/check_mk/agents/cfg_examples/filestats.cfg |Beispielkonfiguration
+|Instanznutzer |share/check_mk/agents/plugins/mk_filestats.py |Python-3-Plugin inklusive Erläuterungen
+|Instanznutzer |share/check_mk/agents/plugins/mk_filestats_2.py |Python-2-Plugin inklusive Erläuterungen
+|Linux-Host |/etc/check_mk/filestats.cfg |Konfiguration aus Bäckerei oder manuell erstellt
+|===
+
+=== fileinfo
+[cols="15,20,~"]
+|===
+|Ort |Pfad |Bedeutung
+|Instanznutzer |share/check_mk/agents/cfg_examples/fileinfo.cfg |Beispielkonfiguration
+|Linux-Host |/etc/check_mk/fileinfo.cfg |Konfiguration (Bäckerei oder manuell)
+|Windows-Host |C:\ProgramData\checkmk\agent\check_mk.user.yml |Nutzerkonfiguration (manuell)
+|Windows-Host |C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml |Nutzerkonfiguration (Bäckerei)
+|===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
