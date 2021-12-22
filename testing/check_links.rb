@@ -10,13 +10,13 @@ require 'optparse'
 class DocItem 
 	
 	# Start with a filename
-	def initialize(langs, file, target_dir, excludes=[])
+	def initialize(langs, file, target_dir, excludes=[], includes=[])
 		@langs = langs
 		@file = file
 		@locdocs = Hash.new
 		langs.each { |l|
 			if File.exists?(l + "/" + file)
-				@locdocs[l] = DocItemLocalized.new(l, file, target_dir, excludes)
+				@locdocs[l] = DocItemLocalized.new(l, file, target_dir, excludes, includes)
 			end
 		}
 	end
@@ -67,10 +67,11 @@ end
 class DocItemLocalized
 	
 
-	def initialize(lang, file, target_dir, excludes=[])
+	def initialize(lang, file, target_dir, excludes=[], includes=[])
 		@lang = lang
 		@file = file
 		@excludes = excludes
+		@includes = includes
 		@lines = Array.new   # array of unedited lines
 		@anchors = Array.new # anchors provided by this document
 		@related = Array.new # array of related links
@@ -252,6 +253,9 @@ class DocItemLocalized
 	def write_back
 		return if @changes.size < 1
 		return if @excludes.include?(@lang + "/" + @file)
+		if @includes.size > 0 
+			return unless @includes.include?(@lang + "/" + @file)
+		end
 		FileUtils.mkdir_p @target_dir + "/" + @lang
 		outhandle = File.new(@target_dir + "/" + @lang + "/" + @file, "w")
 		lct = 0
@@ -274,15 +278,19 @@ end
 	"en/cma_rack1_quick_start.asciidoc",
 	"de/cma_virt1_quick_start.asciidoc",
 	"en/cma_virt1_quick_start.asciidoc" ]
+@include_files = []
 @write_back = false
 @target_dir = "/tmp/checkmk_docs"
 
 # Now parse CLI options:
 opts = OptionParser.new 
 opts.on('-x', '--exclude-files', :REQUIRED )    { |i| @exclude_files = i.split(",") }
-opts.on('-w', '--write_back', :REQUIRED )    { |i| 
+opts.on('-w', '--write-back', :REQUIRED )    { |i| 
 	@target_dir = i
 	@write_back = true
+}
+opts.on('-o', '--only-files', :REQUIRED )    { |i| 
+	@include_files = i.split(",")
 }
 opts.parse!
 
@@ -302,7 +310,7 @@ opts.parse!
 # Now create the doc items
 
 @allfiles.each { |f|
-	@all_doc_items.push(DocItem.new(@langs, f, @target_dir, @exclude_files))
+	@all_doc_items.push(DocItem.new(@langs, f, @target_dir, @exclude_files, @include_files))
 }
 
 @all_doc_items.each { |d|
