@@ -38,9 +38,9 @@ class DocItem
 		end
 	end
 	
-	def check_internal 
+	def check_internal(alldocs) 
 		@langs.each { |l|
-			@locdocs[l].check_internal if @locdocs.has_key? l
+			@locdocs[l].check_internal(alldocs) if @locdocs.has_key? l
 		}
 	end
 	
@@ -104,7 +104,7 @@ class DocItemLocalized
 	end
 	attr_reader :lang, :file, :related, :anchors, :lines
 	
-	def check_internal
+	def check_internal(alldocs)
 		linenum = 0
 		@lines.each { |line|
 			linenum += 1
@@ -113,12 +113,23 @@ class DocItemLocalized
 			ltoks.each { |t|
 				if t =~ /xref\:(.*?)\#(.*?)\[/ || t =~ /xref\:(.*?)\.html/
 					# external reference
-				elsif t =~ /xref\:(.*?)\[/
+				elsif t =~ /xref\:([a-zA-Z0-9_-]*?)\[/
 					# internal reference
 					# puts t + " " + $1
 					ref = $1
 					puts "Broken page internal link: #{@file} (#{@lang}, " + 
 						"line #{linenum}): #{ref}" unless @anchors.include? ref
+					alldocs.each { |d|
+						unless d.locdocs[@lang].nil?
+							if d.locdocs[@lang].file == ref + ".asciidoc"
+								modline = line.gsub(/xref\:([a-zA-Z0-9_-]*?)\[/, 'xref:\1#[')
+								puts "Modifying file: #{@file} (#{lang}), line: #{linenum}"
+								puts "- " + line
+								puts "+ " + modline
+								@changes[linenum - 1] = modline
+							end
+						end
+					}
 				end
 			}
 			
@@ -328,7 +339,7 @@ opts.parse!
 	d.compare_related
 }
 @all_doc_items.each { |d|
-	d.check_internal
+	d.check_internal(@all_doc_items)
 }
 @all_doc_items.each { |d|
 	d.check_external(@all_doc_items)
