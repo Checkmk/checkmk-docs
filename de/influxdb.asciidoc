@@ -1,0 +1,207 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= Metriken senden an InfluxDB und Graphite
+:revdate: draft
+:title: Metriken senden an InfluxDB und Graphite 
+:description: Die in {CMK} gespeicherten Metriken können an die Metrik-Datenbanken von influxDB und Graphite gesendet und dort weiterverarbeitet werden.
+
+{related-start}
+xref:graphing#[Messwerte und Graphing]
+xref:grafana#[{CMK} in Grafana integrieren]
+{related-end}
+
+// TK: Graphite aus graphing#graphing_api hierhin verschoben. Der graphing-Artikel muss noch überarbeitet werden.
+
+
+[#intro]
+== Einleitung
+
+xref:glossar#metric[Metriken] sind die mess- und berechenbare Werte zu Hosts und Services und werden von {CMK} intern in den sogenannten xref:graphing.html#rrds[Round-Robin-Datenbanken (RRDs)] gespeichert.
+Diese Metriken werden durch das eingebaute Graphingsystem aufbereitet und in der {CMK}-Weboberfläche an vielen Stellen visualisiert, zum Beispiel als Perf-O-Meter in der Liste der Services oder als Graphen, die Sie sich aus der Service-Liste mit dem icon:icon_pnp[] Graphsymbol einblenden lassen können.
+Die Oberfläche für die Visualisierung der Metriken basiert auf HTML5 und ist in den {EE} und der {RE} identisch.
+Im Artikel zum xref:graphing#[Graphing] erfahren Sie darüber alle Details.
+
+{cee-only}
+Parallel zum in {CMK} eingebauten Graphing können Sie zusätzlich auch externe Metrik-Datenbanken anbinden und die Metriken an link:https://influxdata.com/[InfluxDB^] und link:http://graphite.wikidot.com/[Graphite^] senden.
+Da die Weiterleitung vom {CMK} Micro Core (CMC) durchgeführt wird, ist diese Funktion nur in den {CEE} verfügbar.
+
+// TK: Die beiden folgenden Absätze könnte man auch in die Einleitung der beiden DBs (Kap. 2 und 3) verschieben.
+// TK: Es gibt auch noch ein Logo mit influxDB-Text: https://influxdata.github.io/branding/img/downloads/influxdb-logo--preview.svg
+[{image-left}]
+image::influxdb-logo.png[width=100]
+InfluxDB ist ein Open Source Datenbankmanagementsystem (DBMS) für Zeitreihen (_time series_) -- und in diesem Segment zurzeit das populärste.
+Beginnend mit der v2.0 bietet InfluxDB eine neue, einheitliche API -- die InfluxDB v2 API -- mit der unter anderem Metrikdaten in die Datenbank geschrieben werden können.
+{CMK} nutzt die InfluxDB v2 API und bietet Ihnen die Möglichkeit, die Metriken aus {CMK} nicht nur an die InfluxDB zu senden, sondern auch passend in die bestehende Struktur der InfluxDB abzulegen.
+Durch die Nutzung der API wird einerseits die Konfiguration für das Versenden der Metrikdaten vereinfacht und andererseits ist {CMK} vorbereitet für zukünftige Erweiterungen.
+
+[{image-left}]
+image::graphite-logo.png[width=150]
+Auch Graphite ist ein bekanntes Open Source DBMS für Zeitreihen, um Metriken zu speichern, abzurufen, weiterzugeben und zu visualisieren.
+Graphite besteht aus einem Carbon Daemon, der auf die Daten wartet und diese in einer Datenbank speichert, aus der sie mit der Graphite Webanwendung aufbereitet und als Graphen angezeigt werden.
+Mit {CMK} können Sie die Metriken im Plaintext-Protokoll an den Carbon Daemon von Graphite weiterleiten, der auf Port 2003 auf Daten dieses Protokolls wartet.
+Im Plaintext-Protokoll ist ein Datensatz sehr einfach aufgebaut im Format `<Metrikpfad> <Wert> <Zeitstempel>`, wobei Metrikpfad ein durch Punkte getrennter eindeutiger Bezeichner ist.
+// TK: Funktionieren Verbindungen noch zur alten InfluxDB <=1.8 - und falls ja: soll das noch erwähnt werden?
+// InfluxDB wurde nur teilweise aus der "alten" GUI entfernt.
+
+In diesem Artikel erfahren Sie, wie Sie in {CMK} die Weiterleitung der Metriken zur influxDB und zu Graphite einrichten.
+
+
+[#influxdb]
+== Metriken an InfluxDB senden
+
+[#influxdb_collect]
+=== Informationen sammeln
+
+Bevor Sie mit der Einrichtung in {CMK} loslegen, sollten Sie sich die folgenden Informationen besorgen über das InfluxDB-Zielsystem, das Sie mit {CMK} verbinden möchten:
+
+[cols="30,~",options="header"]
+|===
+|Parameter |Bedeutung
+|Host-Name |Name (oder IP-Adresse) des InfluxDB-Servers
+|Port-Nummer |Nummer des TCP Ports, über den der InfluxDB-Server erreichbar ist. Der Standard-Port ist `8086`. Beim Start mit `influxd` kann mit der Option `--http-bind-address` auch ein anderer Port angegeben werden.
+|Protokoll |`HTTP` oder `HTTPS`.
+|Organisation |Bei InfluxDB ist die Organisation (_organization_) der Arbeitsbereich für mehrere Benutzer. Die initiale Organisation wird bei der InfluxDB-Einrichtung abgefragt. Weitere Organisationen können manuell über die InfluxDB-GUI angelegt werden.
+|Behälter (_Bucket_)|InfluxDB speichert die Zeitreihendaten in Behältern, sogenannten _buckets._ Für jeden Behälter wird insbesondere ein Aufbewahrungszeitraum (_retention period_) festgelegt. InfluxDB löscht automatisch alle Datenpunkte, die älter sind als dieser Zeitraum. Der initiale Behälter wird zusammen mit der Organisation bei der InfluxDB-Einrichtung festgelegt. Weitere Behälter können manuell erstellt werden.
+// TK: Gehören Buckets immer zu einer Organisation? Muss ich beim Einrichten was beachten? In der InfluxDB-GUI sehe ich keine Zuordnung von Bucket zu Organisation.
+|Token |Die Kommunikation zwischen {CMK} und InfluxDB erfolgt über die InfluxDB v2 API.
+InfluxDB verwendet API-Tokens zur Autorisierung von Anfragen via API.
+Ein API-Token gehört zu einem bestimmten Benutzer und identifiziert die InfluxDB-Berechtigungen innerhalb der Organisation des Benutzers.
+Tokens werden über die InfluxDB-GUI angelegt, entweder mit vollem Lese- und Schreibzugriff auf alle Ressourcen in einer Organisation (_All Access Token_) oder mit ausgewählten Zugriffsrechten für bestimmte Behälter in einer Organisation (_Read/Write Token_). Ein Token kann in die Zwischenablage kopiert werden, was das spätere Einfügen während der {CMK}-Konfiguration erleichtert.
+|===
+
+Genauere Informationen finden Sie in der link:https://docs.influxdata.com/influxdb/latest/[InfluxDB Dokumentation^].
+
+Mit diesen Informationen zur Hand, erfolgt die Konfiguration in {CMK} mit nur zwei unkomplizierten Schritten.
+
+
+[#influxdb_connection]
+=== {CMK} mit InfluxDB verbinden
+
+Wählen Sie im xref:user_interface#setup_menu[Setup-Menü] [.guihint]#Setup > Custom > InfluxDB connections#, um sich die Liste der existierenden InfluxDB-Verbindungen anzuzeigen. Im Auslieferungszsutand ist die Liste leer. Erstellen Sie also eine neue Verbindung mit 
+icon:icon_new[] [.guihint]#Add connection#:
+
+.ID, Titel und Instanzauswahl reichen für die allgemeinen Eigenschaften 
+image::influxdb_new_connection_general_properties.png[alt="Die allgemeinen Eigenschaften einer InfluxDB-Verbindung."]
+
+In den [.guihint]#General Properties# bestimmen Sie, wie gewohnt, die interne ID und den Titel für die Verbindung.
+Falls mit der aktuellen Instanz weitere Instanzen verbunden sind, wie das beim xref:distributed_monitoring#[verteilten Monitoring] der Fall ist, können Sie unter [guihint]#Site restriction# bestimmte Instanzen von der Verbindung ausschließen.
+
+Interessanter wird es im nächsten Kasten mit den [.guihint]#InfluxDB Connection Properties:#
+
+.Die InfluxDB-spezifischen Eigenschaften festlegen
+image::influxdb_new_connection_influxdb_properties.png[alt="Die InfluxDB-spezifischen Eigenschaften der Verbindung."]
+
+Geben Sie hier den ersten Satz der Parameterwerte ein, die Sie im xref:influxdb_collect[vorherigen Abschnitt] zusammengestellt haben.
+
+Sichern Sie die Verbindung mit [.guihint]#Save#.
+Eine Verbindung ist die Voraussetzung für das Versenden der Daten.
+Ohne Regel zur Auswahl der Metriken werden aber keine Daten versendet.
+
+
+[#influxdb_metrics]
+=== Metriken auswählen
+
+Welche Daten an den InfluxDB-Server gesendet und wo sie abgelegt werden, bestimmen Sie in {CMK} mit einer Regel.
+Den Regelsatz [guihint]#Send metrics to InfluxDB# finden Sie unter [guihint]#Setup > Services > Service monitoring rules# oder noch schneller mit der xref:user_interface#search_setup[Suche im Setup-Menü]:
+
+.Die Auswahl der Metriken erfolgt per Regel
+image::influxdb_send_metrics_rule.png[alt="Regel zur Auswahl der Metriken zum Versand über die InfluxDB-Verbindung."]
+
+Im Kasten [guihint]#Send metrics to InfluxDB# wählen Sie zuerst die im xref:influxdb_connection[vorherigen Abschnitt] erstellte Verbindung aus.
+[guihint]#Organisation# und [guihint]#Bucket# legen fest, wo die Daten auf dem InfluxDB-Server abgelegt werden.
+Hier geben Sie den zweiten Satz der xref:influxdb_collect[gesammelten Informationen] über den InfluxDB-Server ein.
+
+Im folgenden wählen Sie die Metrikdaten aus, die von {CMK} an den InfluxDB-Server gesendet werden, wie zum Beispiel den Service-Zustand.
+In InfluxDB werden zusätzliche Werte für jede Metrik als _fields_ gespeichert und als _tags_ Meta-Informationen wie xref:glossar#host_tag[Host-Merkmale] oder xref:glossar#label[Labels], die Sie in der untersten Liste auswählen können.
+
+// TK: Viele Fragen ohne funktionierenden Versand zur InfluxDB: 
+// TK: Metrics of service: Was passiert, wenn ich das nicht auswähle? Wird dann nichts gesendet? Welche Metriken gibt es denn noch (Metrics of host?)
+// TK: Service state: State of service kann ich unten unter Additional values for metric nochmal auswählen. Warum 2x?
+// TK: Wo finde ich die tags in der InfluxDB-GUI?
+
+Zum Schluss xref:wato#activate_changes[aktivieren Sie die Änderungen] für die Erstellung der Verbindung und der Regel.
+Bei Problemen mit dem Metrikversand finden Sie weiter unten xref:diagnosis[Informationen zur Fehlerdiagnose.]
+
+////
+TK: InfluxDB-GUI Screenshot nachliefern
+[#influxdb_display]
+=== Metriken in InfluxDB anzeigen
+////
+
+
+[#graphite]
+== Metriken an Graphite senden
+
+[#graphite_connection]
+=== {CMK} mit Graphite verbinden
+
+Die Verbindung zum Graphite-Server richten Sie ein unter [.guihint]#Setup > General > Global Settings > Monitoring Core > Send metrics to Graphite#:
+
+.Die Graphite-Verbindung wird in den [.guihint]#Global Settings# erstellt
+image::influxdb_graphite_new_connection.png[alt="Die Eigenschaften einer Graphite-Verbindung."]
+
+Neben den offensichtlichen Angaben zum Graphite-Server (Name und Portnummer des Carbon-Plaintext-Protokolls) können Sie mit [.guihint]#Optional variable prefix# einen Präfix konfigurieren, der jedem Host-Namen vorangestellt wird, um z.B. eindeutige Namen zu erzwingen.
+{CMK} setzt den Metrikpfad für das Plaintext-Protokoll auf `<Host>.<Service>.<Metrik>`.
+// TK: Inline help sagt: Graphite graphs will be named with the schema HOST / SERVICE / VARIABLE.
+// Mit [.guihint]#C-style name mangling# haben Sie eine Option, um die Zerlegung der Daten zu beeinflussen (mehr Informationen dazu finden Sie in der Inline-Hilfe).
+// TK: Die Option C-style name mangling würde ich nicht beschreiben: Die Inline help hilft (zumindest mir) nicht wirklich weiter.
+
+Wenn die Graphite-Verbindung über die globalen Einstellungen aktiviert ist, werden, anders als bei der InfluxDB-Verbindung, standardmäßig *alle* Daten gesendet.
+Falls Sie dies nicht wünschen, sollten Sie *vor* der Aktivierung der Verbindung die Metriken per Regel auswählen und dann Verbindung und Regeln zusammen aktivieren.
+
+
+[#graphite_metrics]
+=== Metriken auswählen
+// TK: Die Überschrift ist nicht korrekt, weil ich bei Graphite gar keine Metriken auswähle, sondern nur zusätzliche Werte, die mitgeliefert werden.
+
+Den Regelsatz [.guihint]#Send metrics to Graphite# finden Sie mit der Suchfunktion im [.guihint]#Setup#-Menü.
+Mit ihm können Sie einerseits den Versand auf bestimmte Hosts und Services einschränken und zum anderen die Werte auswählen, die mit den Metriken mitgeliefert werden sollen:
+
+.Auch bei Graphite erfolgt die Auswahl der Metriken per Regel
+image::influxdb_graphite_rule.png[alt="Regel zur Auswahl der Metriken zum Versand über die Graphite-Verbindung."]
+
+// TK: Den Trick mit den 2 Regeln aus SUP-5442 abgeschrieben.
+Da ohne einschränkende Regel alle Daten gesendet werden, empfiehlt es sich zuerst eine Regel zu erstellen, die die Weiterleitung global abschaltet und anschließend eine spezifiche Regel für die Hosts und Services zu erstellen, deren Metriken an den Graphite-Server übermittelt werden sollen. Ordnen Sie die spezifische vor der globalen Regel an:
+
+.Durch die Reihenfolge der beiden Regeln werden nur Metriken des Hosts `myhost` versendet
+image::influxdb_graphite_rule_list.png[alt="Liste der Regeln für den Versand über die Graphite-Verbindung."]
+
+Die Aktivierung der Änderungen für die Verbindung und die Regeln schließt die Konfiguration für Graphite ab.
+
+////
+TK: Graphite-GUI Screenshot nachliefern
+[#graphite_display]
+=== Metriken in Graphite anzeigen
+////
+
+[#diagnosis]
+== Fehlerdiagnose
+
+Sollten die Metriken nicht dort ankommen, wo Sie sie erwarten, finden Sie Diagnoseinformationen in Ihrer Instanz in der Datei `~/var/log/cmc.log` -- der xref:cmc_files[Log-Datei des {CMK} Micro Core.]
+
+Folgendes Beispiel zeigt die Meldungen im Fall einer nicht funktionierenden Verbindung zum InfluxDB-Server:
+// TK: Meldungsteil muss noch überarbeitet werden, wenn die InfluxDB-Verbindung mal wieder steht.
+// TK: Momentan wird das GET ewig wiederholt...
+
+.~/var/log/cmc.log
+[{file}]
+----
+2021-12-15 15:29:35 [5] [influxdb https://influx.dev.tribe29.com:8086] Successfully initiated connection
+2021-12-15 15:29:45 [3] [influxdb https://influx.dev.tribe29.com:8086] GET failed [10]
+2021-12-15 15:29:46 [3] [influxdb https://influx.dev.tribe29.com:8086] GET failed [10]
+----
+
+Folgendes Beispiel zeigt die Meldungen im Fall, dass eine Verbindung zum Graphite-Server nicht klappt:
+
+.~/var/log/cmc.log
+[{file}]
+----
+2021-12-15 17:33:33 [5] [carbon 10.0.0.5:2003] Successfully initiated connection
+2021-12-15 17:33:33 [4] [carbon 10.0.0.5:2003] Connection failed: Connection refused
+2021-12-15 17:33:33 [5] [carbon 10.0.0.5:2003] Closing connection
+----
+
+Der {CMK} Micro Core versucht in so einer Situation von sich aus immer wieder, die Verbindung aufzubauen. 
+Metriken, die während einer Zeit anfallen, zu der keine Verbindung zu Graphite besteht, werden nicht zwischengespeichert, sondern gehen verloren (bzw. sind dann nur in den RRDs von {CMK} verfügbar).
+
+*Hinweis:* Falls Ihnen die Log-Meldungen nicht aussagekräftig genug sind, können Sie die Standardwerte zum Log Level ändern unter [.guihint]#Setup > General > Global Settings > Monitoring Core > Logging of the core#. Hier finden Sie Einträge für das Logging der InfluxDB ([.guihint]#InfluxDB processing#) und für Graphite ([.guihint]#Carbon connections#).
