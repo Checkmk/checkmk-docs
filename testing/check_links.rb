@@ -127,8 +127,12 @@ class DocItemLocalized
 	
 	def check_external(alldocs)
 		linenum = 0
+		inside_related = false
 		@lines.each { |line|
 			linenum += 1
+			# Check whether we are in related section:
+			inside_related = true if line.strip == "{related-start}"
+			inside_related = false if line.strip == "{related-end}"
 			# tokenize the line:
 			ltoks = line.strip.split
 			ltoks.each { |t|
@@ -187,7 +191,7 @@ class DocItemLocalized
 						if t =~ /link\:(.*?)\.html\[/	
 							modline = modline.gsub(/link\:(.*?)\.html\[/, 'xref:\1[')
 						end
-						unless line == modline
+						unless ( line == modline || inside_related == true )
 							puts "Modifying file: #{@file} (#{lang}), line: #{linenum}"
 							puts "- " + line
 							puts "+ " + modline
@@ -277,7 +281,11 @@ end
 	"de/cma_rack1_quick_start.asciidoc",
 	"en/cma_rack1_quick_start.asciidoc",
 	"de/cma_virt1_quick_start.asciidoc",
-	"en/cma_virt1_quick_start.asciidoc" ]
+	"en/cma_virt1_quick_start.asciidoc",
+	"de/menu.asciidoc",
+	"en/menu.asciidoc",
+	"de/index.asciidoc",
+	"en/index.asciidoc" ]
 @include_files = []
 @write_back = false
 @target_dir = "/tmp/checkmk_docs"
