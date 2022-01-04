@@ -74,6 +74,7 @@ class DocItemLocalized
 		@includes = includes
 		@lines = Array.new   # array of unedited lines
 		@anchors = Array.new # anchors provided by this document
+		@impanchors = Array.new # implicite anchors created from headings
 		@related = Array.new # array of related links
 		@changes = Hash.new # Contains only changed lines
 		@changed = false
@@ -86,6 +87,10 @@ class DocItemLocalized
 			# Find anchors
 			if line.strip =~ /^\[\#(.*?)\]/
 				@anchors.push $1
+			elsif line.strip =~ /^=/
+				imp= line.gsub(/(\W|\d)/, "")
+				@impanchors.push imp
+				# puts imp.downcase
 			end
 			inside_related = true if line.strip == "{related-start}"
 			inside_related = false if line.strip == "{related-end}"
@@ -102,7 +107,7 @@ class DocItemLocalized
 		}
 		@related.sort!
 	end
-	attr_reader :lang, :file, :related, :anchors, :lines
+	attr_reader :lang, :file, :related, :anchors, :lines, :impanchors
 	
 	def check_internal(alldocs)
 		linenum = 0
@@ -174,6 +179,7 @@ class DocItemLocalized
 				end
 				if target.length > 0
 					tgt_found = false
+					tgt_found = true if target == "check_plugins_catalog" # forward
 					anchor_found = false
 					alldocs.each { |d|
 						unless d.locdocs[@lang].nil?
@@ -186,6 +192,15 @@ class DocItemLocalized
 										anchor_found = true if a == deep
 										#puts "              FOUND!" if a == deep
 									}
+									if anchor_found == false
+										d.locdocs[@lang].impanchors.each { |a|
+											if a == deep.gsub(/(\W|\d)/, "")
+												anchor_found = true
+												puts "Implicit target anchor, file: #{@file} (#{lang}), line: #{linenum}, target: #{target}##{deep}"
+											end
+										}
+										
+									end
 								end
 							end
 						end
