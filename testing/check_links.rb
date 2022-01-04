@@ -187,7 +187,7 @@ class DocItemLocalized
 				elsif t =~ /xref\:(.*?)\.html/
 					# external reference, assume no anchors are set
 					target = $1
-				elsif t =~ /link\:(https+\:\/\/)(.*?)\[/
+				elsif t =~ /link\:(https*\:\/\/)(.*?)\[/
 					# ignore
 				elsif t =~ /link\:ftp\:\/\/(.*?)\[/
 					# ignore 
