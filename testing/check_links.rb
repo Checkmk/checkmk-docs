@@ -116,6 +116,26 @@ class DocItemLocalized
 			# tokenize the line:
 			ltoks = line.strip.split
 			ltoks.each { |t|
+				ref = nil
+				# Check for internal/external targets with same name
+				if t =~ /xref\:(.*?)\#(.*?)\[/ || t =~ /xref\:(.*?)\.html/
+					ref =$1
+				elsif t =~ /xref\:([a-zA-Z0-9_-]*?)\[/
+					ref = $1
+				end
+				unless ref.nil?
+					file_tgt = false
+					alldocs.each { |d|
+						unless d.locdocs[@lang].nil?
+							file_tgt = true if d.locdocs[@lang].file == ref + ".asciidoc"
+						end
+					}
+					if file_tgt == true && @anchors.include?(ref)
+						puts "Equally named external and internal xref: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{ref}" 
+					end
+				end
+				# Modify
 				if t =~ /xref\:(.*?)\#(.*?)\[/ || t =~ /xref\:(.*?)\.html/
 					# external reference
 				elsif t =~ /xref\:([a-zA-Z0-9_-]*?)\[/
