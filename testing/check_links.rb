@@ -122,19 +122,21 @@ class DocItemLocalized
 					# internal reference
 					# puts t + " " + $1
 					ref = $1
-					puts "Broken page internal link: #{@file} (#{@lang}, " + 
-						"line #{linenum}): #{ref}" unless @anchors.include? ref
-					alldocs.each { |d|
-						unless d.locdocs[@lang].nil?
-							if d.locdocs[@lang].file == ref + ".asciidoc"
-								modline = line.gsub(/xref\:([a-zA-Z0-9_-]*?)\[/, 'xref:\1#[')
-								puts "Modifying file: #{@file} (#{lang}), line: #{linenum}"
-								puts "- " + line
-								puts "+ " + modline
-								@changes[linenum - 1] = modline
+					unless @anchors.include? ref
+						puts "Broken page internal link: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{ref}" 
+						alldocs.each { |d|
+							unless d.locdocs[@lang].nil?
+								if d.locdocs[@lang].file == ref + ".asciidoc"
+									modline = line.gsub(/xref\:([a-zA-Z0-9_-]*?)\[/, 'xref:\1#[')
+									puts "Modifying file: #{@file} (#{lang}), line: #{linenum}"
+									puts "- " + line
+									puts "+ " + modline
+									@changes[linenum - 1] = modline
+								end
 							end
-						end
-					}
+						}
+					end
 				end
 			}
 			
