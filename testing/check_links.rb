@@ -215,7 +215,7 @@ class DocItemLocalized
 							modline = modline.gsub(/link\:(.*?)\.html\#(.*?)\[/, 'xref:\1#\2[')
 						end
 						if t =~ /link\:(.*?)\.html\[/	
-							modline = modline.gsub(/link\:(.*?)\.html\[/, 'xref:\1[')
+							modline = modline.gsub(/link\:(.*?)\.html\[/, 'xref:\1#[')
 						end
 						unless ( line == modline || inside_related == true )
 							puts "Modifying file: #{@file} (#{lang}), line: #{linenum}"
