@@ -51,7 +51,7 @@ class GitCommits():
         commits = DOCS_ROOT.iter_commits(
             branch,
             paths=f'{DOCS_ROOT.working_dir}',
-            grep='^translated\|^content-sync\|^content_sync')
+            grep=r'^translated\|^content-sync\|^content_sync')
         for commit in commits:
             self.translated_markers.append(
                 self.Translate(commit.hexsha, commit.committed_date,
