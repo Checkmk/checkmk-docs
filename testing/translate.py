@@ -250,7 +250,7 @@ def parse_arguments(argv):
 def get_article_names():
     article_names = dict()
     for lang in DEFAULT_LANGUAGES:
-        for article in sorted(listdir(f'../{lang}')):
+        for article in sorted(listdir(f'{DOCS_ROOT.working_dir}/{lang}')):
             article = article.replace('.asciidoc', '')
             if article.startswith((EXCLUDES)):
                 continue
