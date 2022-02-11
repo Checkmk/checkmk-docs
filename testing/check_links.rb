@@ -57,6 +57,14 @@ class DocItem
 		}
 	end
 	
+	def check_images(images)
+		linked_images = []
+		@langs.each { |l|
+			linked_images = linked_images + @locdocs[l].check_images(images) if @locdocs.has_key? l
+		}
+		return linked_images 
+	end
+	
 	def write_back 
 		@langs.each { |l|
 			@locdocs[l].write_back if @locdocs.has_key? l
@@ -65,7 +73,6 @@ class DocItem
 end
 
 class DocItemLocalized
-	
 
 	def initialize(lang, file, target_dir, excludes=[], includes=[])
 		@lang = lang
@@ -161,6 +168,28 @@ class DocItemLocalized
 			}
 			
 		}
+	end
+	
+	def check_images(images)
+		linenum = 0
+		linked_images = []
+		@lines.each { |line|
+			linenum += 1
+			# tokenize the line:
+			ltoks = line.strip.split
+			ltoks.each { |t|
+				img = nil
+				if t =~ /image\:\:(.*?)\[/
+					img = $1
+					linked_images.push img
+					unless images.include? img
+						puts "Missing image file: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{img}" 
+					end
+				end
+			}
+		}
+		return linked_images
 	end
 	
 	def check_external(alldocs)
@@ -322,6 +351,7 @@ class DocItemLocalized
 	
 end
 
+
 # Do not write back these files except stated otherwise:
 @exclude_files = [
 	"de/appliance_usage.asciidoc",
@@ -335,6 +365,8 @@ end
 	"de/index.asciidoc",
 	"en/index.asciidoc" ]
 @include_files = []
+@image_files = []
+@linked_images = [] # images that are actually used
 @write_back = false
 @target_dir = "/tmp/checkmk_docs"
 
@@ -363,6 +395,12 @@ opts.parse!
 	@allfiles.uniq!
 }
 
+# Read all images to an array:
+
+Dir.entries("images").each { |i|
+	@image_files.push i if i =~ /\.png$/i || i =~ /\.jpg/i || i =~ /\.jpeg$/i   
+}
+
 # Now create the doc items
 
 @allfiles.each { |f|
@@ -384,6 +422,15 @@ opts.parse!
 @all_doc_items.each { |d|
 	d.check_full_links
 }
+@all_doc_items.each { |d|
+	@linked_images = @linked_images + d.check_images(@image_files)
+}
+
+( @image_files - @linked_images ).each { |i|
+	puts "Image probably unused? " + i 
+}
+
+
 if @write_back == true
 	@all_doc_items.each { |d|
 		d.write_back
