@@ -65,6 +65,14 @@ class DocItem
 		return linked_images 
 	end
 	
+	def check_icons(icons)
+		linked_icons = []
+		@langs.each { |l|
+			linked_icons = linked_icons + @locdocs[l].check_icons(icons) if @locdocs.has_key? l
+		}
+		return linked_icons 
+	end
+	
 	def write_back 
 		@langs.each { |l|
 			@locdocs[l].write_back if @locdocs.has_key? l
@@ -186,10 +194,41 @@ class DocItemLocalized
 						puts "Missing image file: #{@file} (#{@lang}, " + 
 							"line #{linenum}): #{img}" 
 					end
+				elsif t =~ /image\:(.*?)\[/
+					img = $1
+					linked_images.push img
+					unless images.include? img
+						puts "Missing image file: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{img}" 
+					end
+					puts "Image with single colon: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{img}" 	
 				end
 			}
 		}
 		return linked_images
+	end
+	
+	def check_icons(icons)
+		linenum = 0
+		linked_icons = []
+		@lines.each { |line|
+			linenum += 1
+			# tokenize the line:
+			ltoks = line.strip.split
+			ltoks.each { |t|
+				img = nil
+				if t =~ /icon\:(.*?)\[/
+					img = $1
+					linked_icons.push img
+					unless icons.include? img
+						puts "Missing icon file: #{@file} (#{@lang}, " + 
+							"line #{linenum}): #{img}" 
+					end
+				end
+			}
+		}
+		return linked_icons
 	end
 	
 	def check_external(alldocs)
@@ -366,7 +405,9 @@ end
 	"en/index.asciidoc" ]
 @include_files = []
 @image_files = []
+@icon_files = []
 @linked_images = [] # images that are actually used
+@linked_icons = [] # icons that are acually used
 @write_back = false
 @target_dir = "/tmp/checkmk_docs"
 
@@ -401,6 +442,15 @@ Dir.entries("images").each { |i|
 	@image_files.push i if i =~ /\.png$/i || i =~ /\.jpg/i || i =~ /\.jpeg$/i   
 }
 
+# Read all icons to an array:
+
+Dir.entries("images/icons").each { |i|
+	if i =~ /\.png$/i || i =~ /\.jpg/i || i =~ /\.jpeg$/i   
+		# Strip suffix
+		@icon_files.push i.split(".")[0] 
+	end
+}
+
 # Now create the doc items
 
 @allfiles.each { |f|
@@ -426,8 +476,15 @@ Dir.entries("images").each { |i|
 	@linked_images = @linked_images + d.check_images(@image_files)
 }
 
+@all_doc_items.each { |d|
+	@linked_icons = @linked_icons + d.check_icons(@icon_files)
+}
+
 ( @image_files - @linked_images ).each { |i|
 	puts "Image probably unused? " + i 
+}
+( @icon_files - @linked_icons ).each { |i|
+	puts "Icon probably unused? " + i 
 }
 
 
