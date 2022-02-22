@@ -1,406 +1,451 @@
 include::global_attr.adoc[]
 = Reguläre Ausdrücke in {CMK}
-:revdate: draft
-:title: {CMK} mit Text-Muster konfigurieren
-:description: An vielen Stellen gibt es die Möglichkeit, über reguläre Ausrücke eine Gruppe an Objekten zu erfassen. Erst dadurch wird eine hohe Dynamik ermöglicht.
+:revdate: 2021-10-18
+:title: {CMK} mit Text-Mustern konfigurieren
+:description: An vielen Stellen gibt es die Möglichkeit, über reguläre Ausdrücke eine Gruppe an Objekten zu erfassen. Erst dadurch wird eine hohe Dynamik ermöglicht.
 
 {related-start}
-link:wato_rules.html[Host- und Serviceparameter]
-link:views.html[Ansichten von Hosts und Services (Views)]
-link:ec.html[Die Event Console]
+xref:wato_rules#[Host- und Serviceparameter]
+xref:views#[Ansichten von Hosts und Services (Views)]
+xref:ec#[Die Event Console]
 {related-end}
+
 
 == Einleitung
 
-// MFS: RegExe ist Mischung aus Deutsch und Englich, besser IMHO auszuschreiben:
+Reguläre Ausdrücke (englisch _regular expression_ oder _regex_, selten
+_regexp_), werden in {CMK} für die Angabe von Service-Namen und auch an vielen
+anderen Stellen verwendet. Es sind Muster, die auf einen bestimmten Text passen
+(_match_) oder nicht passen (_nonmatch_). Damit können Sie viele praktische
+Dinge anstellen, wie z.B. flexible xref:wato_rules#[Regeln] formulieren, die
+für alle Services greifen, bei denen `foo` oder `bar` im Namen vorkommt.
 
-Reguläre Ausdrücke_ (englisch _regular expression_ oder _regexp_), werden in
-{CMK} für die Angabe von Servicenamen und auch an vielen anderen
-Stellen verwendet. Es sind Muster, die auf einen bestimmten Text passen
-(_match_) oder nicht passen (_nonmatch_). Damit können Sie viele praktische Dinge
-anstellen, wie z.B.  flexible link:wato_rules.html[Regeln] formulieren, die für alle
-Services greifen, bei denen `foo` oder `bar` im Namen vorkommt.
+Oft werden reguläre Ausdrücke mit den Suchmustern für Dateinamen verwechselt,
+denn die Sonderzeichen `pass:[*]` und `?`, sowie eckige und geschweifte
+Klammern gibt es in beiden.
 
-Oft werden reguläre Ausdrücke mit den Suchmustern für Dateinamen verwechselt, denn die
-Sonderzeichen `pass:[*]` und `?` gibt es in beiden. Nur haben jene
-sogenannten _Globbing patterns_ eine ganz andere Syntax und sind bei
-weitem nicht so mächtig wie die regulären Ausdrücke. Wenn Sie unsicher
-sind, ob an einer Stelle reguläre Ausdrücke erlaubt sind, dann schalten
-Sie am besten die icon:icon_help[] Onlinehilfe an.
+In diesem Artikel zeigen wir Ihnen die wichtigsten Möglichkeiten der regulären
+Ausdrücke, selbstverständlich im Kontext von {CMK}. Da {CMK} zwei verschiedene Komponenten für reguläre Ausdrücke nutzt, steckt manchmal der Teufel im Detail.
+Im wesentlichen nutzt der Monitoring-Kern die *C-Bibliothek* und alle weiteren Komponenten *Python 3*. Wo Unterschiede bestehen, erklären wir diese.
 
-// MFS: Neu: Verweis auf die Unterschiede
-
-In diesem Artikel zeigen wir Ihnen die wichtigsten Möglichkeiten
-der regulären Ausdrücke, selbstverständlich im Kontext von {CMK}. 
-Da {CMK} zwei verschiedene Komponenten für reguläre Ausdrücke nutzt,
-steckt manchmal der Teufel im Detail. Im wesentlichen nutzt der Monitoring-Kern 
-die *C-Bibliothek* und alle weiteren Komponenten *Python 3*.
-Die Unterschiede zwischen beiden arbeiten wir heraus.
-
-*Tipp:* Lassen Sie bei der Arbeit mit regulären Ausdrücken die Kontexthilfe
-aktiv. Sie erfahren dann zu jedem Eingabefeld, welche Feinheiten an dieser Stelle 
-gelten.
-
-// MFS: Neu: Verweis auf weitere Unterschiede bei Plugins
+*Tipp:* In {CMK} sind regexp in Eingabefeldern auf unterschiedlichen Seiten
+erlaubt. Wenn Sie sich unsicher sind, lassen Sie sich die kontextsensitive
+Hilfe über das [.guihint]#Help#-Menü einblenden ([.guihint]#Help > Show inline help#). Dann sehen Sie,
+ob reguläre Ausdrücke erlaubt sind und wie sie genutzt werden können.
 
 Bei der Arbeit mit älteren Plugins oder Plugins aus externen Quellen kann es
-mitunter vorkommen, dass diese Python 2 oder Perl nutzen, bitte beachten Sie
-daher die jeweilige Plugin spezifische Dokumentation. Für die Programmierung
-eigener Plugins kann diese Handbuchseite als Grundlage dienen, zur Performance
-bestimmter regulärer Ausdrücke muss auf die Referenz der jeweils verwendeten 
-Regex-Bibliothek verwiesen werden.
+mitunter vorkommen, dass diese Python 2 oder Perl nutzen und von den hier
+geschilderten Konventionen abweichen, bitte beachten Sie daher die jeweilige
+Plugin-spezifische Dokumentation.
 
-Falls hier gezeigten Möglichkeiten nicht weit genug gehen, finden Sie
-link:regexes.html#reference[weiter unten] Hinweise, wo Sie alle Details
-nachlesen können. Und dann gibt es ja immer noch das Internet.
+In diesem Artikel zeigen wir Ihnen die wichtigsten Möglichkeiten der regulären
+Ausdrücke — aber bei weitem nicht alle. Falls Ihnen die hier gezeigten
+Möglichkeiten nicht weit genug gehen, finden Sie xref:reference[weiter unten]
+Hinweise, wo Sie alle Details nachlesen können. Und dann gibt es ja immer noch
+das Internet.
+
+Falls Sie eigene Plugins programmieren wollen, die beispielsweise mit regulären
+Ausdrücken Auffälligkeiten in Log-Dateien finden, können Sie diesen Artikel als
+Grundlage verwenden. Allerdings ist bei der Suche in großen Datenmengen die
+Optimierung der Performance ein wichtiger Aspekt. Schlagen Sie daher im Zweifel
+immer in der Dokumentation der verwendeten Regex-Bibliothek nach.
 
 
-=== Normale Zeichen und der Punkt
+== Mit regulären Ausdrücken arbeiten
 
-Bei den regulären Ausdrücken geht es immer darum, ob ein Muster (der
-Ausdruck) auf einen bestimmten Text (z.B. einen Servicenamen) _passt 
- (matcht)_. Dabei darf das Muster eine Reihe von Sonderzeichen enthalten,
-welche dann „magische“ Bedeutungen haben. Alle normalen Zeichen im
-Ausdruck matchen einfach sich selbst.
+In diesem Abschnitt zeigen wir anhand konkreter Beispiele die Arbeit mit regulären Ausdrücken, von einfachen Matches einzelner Zeichen oder Zeichenketten, bis hin zu komplexen Gruppen von Zeichen.
 
-{CMK} unterscheidet dabei _nicht_ zwischen Groß- und Kleinschreibung.
-Der Ausdruck `CPU load` matcht also auf den Text `CPU load`
-genauso wie auf `cpu LoAd`. 
 
-*Achtung:* Bei Eingabefeldern, wo
-ohne reguläre Ausdrücke ein exakter Match vorgesehen ist (meistens bei
-Hostnamen), wird Groß und Klein _immer_ unterschieden! In Plugins ist es
-der jeweiligen Beschreibung zu entnehmen, wie Groß- und Kleinschreibung
-behandelt wird. 
+[#alphanumeric]
+=== Alphanumerische Zeichen
 
-Das wichtigste Sonderzeichen ist der `.` Punkt. Er
-*matcht ein einziges beliebiges Zeichen:*
+Bei den regulären Ausdrücken geht es immer darum, ob ein Muster ("Pattern",
+beziehungsweise der reguläre Ausdruck) auf einen bestimmten Text (z.B. einen
+Service-Namen) _passt_ (_matcht_). Der einfachste Anwendungsfall sind Ketten
+alphanumerischer Zeichen. Diese (und das als Bindestrich verwendete
+Minus-Zeichen) im Ausdruck matchen einfach sich selbst.
 
-Beispiel:
+Beim xref:user_interface#search_monitor[Suchen in der Monitoring-Umgebung] unterscheidet {CMK} dabei in der Regel nicht zwischen Groß- und Kleinschreibung. Der Ausdruck `CPU load` matcht also in den meisten Fällen auf den Text `CPU load` genauso wie auf `cpu LoAd`.
+Beim xref:user_interface#search_setup[Suchen in der Konfigurationsumgebung] dagegen wird üblicherweise zwischen Groß- und Kleinschreibung unterschieden. Begründete Ausnahmen von diesen Standards sind möglich und werden in der Inline-Hilfe beschrieben.
 
-[cols="34,22,22,22"]
+*Achtung:* Bei Eingabefeldern, in denen ohne reguläre Ausdrücke ein exakter
+Match vorgesehen ist (meistens bei Host-Namen), wird Groß- und Kleinschreibung
+immer unterschieden!
+
+
+[#dotaswildcard]
+=== Der Punkt als Wildcard
+
+Neben den "Klartext"-Zeichenketten gibt es eine Reihe von Zeichen und
+Zeichenfolgen, die "magische" Bedeutung haben. Das wichtigste derartige Zeichen
+ist der `.` (Punkt). *Er matcht genau ein einziges beliebiges Zeichen:*
+
+[cols="34,22,22",options=header]
 |===
-|Regular Expression |Match |Match |Kein Match 
+|Regulärer Ausdruck |Match |Kein Match
+|`Me.er`  |`Meier` +
+           `Meyer` |`Meyyer`
+|`.var.log` |`1var2log` +
+              `/var/log` |`/var//log`
+|===
 
-|`Me.er`  |Meier |Meyer |Meyyer
-|`.var.log` | 1var2log |/var/log |/var//log
+[#repetition]
+=== Wiederholungen von Zeichen
+
+Sehr häufig möchte man definieren, dass eine Folge von Zeichen bestimmter
+Länge vorkommen darf. Hierfür gibt man in geschweiften Klammern die Zahl
+der Wiederholungen des vorhergehenden Zeichens an:
+
+[cols="25,35,20,20",options=header]
+|===
+|Regulärer Ausdruck |Bedeutung |Match | Kein Match
+|`Ax{2,5}B` |`x` tritt mindestens zweimal, aber höchstens fünfmal auf
+	    |`AxxB` +
+	     `AxxxxB` |`AxB` +
+	               `AxxxxxxB`
+|`Ax{0,5}B` |`x` tritt höchstens fünfmal auf, es muss aber nicht
+             auftreten
+	    |`AB` +
+             `AxxxxxB` | `AxxxxxxB`
+|`Ax{3}B`   |`x` tritt genau dreimal auf
+            |`AxxxB` |`AxxB` +
+                      `AxxxxB`
+|`Ax{0,}B`  |`x` tritt beliebig oft auf
+            |`AB` +
+	     `AxxxxxxB` |
+|`Ax{1,}B`  |`x` tritt mindestens einmal auf
+            |`AxB` +
+             `AxxxxxB` | `AB`
+|`Ax{0,1}B` |`x` tritt höchstens einmal auf
+            |`AB` +
+             `AxB` | `AxxB`
+|===
+
+Für die letzten drei Fälle gibt es Abkürzungen: `pass:[*]` matcht das
+vorhergehende Zeichen *beliebig oft*, `pass:[+]` matcht ein *mindestens
+einmaliges Auftreten* und `pass:[?]` matcht das *höchstens einmalige
+Auftreten*.
+
+Sie können auch den xref:dotaswildcard[Punkt] `pass:[.]` mit den Wiederholungsoperatoren verknüpfen, um eine Folge beliebiger Zeichen definierter zu suchen:
+
+[cols="40,30,30",options=header]
+|===
+|Regulärer Ausdruck |Match |Kein Match
+|`State.*OK` |`State is OK` +
+              `State = OK` +
+	      `StateOK` |`StatOK`
+|`State*OK`  |`StateOK` +
+              `StatOK` |`State OK`
+|`a *= *5`   |`a=5` +
+              `a{nbsp}={nbsp}5` |`a==5`
+|`State.+OK` |`State is OK` +
+              `State=OK` +
+	      `State OK` |`StateOK`
+|`State.?OK` |`State=OK` +
+              `State OK` +
+	      `StateOK` | `State is OK`
 |===
 
 
+[#characterclasses]
+=== Zeichenklassen, Ziffern und Buchstaben
+
+Zeichenklassen erlauben es, bestimmte Ausschnitte des Zeichensatzes zu matchen,
+beispielsweise „hier muss eine Ziffer kommen“. Dafür setzen Sie alle zu
+matchenden Zeichen innerhalb eckiger Klammern. Mit einem Minuszeichen können
+Sie auch Bereiche angeben. *Hinweis:* es gilt dabei die Reihenfolge im
+link:https://de.wikipedia.org/wiki/American_Standard_Code_for_Information_Interchange[7-Bit-ASCII-Zeichensatz^].
+
+So steht beispielsweise `[abc]` für genau eines der Zeichen *a, b oder c* und
+`[0-9]` für *eine beliebige Ziffer -* beides lässt sich kombinieren. Auch eine
+Negation des Ganzen ist möglich: Mit einem `^` in der Klammer steht `[^abc]`
+dann für ein beliebiges Zeichen *außer a, b, c*.
+
+Zeichenklassen lassen sich natürlich mit anderen Operatoren kombinieren.
+Zunächst mal einige abstrakte Beispiele:
+
+[cols="34,~",options=header]
+|===
+|Zeichenklasse |Bedeutung
+|`[abc]` |Genau eines der Zeichen a, b, c.
+|`[0-9a-z_]` |Genau eine Ziffer, ein Kleinbuchstabe oder ein Unterstrich.
+|`[^abc]` |Jedes beliebige Zeichen außer a, b, c.
+|`[ --]` |Genau ein Zeichen aus dem Bereich von Leerzeichen bis Bindestrich gemäß ASCII-Tabelle. In diesem Bereich befinden sich die folgenden Zeichen: `!"#$%&'()*+,`
+|`[0-9a-z]{1,20}` |Eine Folge von mindestens einem und maximal 20 Buchstaben und/oder Ziffern in beliebiger Reihenfolge.
+|===
+
+Dazu einige praktische Beispiele:
+
+[cols="34,33,33",options=header]
+|===
+|Regulärer Ausdruck    |Match  |Kein Match
+|`[0-7]`               |`0` +
+	                `5`    |`9`
+|`[0-7]{2}`            |`00` +
+                        `53`   |`183`
+|`M[ae]{1}[iy]{1}e?r`  |`Meier` +
+			`Meyer` +
+			`Mayr` | `Myers`
+// altes Beispiel myhost_123 matcht, wenn regex nicht terminiert mit $
+|`myhost_[0-9a-z_]{3}` |`myhost_1a3` +
+                        `myhost_1_5`   |`myhost_xy`
+// altes Beispiel myhost_1234 matcht, wenn regex nicht terminiert mit $
+|`[+0-9/ ()-]+`        |`+49 89 998209700` +
+		        `089 / 9982 097-00` | `089 : 9982 097-00` +
+			                      (hier wird nur die Gruppe vor dem Doppelpunkt gematcht)
+|===
+
+*Hinweis:* Wenn Sie eines der Zeichen `-`, `[` oder `]` brauchen, müssen Sie etwas
+tricksen. Das `-` (Minuszeichen) schreiben Sie ans _Ende der Klasse_ -- wie im
+letzten Beispiel bereits gezeigt. Beim Auswerten der regulären Ausdrücke wird
+das Minuszeichen, wenn es nicht mittleres von drei Zeichen ist, nicht als
+Operator, sondern als exakt dieses Zeichen ausgewertet. Eine schließende eckige
+Klammer platzieren Sie als _erstes_ Zeichen in der Klasse, eine öffnende
+gegebenenfalls als _zweites_ Zeichen. Da keine leeren Klassen erlaubt sind,
+wird die schließende eckige Klammer dann als normales Zeichen interpretiert.
+Eine Klasse mit diesen Sonderzeichen sähe also so aus: `[]-]`, beziehungsweise
+`[][-]` wenn auch die öffnende eckige Klammer benötigt wird.
+
+
+[#prefixinfixsuffix]
+=== Anfang und Ende -- Präfix, Suffix und Infix
+
+In vielen Fällen ist es erforderlich, zwischen Matches am Anfang, am Ende oder
+einfach irgendwo innerhalb einer Zeichenkette zu unterscheiden. Für den Match
+des Anfangs einer Zeichenkette (Präfix-Match) verwenden Sie den `pass:[^]`
+(Zirkumflex), für das Ende (Suffix-Match) das `pass:[$]` (Dollarzeichen). Ist
+keines der beiden Zeichen angegeben, ist bei den meisten Bibliotheken für
+reguläre Ausdrücke Infix-Match Standard -- es wird an beliebiger Stelle in der
+Zeichenkette gesucht. Für exakte Matches verwenden Sie sowohl `pass:[^]` als
+auch `pass:[$]`.
+
+[cols="34,33,33",options=header]
+|===
+|Regulärer Ausdruck |Match |Kein Match
+|`/var` |`/var` +
+          `/var/log` +
+	  `/usr/var` |
+|`^/var` |`/var` +
+          `/var/log` |`/usr/var`
+|`/var$` |`/var` +
+          `/usr/var` |`/var/log`
+|`^/var$` |`/var`    |`/var/log` +
+                      `/usr/var`
+// |`.*/var$` |/var |/test/var |/var/log
+// |`.*/var` |/test/var |/test/var/log |\test\var\log
+|===
+
+*Hinweis:* Im Monitoring und der xref:ec#[Event Console] ist Infix-Match Standard. Ausdrücke, die irgendwo im Text vorkommen, werden gefunden, d.h. die Suche nach "memory" findet auch "Kernel memory". In der Setup-GUI dagegen prüft {CMK} beim Vergleichen von regulären Ausdrücken mit Service-Namen und anderen Dingen grundsätzlich, ob der Ausdruck mit dem _Anfang_ des Textes übereinstimmt (Präfix-Match) – in der Regel ist dies, was Sie suchen:
+
+image::regexes_servicematch.png[]
+// TK: Schade, dass gerade dieser Hilfetext sich so liest, als ob er nach einem 15h Arbeitstag um 2h morgens geschrieben worden ist ;-)
+// MFS: Der Hilfetext ist aus mehreren Teilstücken interner Dokumentation im Quelltext automatisch zusammengesetzt, die Entwickler sind informiert.
+
+Falls Sie an Stellen, an denen _Präfix-Match_ vorgesehen ist, doch einmal einen
+_Infix-Match_ benötigen, erweitern Sie einfach ihren regulären Ausdruck am
+Anfang mit `.*`, um eine beliebige vorangestellte Zeichenkette zu matchen:
+
+[cols="34,33,33",options=header]
+|===
+|Regulärer Ausdruck	|Match		|Kein Match
+|`/var`			|`/var` +
+			 `/var/log`	|`/usr/var`
+|`.*/var`		|`/var` +
+			 `/usr/var` +
+			 `/var/log`	|
+|`/var$`		|`/var`		|`/var/log` +
+					 `/usr/var`
+|===
+
+*Tipp:* Sie können _jede_ Suche am Anfang einer Zeichenkette mit `pass:[^]` und
+_jede_ Suche innerhalb mit `pass:[.*]` einleiten, die Interpreter für reguläre
+Ausdrücke ignorieren redundante Symbole.
+
+
+[#escaping]
 === Sonderzeichen mit Backslash maskieren
 
 Da der Punkt alles matcht, matcht er natürlich auch einen Punkt. Wenn Sie nun
 aber _genau_ einen Punkt matchen wollen, so müssen Sie diesen mit einem
-`\` Backslash maskieren (eingedeutscht: „escapen“).  Das gilt analog
-auch für alle anderen Sonderzeichen, die Sie noch kennenlernen werden. Dies
-sind: `\ . * + ? { } ( ) [ ] | & ^` und `$`.  Der `\`
+`\` (Backslash) maskieren (eingedeutscht: „escapen“). Das gilt analog
+auch für alle anderen Sonderzeichen.
+Dies sind: `\ . * + ? { } ( ) [ ] | & ^` und `$`. Der `\`
 Backslash *wertet das nächste dieser Sonderzeichen als normales Zeichen:*
 
-[cols="34,22,22,22"]
+[cols="34,33,33",options=header]
 |===
-|Regular Expression |Match |Kein Match |Kein Match 
-
-|`example\.com` |example.com |example\.com |example-com
-|`Wie\?` |Wie? |Wie\? |Wie
-|`C:\\Programs` |C:\Programs |C:Programs |C:\\Programs
-|===
-
-*Achtung Python:* Da in Python der Backslash intern mit einem weiteren Backslash 
-maskiert wird, müssen hier 
-https://docs.python.org/3/howto/regex.html#the-backslash-plague[vier Backslashes]
-verwendet werden:
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Kein Match |Kein Match 
-
-|`example\.com` |example.com |example\.com |example-com
-|`Wie\?` |Wie? |Wie\? |Wie
-|`C:\\\\Programs` |C:\Programs |C:Programs |C:\\Programs
+|Regulärer Ausdruck |Match |Kein Match
+|`example\.com` |`example.com` |`example\.com` +
+                                `example-com`
+|`Wie\?` |`Wie?` |`Wie\?` +
+		  `Wie`
+|`C:\\Programs` |`C:\Programs` |`C:Programs` +
+                                `C:\\Programs`
 |===
 
-=== Wiederholungen von Zeichen
+*Achtung Python:* Da in
+link:https://docs.python.org/3/howto/regex.html#the-backslash-plague[Python^] der
+Backslash in der internen Zeichenkettendarstellung intern mit einem weiteren
+Backslash maskiert wird, müssen diese beiden Backslashes wiederum maskiert
+werden, was zu insgesamt vier Backslashes führt:
 
-Sehr oft möchte man definieren, dass irgendwo im Ausdruck eine _beliebige
-Folge von Zeichen_ vorkommen darf. In regulären Ausdrücken schreiben Sie das mit
-`pass:[.*]` (Punkt Stern). Eigentlich ist das aber nur ein Spezialfall. Denn
-Sie können den Stern einem beliebigen Zeichen nachstellen, welches dann im
-Suchtext beliebig oft hintereinander vorkommen darf. Dabei gilt auch eine
-leere Folge als Folge. Das heißt, `pass:[.*]` *matcht eine beliebige Zeichenfolge*
-und `pass:[*]` *matcht das vorherige Zeichen beliebig oft:*
-
-[cols="34,22,22,22"]
+[cols="34,33,33",options=header]
 |===
-|Regular Expression |Match |Match |Kein Match 
-
-|`State.*OK` |State is OK |State = OK |StatOK
-|`State*OK` |StateOK |StatOK |State OK
-|`a *= *5` |a=5 |a{nbsp}={nbsp}5 |a==5
+|Regulärer Ausdruck |Match |Kein Match
+|`C:\\\\Programs` |`C:\Programs` |`C:Programs` +
+                                  `C:\\Programs`
 |===
 
 
-Das Zeichen `+` ist fast das Gleiche wie `pass:[*]`, erlaubt aber keine leere
-Folge. Das vorangestellte Zeichen muss also *mindestens einmal vorkommen:*
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Match |Kein Match 
-
-|`State +OK` |State OK |State{nbsp}{nbsp}OK |StateOK
-|`switch +off` |switch off |switch{nbsp}{nbsp}off |switchoff
-|===
-
-
-Möchten Sie die Anzahl von Wiederholungen genauer festlegen, so gibt es
-dafür eine Syntax mit geschweiften Klammern, die die
-*exakte Anzahl oder einen Bereich angibt:*
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Match |Kein Match 
-
-|`Ax{3}B` |AxxxB | |AxB
-|`Ax{2,4}` |Axx |Axxxx |Ax
-|===
-
-
-Eine Abkürzung für `{0,1}`, also exakt null- oder einmaliges Vorkommen, ist
-das Fragezeichen. Es markiert das vorangegangene Zeichen somit als optional:
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Match |Kein Match 
-
-|`a-?b` |ab |a-b |a--b
-|`Meyi?er` |Meyer |Meyier |Meyiier
-|===
-
-
-
-=== Zeichenklassen, Ziffern und Buchstaben
-
-Zeichenklassen erlauben Dinge wie „hier muss eine Ziffer kommen“. Dazu
-setzen Sie in eckige Klammern alle erlaubten Zeichen. Mit einem Minuszeichen
-können Sie auch Bereiche angeben. Achtung: Es gilt dabei die Reihenfolge
-im ASCII-Zeichensatz.
-
-So steht beispielsweise `[abc]` für genau eines der Zeichen
-*a, b oder c* und `[0-9]` für *eine beliebige Ziffer -* beides
-lässt sich kombinieren. Auch eine Negation des Ganzen ist möglich:
-Mit einem `^` in der Klammer steht `[^abc]` dann für ein
-beliebiges Zeichen *außer a, b, c.*
-
-Zeichnklassen lassen sich natürlich mit anderen Operatoren
-kombinieren. Zunächst mal einige abstrakte Beispiele:
-
-[cols="34,~"]
-|===
-|Zeichenklasse |Bedeutung 
-
-|`[abc]` |Genau eines der Zeichen a, b, c.
-|`[0-9a-z_]` |Genau eine Ziffer, ein Buchstabe oder ein Unterstrich.
-|`[^abc]` |Beliebiges Zeichen außer a, b, c.
-|`[ --]` |Genau ein Zeichen zwischen Leerzeichen und Minus gemäß ASCII-Tabelle.
-|`[0-9a-z]{1,20}` |Bezeichner mit mindestens einem und maximal 20 Buchstaben oder Ziffern.
-|===
-
-
-Dazu einige praktische Beispiele:
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Match |Kein Match 
-
-|`[0-7]` |0 |5 |9
-|`[0-7]{2}` |00 |53 |123
-|`myhost_[0-9a-z_]{3}` |myhost_1a3 |myhost_1_5 |myhost_1234
-|`[+0-9/ --]+` |+49 89 998209700 | 089 / 9982 097-00 | 089 : 9982 097-00
-|===
-
-
-*Achtung:* Wenn Sie eines der beiden Zeichen `-` oder `]`
-brauchen, müssen Sie etwas tricksen.  Den `-` schreiben Sie
-einfach direkt ans _Ende der Klasse -- _ wie in obigen Beispielen bereits
-gezeigt. Dann ist dem Regexauswerter klar, dass es keine Folge sein kann. Und
-die eckige Klammer platzieren Sie als _erstes Zeichen in der Klasse._
-Da keine leeren Klassen erlaubt sind, wird das dann als normales Zeichen
-gewertet.  Eine Klasse mit genau diesen beiden Sonderzeichen sähe also so
-aus: `[]-]`.
-
-
-=== Anfang und Ende, Präfix, Suffix und Infix
-
-{CMK} prüft beim Vergleichen von regulären Ausdrücken mit Servicenamen
-und anderen Dingen grundsätzlich, ob der Text mit dem _Anfang_ des
-Ausdrucks übereinstimmt.  Der Grund dafür ist, dass das meistens das ist,
-was Sie brauchen. Eine Regel, in der Sie bei [.guihint]#Services# die Begriffe
-`CPU` und `Kernel` angeben, matcht also auf alle Services,
-die mit einem dieser Begriffe _beginnen:_
-
-image::regexes_servicematch.png[]
-
-Das bezeichnet man auch als _Präfixmatch._ Benötigen Sie einen
-_exakten_ Match, so können Sie das durch Anhängen eines `$`
-bewerkstelligen. Dieser matcht quasi auf das _Ende_ des Texts. Genügt es,
-wenn der Ausdruck _irgendwo_ im Text matcht, ein sogenannter Infixmatch,
-erreichen Sie das mit dem bekannten `pass:[.*]` vorab:
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match |Match |Kein Match 
-
-|`^/var` |/var |/var/log |/test/var
-|`/var$` |/var | |/var/log
-|`.*/var$` |/var |/test/var |/var/log
-|`.*/var` |/test/var |/test/var/log |\test\var\log
-|===
-
-
-Eine Ausnahme von der Regel, dass {CMK} immer einen Präfixmatch verwendet,
-ist die link:ec.html[Event Console] (EC), welche immer mit einem _Infixmatch_
-arbeitet -- also nur auf _Enthaltensein_ prüft. Hier können Sie durch
-Voranstellen von `^` ein *Match für den Anfang erzwingen,*
-also einen Präfixmatch.
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression in EC |Match |Match |Kein Match 
-
-|`ORA-` |ORACLEserver |myORACLEserver |myoracleserver
-|`^ORA-` |ORACLEserver |ORACLEhost |myORACLEserver
-|===
-
-
-
+[#alternatives]
 === Alternativen
 
-Mit dem `|` senkrechten Balken können Sie _Alternativen_
-definieren, sprich eine ODER-Verküpfung verwenden: `1|2|3` matcht also
-auf _1, 2 oder 3._ Wenn Sie die Alternativen inmitten eines Ausdrucks
-benötigen, setzen Sie diese in runde Klammern.
+Mit dem senkrechten Strich `|` können Sie _Alternativen_ definieren, sprich
+eine ODER-Verküpfung verwenden: `1|2|3` matcht also 1, 2 oder 3. Wenn Sie die
+Alternativen inmitten eines Ausdrucks benötigen, gruppieren Sie diese innerhalb
+runder Klammern.
+// TK: Eingeführt werden runde Klammern, aber in der Tabelle gezeigt werden eckige.
 
-[cols="34,22,22,22"]
+[cols="34,33,33",options=header]
 |===
-|Regular Expression |Match |Match |Kein Match 
-
-|`CPU load\|Kernel\|Memory` |CPU load |Kernel |CPU utilization
-|`01\|02\|1[1-5]` |01 |11 bis 15 |05
-|`server\.(intern\|dmz\|123)\.net` |server.intern.net |server.dmz.net |server.extern.net
+|Regulärer Ausdruck |Match |Kein Match
+|`CPU load\|Kernel\|Memory` |`CPU load` +
+                             `Kernel` |`CPU utilization`
+|`01\|02\|1[1-5]`           |`01` +
+			     `02` +
+			     `11` bis `15` |`05`
 |===
-
-
 
 [#matchgroups]
-=== Matchgruppen
+=== Match-Gruppen
 
-In der link:ec.html[Event Console], im link:bi.html[Business Intelligence (BI)] und auch beim
-link:wato_hosts.html#rename[Massenumbenennen von Hosts] besteht die Möglichkeit, dass
-Sie sich auf Textteile beziehen, die im Ursprungstext gefunden wurden. Dabei
-werden Muster in regulären Ausdrücken mit Klammern markiert. Der Textteil,
-der auf den ersten Klammerausdruck passt, steht dann beim Ersetzen als
-`\1` zur Verfügung, der zweite Ausdruck als `\2` usw.
+Match-Gruppen (englisch _capture groups_) erfüllen zwei Zwecke: Der erste ist
+-- wie im letzten Beispiel gezeigt -- die Gruppierung von Alternativen oder
+Teil-Matches. Dabei sind auch verschachtelte Gruppierungen möglich. Zudem ist
+es zulässig, hinter runden Klammern die Wiederholungsoperatoren `pass:[*]`,
+`+`, `?` und `{`...`}` zu verwenden. So passt der Ausdruck `(/local)?/share`
+sowohl auf `/local/share` als auch auf `/share`.
 
-[cols="34,22,22,22"]
+Der zweite Zweck ist das "Einfangen" gematchter Zeichengruppen in Variablen.
+In der xref:ec#[Event Console (EC)], xref:bi#[Business Intelligence (BI)],
+beim xref:wato_hosts#rename[Massenumbenennen von Hosts] und bei
+xref:piggyback#[Piggyback-Zuordnungen] besteht die Möglichkeit, den Textteil
+der dem regulären Ausdruck in der ersten Klammer entspricht, als `\1` zu
+verwenden, den der zweiten Klammer entsprechenden als `\2` usw. Das letzte
+Beispiel der Tabelle zeigt die Verwendung von
+xref:alternatives[Alternativen] innerhalb einer Match-Gruppe.
+
+[cols="34,22,22,22",options=header]
 |===
-|Regular Expression |Text |Gruppe 1 |Gruppe 2 
-
-|`([a-z])+([123])+` |abc123 |abc |123
-|`server-(pass:[.*])\.local` |server-lnx02.local |lnx02 |
+|Regulärer Ausdruck |Zu matchender Text |Gruppe 1 |Gruppe 2
+// TK: Statt Text würde ich Eingabewert oder Texteingabe im Header schreiben.
+// MFS: Tatsächlich handelt es sich um "zu matchenden Text", eingegeben wird ja auf der einen Seite der reguläre Ausdruck und auf der anderen Seite der neue Text, der die Variable verwendet
+// MFS: Fallstrick, hier war das + außerhalb der Klammer!
+|`([a-z]+)([123]+)` |`def231` |`def` |`231`
+|`server-(pass:[.*])\.local` |`server-lnx02.local` |`lnx02` |
+// Bezug zu oben herstellen:
+|`server\.(intern\|dmz\|123)\.net` |`server.dmz.net` |`dmz` |
 |===
 
-
-Folgende Abbildung zeigt eine solche Umbenennung. Alle Hostnamen, die auf
-den regulären Ausdruck `server-(pass:[.*])\.local` passen, werden durch
+Folgende Abbildung zeigt eine solche Umbenennung mehrerer
+Hosts. Alle Host-Namen, die auf den regulären Ausdruck
+`server-(pass:[.*])\.local` passen, werden durch
 `\1.servers.local` ersetzt. Dabei steht das `\1` genau für
-den Text, der mit dem `pass:[.*]` in der Klammer „eingefangen“ wurde:
+den Text, der mit dem `pass:[.*]` in der Klammer "eingefangen" wurde:
 
 image::bulk_renaming_regex.png[]
 
 Im konkreten Fall wird also `server-lnx02.local` in
 `lnx02.servers.local` umbenannt.
 
-Sie können Gruppen natürlich auch mit den Operatoren für Wiederholungen,
- `pass:[*]`, `+`, `?` und `{`...`}`
-kombinieren. So passt etwa der Ausdruck `(/local)?/share` sowohl auf
-`/local/share` als auch auf `/share`.
-
 
 [#characters]
 == Tabelle der Sonderzeichen
 
-Hier noch einmal zusammengefasst die Liste von allen oben erklärten
+Hier finden Sie zusammengefasst die Liste von allen oben erklärten
 Sonderzeichen und Funktionen der regulären Ausdrücke, die {CMK} verwendet:
 
-[cols=2]
+[cols="15,~"]
 |===
-
-|`.` |Passt auf _ein_ beliebiges Zeichen
-|`\` |Wertet das nächste Sonderzeichen als normales Zeichen
-|`*` |Das vorherige Zeichen darf beliebig oft kommen (auch 0-mal)
-|`+` |Das vorherige Zeichen muss mindestens einmal vorkommen.
-|`{5}` |Das vorherige Zeichen muss genau fünfmal vorkommen.
+|`.` |Passt auf _ein_ xref:dotaswildcard[beliebiges Zeichen].
+|`\` |Wertet das nächste xref:escaping[Sonderzeichen als normales Zeichen].
+|`{5}` |Das vorherige Zeichen muss genau xref:repetition[fünfmal vorkommen].
 |`{5,10}` |Das vorherige Zeichen muss mindestens fünf- und höchstens zehnmal vorkommen.
-|`?` |Das vorherige Zeichen darf null- oder einmal vorkommen.
-|`[abc]` |Steht für genau eines der Zeichen `a`, `b` oder `c`.
+|`*` |Das vorherige Zeichen darf beliebig oft vorkommen (entspricht `{0,}`).
+|`+` |Das vorherige Zeichen darf beliebig oft, aber muss mindestens einmal vorkommen (entspricht `{1,}`).
+|`?` |Das vorherige Zeichen darf null- oder einmal vorkommen (entspricht `{0,1}`).
+|`[abc]` |Steht für genau xref:characterclasses[eines der Zeichen] `a`, `b` oder `c`.
 |`[0-9]` |Steht für genau eines der Zeichen `0`, `1` ... `9` (also eine Ziffer).
-|`[0-9a-z_]` |Steht für genau eine Ziffer, einen Buchstaben oder den Unterstrich.
-|`[^"']` |Steht für genau ein beliebes Zeichen _außer_ dem einfachen oder Anführungszeichen.
-|`$` |Match auf das _Ende_ eines Textes.
-|`^` |Match auf den _Anfang_ eines Textes.
-|`A\|B\|C`   |Matcht auf _A_ oder auf _B_ oder auf _C_.
-|`(_A_)` |Fasst den Unterausdruck _A_ zu einer Gruppe zusammen.
-|`\t` |Matcht einen Tabstop (Tabulator), teils in Logdateien oder CSV-Tabellen
-|`\s` |Matcht alle Leerzeichen (ASCII kennt 5 verschiedene)
+|`[0-9a-z_]` |Steht für genau eine Ziffer, einen Kleinbuchstaben oder den Unterstrich.
+|`[^"']` |Steht für genau ein beliebiges Zeichen _außer_ dem einfachen oder doppelten Anführungszeichen.
+|`$` |Matcht das xref:prefixinfixsuffix[_Ende_ eines Textes].
+|`^` |Matcht den _Anfang_ eines Textes.
+|`A\|B\|C`   |Matcht auf xref:alternatives[`A` oder auf `B` oder auf `C_`].
+|`(_A_)` |Fasst den Unterausdruck _A_ zu einer xref:matchgroups[Match-Gruppe] zusammen.
+|`\t` |Matcht einen Tabstop (Tabulator). Dieses Zeichen kommt oft in Log-Dateien oder CSV-Tabellen vor
+|`\s` |Matcht alle Leerzeichen (ASCII kennt 5 verschiedene).
 |===
 
-
-Folgende Zeichen müssen durch Backslash maskiert/escaped werden, wenn sie wörtlich verwendet werden sollen:
-`\ . * + ? { } ( ) [ ] | & ^ $`
-
-// MFS: Auskommentiert, bis Unicode-Handling in den Bestandteilen von CheckMK geklärt
-////
-
-=== Unicode in Python 3 
-
-Insbesondere, wenn Eigennamen in Kommentaren oder beschreibenden Texten 
-per Copy und Paste übernommen wurde und daher
-Unicode-Zeichen oder verschiedene Typen von Leerzeichen im Text auftreten,
-sind Pythons erweiterte Klassen sehr hilfreich:
+Folgende Zeichen müssen durch xref:escaping[Backslash maskiert werden],
+wenn sie wörtlich verwendet werden sollen: `\ . * + ? { } ( ) [ ] | & ^ $`.
 
 
-[cols=2]
+=== Unicode in Python 3
+
+Insbesondere, wenn Eigennamen in Kommentaren oder beschreibenden Texten per
+Copy und Paste übernommen wurde und daher Unicode-Zeichen oder verschiedene
+Typen von Leerzeichen im Text auftreten, sind Pythons erweiterte Klassen sehr hilfreich:
+
+[cols="15,~"]
+|===
+|`\t` |Matcht einen Tabstop (Tabulator), teils in Logdateien oder CSV-Tabellen.
+|`\s` |Matcht alle Leerzeichen (Unicode kennt 25 verschiedene, ASCII 5).
+|`\S` |Invertierung von `\s`, d.h. matcht alle Zeichen, die keine Leerzeichen sind.
+|`\w` |Matcht alle Zeichen, die Wortbestandteil sind, also Buchstaben, in Unicode aber auch Akzente, chinesische, arabische oder koreanische Glyphen. +
+*Achtung:* Ziffern zählen hier zu den Wortbestandteilen.
+|`\W` |Invertierung von `\w`, d.h. matcht alles, was typischerweise kein Wortbestandteil ist (Leerzeichen, Satzzeichen, Emoticons, mathematische Sonderzeichen).
+// |`\u` |Gibt mit vier folgenden Hexadezimalziffern an, welches Unicode-Zeichen gematcht werden soll
 |===
 
-|\t |Matcht einen Tabstop (Tabulator), teils in Logdateien oder CSV-Tabellen
-|\s |Matcht alle Leerzeichen (Unicode kennt 25 verschiedene, ASCII 5)
-|\S |Invertierung von \s, matcht alle Zeichen, die keine Leerzeichen sind
-|\w |Matcht alle Zeichen, die Wortbestandteil sind, also Buchstaben, in Unicode aber auch Akzente oder chinesische, arabische oder koreanische Worte… 
-|\W |Invertierung von \w, matcht alles, was typischerweise kein Wortbestandteil ist
-|\u |Gibt mit vier folgenden Hexadezimalziffern an, welches Unicode-Zeichen gematcht werden soll
+An Stellen, an denen {CMK} Unicode-Matching erlaubt, ist `\w` vor allem zur Suche nach ähnlich geschriebenen Worten in verschiedenen Sprachen hilfreich, beispielsweise Eigennamen, die mal mit und mal ohne Accent geschrieben werden:
+
+[cols="30,35,35",options=header]
+|===
+|Regular Expression |Match | Kein Match
+// zusätzliches Beispiel für kein Match FIXME
+|`\w{1,3}ni\w{1,2}el` |`Schnitzel` (Deutsch) +
+`șnițel` (Rumänisch) |`šnicl` (Kroatisch) +
+Schnit'el (mit Auslassungszeichen)
 |===
 
-An Stellen, an denen {CMK} Unicode-Matching erlaubt, ist \w vor allem zur Suche nach ähnlich geschriebenen Worten in verschiedenen Sprachen hilfreich, beispielsweise Eigennamen, die mal mit und mal ohne Accent geschrieben werden.
-
-[cols="34,22,22,22"]
-|===
-|Regular Expression |Match | Match | Kein Match 
-
-|\w{1,3}ni\w{1,2}el |Schnitzel (Deutsch) |șnițel (Rumänisch) |šnicl (Kroatisch) 
-|===
-////
 
 [#testing]
-== Test regulärer Ausdrücke im Python-Prompt
+== Test regulärer Ausdrücke
 
-Die Logik regulärer Ausdrücke ist insbesondere bei verschachtelten Match-Gruppen 
-und  der Kombination von minimalen und maximalen Matches oft nicht ganz einfach
-zu beherrschen. Auch Profis testen daher gerne im Python-Prompt. Nach dem Öffnen 
-müssen Sie das Modul `re` importieren, dann können Sie loslegen:
+Die Logik regulärer Ausdrücke ist nicht immer einfach zu durchschauen, insbesondere bei verschachtelten
+Match-Gruppen oder der Frage in welcher Reihenfolge von welchem Ende des zu
+matchenden Strings ausgewertet wird.
+Besser als Trial and Error in {CMK} sind diese zwei Möglichkeiten zum Test
+regulärer Ausdrücke: Online-Dienste wie
+link:https://regex101.com/[regex101.com^] bereiten Matches grafisch auf und
+erklären darüber die Reihenfolge der Auswertung in Echtzeit:
+
+image::regexes_testing.png[]
+
+Die zweite Testmöglichkeit ist der Python-Prompt, den jede Python-Installation
+mitbringt. Unter Linux und auf dem Mac ist Python 3 in der Regel
+vorinstalliert. Gerade weil reguläre Ausdrücke am Python-Prompt exakt wie in
+{CMK} ausgewertet werden, gibt es auch bei komplexen Schachtelungen keine
+Abweichungen bei der Interpretation. Mit dem Test im Python-Interpreter sind Sie damit immer auf der sicheren Seite.
+
+Nach dem Öffnen müssen Sie das Modul `re` importieren. Im Beispiel schalten wir
+zudem mit `re.IGNORECASE` die Unterscheidung zwischen Groß- und Kleinschreibung
+ab:
 
 [{shell}]
 ----
 {c-omd} *python3*
-Python 3.8.10 (default, Jun  2 2021, 10:49:15) 
+Python 3.8.10 (default, Jun  2 2021, 10:49:15)
 [GCC 9.4.0] on linux
 Type "help", "copyright", "credits" or "license" for more information.
 >>> *import re*
@@ -408,37 +453,48 @@ Type "help", "copyright", "credits" or "license" for more information.
 re.IGNORECASE
 ----
 
-Um das Verhalten der regulären Ausdrücke von C nachzubilden, das auch in vielen 
+Um das Verhalten der regulären Ausdrücke von C nachzubilden, das auch in vielen
 Python-Komponenten genutzt wird, schränken Sie auf ASCII ein:
 
-
-[{shell}] 
+[{shell}]
 ----
 >>> *re.ASCII*
 re.ASCII
 ----
 
-
-Nun können Sie mit der Funktion `re.match()` direkt einen regulären Ausdruck gegen einen String matchen und die Matchgruppe ausgeben:
+Nun können Sie mit der Funktion `re.match()` direkt einen regulären Ausdruck
+gegen einen String matchen und die xref:matchgroups[Match-Gruppe] ausgeben,
+`group(0)` steht hierbei für den gesamten Match, mit `group(1)` wird der
+Match ausgegeben, der zum ersten in einer runden Klammer gruppierten
+Unterausdruck passt:
 
 [{shell}]
 ----
->>> *x = re.match('M(a|e)(i|y)e*r', 'Maier')*
+>>> *x = re.match('M[ae]{1}[iy]{1}e?r', 'Meier')*
 >>> *x.group(0)*
-'Maier'
->>> *x = re.match('M(a|e)(i|y)e*r', 'Meyer')*
->>> *x.group(0)*
-'Meyer'
->>> *x = re.match('M(a|e)(i|y)e*r', 'Mayr')*
+'Meier'
+>>> *x = re.match('M[ae]{1}[iy]{1}e?r', 'Mayr')*
 >>> *x.group(0)*
 'Mayr'
->>> *x.group(2)*
-'y'
+>>> *x = re.match('M[ae]{1}[iy]{1}e?r', 'Myers')*
+>>> *x.group(0)*
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+IndexError: no such group
+>>> *x = re.match('server-(.pass:[*])\.local', 'server-lnx23.local')*
+>>> *x.group(0)*
+'server-lnx23.local'
+>>> *x.group(1)*
+'lnx23'
 ----
 
 
 [#reference]
-== Wenn Sie es genau wissen möchten
+== Weitere externe Dokumentation
+// TK: Ist schon klar, dass es in diesem Kapitel um die vollständige Information geht.
+// TK: Trotzdem würde ich gern wissen, ob sich das oben beschriebene allgemeine Handling in den verschiedenen regexp Varianten unterscheidet.
+// TK: Oder andersrum: Wenn ich nur mit den oben beschriebenen "Basics" arbeite, können mir die Unterschiede der Varianten egal sein, oder?
+// MFS: Nein, das allgemeine Handling ist fast identisch. Ich schreibe fast, weil es tatsächlich feine Unterschiede bei verschachtelten Match-Gruppen gibt und bei Suffixmatches, die treten in der Praxis selten zu Tage. Wichtig ist IMHO, sich der modernen Erweiterungen wie (?:…) bewusst zu werden. Solche "non-capturing groups" matchen zwar, stellen aber keine group(n) bzw. \n bereit, gut bei geschachtelten Groups, wo man sonst hinterher nicht weiss, welchen Index man jetzt sucht. Später wird der nicht gierige Stern erwähnt, *?, das ist was ich als "minimales Matching" drin hatte - der ist meiner Ansicht nach der wichtigste Unterschied zu POSIX regex.
 
 Ken Thompson, einer der Erfinder von UNIX, hat schon in den 1960ern als erster
 reguläre Ausdrücke in der heutigen Form entwickelt -- unter anderem im bis
@@ -447,11 +503,12 @@ Erweiterungen und Dialekte von regulären Ausdrücken geschaffen -- darunter
 erweiterter Regexe, Perl-kompatible Regexe und auch eine sehr ähnlich
 Variante in Python.
 
-{CMK} verwendet in den link:views.html#filter[Filtern in Views] _POSIX
-erweiterte reguläre Ausdrücke_ (extended REs). Diese werden im
-Monitoringkern in C mit der Regexfunktion der C-Bibliothek
-ausgewertet. Sie finden eine komplette Referenz dazu in der
-Linux-Manpage zu `regex(7)`:
+{CMK} verwendet in den xref:views#filter[Filtern in Ansichten] _POSIX
+erweiterte reguläre Ausdrücke_ (extended REs).
+// TK: Anmerkung: in den Filtern gibt es leider keine kontextsensitive Hilfe und daher auch keine Info, ob und wie regexp genutzt werden können.
+Diese werden im Monitoring-Kern in C mit der Regexfunktion der C-Bibliothek
+ausgewertet. Sie finden eine komplette Referenz dazu in der Linux-Manpage zu
+`regex(7)`:
 
 [{shell-raw}]
 ----
@@ -470,15 +527,17 @@ DESCRIPTION
 ----
 
 An allen anderen Stellen stehen darüber hinaus alle Möglichkeiten der
-regulären Ausdrücke von _Python_ zur Verfügung. Dies betrifft unter
-anderem die link:wato_rules.html[Konfigurationsregeln], die link:ec.html[Event Console]
-und das link:bi.html[Business Intelligence (BI)]. Die Python-Regexe sind
-eine Erweiterung der extended REs und sehr ähnlich zu denen aus Perl.
-Sie unterstützen z.B. den sogenannten _negative Lookahead_, einen
-nicht gierigen `pass:[*]` Stern, oder ein Erzwingen der Unterscheidung von
-Groß-/Kleinschreibung. Die genauen Möglichkeiten dieser Regexe finden Sie
-in der Online-Hilfe von Python zum Modul `re`:
+regulären Ausdrücke von Python zur Verfügung. Dies betrifft unter
+anderem die xref:wato_rules#[Konfigurationsregeln],
+xref:ec#[Event Console (EC)] und xref:bi#[Business Intelligence (BI)].
 
+Die regulären Ausdrücke in Python sind eine Erweiterung der extended REs und
+sehr ähnlich zu denen aus Perl. Sie unterstützen z.B. den sogenannten
+_negative Lookahead_, einen nicht gierigen `pass:[*]` Stern, oder ein
+Erzwingen der Unterscheidung von Groß-/Kleinschreibung. Die genauen
+Möglichkeiten dieser regulären Ausdrücke finden Sie in der Online-Hilfe von
+Python zum Modul `re`, oder ausführlicher in der
+link:https://docs.python.org/3/library/re.html[Online-Dokumentation von Python^].
 
 [{shell-raw}]
 ----
@@ -490,7 +549,7 @@ NAME
 
 MODULE REFERENCE
     https://docs.python.org/3.8/library/re
-    
+
     The following documentation is automatically generated from the Python
     source files.  It may be incomplete, incorrect or include features that
     are considered implementation detail and may vary between Python
@@ -502,435 +561,12 @@ DESCRIPTION
     those found in Perl.  It supports both 8-bit and Unicode strings; both
     the pattern and the strings being processed can contain null bytes and
     characters outside the US ASCII range.
-    
+
     Regular expressions can contain both special and ordinary characters.
     Most ordinary characters, like "A", "a", or "0", are the simplest
     regular expressions; they simply match themselves.  You can
     concatenate ordinary characters, so last matches the string 'last'.
-    
-    The special characters are:
-        "."      Matches any character except a newline.
-        "^"      Matches the start of the string.
-        "$"      Matches the end of the string or just before the newline at
-                 the end of the string.
-        "*"      Matches 0 or more (greedy) repetitions of the preceding RE.
-                 Greedy means that it will match as many repetitions as possible.
-        "+"      Matches 1 or more (greedy) repetitions of the preceding RE.
-        "?"      Matches 0 or 1 (greedy) of the preceding RE.
-        *?,+?,?? Non-greedy versions of the previous three special characters.
-        {m,n}    Matches from m to n repetitions of the preceding RE.
-        {m,n}?   Non-greedy version of the above.
-        "\\"     Either escapes special characters or signals a special sequence.
-        []       Indicates a set of characters.
-                 A "^" as the first character indicates a complementing set.
-        "|"      A|B, creates an RE that will match either A or B.
-        (...)    Matches the RE inside the parentheses.
-                 The contents can be retrieved or matched later in the string.
-        (?aiLmsux) The letters set the corresponding flags defined below.
-        (?:...)  Non-grouping version of regular parentheses.
-        (?P<name>...) The substring matched by the group is accessible by name.
-        (?P=name)     Matches the text matched earlier by the group named name.
-        (?#...)  A comment; ignored.
-        (?=...)  Matches if ... matches next, but doesn't consume the string.
-        (?!...)  Matches if ... doesn't match next.
-        (? < =...) Matches if preceded by ... (must be fixed length).
-        (?<!...) Matches if not preceded by ... (must be fixed length).
-        (?(id/name)yes|no) Matches yes pattern if the group with id/name matched,
-                           the (optional) no pattern otherwise.
-    
-    The special sequences consist of "\\" and a character from the list
-    below.  If the ordinary character is not on the list, then the
-    resulting RE will match the second character.
-        \number  Matches the contents of the group of the same number.
-        \A       Matches only at the start of the string.
-        \Z       Matches only at the end of the string.
-        \b       Matches the empty string, but only at the start or end of a word.
-        \B       Matches the empty string, but not at the start or end of a word.
-        \d       Matches any decimal digit; equivalent to the set [0-9] in
-                 bytes patterns or string patterns with the ASCII flag.
-                 In string patterns without the ASCII flag, it will match the whole
-                 range of Unicode digits.
-        \D       Matches any non-digit character; equivalent to [^\d].
-        \s       Matches any whitespace character; equivalent to [ \t\n\r\f\v] in
-                 bytes patterns or string patterns with the ASCII flag.
-                 In string patterns without the ASCII flag, it will match the whole
-                 range of Unicode whitespace characters.
-        \S       Matches any non-whitespace character; equivalent to [^\s].
-        \w       Matches any alphanumeric character; equivalent to [a-zA-Z0-9_]
-                 in bytes patterns or string patterns with the ASCII flag.
-                 In string patterns without the ASCII flag, it will match the
-                 range of Unicode alphanumeric characters (letters plus digits
-                 plus underscore).
-                 With LOCALE, it will match the set [0-9_] plus characters defined
-                 as letters for the current locale.
-        \W       Matches the complement of \w.
-        \\       Matches a literal backslash.
-    
-    This module exports the following functions:
-        match     Match a regular expression pattern to the beginning of a string.
-        fullmatch Match a regular expression pattern to all of a string.
-        search    Search a string for the presence of a pattern.
-        sub       Substitute occurrences of a pattern found in a string.
-        subn      Same as sub, but also return the number of substitutions made.
-        split     Split a string by the occurrences of a pattern.
-        findall   Find all occurrences of a pattern in a string.
-        finditer  Return an iterator yielding a Match object for each match.
-        compile   Compile a pattern into a Pattern object.
-        purge     Clear the regular expression cache.
-        escape    Backslash all non-alphanumerics in a string.
-    
-    Each function other than purge and escape can take an optional 'flags' argument
-    consisting of one or more of the following module constants, joined by "|".
-    A, L, and U are mutually exclusive.
-        A  ASCII       For string patterns, make \w, \W, \b, \B, \d, \D
-                       match the corresponding ASCII character categories
-                       (rather than the whole Unicode categories, which is the
-                       default).
-                       For bytes patterns, this flag is the only available
-                       behaviour and needn't be specified.
-        I  IGNORECASE  Perform case-insensitive matching.
-        L  LOCALE      Make \w, \W, \b, \B, dependent on the current locale.
-        M  MULTILINE   "^" matches the beginning of lines (after a newline)
-                       as well as the string.
-                       "$" matches the end of lines (before a newline) as well
-                       as the end of the string.
-        S  DOTALL      "." matches any character at all, including the newline.
-        X  VERBOSE     Ignore whitespace and comments for nicer looking RE's.
-        U  UNICODE     For compatibility only. Ignored for string patterns (it
-                       is the default), and forbidden for bytes patterns.
-    
-    This module also defines an exception 'error'.
-
-CLASSES
-    builtins.Exception(builtins.BaseException)
-        error
-    builtins.object
-        Match
-        Pattern
-    
-    class Match(builtins.object)
-     |  The result of re.match() and re.search().
-     |  Match objects always have a boolean value of True.
-     |  
-     |  Methods defined here:
-     |  
-     |  __copy__(self, /)
-     |  
-     |  __deepcopy__(self, memo, /)
-     |  
-     |  __getitem__(self, key, /)
-     |      Return self[key].
-     |  
-     |  __repr__(self, /)
-     |      Return repr(self).
-     |  
-     |  end(self, group=0, /)
-     |      Return index of the end of the substring matched by group.
-     |  
-     |  expand(self, /, template)
-     |      Return the string obtained by doing backslash substitution on the string template, as done by the sub() method.
-     |  
-     |  group(...)
-     |      group([group1, ...]) -> str or tuple.
-     |      Return subgroup(s) of the match by indices or names.
-     |      For 0 returns the entire match.
-     |  
-     |  groupdict(self, /, default=None)
-     |      Return a dictionary containing all the named subgroups of the match, keyed by the subgroup name.
-     |      
-     |      default
-     |        Is used for groups that did not participate in the match.
-     |  
-     |  groups(self, /, default=None)
-     |      Return a tuple containing all the subgroups of the match, from 1.
-     |      
-     |      default
-     |        Is used for groups that did not participate in the match.
-     |  
-     |  span(self, group=0, /)
-     |      For match object m, return the 2-tuple (m.start(group), m.end(group)).
-     |  
-     |  start(self, group=0, /)
-     |      Return index of the start of the substring matched by group.
-     |  
-     |  ----------------------------------------------------------------------
-     |  Data descriptors defined here:
-     |  
-     |  endpos
-     |      The index into the string beyond which the RE engine will not go.
-     |  
-     |  lastgroup
-     |      The name of the last matched capturing group.
-     |  
-     |  lastindex
-     |      The integer index of the last matched capturing group.
-     |  
-     |  pos
-     |      The index into the string at which the RE engine started looking for a match.
-     |  
-     |  re
-     |      The regular expression object.
-     |  
-     |  regs
-     |  
-     |  string
-     |      The string passed to match() or search().
-    
-    class Pattern(builtins.object)
-     |  Compiled regular expression object.
-     |  
-     |  Methods defined here:
-     |  
-     |  __copy__(self, /)
-     |  
-     |  __deepcopy__(self, memo, /)
-     |  
-     |  __eq__(self, value, /)
-     |      Return self==value.
-     |  
-     |  __ge__(self, value, /)
-     |      Return self>=value.
-     |  
-     |  __gt__(self, value, /)
-     |      Return self>value.
-     |  
-     |  __hash__(self, /)
-     |      Return hash(self).
-     |  
-     |  __le__(self, value, /)
-     |      Return self<=value.
-     |  
-     |  __lt__(self, value, /)
-     |      Return self<value.
-     |  
-     |  __ne__(self, value, /)
-     |      Return self!=value.
-     |  
-     |  __repr__(self, /)
-     |      Return repr(self).
-     |  
-     |  findall(self, /, string, pos=0, endpos=9223372036854775807)
-     |      Return a list of all non-overlapping matches of pattern in string.
-     |  
-     |  finditer(self, /, string, pos=0, endpos=9223372036854775807)
-     |      Return an iterator over all non-overlapping matches for the RE pattern in string.
-     |      
-     |      For each match, the iterator returns a match object.
-     |  
-     |  fullmatch(self, /, string, pos=0, endpos=9223372036854775807)
-     |      Matches against all of the string.
-     |  
-     |  match(self, /, string, pos=0, endpos=9223372036854775807)
-     |      Matches zero or more characters at the beginning of the string.
-     |  
-     |  scanner(self, /, string, pos=0, endpos=9223372036854775807)
-     |  
-     |  search(self, /, string, pos=0, endpos=9223372036854775807)
-     |      Scan through string looking for a match, and return a corresponding match object instance.
-     |      
-     |      Return None if no position in the string matches.
-     |  
-     |  split(self, /, string, maxsplit=0)
-     |      Split string by the occurrences of pattern.
-     |  
-     |  sub(self, /, repl, string, count=0)
-     |      Return the string obtained by replacing the leftmost non-overlapping occurrences of pattern in string by the replacement repl.
-     |  
-     |  subn(self, /, repl, string, count=0)
-     |      Return the tuple (new_string, number_of_subs_made) found by replacing the leftmost non-overlapping occurrences of pattern with the replacement repl.
-     |  
-     |  ----------------------------------------------------------------------
-     |  Data descriptors defined here:
-     |  
-     |  flags
-     |      The regex matching flags.
-     |  
-     |  groupindex
-     |      A dictionary mapping group names to group numbers.
-     |  
-     |  groups
-     |      The number of capturing groups in the pattern.
-     |  
-     |  pattern
-     |      The pattern string from which the RE object was compiled.
-    
-    class error(builtins.Exception)
-     |  error(msg, pattern=None, pos=None)
-     |  
-     |  Exception raised for invalid regular expressions.
-     |  
-     |  Attributes:
-     |  
-     |      msg: The unformatted error message
-     |      pattern: The regular expression pattern
-     |      pos: The index in the pattern where compilation failed (may be None)
-     |      lineno: The line corresponding to pos (may be None)
-     |      colno: The column corresponding to pos (may be None)
-     |  
-     |  Method resolution order:
-     |      error
-     |      builtins.Exception
-     |      builtins.BaseException
-     |      builtins.object
-     |  
-     |  Methods defined here:
-     |  
-     |  __init__(self, msg, pattern=None, pos=None)
-     |      Initialize self.  See help(type(self)) for accurate signature.
-     |  
-     |  ----------------------------------------------------------------------
-     |  Data descriptors defined here:
-     |  
-     |  __weakref__
-     |      list of weak references to the object (if defined)
-     |  
-     |  ----------------------------------------------------------------------
-     |  Static methods inherited from builtins.Exception:
-     |  
-     |  __new__(*args, **kwargs) from builtins.type
-     |      Create and return a new object.  See help(type) for accurate signature.
-     |  
-     |  ----------------------------------------------------------------------
-     |  Methods inherited from builtins.BaseException:
-     |  
-     |  __delattr__(self, name, /)
-     |      Implement delattr(self, name).
-     |  
-     |  __getattribute__(self, name, /)
-     |      Return getattr(self, name).
-     |  
-     |  __reduce__(...)
-     |      Helper for pickle.
-     |  
-     |  __repr__(self, /)
-     |      Return repr(self).
-     |  
-     |  __setattr__(self, name, value, /)
-     |      Implement setattr(self, name, value).
-     |  
-     |  __setstate__(...)
-     |  
-     |  __str__(self, /)
-     |      Return str(self).
-     |  
-     |  with_traceback(...)
-     |      Exception.with_traceback(tb) --
-     |      set self.__traceback__ to tb and return self.
-     |  
-     |  ----------------------------------------------------------------------
-     |  Data descriptors inherited from builtins.BaseException:
-     |  
-     |  __cause__
-     |      exception cause
-     |  
-     |  __context__
-     |      exception context
-     |  
-     |  __dict__
-     |  
-     |  __suppress_context__
-     |  
-     |  __traceback__
-     |  
-     |  args
-
-FUNCTIONS
-    compile(pattern, flags=0)
-        Compile a regular expression pattern, returning a Pattern object.
-    
-    escape(pattern)
-        Escape special characters in a string.
-    
-    findall(pattern, string, flags=0)
-        Return a list of all non-overlapping matches in the string.
-        
-        If one or more capturing groups are present in the pattern, return
-        a list of groups; this will be a list of tuples if the pattern
-        has more than one group.
-        
-        Empty matches are included in the result.
-    
-    finditer(pattern, string, flags=0)
-        Return an iterator over all non-overlapping matches in the
-        string.  For each match, the iterator returns a Match object.
-        
-        Empty matches are included in the result.
-    
-    fullmatch(pattern, string, flags=0)
-        Try to apply the pattern to all of the string, returning
-        a Match object, or None if no match was found.
-    
-    match(pattern, string, flags=0)
-        Try to apply the pattern at the start of the string, returning
-        a Match object, or None if no match was found.
-    
-    purge()
-        Clear the regular expression caches
-    
-    search(pattern, string, flags=0)
-        Scan through string looking for a match to the pattern, returning
-        a Match object, or None if no match was found.
-    
-    split(pattern, string, maxsplit=0, flags=0)
-        Split the source string by the occurrences of the pattern,
-        returning a list containing the resulting substrings.  If
-        capturing parentheses are used in pattern, then the text of all
-        groups in the pattern are also returned as part of the resulting
-        list.  If maxsplit is nonzero, at most maxsplit splits occur,
-        and the remainder of the string is returned as the final element
-        of the list.
-    
-    sub(pattern, repl, string, count=0, flags=0)
-        Return the string obtained by replacing the leftmost
-        non-overlapping occurrences of the pattern in string by the
-        replacement repl.  repl can be either a string or a callable;
-        if a string, backslash escapes in it are processed.  If it is
-        a callable, it's passed the Match object and must return
-        a replacement string to be used.
-    
-    subn(pattern, repl, string, count=0, flags=0)
-        Return a 2-tuple containing (new_string, number).
-        new_string is the string obtained by replacing the leftmost
-        non-overlapping occurrences of the pattern in the source
-        string by the replacement repl.  number is the number of
-        substitutions that were made. repl can be either a string or a
-        callable; if a string, backslash escapes in it are processed.
-        If it is a callable, it's passed the Match object and must
-        return a replacement string to be used.
-    
-    template(pattern, flags=0)
-        Compile a template pattern, returning a Pattern object
-
-DATA
-    A = re.ASCII
-    ASCII = re.ASCII
-    DOTALL = re.DOTALL
-    I = re.IGNORECASE
-    IGNORECASE = re.IGNORECASE
-    L = re.LOCALE
-    LOCALE = re.LOCALE
-    M = re.MULTILINE
-    MULTILINE = re.MULTILINE
-    S = re.DOTALL
-    U = re.UNICODE
-    UNICODE = re.UNICODE
-    VERBOSE = re.VERBOSE
-    X = re.VERBOSE
-    __all__ = ['match', 'fullmatch', 'search', 'sub', 'subn', 'split', 'fi...
-
-VERSION
-    2.2.1
-
-FILE
-    /usr/lib/python3.8/re.py
-
-
-
 ----
 
 Eine sehr ausführliche Erklärung zu regulären Ausdrücken finden Sie in
-der link:https://de.wikipedia.org/wiki/Regulärer_Ausdruck[Wikipedia]. 
-Konkrete Beispiele zum Einsatz mit Python erläutert die 
-link:https://docs.python.org/3/library/re.html[Online-Dokumentation des Moduls re].
-
-
+link:https://de.wikipedia.org/wiki/Regulärer_Ausdruck[Wikipedia^].
