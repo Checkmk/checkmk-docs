@@ -1,0 +1,276 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= Monitoring FreeBSD
+:revdate: 2022-02-07
+:title: FreeBSD überwachen - The agent for FreeBSD in detail
+:description: The FreeBSD agent is a simple shell script and therefore maximally transparent. How to use, extend and configure the agent can be found here.
+
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:datasource_programs#[Datasource programs]
+{related-end}
+
+
+== Introduction
+
+There are many good reasons for using link:https://www.freebsd.org/[FreeBSD^] instead of Linux or other unix-type systems:
+For example, the 'Jails' container feature, which has been available since 2000, its high performance even under heavy I/O loads, the robustness of the UFS2 file system, or the excellent support for the modern ZFS transactional file system.
+{CMK} provides an agent for FreeBSD which is based on the agent for Linux, but which has been adapted for FreeBSD entities, such as using different output formats of the command line tools and different path conventions.
+However, installation and functional testing must be largely manual, as there is no provision for packaging or deployment via the Agent Bakery.
+
+*Note regarding other BSD systems:* This article explains the installation and setup of the agent for _FreeBSD_ --
+link:https://github.com/tribe29/checkmk/tree/master/agents[Agents for _OpenBSD_ and _NetBSD_^]
+are also available.
+The installation for those is similar to the that described here.
+If you use DragonFly BSD, we would welcome tests and any suggested patches for the FreeBSD agent.
+
+The basic structure of the FreeBSD agent is the same as described for the xref:agent_linux#[Linux agent]:
+It is a pure shell script, which can be executed via an internet superserver (`inetd` or `xinetd`) or an SSH tunnel, which makes it lightweight and secure.
+
+In general we assume in this article that you have some experience with Linux or Solaris, so here we will mainly focus on the differences.
+
+
+== Installation
+
+=== Prerequisites
+
+In order for the {CMK} agent to be able to read all of the information useful for the monitoring, the installation of additional tools is required:
+
+* `sysutils/ipmitool`
+* `devel/libstatgrab`
+* `shells/bash`
+* `lang/python3`
+* `ftp/wget`
+
+Python is optional at this point, but in any case is needed for many agent plug-ins.
+A special feature is `bash`, since the agent script actually uses a syntax which is not compatible with the FreeBSD Bourne Shell.
+The `ipmitool` is needed to read hardware information.
+
+You install all of these tools with the following command:
+
+[{shell}]
+----
+root@bsd:/root # *pkg install ipmitool libstatgrab bash python3 wget*
+----
+
+
+=== Installation over the FreeBSD Ports
+
+The link:https://www.freebsd.org/ports/[FreeBSD Ports^] contain a link:https://cgit.freebsd.org/ports/tree/net-mgmt/check_mk_agent[port for the {CMK} agent^] maintained by Mark Peek, which may contain patches to make the agent compatible with newer FreeBSD-STABLE versions. 
+If the version (e.g. {v20}) of this {CMK} agent available in the FreeBSD ports is equal to or slightly higher than your {CMK} version currently in use, you can install this agent. 
+
+[{shell}]
+----
+root@bsd:/root # *cd /usr/ports/net-mgmt/check_mk_agent*
+root@bsd:/usr/ports/net-mgmt/check_mk_agent # *make install*
+----
+
+
+=== Manual installation
+
+If the version available in the FreeBSD ports is older than that on your {CMK} server, install the latest agent from the GitHub repository.
+Since customizations to new FreeBSD versions do not always backport to agents for older {CMK} versions, it is usually a good idea to install from the most recent development branch: 
+
+[{shell}]
+----
+root@bsd:/root # *wget -O /usr/local/bin/check_mk_agent \https://checkmk.io/3EjKJlt*
+root@bsd:/root # *chmod 0700 /usr/local/bin/check_mk_agent*
+----
+
+If you are looking for the agents for other BSD systems or want to set the development branch to a specific {CMK} version, locate the link:https://github.com/tribe29/checkmk/tree/master/agents[agent folder in Github^].
+
+
+=== Test at the command line
+
+Now call the agent on the command line and skim over the output in the pager:
+
+[{shell-raw}]
+----
+root@bsd:/root # check_mk_agent | more
+<<check_mk>>
+Version: 2.1.0i1
+AgentOS: freebsd
+Hostname: fbsd13
+AgentDirectory: /etc/check_mk
+DataDirectory: 
+SpoolDirectory: /var/spool/check_mk_agent
+PluginsDirectory: /usr/local/lib/check_mk_agent/plugins
+LocalDirectory: /usr/local/lib/check_mk_agent/local
+----
+
+If no output at all is produced, please check the prerequisites again, in particular that Bash is installed under `/usr/local/bin`.
+
+
+== Setting up access via the network 
+
+=== FreeBSD inetd
+
+The easiest way to access the agent is the `inetd` provided with FreeBSD.
+Alternatively, the Linux `xinetd` is available from the `security` section in the FreeBSD Ports.
+Its configuration is exactly the same as described in the xref:agent_linux#manual [Linux agent article].
+The `inetd` binds the output of the agent to TCP port 6556 and -- if necessary -- restricts access to certain {CMK} servers.
+
+First, check if your `/etc/services` already contains an entry for port 6556:
+
+[{shell}]
+----
+root@bsd:/root # *grep 6556/ /etc/services*
+----
+
+If this is not the case, {CMK} must be identified as a service. To do this, add the following line:
+
+./etc/services
+[{file}]
+----
+checkmk-agent 6556/tcp #Checkmk monitoring agent
+----
+
+Now add the following line to the `/etc/inetd.conf` configuration file:
+
+./etc/inetd.conf
+[{file}]
+----
+checkmk-agent stream tcp nowait root /usr/local/bin/check_mk_agent
+----
+
+The `inetd` must always be activated. To do this, append the following line to the `/etc/rc.conf` file:
+
+./etc/rc.conf
+[{file}]
+----
+inetd_enable="YES"
+----
+
+If access restriction is necessary, edit the `/etc/hosts.allow` file.
+First comment out the line that allows access from anywhere, then add a line that allows access only to the {CMK} server -- here with the IP address `10.2.3.4`.
+The first parameter is the name of the command executed by `inetd`:
+
+./etc/hosts.allow
+[{file}]
+----
+# The rules here work on a "first match wins" basis.
+# ALL : ALL : allow
+sshd : ALL : allow
+check_mk_agent : 10.2.3.4 : allow
+----
+
+Once the configuration changes have been made, reboot:
+
+[{shell}]
+----
+root@bsd:/root # *reboot*
+----
+
+Now access to the agent from the monitoring server should work.
+
+The easiest way to test this is with `netcat` or `nc`.
+Run the following command as the site user on the {CMK} server to test the network connection to the agent (in this example, to the host with the IP address `10.2.3.5`).
+The command output is here abbreviated to show only the first lines:
+
+[{shell-raw}]
+----
+{c-omd} nc 10.2.3.5 6556
+<<check_mk>>
+Version: 2.1.0i1
+AgentOS: freebsd
+----
+
+
+=== Security 
+
+Since the FreeBSD agent does not currently support encryption, we recommend using an SSH tunnel in situations where it is necessary to secure the transferred data.
+We explain how to set this up in the xref:agent_linux#ssh[Linux agent] article.
+
+
+== Inclusion into the monitoring
+
+The xref:checkmk_getting_started.html#add_server[inclusion into the monitoring] is performed by an automatic service discovery, as with all other systems.
+For a 'bare' FreeBSD with no server services configured yet, at least 12 services should be discovered, and ten additional ones for file system information if installed on ZFS:
+
+.The service discovery in {CMK} will find at least 12 services.
+image::agent_freebsd_discovery.png[alt="List of 12 automatically discovered services."]
+
+
+== Plug-ins
+
+Because of the completely manual configuration, the lack of automatic distribution and the different file paths compared to Linux, it is recommended to test the most important plug-in mechanisms.
+This is started using xref:agent_linux.html#mrpe[MRPE.] 
+
+
+=== MRPE
+
+Create a configuration file `/etc/check_mk/mrpe.cfg` with the following content:
+
+./etc/check_mk/mrpe.cfg
+[{file}]
+----
+Flux_Comp /bin/echo 'OK - Flux compensator up and running'
+----
+
+There should now be an MRPE section in the agent's output:
+
+[{shell-raw}]
+----
+root@bsd:/root # check_mk_agent | grep -A1 '^...mrpe'
+<<<mrpe>>>
+(echo) Flux_Comp 0 OK - Flux compensator up and running
+----
+
+In the service discovery [.guihint]#Flux_Comp# now appears as a new service:
+
+.The MRPE plugin has been configured successfully
+image::agent_freebsd_mrpe.png[alt="List with the newly detected service Flux_Comp."]
+
+
+=== Agent plug-ins
+
+The installation of the agent plug-ins is the same as described in the xref:agent_linux#manualplugins[Linux agent article].
+Be sure to use the correct Shebang when installing any plug-ins.
+Perl and Python are installed in `/usr/local/bin` on FreeBSD, and many a shell script that works with `/bin/sh` on Linux actually requires the Bourne Again shell installed in `/usr/local/bin/bash` on FreeBSD.
+
+For testing, a simple xref:localchecks#[local check] is suitable, with which the evaluation of whether the monitored service is {OK}, {WARN} or {CRIT} is done directly on the monitored host.
+While we're at it, let's use a two-liner to test the Python interpreter.
+Again, note the different default paths compared to Linux:
+
+./usr/local/lib/check_mk_agent/local/hello.py
+[{python}]
+----
+#!/usr/local/bin/python3
+print("0 \"Hello Beastie\" - Just check paths and Python interpreter!")
+----
+
+Don't forget to make the script executable:
+
+[{shell}]
+----
+root@bsd:/root # chmod 0755 /usr/local/lib/check_mk_agent/local/hello.py
+----
+
+Also in this case the service is found immediately:
+
+.The new service "Hello Beastie" was found
+image::agent_freebsd_local.png[alt="List with the newly detected service Hello Beastie."]
+
+
+== Files and directories
+
+=== File paths on the host being monitored
+
+[cols="45,~"]
+|===
+|File path |Description
+
+|`/usr/local/bin/check_mk_agent` |Installation location of the {CMK} agent on the target host.
+|`/usr/local/lib/check_mk_agent` |Base directory for agent extensions.
+|`/usr/local/lib/check_mk_agent/plugins` |Plug-ins, which extend the agent with additional monitoring data. Plug-ins can be written in any available programming language.
+|`/usr/local/lib/check_mk_agent/local` |Storage location for custom xref:localchecks#[local checks.]
+|`/var/spool/check_mk_agent` |Contains data that is created by cronjobs, for example, and includes its own section. These are also appended to the agent output.
+|`/etc/check_mk` |Storage location for the agent's configuration files.
+|`/etc/check_mk/mrpe.cfg` |Configuration file for xref:agent_linux#mrpe[MRPE] -- for running classic Nagios compatible check plug-ins.
+|`/etc/check_mk/exclude_sections.cfg` |Configuration file for  xref:agent_linux#disabled_sections[disabling specified sections] of the agent.
+|===
+
+*Attention:* There are no default file paths defined for FreeBSD, as there are for Linux below `/var/lib/check_mk_agent`.
+Choose a suitable location and enter this in the agent's script.
