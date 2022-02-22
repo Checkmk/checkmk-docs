@@ -4,7 +4,9 @@
 
 from sys import argv as sysargs
 from sys import stdout as sysout
-from os import (listdir, system)
+from sys import exit as sysexit
+from os import listdir, system
+from pathlib import Path
 from subprocess import check_output as check
 from datetime import datetime
 import argparse
@@ -49,7 +51,7 @@ class GitCommits():
         commits = DOCS_ROOT.iter_commits(
             branch,
             paths=f'{DOCS_ROOT.working_dir}',
-            grep='^translated\|^content-sync\|^content_sync')
+            grep=r'^translated\|^content-sync\|^content_sync')
         for commit in commits:
             self.translated_markers.append(
                 self.Translate(commit.hexsha, commit.committed_date,
@@ -248,7 +250,7 @@ def parse_arguments(argv):
 def get_article_names():
     article_names = dict()
     for lang in DEFAULT_LANGUAGES:
-        for article in sorted(listdir(f'../{lang}')):
+        for article in sorted(listdir(f'{DOCS_ROOT.working_dir}/{lang}')):
             article = article.replace('.asciidoc', '')
             if article.startswith((EXCLUDES)):
                 continue
@@ -261,11 +263,18 @@ def get_articles(article=None) -> list:
     articles = list()
 
     if article:
+        article_exists = False
         instance = Article(f'{article}.asciidoc')
         for language in DEFAULT_LANGUAGES:
-            instance.paths[language] = f'{language}/{article}.asciidoc'
+            article_path = f'{language}/{article}.asciidoc'
+            instance.paths[language] = article_path
+            if Path(f'{DOCS_ROOT.working_dir}/{article_path}').exists():
+                article_exists = True
             instance.lang.append(language)
-        articles.append(instance)
+        if article_exists:
+            articles.append(instance)
+        else:
+            sysexit(f'Article "{article}" does not exist!')
     else:
         article_names = get_article_names()
         for article, languages in article_names.items():
