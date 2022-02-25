@@ -1,8 +1,8 @@
 include::global_attr.adoc[]
 = Weboberfläche mit HTTPS absichern
-:revdate: 2019-12-04
-:title: {CMK} mit HTTPS betreiben
-:description: Es gibt viele Gründe Weboberflächen nur über HTTPS zu betreiben. In diesem Artikel finden Sie alles dazu, wie Sie die Verschlüsselung in checkmk aktivieren.
+:revdate: 2021-07-13
+:title: Weboberfläche mit HTTPS absichern
+:description: Es gibt viele Gründe, Weboberflächen nur über HTTPS zu betreiben. In diesem Artikel erfahren Sie, wie Sie die Verschlüsselung für eine {CMK}-Instanz aktivieren.
 
 {related-start}
 link:web_api.html[Konfiguration via HTTP-API]
@@ -19,7 +19,7 @@ folgende Voraussetzungen schaffen:
 * Sie besitzen ein gültiges Serverzertifikat.
 * Das Apache-Modul mod_ssl ist installiert und aktiviert.
 * Der Server ist über HTTPS erreichbar.
-* Das Rewrite-Modul für den Webserver ist vorhanden und geladen.
+* Das Rewrite- und das Header-Modul für den Webserver ist vorhanden und geladen.
 
 
 == Konfiguration der HTTPS-Verbindung für eine Instanz
@@ -27,11 +27,11 @@ folgende Voraussetzungen schaffen:
 Ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
 
 ./etc/apache2/sites-enabled/000-default
-[{file}]
+[source,apache]
 ----
 RewriteEngine On
 RewriteCond %{SERVER_PORT} !^443$
-RewriteRule (.*) https://%{HTTP_HOST}/$1 [L]
+RewriteRule (.*) https://%{HTTP_HOST}$1 [L]
 RequestHeader set X-Forwarded-Proto "https"
 ----
 
@@ -57,3 +57,47 @@ Je nach eingesetzter Distribution sind die Befehle dafür unterschiedlich:
 {c-root} systemctl restart httpd
 {c-root} systemctl restart apache2
 ----
+
+== Zusätzliche Optionen
+
+=== HSTS einrichten
+
+Den {CMK}-Server nur noch mittels HTTPS erreichbar zu machen, ist der erste und wichtigste Schritt, um Verbindungen zum Monitoring abzusichern. Erhöhen kann man die Sicherheit aber mit zusätzlichen, optionalen Einstellungen.
+So kann der Webserver dem Browser mitteilen, dass er in Zukunft bitte nur noch über HTTPS angesprochen werden soll und eine ungesicherte Verbindung über HTTP immer abgelehnt wird.
+Diese Technik nennt sich `HTTP Strict Transport Security` (HSTS) und wird für einen bestimmten Zeitraum in Sekunden gesetzt.
+Ist dieser Zeitraum abgelaufen, prüft der Browser erneut, ob die Limitierung über HSTS weiterhin gültig ist.
+Um die Option zu setzen, fügen Sie den folgenden Eintrag der HTTPS-Konfiguration hinzu.
+Unter Debian/Ubuntu ist das standardmäßig die Datei `default-ssl.conf`:
+
+./etc/apache2/sites-enabled/default-ssl.conf
+[source,apache]
+----
+Header always set Strict-Transport-Security "max-age=31536000"
+----
+
+*Wichtig*: Setzen Sie zunächst einen kurzen Zeitraum -- z.B. 3600 Sekunden --, um die Einstellung zu testen, da es sein kann, dass ansonsten die Verbindung im Fehlerfall dauerhaft abgelehnt wird!
+Mehr dazu auch bei den xref:hsts_specifics[Besonderheiten].
+
+Um zu sehen, ob die neue Einstellung funktioniert, können sie mit Hilfe des Programms `curl` den Server abrufen.
+Hier in der Ausgabe nur die ersten 4 Zeilen:
+
+[{shell}]
+----
+{c-root} curl -I \https://myHost/mySite/check_mk/login.py
+HTTP/1.1 200 OK
+pass:q[*Date*]: Tue, 01 Jun 2021 09:30:20 GMT
+pass:q[*Server*]: Apache
+pass:q[*Strict-Transport-Security*]: max-age=3600
+----
+
+[.hsts_specifics]
+==== Besonderheiten
+
+Die Einrichtung von HSTS hat nicht nur den Vorteil der Sicherstellung, dass nur sichere Verbindungen genutzt werden.
+Der Einsatz bringt auch bestimmte Besonderheiten mit sich, derer man sich _vor_ der Umstellung bewusst sein muss:
+
+* Ist der Eintrag zu dem HSTS einmal vom Browser des Benutzers angelegt, kann er -- zumindest vor Ablauf der Zeit -- nur mit entsprechendem Detailwissen zu dem jeweiligen Browser entfernt werden. Beachten Sie, dass das auf viele Benutzer nicht zutrifft.
+* Die Verbindung wird u.a. dann abgelehnt, wenn das Zertifikat abgelaufen ist oder durch ein selbst-signiertes ausgetauscht wurde.
+Solche Seiten können auch nicht mit einer Ausnahme umgangen werden.
+* HSTS wird umgekehrt nur dann berücksichtigt, wenn dem Zertifikat beim ersten Verbindungsaufbau *vertraut* wird.
+Ansonsten legt der Browser keinen Eintrag zum HSTS an, so dass der zusätzliche Schutzmechanismus nicht benutzt wird.
