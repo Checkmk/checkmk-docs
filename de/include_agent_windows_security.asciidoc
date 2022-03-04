@@ -1,0 +1,129 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+
+
+[#security]
+== Absicherung
+
+////
+=== Vorüberlegung
+
+Wie auch beim Linux-Agent muss auch der Zugriff auf den Agent für Windows abgesichert werden.
+Immerhin handelt es sich um potentiell sensible Server, die vor Angriffen von außen geschützt werden müssen.
+Daher gelten hier auch die gleichen Grundgedanken, wie unter xref:agent_linux#security[Linux].
+Auch unter Windows liest der Agent keinerlei Daten vom Netzwerk, so dass ein Angreifer über den Überwachungsport 6556 niemals Befehle oder Skripte einschleusen kann.
+
+Wird das überwachte System über eine unsichere (Internet-)Verbindung abgefragt, werden zusätzliche Maßnahmen notwendig. 
+So verfügt der Agent über eine optionale eingebaute Verschlüsselung, um die übermittelten Daten vor Angriffen aus dem Netzwerk zu schützen.
+Auf neueren Windows-Versionen ist zusätzlich natives SSH möglich, so dass eine Verschlüsselung über die gesamte Verbindungsdauer gewährleistet werden kann, wie man das unter Linux bereits kennt.
+
+Diese und andere Methoden der Absicherung werden im Folgenden näher beschrieben.
+
+
+=== Zugriff über IP-Adressen beschränken
+
+Die Einschränkung auf bestimmte IP-Adressen können Sie zwar auch über die xref:agent_windows#firewall[Firewall] konfigurieren.
+Zusätzlich bietet aber auch der Agent selbst die Möglichkeit, Anfragen von fremden IP-Adressen schlicht zu ignorieren.
+Fügen Sie der Konfigurationsdatei lediglich die folgende Einschränkung in den globalen Optionen hinzu.
+Beachten Sie, dass davor oder danach noch andere Parameter in der Konfigurationsdatei gesetzt sein können und dies nur ein Ausschnitt ist:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+global:
+  only_from: 127.0.0.1/32 192.168.42.0/24
+----
+
+Wie in dem Beispiel gut zu sehen, können Sie prinzipiell beliebig viele Subnetze erlauben.
+Mit einem `/32` geben Sie z.B. ein Subnetz der Größe 1 an, so dass nur diese eine Adresse erlaubt ist, während sie mit mit `192.168.42.0/24` alle Adressen zwischen `192.168.42.0` und `192.168.42.255` erlauben.
+
+{cee-only}
+In der Agentenbäckerei können Sie die erlaubten IP-Adressen über folgenden Regelsatz konfigurieren:
+[.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX >  Agent rules > Allowed agent access via IP address (Linux, Windows)#
+
+Natürlich kann ein Angreifer sehr leicht seine IP-Adresse fälschen und so eine Verbindung zum Agenten bekommen.
+Aber dann ist es sehr wahrscheinlich, dass er die Antwort nicht bekommt -- weil diese zum echten Monitoring-Server geht.
+Oder er bekommt sie tatsächlich, aber der {CMK}-Server bekommt keinerlei Daten und wird sehr bald einen Fehler melden.
+
+
+=== Aufruf über SSH
+
+Neuere Versionen von Windows haben eine native Unterstützung für SSH.
+Aber auch bei älteren Versionen können Sie einen SSH-Server über link:https://www.cygwin.com[Cygwin^] nachrüsten und damit eine identische Konfiguration nachstellen, wie Sie unter xref:agent_linux#ssh[Linux]
+möglich ist.
+Beachten Sie dabei die aktuellen Hilfestellungen seitens Cygwin oder Microsoft für die Einrichtung.
+Sobald ein SSH-Server gestartet und erreichbar ist, ist die weitere Einrichtung identisch zu der unter Linux:
+Sie richten die `authorized_keys` auf dem überwachten Host ein und beschränken den Zugriff auf die Ausführung des Agenten.
+
+Der Eintrag in der Datei `authorized_keys` ist auf Windows Hosts allerdings etwas holprig, da hier viele Zeichen maskiert werden müssen.
+Orientieren Sie sich an dem folgenden (gekürzten) Beispiel:
+
+.~\.ssh\authorized_keys:
+[{file}]
+----
+command="\"C:\\Program Files (x86)\\checkmk\\service\\check_mk_agent.exe\" test" ssh-rsa AAAA...pb48 mysite@mycmkserver
+----
+
+Beachten Sie, dass Sie den Windows-Dienst danach stoppen können und auch eine eventuell eingerichtete Firewall-Regel damit obsolet ist.
+// Prinzipiell ist damit auch ein Betrieb ohne Installation nur mit dem Binary möglich. Aber das führt hier erst einmal zu weit.
+
+
+=== Eingebaute Verschlüsselung
+
+Der Windows-Agent (wie auch sein Linux-Pendant) kann seine Daten ohne Zusatzmittel selbst verschlüsseln.
+Dies ist streng genommen kein Ersatz für eine Zugangskontrolle.
+Da aber ein Angreifer ja keine Befehle senden und mit verschlüsselten Ausgabedaten nichts anfangen kann, kommt es einer solchen schon sehr nahe.
+
+Der Aufwand für die Verwendung der Verschlüsselung und die nötige zusätzliche CPU-Last sind beide geringer, als bei der oben beschriebenen Methode mit SSH, welche wir aber nach wie vor bei der Übertragung über das
+Internet empfehlen.
+
+Die Verschlüsselung braucht natürlich sowohl auf dem Agenten als auch auf dem Server eine passende Konfiguration.
+Diese kann entweder von Hand erstellt werden ({CRE}) oder mit der Agentenbäckerei ({CEE}).
+
+
+==== Aufsetzen ohne Agentenbäckerei
+
+Auch ohne Agentenbäckerei geht der erste Schritt über das Anlegen einer Regel im Regelsatz [.guihint]#Setup > Agents > Agent access rules > Encryption (Linux, Windows).# 
+Die Regel soll auf alle Hosts greifen, für die Sie Verschlüsselung einsetzen möchten.
+SNMP-Hosts ignorieren diese Einstellung, daher müssen Sie sie nicht explizit ausschließen.
+
+.Auf dem Server selbst ist das Passwort nicht verschlüsselt
+image::agent_windows_encrypt_agent.png[alt="Dialog mit Verschlüsselungsoptionen."]
+
+Wichtig ist die Einstellung für [.guihint]#Encryption for Agent#.
+Solange Sie die Regel auf dem Default [.guihint]#Disable# lassen, bleibt natürlich alles beim Alten.
+Sie haben also die Wahl zwischen:
+
+* [.guihint]#Enable#: Verschlüsselung wird aktiviert, aber Daten von Agenten ohne Verschlüsselung werden weiter akzeptiert.
+* [.guihint]#Enforce#: Verschlüsselung wird aktiviert, nur noch verschlüsselte Daten werden akzeptiert.
+
+Sinnvoll ist es, zunächst mit [.guihint]#Enable# zu beginnen.
+Sobald Sie meinen, dass alle Agenten auf Verschlüsselung umgestellt sind, stellen Sie auf [.guihint]#Enforce#, um dadurch Hosts zu finden, die noch Daten im Klartext senden.
+
+Die Verschlüsselung funktioniert mit einem gemeinsamen Passwort, das Sie hier angeben und sowohl auf dem {CMK}-Server als in der Konfiguration des Agenten im Klartext gespeichert werden muss (_shared secret_). Wählen Sie ein zufälliges Passwort aus und halten Sie es parat für den zweiten Schritt: die Konfiguration des Agenten.
+
+Auf dem Windows-Server fügen Sie nun das Passwort der Konfiguration des Agenten in den globalen Optionen hinzu:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+global:
+  encrypted: yes
+  passphrase: MyPassword
+----
+
+Jetzt können Sie folgende Tests machen (siehe dazu auch den xref:cmk_commandline#[Artikel über die Kommandozeile von {CMK}):]
+
+* Ein `telnet myhost123 6556` vom {CMK}-Server muss nun wirren Zeichensalat ausgeben.
+* Ein `cmk -d myhost123` auf dem {CMK}-Server muss die sauberen Klartextdaten anzeigen.
+
+
+==== Aufsetzen mit der Agentenbäckerei
+
+{cee-only}
+Das Aufsetzen der Verschlüsselung mit der Agentenbäckerei ist sehr einfach. 
+Mit dem Erstellen der gerade beschriebenen Regel sind Sie im Grunde fertig.
+Sie brauchen nur noch neue Agenten zu backen und zu verteilen.
+Der notwendige Eintrag wird dann automatisch in der xref:agent_windows#files[Konfigurationsdatei der Agentenbäckerei] erzeugt.
+// Die Datei `C:\ProgramData\checkmk\agent\check_mk.user.yml` wird automatisch für Sie erzeugt und mit in die Agentenpakete eingebaut.
+////
