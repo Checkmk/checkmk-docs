@@ -5,32 +5,53 @@ include::global_attr.adoc[]
 [#agent_architecture]
 == Architektur des Agenten
 
-////
-=== Verzeichnisse des Agenten
+Mit dem neuen Agenten sind mehr Software-Komponenten als zuvor in die Kommunikation involviert.
+Daher stellen wir die Komponenten und ihr Zusammenspiel kurz vor.
+Die Architektur ist beim Windows-Agenten und beim xref:agent_linux#architecture[Linux-Agenten] identisch.
+Nur die technische Realisierung ist spezifisch für die Betriebssysteme.
 
-Der Agent gliedert sich in zwei Bereiche des Dateisystems auf:
+.Zusammenspiel der Software-Komponenten
+[{image-border}]
+image::agent_windows_communication_flow.png[alt="Illustration der Kommunikation zwischen Agent und Instanz."]
 
-* `C:\Program Files (x86)\checkmk\service\` - Hier werden programmspezifische Dateien installiert.
-Anpassungen sind hier nicht nötig. In das Verzeichnis `Program Files *(x86)*` wird der Agent aus Gründen der Kompatibilität installiert.
-Dies ist unabhängig davon, ob der Agent auf ein 32- oder 64-Bit Betriebssystem installiert wird.
-Die Installationsroutine wählt automatisch den richtigen Agenten aus.
-* `C:\ProgramData\checkmk\agent\` - Hier werden host-spezifische Dateien gespeichert.
-Das Verhalten des Agenten wird hier konfiguriert und Plugins, Logs, etc. werden ebenfalls unterhalb dieses Verzeichnisses abgelegt. +
-*Hinweis*: Normalerweise ist dieses Verzeichnis vom System als unsichtbar markiert.
+Das *Agentenprogramm* `check_mk_agent.exe` ist und bleibt zuständig für die Sammlung der Monitoring-Daten.
+// Um auch diejenigen Informationen zu erhalten, zu deren Beschaffung `root`-Rechte erforderlich sind, wird `check_mk_agent` unter `root` ausgeführt.
+Es wird als Windows-Dienst unter dem lokalen Systemkonto (_Local System account_) gestartet.
+// Für die Datensammlung ruft es der Reihe nach vorhandene Systembefehle auf.
+Es sammelt bei einem Aufruf Daten zu dem lokalen System und stellt sie dem Agent Controller zur Verfügung.
 
+Das Agentenprogramm ist:
 
-=== Die Konfigurationsdateien des Agenten
+* minimalistisch, denn es begnügt sich mit minimalen Ressourcen an RAM, CPU, Plattenplatz und Netzwerk.
+* umfassend, denn es hat Zugriff auf wichtige Daten, die per WMI oder SNMP nicht erreichbar sind. +
+In einigen Fällen kann allerdings die Überwachung per SNMP *zusätzlich* zum {CMK}-Agenten sinnvoll sein.
+Im Artikel zur xref:snmp#snmp_cmk_agent[Überwachung mit SNMP] finden Sie mehr zu diesem Thema.
+* sicher, denn es erlaubt keinerlei Zugriffe aus dem Netzwerk.
+* leicht erweiterbar, denn Sie können Plugins in einer beliebigen Programmier- oder Skriptsprache schreiben und vom Agentenprogramm ausführen lassen.
+* transparent, denn obwohl es als ausführbare Datei ausgeliefert wird, haben Sie jederzeit Zugriff auf den Quellcode und können den Agenten daher prinzipiell auch selbst kompilieren und haben jederzeit Einsicht in die Funktionalität.
 
-Für die Konfiguration des Agenten liest dieser nacheinander und hierarchisch drei Dateien ein:
+// Das Skript lauscht an einem Unix-Socket (einer `systemd` Einheit) auf eine eingehende Verbindung vom Agent Controller und schreibt seine Ausgabe in das Unix-Socket.
 
-. `C:\Program Files (x86)\checkmk\service\check_mk.yml` - Hier ist die Standardkonfiguration hinterlegt. Diese dürfen Sie nicht ändern.
-. `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` - Diese Datei wird von der Agentenbäckerei erstellt und überschreibt gegebenfalls einen Standardwert aus der vorherigen Datei.
-. `C:\ProgramData\checkmk\agent\check_mk.user.yml` - In dieser Datei können Sie von Hand individuelle Anpassungen vornehmen, um eine Einstellung oder eine Erweiterung auf einem Host zu testen.
-Diese Datei wird nach der Konfiguration aus der Agentenbäckerei eingelesen und überschreibt diese gegebenenfalls.
+Der *Agent Controller* `cmk-agent-ctl.exe` ist die neue Komponente des Agenten und zuständig für den Transport der vom Agentenskript gesammelten Daten.
+// Er wird unter dem Benutzer `cmk-agent` ausgeführt, der nur beschränkte Rechte besitzt, z.B. keine Login-Shell hat und nur zur Datenübertragung genutzt wird.
+// Der Benutzer `cmk-agent` wird während der Installation des Agentenpakets angelegt.
+// Der Agent Controller läuft als Daemon und ist als Service an `systemd` gekoppelt.
+Er lauscht am TCP-Port 6556 und fragt das Agentenprogramm ab.
 
-Wie Sie vielleicht schon an der Dateiendung der Konfigurationsdateien erkannt haben, wird als Konfigurationsformat link:https://yaml.org[YAML^] verwendet.
-Wir haben uns entschieden, ab Version {v16} dieses Format zu verwenden, da es damit einfacher möglich ist, strukturierte Daten zu konfigurieren, als mit dem klassischen INI-Format.
+Wozu wird nun der Agent Controller gebraucht -- bisher funktionierte es doch auch sehr gut ohne ihn?
+Nun, die neue Software-Architektur des Agenten ist die Voraussetzung dafür, neue Funktionen anzubieten, die mit dem minimalistischen Design des Agentenprogramms nicht umsetzbar sind, wie beispielsweise die Verschlüsselung der Kommunikation per Transport Layer Security (TLS), Datenkomprimierung und die Umkehrung der Kommunikationsrichtung.
+Bisher war es stets der {CMK} Server, der die Kommunikation initiierte und die Daten vom Agenten abfragte -- im sogenannten Pull-Modus.
 
-Für das manuelle Arbeiten mit dem Agenten ist also lediglich die letzte Konfigurationsdatei (`check_mk.user.yaml`) relevant, weil sie als letzte eingelesen wird und damit _das letzte Wort hat_.
-Wenn die Agentenbäckerei nicht genutzt wird, ist sie sogar die einzige Datei, in der Anpassungen an der Konfiguration des Agenten vorgenommen werden dürfen.
-////
+Mit dem Agent Controller kann nunmehr zusätzlich der Push-Modus realisiert werden, in dem die Initiative vom Agenten ausgeht.
+Der Push-Modus ist für eine Cloud-basierte Konfiguration und in einigen abgeschotteten Netzwerken erforderlich.
+In beiden Fällen kann der {CMK} Server nicht auf das Netzwerk zugreifen, in dem sich die zu überwachenden Hosts befinden.
+Daher sendet der Agent von sich aus regelmäßig die Daten an den {CMK} Server.
+Agent Controller und Agent Receiver sind bereits für den Push-Modus vorbereitet, auch wenn dieser Modus erst mit der nächsten {CMK} Version für die neue {CMK} Plus Edition (CPE) verfügbar sein wird.
+
+Der *Agent Receiver* `agent-receiver` ist eine neue Komponente des {CMK} Servers und der generelle Endpunkt für die Kommunikation des Agent Controllers, z.B. für die Registrierung der Verbindung.
+Er empfängt auch die vom Agent Controller im Push-Modus gesendeten Daten.
+Im Pull-Modus erfolgt der Datenaustausch mit den xref:cmc_differences.html#fetcher_checker[{CMK} Fetchern] der Instanz.
+
+Alle neuen Features werden über den Agent Controller und den Agent Receiver realisiert, d.h. {CMK} Server und Agent müssen Version {v21} haben.
+Dabei ist der erste Schritt die Registrierung des Agent Controller beim Agent Receiver der {CMK} Instanz, mit der ein Vertrauensverhältnis hergestellt wird.
+Bei der Registrierung wird bereits die TLS-Verschlüsselung der Kommunikation eingerichtet.
