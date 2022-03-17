@@ -1,3 +1,4 @@
+// -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = Anmeldung mit SAML
 :revdate: draft
@@ -14,16 +15,37 @@ Stimmen die Pfade/Prompts?
 Ist mellon_create_metadata ohne .sh jetzt auch für die 2.0 richtig?
 ////
 
-== Einleitung
-In diesem Artikel erfahren Sie, wie Sie eine Anmeldung via Secure Assertion Markup Language (SAML) einrichten. Die Implementierung in {CMK} läuft auf Apache-Level über link:https://github.com/latchset/mod_auth_mellon[mod_auth_mellon.]
+////
+MFS: Ein paar Kritikpunkte:
 
-Die Anleitung zeigt ausführlich den Weg mit Active Directory Federation Services (AD FS) als Identity Provider (IDP).
+1. Zertifikatshandling ist recht rustikal, hier sollte auf Best Practices verwiesen werden und erwähnt werden, dass in Produktivumgebungen eine interne CA aufzusetzen sinnvoll ist und die verwendeten Beispielskripte eher für Testumgebungen geeignet sind. Viele Admins machen sich wenig Kopf um "chains of trust" und wollen nur, dass alles funktioniert. Ein von einem Script vergessener Schlüssel ohne Passphrase, der verwendet werden kann, gültige Zertifikate zu signieren, ist a bissele a Problem, wenn das Root-Zertifikat bei 1000 Servern in den Trust Store aufgenommen wurde.
+
+2. Auch wenn Du wenig Einfluss auf die Screenshots hast: Ein paar sollten der Übersichtlichkeit zuliebe zumindest unten beschnitten werden, damit auch auf kleinen Bildschirmen wenigstens ein Screenshot und die Texte drüber und drunter sichtbar sind. Ein Screenshot mit sehr kleiner Schrift sollte noch mit target="_blank" separat verlinkt werden, um lesbar zu sein.
+
+3. Am Ende sollte noch ein Abschnitt "Logging und Debugfiles" hinzugefügt werden. Es gibt sicher Möglichkeiten, für mod_mellon das Logging alleine hochzudrehen oder gar in ein separates Logfile zu schreiben. Gerade vor dem Hintergrund der Konfiguration für andere IDPs ist Logging/Debugging sicher sinnvoll. Evtl. nochmal im Consulting/Forum nachfragen?
+
+Desweiteren ist genau das ein Beispiel für Funktionalität, die nicht Kernfunktionalität von CMK ist und daher eher sporadisch getestet wird. D.h. es wäre sinnvoll, gleich in der Einleitung exakt eine Systemumgebung zu nennen, mit der das Setup funktionierte, bspw. Ubuntu 20.04 mit Checkmk 2.0.0p16 und Anbindung von Windows Server 2012 als IDP. D.h. sinnvollerweise einen der Consultants fragen, der dieses Setup zuletzt aufgesetzt hat, wie die Systemumgebung aussah.
+
+////
+
+
+== Einleitung
+
+In diesem Artikel erfahren Sie, wie Sie eine Anmeldung via _Secure Assertion Markup Language_ (SAML) einrichten. Die Implementierung in {CMK} läuft auf Apache-Level über link:https://github.com/latchset/mod_auth_mellon[mod_auth_mellon^].
+
+Diese Anleitung zeigt ausführlich den Weg mit Active Directory Federation Services (AD FS) als Identity Provider (IDP).
 In weiteren Kapiteln bekommen Sie Hinweise zur Konfiguration weiterer IDPs, etwa Azure AD und Micro Focus NetIQ Access Manager.
 
-*Hinweis:* Dieses Feature wird von den SUSE-Linux-Enterprise-Server-Versionen 12 SP3, 12 SP4 und 15 aufgrund fehlender Abhängigkeiten nicht unterstützt (ab SLES 15 SP1 läuft es).
+*Hinweis:* Dieses Feature wird von den SUSE-Linux-Enterprise-Server-Versionen 12 SP3, 12 SP4 und 15 aufgrund fehlender Abhängigkeiten nicht unterstützt (ab SLES 15 SP1 ist die Anbindung möglich).
+
+////
+MFS: Hier gehört meiner Ansicht nach noch der weitere Hinweis rein, dass alles SSL relevante hier Adhoc geschieht und ALLES gefährlich ist, wo Root-Zertifikate nicht sauber mit Passwort versehen und weggeschlossen sind. Evtl. bereits an dieser Stelle Verweis auf omd_https?
+////
 
 == Anmeldung mit Active Directory Federation Services
-== Voraussetzungen
+
+=== Voraussetzungen
+
 Die Anmeldung an {CMK} mittels Active Directory ist im Grunde relativ simpel: AD Federation Service (FS) dient als _Identity Provider_ (IDP), das Apache-Modul link:https://github.com/Uninett/mod_auth_mellon[mod_auth_mellon^] sorgt via _Security Assertion Markup Language_ (SAML) für die Authentifizierung. Voraussetzungen für diese Anleitung sind entsprechend:
 
 * Funktionierende LDAP-AD-Integration
@@ -32,11 +54,12 @@ Die Anmeldung an {CMK} mittels Active Directory ist im Grunde relativ simpel: AD
 
 Die Einrichtung erfolgt in drei Schritten:
 
-1. Konfiguration von Apache (Ein Ergebnis: XML-Datei mit Metadaten)
-2. Konfiguration von AD FS: Relying Party Trust mit Mellon-Metadaten einrichten
-3. Aktivierung des Logins in {CMK} selbst
+. Konfiguration von Apache (Ein Ergebnis: XML-Datei mit Metadaten)
+. Konfiguration von AD FS: Relying Party Trust mit Mellon-Metadaten einrichten
+. Aktivierung des Logins in {CMK} selbst
 
-== Apache konfigurieren
+=== Apache konfigurieren
+
 Es geht hier natürlich um die Konfiguration des Instanz-eigenen Apache-Servers, loggen Sie sich also zunächst dort ein:
 
 [{shell}]
@@ -60,6 +83,7 @@ OMD[mysite]:~/etc/apache/mellon$ chmod +x ~/bin/mellon_create_metadata
 OMD[mysite]:~/etc/apache/mellon$ mellon_create_metadata https://myserver "https://myserver/mysite/mellon"
 ----
 
+// MFS: Modul? Programm? Script?
 Das Modul erzeugt dabei drei Dateien: Zertifikat (.cert), Schlüssel (.key) und statische Metadaten (.xml) -- letztere werden nicht benötigt und können gelöscht werden:
 
 [{shell}]
@@ -77,21 +101,26 @@ OMD[mysite]:~/etc/apache/mellon$ mv *.cert mellon.cert
 
 Nun besorgen Sie die benötigten Metadaten direkt von Ihrem AD-FS-Server (hier _myadfs_) und speichern sie als `idp-metadata.xml`:
 
+// MFS: Umstellung von mir, da URL kein Argument eines Parameters ist
 [{shell}]
 ----
-OMD[mysite]:~/etc/apache/mellon$ wget https://myadfs/FederationMetadata/2007-06/FederationMetadata.xml -O ./idp-metadata.xml --no-check-certificate
+OMD[mysite]:~/etc/apache/mellon$ wget --no-check-certificate -O ./idp-metadata.xml https://myadfs/FederationMetadata/2007-06/FederationMetadata.xml 
 ----
 
+// MFS: ...das öffentliche Serverzertifikat...
 Nun benötigen Sie den öffentlichen Schlüssel des AD-FS-Servers, der in der Datei `idp-public-key.pem` gespeichert wird:
+// MFS: Diese Methode extrahiert nur das Zertifikat des Servers, ignoriert den Rest der Zertifikatskette. Sich die Zertifikatskette ggf. selbst zusammenzufrickeln, ist ziemlich PITA. Eigentlich sollte man sich das Root-Zertifikat und alle weiteren Zertifikate der Kette besorgen, um sauber Vertrauensverhältnisse aufzubauen. D.h. Admin fragen: "Gib mal Zertifikatskette rüber, gerne in einer konkatenierten Datei."
 
 [{shell}]
 ----
 OMD[mysite]:~/etc/apache/mellon$ echo -n | openssl s_client -connect myadfs:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | openssl x509 -pubkey -noout > idp-public-key.pem
 ----
 
-Nur für den Fall, dass Sie sich über das `echo -n` wundern: Darüber wird die folgende openssl-Session terminiert.
+// MFS: Das -n kann weg und Du kannst gerne anfügen, das in der folgenden SSL-Session interaktiv HTTP GET etc. möglich wäre, s_client ist eine Art Debug-Modus für SSL verschlüsselte Protokolle.
+Nur für den Fall, dass Sie sich über das `echo -n` wundern: Darüber wird die folgende SSL-Session terminiert.
 
-// ML: So dem so sei: Ausführlich? Verlinken? 
+// ML: So dem so sei: Ausführlich? Verlinken?
+// MFS: Tendenziell verlinken auf omd_https.html, wo komplettes Zertifikatsmanagement beschrieben wird, wir haben bei dem gesamten Themenkomplex das Problem, dass ein Root-Zertifikat, welches Ad-Hoc erzeugt wurde und ohne Schlüssel irgendwo™ herumliegt, mehr Schaden anrichten kann, wenn es in den systemweiten Store installiert wurde, als wenn nur eine Anwendung einem Zertifikat vertraut.
 ////
 Hinweis: Das Zertifikat sollte oder muss gar in den Trust Store hochgeladen werden, für den Fall, dass zum Beispiel der IDP-Service die Zertifikatskette prüft.
 ////
@@ -99,6 +128,19 @@ Hinweis: Das Zertifikat sollte oder muss gar in den Trust Store hochgeladen werd
 Als letzten Schritt ersetzen Sie die Datei Authenfizierungskonfiguration `~/etc/apache/conf.d/auth.conf` mit der folgenden Variante -- natürlich unter Angabe Ihres {CMK}-Servers (hier myserver) und Ihrer Instanz (hier mysite):
 
 // Highlighting im Quelltext scheint nicht zu funktionieren.
+// MFS: [source,apache] müsste funktionieren, bitte testen.
+// MFS: Das Error-Dokument ist semantisch falsches HTML. Es müsste wie folgt aufgebaut sein um die Fallback-Reihenfolge 1. Redirect per HTTP-Header, 2. Redirect per Meta-Direktive, 3. Nutzer muss klicken, zu respektieren: 
+////
+<html>
+  <head>
+    <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py">
+  </head>
+  <body>
+    SAML authentication failed, redirecting to login page.
+    <a href="/${SITE}/check_mk/login.py">Click here</a>.
+  </body>
+</html>
+////
 
 .~/etc/apache/conf.d/auth.conf
 [{file}]
@@ -188,7 +230,7 @@ Anschließend starten Sie Apache neu:
 OMD[mysite]:~/etc/apache/mellon$ omd restart apache
 ----
 
-Zu guter letzt laden Sie nun die dynamisch erstellten Mellon-Metadaten als XML-Datei herunter, um sie gleich im AD-Management importieren zu können:
+Zu guter Letzt laden Sie nun die dynamisch erstellten Mellon-Metadaten als XML-Datei herunter, um sie gleich im AD-Management importieren zu können:
 
 [{shell}]
 ----
@@ -200,14 +242,17 @@ Um einen Relying Party Trust in AD FS anzulegen, gehen Sie wie folgt vor:
 
 Starten Sie die AD-FS-Oberfläche:
 
+// MFS:  Screenshot unten beschneiden: 
 image::saml_adfs_01.png[]
 
 Klicken Sie auf [.guihint]#Add Relying Party Trust:#
 
+// MFS:  Screenshot unten beschneiden: 
 image::saml_adfs_02.png[]
 
 Belassen Sie die Option auf [.guihint]#Claims aware# und fahren Sie mit dem Start-Knopf fort:
 
+// MFS:  Screenshot unten beschneiden/zusammenschieben: 
 image::saml_adfs_03.png[]
 
 Wählen Sie nun [.guihint]#Import data about the relying party from a file# und geben Sie die eben heruntergeladene XML-Datei an:
@@ -220,8 +265,10 @@ image::saml_adfs_05.png[]
 
 Unter [.guihint]#Specify Display Name# geben Sie nun `Checkmk` als Namen ein:
 
+// MFS:  Screenshot unten beschneiden: 
 image::saml_adfs_06.png[]
 
+// MFS: WTF? Das ist bei einer CMK-Testinstanz OK, aber nicht bei einem Produktivsystem!? D.h. bitte anders formulieren, bspw. "Falls Sie zunächst Permit everyone wählen, denken Sie unbedingt daran, die Rechte nach den ersten Tests auf Permit specific group ändern.
 Bei der Rechtevergabe wählen Sie zunächst [.guihint]#Choose Access Control Policy# [.guihint]#Permit everyone# zum Testen; später können Sie gegebenenfalls nach [.guihint]#Permit specific group# ändern.
 
 image::saml_adfs_07.png[]
@@ -232,18 +279,22 @@ image::saml_adfs_08.png[]
 
 Bestätigen Sie abschließend den [.guihint]#Finish#-Dialog und behalten Sie das Häkchen bei [.guihint]#Configure claims issuance policy for this application:#
 
+// MFS:  Screenshot unten beschneiden: 
 image::saml_adfs_09.png[]
 
 Wählen Sie auf den eben erstellten Relying Party Trust an und starten Sie dann den Editor mit [.guihint]#Edit Claim Issuance Policy... :#
 
+// MFS:  Screenshot unten beschneiden und Link auf Screenshot im Vollbild einfügen: 
 image::saml_adfs_10.png[]
 
 Fügen Sie im folgenden Dialog über [.guihint]#Add Rule...# eine neue Regel hinzu:
 
+// MFS:  Screenshot Größe anhand von Schriftgröße berechnen: 
 image::saml_adfs_11.png[]
 
 Im ersten Schritt [.guihint]#Select Rule Template# wählen Sie [.guihint]#Transform an Incoming Claim# und bestätigen:
 
+// MFS:  Screenshot unten beschneiden: 
 image::saml_adfs_12.png[]
 
 Im zweiten Schritt [.guihint]#Configure Rule# setzen Sie folgende Werte:
@@ -254,7 +305,7 @@ Im zweiten Schritt [.guihint]#Configure Rule# setzen Sie folgende Werte:
 
 image::saml_adfs_13.png[]
 
-Damit ist auch die AD-FS-Konfiguration abgeschlossen, FS kann nun aus der Windows-Authenfifizierung die Authentifizierung für {CMK} ableiten, das Sie im nächsten Schritt anweisen, Nutzer über HTTP-Anfragen zu authentifizieren.
+Damit ist auch die AD-FS-Konfiguration abgeschlossen, FS kann nun aus der Windows-Authentifizierung die Authentifizierung für {CMK} ableiten, das Sie im nächsten Schritt anweisen, Nutzer über HTTP-Anfragen zu authentifizieren.
 
 == {CMK} konfigurieren
 In {CMK} müssen Sie nun nur noch unter [.guihint]#Setup > General > Global Settings > User Interface > Authenticate users by incoming HTTP requests# bei [.guihint]#Current settings# die Option [.guihint]#Activate HTTP header authentication# aktivieren.
@@ -263,7 +314,7 @@ image::saml_adfs_cmk.png[]
 
 == Weitere IDPs
 Die folgenden Kapitel beschreiben lediglich die Konfiguration von Mellon/Apache für unterschiedliche, bereits laufende IDPs.
-Die Anbindung in {CMK} selbst beschränkt sich jeweils auf den letzten Schritt aus der ausfürhrlichen AD-FS-Anleitung.
+Die Anbindung in {CMK} selbst beschränkt sich jeweils auf den letzten Schritt aus der ausführlichen AD-FS-Anleitung.
 
 // ML: Nach JHS
 === Azure AD
@@ -276,6 +327,7 @@ Voraussetzungen für die folgende Beispielkonfiguration:
 
 Hier eine Beispielkonfiguration:
 
+// MFS: Syntax-Highlighting für Apache aktivieren, Error Document wie oben
 .~/etc/apache/conf.d/auth.conf
 [{file}]
 ----
