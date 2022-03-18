@@ -281,7 +281,7 @@ Bob signiert nun mit seinem Intermediate-Zertifikat das mitgebrachte CSR mit ein
 bob@pc:~$ *cd im*
 bob@pc:~/im$ *openssl x509 -CAcreateserial -req \
     -in certs/checkmk.starkindustries.test.csr \
-    -CA certs/imbob.pem -CAkey private/im.key.pem -rand_serial \
+    -CA certs/imbob.pem -CAkey private/im.key.pem \
     -out certs/checkmk.starkindustries.test.crt -days 365 \
     -sha256 -extfile certs/checkmk.starkindustries.test.ext*
 ----
@@ -300,8 +300,7 @@ Meist genügt es, das Zertifikat `ca.cert.pem` unter  [.guihint]#Einstellungen >
 Damit die Zertifikatsverwaltung kein Stolperstein beim automatischen Agenten-Update darstellt, haben wir in der Agenten-Bäckerei die Möglichkeit vorgesehen, ein eigenes CA-Zertifikat zu übergeben, das nur für Agenten-Updates benutzt wird.
 Die Systemzertifikate werden hierbei nicht angetastet, Agenten-Updates sind dennoch möglich.
 
-Alternativ können Sie das Root-Zertifikat in der lokalen CA-Datenbank enthalten.
-//SP: Der Satz klingt eigenartig. Ich vermute, das Verb ist falsch.
+Alternativ können Sie das Root-Zertifikat in der lokalen CA-Datenbank integrieren.
 Kopieren Sie dafür die Datei `ca.cert.pem` nach `/usr/local/share/ca-certificates/starkindustries.crt`.
 Anschließend generieren Sie den Cache neu:
 
@@ -339,8 +338,9 @@ Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Nameserver, 
 Es entstehen keine Kosten. Per DNS validierte Zertifikate erfordern alle 90 Tage etwas Aufmerksamkeit, per Serververzeichnis validierte können Jahre lang automatisch neu erzeugt werden. 
 
 Für Letsencrypt-Zertifikate stellt die EFF das Python-Programm-Certbot in vielen verschiedenen Paketformaten bereit.
-Der Certbot übernimmt die Erstellung des Schlüssels und den Versand der CSR. Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft verifiziert wird.
+Der Certbot übernimmt die Erstellung des Schlüssels und den Versand der CSR. Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
 //SP: Die Inhaberschaft wovon? Der Absatz ist insgesamt heftig, da gefühlt zu mehr als der Hälfte aus Fachbegriffen bestehend.
+// MFS: Ich habe nun "Domain" eingetragen, der Begriff impliziert auch Subdomains bezw. Wildcard-Domains oder halt einzelne Hostnamen.
 
 Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitsstellt, können Sie der Anleitung für ` certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. Hier passt das Script die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein. Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
 //SP: erster Satz:Ist mit Apache ein Apache-Server gemeint? Ein Apache ist ein Indianer. letzter Satz: hinter "für den ein Certbot-Plugin" fehlt IMHO ein Verb, z.B. existiert oder vorliegt.
@@ -359,8 +359,10 @@ Die erstellten Zertifikate werden dann im Ordner `/etc/letsencrypt/live` abgeleg
 == Konfiguration der HTTPS-Verbindung für eine Instanz
 
 // New
-Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und IM-Zertifikat angeben, im Beispiel oben sind das:
+Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und Intermediate-Zertifikat angeben, im Beispiel oben sind das:
 //SP: Was ist ein IM-Zertifikat?
+// MFS: Wird weiter oben verwendet: Intermediate Certificate, nun ausgeschrieben, für alle, die direkt hier hin springen
+
 ./etc/apache2/sites-enabled/default-ssl.conf
 [source,apache]
 ----
@@ -370,7 +372,7 @@ SSLCertificateKeyFile /etc/certs/checkmk.starkindustries.test.key
 SSLCertificateChainFile /etc/certs/imbob.pem
 ----
 
-Letsencrypt-Certbot legt Zertifikate in /etc/letsencrypt ab:
+Letsencrypt-Certbot legt Zertifikate in `/etc/letsencrypt` ab:
 
 ./etc/apache2/sites-enabled/default-ssl.conf
 [source,apache]
@@ -387,6 +389,9 @@ Falls Sie Zertifikate von einem kommerziellen Anbieter signieren lassen haben, h
 
 Ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
 // Lines and comments added.
+// MFS: Für eine bessere Lösung sollte der Block  <IfModule headers_module>
+// mit unserer Konfiguration ausgeliefert werden. Siehe auch:
+// https://forum.checkmk.com/t/include-apache-config-for-x-forwarded-proto/29869
 
 ./etc/apache2/sites-enabled/000-default
 [source,apache]
@@ -396,8 +401,13 @@ RewriteEngine On
 RewriteCond %{REQUEST_URI} !^/.well-known
 RewriteCond %{SERVER_PORT} !^443$
 RewriteRule (.*) https://%{HTTP_HOST}$1 [L]
-# If this line breaks the Apache startup, remove it:
-RequestHeader set X-Forwarded-Proto "https"
+# This section passes the system Apaches connection mode to the 
+# instance Apache. Make sure mod_headers is enabled, otherwise it
+# will be ignored and "Analyze configuration" will issue "WARN".
+<IfModule headers_module>
+    RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}
+    RequestHeader set X-Forwarded-SSL expr=%{HTTPS}
+</IfModule>
 ----
 
 // Small change in wording
