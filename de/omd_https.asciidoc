@@ -26,12 +26,65 @@ Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann müss
 * Sie besitzen ein gültiges Server-Zertifikat.
 * Das Apache-Modul `mod_ssl` ist installiert und aktiviert.
 * Der Server ist über HTTPS erreichbar.
-* Das Rewrite- und das Header-Modul für den Webserver sind vorhanden und geladen.
+* Das Rewrite- und das Headers-Modul für den Webserver sind vorhanden und geladen.
 
 // Neu.
 Was dafür zu tun ist, erklärt dieser Artikel.
-// TK: Nur zum Teil: Wie man überprüft, dass `mod_ssl` und das Rewrite- und Header-Modul für den Webserver da sind, wird nicht beschrieben.
+// TK: Nur zum Teil: Wie man überprüft, dass `mod_ssl` und das Rewrite- und Headers-Modul für den Webserver da sind, wird nicht beschrieben.
 
+== Apache-Module aktivieren
+
+=== Geladene Module anzeigen
+
+Verwenden Sie das Kommando `apachectl` (alte CentOS- und RHEL-Versionen benötigen möglicherweise stattdessen `httpd`), um eine Liste der geladenen Apache-Module anzuzeigen:
+
+[{shell}]
+----
+{c-root} *apachectl -M*
+Loaded Modules:
+ core_module (static)
+ so_module (static)
+ watchdog_module (static)
+ http_module (static)
+ log_config_module (static)
+ logio_module (static)
+ version_module (static)
+ unixd_module (static)
+ access_compat_module (shared)
+ alias_module (shared)
+ [...]
+----
+
+Sind in der angezeigten Liste `headers_module`, `rewrite_module` und `ssl_module` bereits geladen, können Sie die nächsten beiden Schritte überspringen.
+
+=== Module aktivieren
+
+Die Aktivierung fehlender Module gelingt mit dem Script `a2enmod`. Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an. Die Datei mit Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, `.conf` die eigentliche Konfiguration des Moduls:
+
+[{shell}]
+----
+{c-root} *a2enmod ssl*
+Enabling module ssl.
+To activate the new configuration, you need to run:
+  systemctl restart apache2
+----
+
+Schlägt `a2enmod` fehl (beispielsweise, weil Sie mit einem älteren RHEL arbeiten), ist die Konfigurationsdatei `/etc/httpd/conf/httpd.conf` dergestalt anzupassen, dass auskommentierte Zeilen `LoadModule` vom `#` befreit werden.
+
+=== Apache neu starten
+
+Nach der Aktivierung der Module muss der Apache-Webserver neu gestartet werden. Falls Ihre Distribution bereits bei der Apache-Installation ein selbst signiertes Zertifikat für Testzwecke erzeugt hat, werfen Sie bitte einen Blick in die Datei `/etc/apache2/mods-enabled/ssl.conf` und prüfen Sie. ob die hier angegebenen Zertifikatsdateien vorhanden sind. 
+
+Ist dies der Fall, starten Sie mit einem der folgenden Befehle den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` ist der erste Befehl zu verwenden:
+
+[{shell}]
+----
+{c-root} systemctl restart apache2
+{c-root} service apache2 restart
+{c-root} /etc/init.d/apache2 restart
+----
+
+Ist kein automatisch erstelltes Zertifikat vorhanden, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifik erhalten oder erstellt haben.
 
 == Zertifikate erhalten
 
@@ -39,31 +92,36 @@ Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat z
 // TK: Ich würde die Reihenfolge umstellen, ist logischer und ausserdem kommt der Riemen dann am Schluss: 1. oldschoolcsr 2. letsencrypt 3. becomeca
 
 * Sie bezahlen für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_).
-Je nach Level wird nur geprüft, ob Sie Webmaster einer Domain sind oder es müssen Unterlagen vom Registergericht eingereicht werden.
+Je nach Stufe der Validierung wird nur geprüft, ob Sie Webmaster einer Domain sind oder es müssen Handelsregisterauszüge eingereicht werden.
 Nachteil: es kostet Geld und verursacht Verwaltungsaufwand.
 // TK: Registergericht problematisch: als Info für D kennzeichnen
+// MFS: Das prinzipielle Vorgehen ist überall gleich, trade register, oder commercial register
+* Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Letsencrypt_].
+Nachteil: Sie müssen entweder Zugriff auf den Server haben, dessen Zertifikate Sie ausstellen wollen (und der muss von außen erreichbar sein), oder Sie müssen im Nameserver Ihrer Domain Einträge anlegen und ändern können.
+// TK: "im DNS TXT-Einträge anlegen": ist mir nicht klar, was das bedeutet
 * Sie werden Ihre xref:becomeca[eigene _Certificate Authority_ (CA)] und erzeugen Zertifikate selbst.
 Nachteil: Sie müssen strikte Sicherheitsregeln einhalten und die CA in die Browser der Nutzer importieren, die {CMK} verwenden sollen.
-* Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Letsencrypt_].
-Nachteil: Sie müssen entweder Zugriff auf den Server haben, dessen Zertifikate Sie ausstellen wollen (und der muss von außen erreichbar sein), oder Sie müssen im DNS TXT-Einträge anlegen können.
-// TK: "im DNS TXT-Einträge anlegen": ist mir nicht klar, was das bedeutet
-
 
 [#oldschoolcsr]
 === Zertifikate per CSR erhalten
 
-Zertifikate bei einer kommerziellen Certificate Authority signieren zu lassen, war lange Zeit der einzige Weg, von allen Browsern und Betriebssystemen akzeptierte Zertifikate zu erhalten und ist es auch heute noch, wenn lange Laufzeiten oder Validierung auf Organisationsebene oder höher erforderlich ist.
-// TK: Der Satz ist ganz schön lang.
-// TK: "lange Laufzeiten": bis man das Zertifikat bekommt oder Laufzeit des Zertifikats?
+Zertifikate bei einer kommerziellen Certificate Authority signieren zu lassen, war lange Zeit der einzige Weg, von allen Browsern und Betriebssystemen akzeptierte Zertifikate zu erhalten. 
+Dieses Verfahren ist heute insbesondere dann noch üblich, wenn lange Gültigkeitszeiträume oder Validierung auf Organisationsebene (Organization Validation, kurz OV) oder höher (Extended Validation, kurz EV) erwünscht ist.
 // TK: "Organisationsebene oder höher": ?
-Die Kosten für dieses Verfahren liegen zwischen null Euro (3 Monate Gültigkeit, ein Hostname), 20 Euro (12 Monate, ein Hostname) und mehreren hundert Euro (24 Monate, mehrere Hostnamen, Validierung auf Organisationsebene).
+//  MFS: bspw. Bestätigtung, dass die Domain checkmk-topsupport.com auch wirklich tribe29 GmbH gehört, ist OV
+
+Die Kosten für dieses Verfahren liegen zwischen gratis (3 Monate Gültigkeit, ein Hostname), wenigen Euro (12 Monate, ein Hostname) und mehreren hundert Euro (24 Monate, mehrere Hostnamen, Validierung auf Organisationsebene).
 //SP: Ich würde den ersten Satz teilen, da er sehr lang und unübersichtlich ist. Eine Frage am Rande: Wollen wir wirklich fixe Preise nennen? Preise können sich schnell ändern, es handelt sich um Preise die nicht im Einflussbereich unseres Unternehmens liegen, ist uns jede Änderung bekannt etc.
 // TK: Ähnlicher Einwand zu den Preisen. Vielleicht so: von gratis über wenige Euro bis zu mehreren hundert Euro
 // TK: Kann man hier nicht eine oder ein paar CA verlinken? Was ist damit? https://www.globalgap.org/de/what-we-do/the-gg-system/certification/Approved-CBs/index.html
+// MFS: Die zertifizieren nicht im SSL-Bereich, sondern Zertifizierungsstellen für landwirtschaftliche Normen
+// MFS: Zertifizierungsstellen zu verlinken, ist schwierig, weil viele der schnellen günstigen mit IM-Zertifikaten der "großen" als schnelle, günstige Quasi-Reseller auftreten, per Suchmaschine zu suchen oder die vom eigenen Webhoster empfohlene Zertifizierungsstelle zu untzen, ist daher der beste Weg
 
-Der Standardweg ist, zunächst den Server-Schlüssel zu erzeugen, was Sie direkt auf dem Webserver durchführen können, auf dem {CMK} läuft:
+Der Standardweg ist, zunächst den privaten Server-Schlüssel zu erzeugen.
+Diesen Schritt können Sie direkt auf dem Server durchführen können, auf dem Ihre {CMK}-Instanz läuft:
 // TK: Zu meinem Verständnis: einen privaten Schlüssel erzeugen, der für das Zertifikat des Servers verwendet werden soll?
 // TK: Ist es nicht umgekehrt? Durch CMK bekomme ich erst einen Webserver, für den ich jetzt HTTPS einrichten muss?
+// MFS: Ich gehe davon aus, dass CMK bereits läuft, bislang unverschlüsselt. Zunächst muss dafür der private Serverschlüssel erzeugt werden, der auf dem Server verbleiben kann
 
 [{shell}]
 ----
@@ -72,26 +130,110 @@ Der Standardweg ist, zunächst den Server-Schlüssel zu erzeugen, was Sie direkt
 {c-root} *openssl genrsa -out checkmk.mydomain.com.key 2048*
 ----
 // TK: Kommandoausgabe sagt, dass ich einen "RSA private key" erzeuge: siehe Frage von oben?
+// MFS: Das ist korrekt, dieser Schlüssel dient später dazu, den TLS-Verkehr zu verschlüsseln
 
-Im nächsten Schritt wird das "Certificate Signing Request" erstellt:
+Im nächsten Schritt erstellrn Sie das "Certificate Signing Request":
 
 [{shell}]
 ----
 {c-root} *openssl req -new -key checkmk.mydomain.com.key -out checkmk.mydomain.com.csr*
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+---
+Country Name (2 letter code) [AU]: *DE*
+State or Province Name (full name) [Some-State]: *Bavaria*
+Locality Name (eg, city) []: *Munich*
+Organization Name (eg, company) [Internet Widgits Pty Ltd]: *Yoyodyne Inc.*
+Organizational Unit Name (eg, section) []:
+Common Name (e.g. server FQDN or YOUR name) []: *checkmk.mydomain.com*
+Email Address []: *webmaster@mydomain.com*
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:
+An optional company name []:
 ----
 
-Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen.
+// Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen. Die eingetragene E-Mail-Adresse sollte in derselben Domain liegen und zu einem existierenden und gelesenen Postfach gehören.
 // TK: im Bsp. als Common Name checkmk.mydomain.com?
 //SP: Wo werden die Angaben eingetragen? Kann hier ein Screenshot oder ähnliches eingefügt werden?
 // TK: Hier zumindest schreiben, dass mit diesem Kommando diverse Eingaben abgefragt werden (Location, Org, Server-Name, E-Mail...) + Verweis auf das becomeca Kapitel, in dem die beiden Kommandos genau vorgestellt werden.
-Die CSR-Datei wird nun per Webformular an den Zertifikatsdienstleister übertragen.
+// Die CSR-Datei wird nun per Webformular an den Zertifikatsdienstleister übertragen.
 // TK: So schnell geht es doch wohl nicht, oder? Das klingt so, als ob per openssl genrsa Kommando ein Webformular geöffnet wird.
 // TK: Die generierte Dateien checkmk.mydomain.com.csr und checkmk.mydomain.com.key müssen anschließend zur CA geschickt werden, idR per Webformular der CA
-Je nach Validierungsstufe kann es sein, dass zusätzliche Dokumente wie ein Handelsregistereintrag beigefügt werden müssen.
+// Je nach Validierungsstufe kann es sein, dass zusätzliche Dokumente wie ein Handelsregistereintrag beigefügt werden müssen.
 // TK: Handelsregistereintrag problematisch: als Info für D kennzeichnen
-Im einfachsten Fall der reinen Domain-Validierung besteht diese darin, dass das Zertifikat einfach an `webmaster@mydomain.com` oder `postmaster@mydomain.com` geschickt wird. 
+// MFS: englischsprachig commercial register oder trade register, Verfahren ist letztlich überall gleich
+// Im einfachsten Fall der reinen Domain-Validierung besteht diese darin, dass das Zertifikat einfach an `webmaster@mydomain.com` oder `postmaster@mydomain.com` geschickt wird. 
 // TK: Ist dieser einfachste Fall etwas, was ich ich im Webformular an die CA auswählen kann?
 // TK: Und muss die EMail dann die sein, die ich in der CSR-Datei hinterlegt habe? 
+// MFS: Wie tief Konsistenz der E-Mail-Adresse gegen anderen Quellen geprüft wird (auch Kontakte im Handle des Registrars), ist den Zertifizierungsstellen überlassen 
+
+// MFS: Nochmal am Stück mit neuen Formulierungen:
+Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen. Die eingetragene E-Mail-Adresse sollte in derselben Domain liegen und zu einem existierenden und gelesenen Postfach gehören.
+
+Die CSR-Datei wird anschließend per Webformular an den von Ihnen ausugewählten Zertifikatsdienstleister übertragen.
+Je nach Validierungsstufe kann es sein, dass zusätzliche Dokumente wie ein Handelsregistereintrag beigefügt werden müssen.
+Im einfachsten Fall der reinen Domain-Validierung besteht diese darin, dass eine E-Mail mit Bestätigungslink an `webmaster@mydomain.com` oder `postmaster@mydomain.com` geschickt wird. Das fertige Zertifikat kann dann aus dem Webfrontend des Dienstleisters heruntergeladen werden oder es wird ebenfalls per E-Mail zugestellt.
+
+Die folgenden Screenshots zeigen die wesentlichen Schritte bei Verwendung der Online-Formulare des Dienstleisters link:https://www.zerossl.com/[ZeroSSL^]. Die Verlinkung stellt dabei keine Empfehlung dar, ZeroSSL eignet sich jedoch der wegen drei möglichen 90-Tage-Gratis-Zertifikate gut für Tests. Die folgenden Screenshots zeigen die für die Zertifikatsanforderung relevanten Schritte
+
+Zunächst wird die Domain angegeben, für die das Zertifikat ausgestellt werden soll. Je nach Dienstleister sind auch Multidomain-Zertifikate mit unterschiedlicher Flexibilität (und Preisgestaltung) möglich:
+
+image::omd_https_zerossl_step01.png[]
+
+Es folgt der Upload des zuvor erzeugten CSR. Einige Zertifizierungsstellen bieten an, Schlüssel und CSR online zu erzeugen. Verzichten Sie aus Sicherheitsgründen darauf und laden Sie die selbst erzeugte Signierungsanfrage hoch:
+
+image::omd_https_zerossl_step02.png[]
+
+Meist müssen Sie jetzt die Laufzeit angeben (und sich damit für ein Preismodell entscheiden) und daraufhin die E-Mail-Adresse wählen, an die ein Validierungslink oder ein Token (Zeichenkette) für die Eingabe in ein Formular verschickt wird.
+
+image::omd_https_zerossl_step03.png[]
+
+Befolgen Sie die Anweisungen in der E-Mail an die ausgewählte Adresse. So gelangen Sie zu einem Link zum Download des Zertifikates oder Sie bekommen das Zertifikat in einer weiteren E-Mail zugeschickt.
+
+image::omd_https_zerossl_step04.png[]
+
+In unserem Fall enthielt das heruntergeladene Zip-Archiv zwei Dateien: `certificate.crt` (das eigentliche Zertifikat) und `ca_bundle.crt`, die Verkettung ein oder mehrerer Intermediate-Zertifikate. Sie können mit diesen beiden Dateien nun die xref:configsample[Konfiguration des Apache-Servers] durchführen.
+
+[#letsencrypt]
+=== Letsencrypt
+
+Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Nameserver, können Sie automatisiert Zertifikate über den mit der Electronic Frontier Foundation (EFF) verbandelten Non-Profit-Dienstleister Letsencrypt erstellen lassen.
+// TK: Hier Letsencrypt nochmal verlinken
+//SP: Bei der ersten Erwähnung einer Bezeichnung (hier: Electronic Frontier Foundation) sollte die Abkürzung in Klammern eingeführt werden. Danach kann dann die Abkürzung eigenständig verwendet werden.
+Es entstehen keine Kosten.
+Per DNS validierte Zertifikate erfordern alle 90 Tage etwas Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden. 
+
+Für Letsencrypt-Zertifikate stellt die EFF das Python-Programm Certbot in vielen verschiedenen Paketformaten bereit.
+Der Certbot übernimmt die Erstellung des Schlüssels und den Versand der CSR.
+Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
+//SP: Die Inhaberschaft wovon? Der Absatz ist insgesamt heftig, da gefühlt zu mehr als der Hälfte aus Fachbegriffen bestehend.
+// MFS: Ich habe nun "Domain" eingetragen, der Begriff impliziert auch Subdomains bezw. Wildcard-Domains oder halt einzelne Hostnamen.
+
+Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt, können Sie der Anleitung für `certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. 
+Hier passt das Skript die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein.
+Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
+//SP: erster Satz:Ist mit Apache ein Apache-Server gemeint? Ein Apache ist ein Indianer. letzter Satz: hinter "für den ein Certbot-Plugin" fehlt IMHO ein Verb, z.B. existiert oder vorliegt.
+// TK: Warum benennst Du die Fälle unterschiedlich: "Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt" und "Ist der {CMK}-Server nicht aus dem Internet erreichbar"?
+// TK: Der 1. certbot Link geht nicht in die Doku, sondern auf die Website.
+// TK: Entweder Du verlinkst direkt in die Anleitungen oder paraphrasierst die Überschriften, so dass man Sie wiederfinden kann. Zum Stichwort certbot --apache hab ich was gefunden, weiss aber nicht, ob es das ist, was Du meinst.
+
+Existiert kein Plugin, können Sie alle 90 Tage eine manuelle DNS-Validierung vornehmen. Dafür genügt der minimale Certbot ohne Apache-Plugin. 
+
+[{shell}]
+----
+{c-root} *certbot -d 'checkmk.mydomain.com' --manual \
+   --preferred-challenges dns certonly*
+----
+
+Die erstellten Zertifikate werden dann im Ordner `/etc/letsencrypt/live` abgelegt. 
+
+
 
 
 [#becomeca]
@@ -390,41 +532,6 @@ In diesem Fall muss sie jährlich bei Bob vorbeischauen.
 
 Im unten beschriebenen xref:configsample[Konfigurationsbeispiel] muss dann nicht Bobs Intermediate-Zertifikat auf dem Server platziert werden, sondern eine Konkatenation aus Bobs und Alice' Intermediate-Zertifikaten.
 
-
-[#letsencrypt]
-=== Letsencrypt
-
-Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Nameserver, können Sie automatisiert Zertifikate über den mit der Electronic Frontier Foundation (EFF) verbandelten Non-Profit-Dienstleister Letsencrypt erstellen lassen.
-// TK: Hier Letsencrypt nochmal verlinken
-//SP: Bei der ersten Erwähnung einer Bezeichnung (hier: Electronic Frontier Foundation) sollte die Abkürzung in Klammern eingeführt werden. Danach kann dann die Abkürzung eigenständig verwendet werden.
-Es entstehen keine Kosten.
-Per DNS validierte Zertifikate erfordern alle 90 Tage etwas Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden. 
-
-Für Letsencrypt-Zertifikate stellt die EFF das Python-Programm Certbot in vielen verschiedenen Paketformaten bereit.
-Der Certbot übernimmt die Erstellung des Schlüssels und den Versand der CSR.
-Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
-//SP: Die Inhaberschaft wovon? Der Absatz ist insgesamt heftig, da gefühlt zu mehr als der Hälfte aus Fachbegriffen bestehend.
-// MFS: Ich habe nun "Domain" eingetragen, der Begriff impliziert auch Subdomains bezw. Wildcard-Domains oder halt einzelne Hostnamen.
-
-Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt, können Sie der Anleitung für `certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. 
-Hier passt das Skript die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein.
-Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
-//SP: erster Satz:Ist mit Apache ein Apache-Server gemeint? Ein Apache ist ein Indianer. letzter Satz: hinter "für den ein Certbot-Plugin" fehlt IMHO ein Verb, z.B. existiert oder vorliegt.
-// TK: Warum benennst Du die Fälle unterschiedlich: "Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt" und "Ist der {CMK}-Server nicht aus dem Internet erreichbar"?
-// TK: Der 1. certbot Link geht nicht in die Doku, sondern auf die Website.
-// TK: Entweder Du verlinkst direkt in die Anleitungen oder paraphrasierst die Überschriften, so dass man Sie wiederfinden kann. Zum Stichwort certbot --apache hab ich was gefunden, weiss aber nicht, ob es das ist, was Du meinst.
-
-Existiert kein Plugin, können Sie alle 90 Tage eine manuelle DNS-Validierung vornehmen. Dafür genügt der minimale Certbot ohne Apache-Plugin. 
-
-[{shell}]
-----
-{c-root} *certbot -d 'checkmk.mydomain.com' --manual \
-   --preferred-challenges dns certonly*
-----
-
-Die erstellten Zertifikate werden dann im Ordner `/etc/letsencrypt/live` abgelegt. 
-
-
 [#configsample]
 == Konfiguration der HTTPS-Verbindung für eine Instanz
 // TK: Hier den Zusammenhang zu den 3 Optionen von oben deutlicher machen, d.h. z.B. im Fall becomeca muss ich die folgenden Einträge machen...
@@ -445,6 +552,17 @@ SSLCertificateKeyFile /etc/certs/checkmk.starkindustries.test.key
 SSLCertificateChainFile /etc/certs/imbob.pem
 ----
 
+Falls Sie Zertifikate von einem kommerziellen Anbieter signieren lassen haben, hat Ihnen dieser auch mitgeteilt, ob ein `SSLCertificateChainFile` benötigt wird und dieses gegebenenfalls mitgeschickt. Im oben gezeigten Beispiel mit ZeroSSL sähe die Konfiguration wie folgt aus:
+
+./etc/apache2/sites-enabled/default-ssl.conf
+[source,apache]
+----
+SSLEngine on
+SSLCertificateFile /etc/certs/checkmk.mydomain.com.key
+SSLCertificateKeyFile /etc/certs/certificate.crt
+SSLCertificateChainFile /etc/certs/ca_bundle.crt
+----
+
 Der Letsencrypt-Certbot legt Zertifikate in `/etc/letsencrypt` ab:
 // TK: nicht nur Zertifikate, sondern auch Schlüssel
 
@@ -456,8 +574,6 @@ SSLCertificateFile /etc/letsencrypt/live/checkmk.starkindustries.test/cert.pem
 SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.starkindustries.test/privkey.pem
 SSLCertificateChainFile /etc/letsencrypt/live/checkmk.starkindustries.test/chain.pem
 ----
-
-Falls Sie Zertifikate von einem kommerziellen Anbieter signieren lassen haben, hat Ihnen dieser auch mitgeteilt, ob ein `SSLCertificateChainFile` benötigt wird und dieses gegebenenfalls mitgeschickt.
 
 // End new
 
