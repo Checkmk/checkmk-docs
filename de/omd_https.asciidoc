@@ -59,7 +59,7 @@ Sind in der angezeigten Liste `headers_module`, `rewrite_module` und `ssl_module
 
 === Module aktivieren
 
-Die Aktivierung fehlender Module gelingt mit dem Script `a2enmod`. Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an. Die Datei mit Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, `.conf` die eigentliche Konfiguration des Moduls:
+Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem Script `a2enmod`. Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an. Die Datei mit Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, `.conf` die eigentliche Konfiguration des Moduls:
 
 [{shell}]
 ----
@@ -69,7 +69,15 @@ To activate the new configuration, you need to run:
   systemctl restart apache2
 ----
 
-Schlägt `a2enmod` fehl (beispielsweise, weil Sie mit einem älteren RHEL arbeiten), ist die Konfigurationsdatei `/etc/httpd/conf/httpd.conf` dergestalt anzupassen, dass auskommentierte Zeilen `LoadModule` vom `#` befreit werden.
+// MFS: Getestet mit CentOS 7, alles davor solle irrelevat sein, globale /etc/httpd/conf/httpd.conf nur nach Update früherer Versionen
+Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl`ein eigenes Paket, das Sie separat installieren müssen:
+
+[{shell}]
+----
+{c-root} *yum install -y httpd mod_ssl*
+----
+
+Distributionen mit monolithischer Konfiguration erfordern die Anpassung der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` dergestalt, dass die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit wird.
 
 === Apache neu starten
 
@@ -80,11 +88,21 @@ Ist dies der Fall, starten Sie mit einem der folgenden Befehle den Apache-Webser
 [{shell}]
 ----
 {c-root} systemctl restart apache2
+{c-root} systemctl restart httpd
 {c-root} service apache2 restart
 {c-root} /etc/init.d/apache2 restart
+{c-root} /etc/init.d/httpd restart
 ----
 
-Ist kein automatisch erstelltes Zertifikat vorhanden, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifik erhalten oder erstellt haben.
+Ob bei der Installation oder Aktivierung des SSL-Moduls ein Zertifikat erstellt wurde, erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Datei existiert (bei RHEL ist als Startverzeichnis `/etc/httpd` anzugeben):
+
+[{shell}]
+----
+{c-root} find /etc/apache2/ -type f -exec grep -Hn '^\s*SSLCertificateFile' {} \;
+/etc/apache2/sites-available/default-ssl.conf:32: SSLCertificateFile /etc/ssl/certs/ssl-cert-snakeoil.pem
+----
+
+Ist kein automatisch erstelltes Zertifikat vorhanden, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben.
 
 == Zertifikate erhalten
 
@@ -93,12 +111,13 @@ Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat z
 
 * Sie bezahlen für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_).
 Je nach Stufe der Validierung wird nur geprüft, ob Sie Webmaster einer Domain sind oder es müssen Handelsregisterauszüge eingereicht werden.
-Nachteil: es kostet Geld und verursacht Verwaltungsaufwand.
+Nachteil: das Verfahren kostet Geld und verursacht Verwaltungsaufwand.
 // TK: Registergericht problematisch: als Info für D kennzeichnen
-// MFS: Das prinzipielle Vorgehen ist überall gleich, trade register, oder commercial register
+// MFS: Das prinzipielle Vorgehen ist in jeder Jurisdiktion gleich, Englisch: trade register, oder commercial register
 * Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Letsencrypt_].
 Nachteil: Sie müssen entweder Zugriff auf den Server haben, dessen Zertifikate Sie ausstellen wollen (und der muss von außen erreichbar sein), oder Sie müssen im Nameserver Ihrer Domain Einträge anlegen und ändern können.
 // TK: "im DNS TXT-Einträge anlegen": ist mir nicht klar, was das bedeutet
+// MFS: allgemein formuliert, Details später
 * Sie werden Ihre xref:becomeca[eigene _Certificate Authority_ (CA)] und erzeugen Zertifikate selbst.
 Nachteil: Sie müssen strikte Sicherheitsregeln einhalten und die CA in die Browser der Nutzer importieren, die {CMK} verwenden sollen.
 
@@ -117,6 +136,8 @@ Die Kosten für dieses Verfahren liegen zwischen gratis (3 Monate Gültigkeit, e
 // MFS: Die zertifizieren nicht im SSL-Bereich, sondern Zertifizierungsstellen für landwirtschaftliche Normen
 // MFS: Zertifizierungsstellen zu verlinken, ist schwierig, weil viele der schnellen günstigen mit IM-Zertifikaten der "großen" als schnelle, günstige Quasi-Reseller auftreten, per Suchmaschine zu suchen oder die vom eigenen Webhoster empfohlene Zertifizierungsstelle zu untzen, ist daher der beste Weg
 
+==== Schlüssel und CSR erzeugen
+
 Der Standardweg ist, zunächst den privaten Server-Schlüssel zu erzeugen.
 Diesen Schritt können Sie direkt auf dem Server durchführen können, auf dem Ihre {CMK}-Instanz läuft:
 // TK: Zu meinem Verständnis: einen privaten Schlüssel erzeugen, der für das Zertifikat des Servers verwendet werden soll?
@@ -132,7 +153,7 @@ Diesen Schritt können Sie direkt auf dem Server durchführen können, auf dem I
 // TK: Kommandoausgabe sagt, dass ich einen "RSA private key" erzeuge: siehe Frage von oben?
 // MFS: Das ist korrekt, dieser Schlüssel dient später dazu, den TLS-Verkehr zu verschlüsseln
 
-Im nächsten Schritt erstellrn Sie das "Certificate Signing Request":
+Im nächsten Schritt erstellen Sie das "Certificate Signing Request":
 
 [{shell}]
 ----
@@ -207,38 +228,234 @@ In unserem Fall enthielt das heruntergeladene Zip-Archiv zwei Dateien: `certific
 [#letsencrypt]
 === Letsencrypt
 
-Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Nameserver, können Sie automatisiert Zertifikate über den zu der Electronic Frontier Foundation (EFF) gehörenden Non-Profit-Dienstleister Letsencrypt erstellen lassen.
+Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Nameserver, können Sie automatisiert Zertifikate über den zu der Electronic Frontier Foundation (EFF) gehörenden Non-Profit-Dienstleister link:https://letsencrypt.org/#[Letsencrypt] erstellen lassen.
 // TK: Hier Letsencrypt nochmal verlinken
 //SP: Bei der ersten Erwähnung einer Bezeichnung (hier: Electronic Frontier Foundation) sollte die Abkürzung in Klammern eingeführt werden. Danach kann dann die Abkürzung eigenständig verwendet werden.
 Es entstehen keine Kosten.
-Per DNS validierte Zertifikate erfordern alle 90 Tage etwas Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden. 
+Per DNS validierte Zertifikate erfordern alle 90 Tage wenige Minuten Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden. 
 
-Für Letsencrypt-Zertifikate stellt die EFF das Python-Programm Certbot in vielen verschiedenen Paketformaten bereit.
-Der Certbot übernimmt die Erstellung des Schlüssels und den Versand der CSR.
-Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
+Für Letsencrypt-Zertifikate stellt die EFF das Python-Programm _Certbot_ in vielen verschiedenen Paketformaten bereit.
+Der Certbot übernimmt die Erstellung des Schlüssels, den Versand der CSR und die Prüfung der Inhaberschaft von Server oder Domain.
+Er kommuniziert hierfür über das Protokoll link:https://en.wikipedia.org/wiki/Automatic_Certificate_Management_Environment#[_Automatic Certificate Management Environment_ (ACME)^] mit den Servern der FFF.
+
+==== Installation des Certbot-Scriptes
+
+Es existieren drei Möglichkeiten, Certbot zu installieren. Welche Sie wählen, dürfte vor allem vom Alter der eingesetzten Distribution und den Policies in Ihrem Unternehmen zur Installation aus fremden Paketquellen abhängen:
+
+* Die EFF empfiehlt auf der link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite] die Installation aus einem Snap-Image. Vorteil der Lösung ist, dass immer ein aktueller Certbot bereitsteht und Abhängigkeiten (beispielsweise zur benötigten Python-Version) problemlos aufgelöst werden. Nachteil der Lösung ist, dass eine Pakete als Dubletten installiert werden und der Platzbedarf relativ hoch ist.
+* Certbot ist über sind über das Python-Paketinstallationstool `pip3` aus dem link:https://pypi.org/project/certbot/#[Python Package Index] installierbar. Der Befehl `pip3 install certbot` installiert alle abhängig benötigten Python-Module. 
+* Falls Sie eine über das Paketmanagement Ihrer Distribution bereitgestellten Certbot-Version installieren wollen, informieren Sie sich über mögliche Einschränkungen: So implementiert Certbot 0.40 in Ubuntu 20.04 zwar das erforderliche ACME v2 Protokoll, unterstützt aber keine ECDSA signierten Zertifikate, was bei Certbot 1.21 in Ubuntu 22.04 der Fall ist.
+
+*Hinweis:* Certbot 0.40 aus Ubuntu 20.04 war die früheste Certbot-Version, mit der wir Stand März 2022 ohne Änderung der Konfiguration Letsencrypt-Zertifikate anfordern konnten. Ältere Versionen mögen ACME v2 fähig sein, decken aber unter Umständen nicht den kompletten Funktionsumfang von ACME v2 und erfordern teils manuelle Konfiguration.
+
+==== Vollautomatische Konfiguration
+
+Falls der {CMK}-Server aus dem Internet erreichbar ist und Sie an der Konfiguration des systemweiten Apache Webservers seit der Installation von {CMK} keine Änderung vorgenommen haben, können Sie den "Apache-Automatismus" von Certbot verwenden, um Schlüssel zu erzeugen, Zertifikate anzufordern, die Apache-Konfiguration automatisch anzupassen und schließlich einen Cronjob einzurichten, um regelmäßig die 90 Tage laufenden Zertifikate zu erneuern.
+
+[{shell}]
+----
+{c-root} *certbot --apache*
+----
+
+Das Script fragt nun interaktiv einige Informationen zu Kontaktdaten (E-Mail-Kontakt für zusätzliche Informationen wie notwendige Zertifikatsrückrufe) und Installationspfaden ab, am Ende steht die funktionsfähige SSL-Konfiguration.
+
+Da die Parameter des Scriptes gelegentlichen Änderungen unterworfen sind, empfehlen wir, der jeweils aktuellen Anleitung in der Certbot-Dokumentation (link:https://certbot.eff.org/instructions?ws=apache&os=ubuntufocal[hier für Ubuntu 20.04, andere Betriebssysteme per Dropdown auswählbar^]) zu folgen. 
+
+==== Teilautomatische Konfiguration über Webroot
+
+Ist der {CMK}-Server zwar aus dem Internet erreichbar, aber Sie wollen oder können keine automatische Konfigurationsänderung vornehmen, kann das Certbot-Skript zwar Schlüssel generieren und Zertifikate anfordern, aber die restliche Konfiguration überspringen.
+Sie müssen die weitere Konfiguration dann manuell vornehmen und können die Zertifikate auch für andere Dienste einbinden, die Sie auf dem {CMK}-Server verwenden – zum Beispiel einen Mailserver für Benachrichtigungen.
+
+Zunächst sollten Sie sicherstellen, dass für das Wurzelverzeichnis des Webservers keine Weiterleitung existiert oder zumindest der Ordner `.well-known` xref:apachedefaultconfig[hiervon ausgenommen] ist.
+In diesem Ordner legt das Certbot-Skript eine Datei mit an, deren Inhalt von den Letsencrypt-Servern vorgegeben wird.
+Mit dem Abruf der Datei können die Letsencrypt-Server dann bestätigen, dass derjenige, der das Zertifikat anfordert, Schreibrechte im Webroot des Servers hat.
+
+Jetzt erzeugen Sie per `certbot` Schlüssel und fordern Zertifikate für die verwendete Domain an.
+Der erste Aufruf des Scriptes erfolgt interaktiv:
+
+[{shell}]
+----
+{c-root} *certbot certonly --webroot -w /var/www/html -d checkmk.mydomain.com*
+Saving debug log to /var/log/letsencrypt/letsencrypt.log
+Plugins selected: Authenticator webroot, Installer None
+Enter email address (used for urgent renewal and security notices) (Enter 'c' to
+cancel): *johndoe@mydomain.com*
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Please read the Terms of Service at
+https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf. You must
+agree in order to register with the ACME server at
+https://acme-v02.api.letsencrypt.org/directory
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+(A)gree/(C)ancel: *A*
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Would you be willing to share your email address with the Electronic Frontier
+Foundation, a founding partner of the Let's Encrypt project and the non-profit
+organization that develops Certbot? We'd like to send you email about our work
+encrypting the web, EFF news, campaigns, and ways to support digital freedom.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+(Y)es/(N)o: *N*
+Obtaining a new certificate
+Performing the following challenges:
+http-01 challenge for checkmk.mydomain.com
+Using the webroot path /var/www/html for all unmatched domains.
+Waiting for verification...
+Cleaning up challenges
+
+IMPORTANT NOTES:
+ - Congratulations! Your certificate and chain have been saved at:
+   /etc/letsencrypt/live/checkmk.mydomain.com/fullchain.pem
+   Your key file has been saved at:
+   /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
+[...]
+----
+
+Künftige Aufrufe des Skriptes können dann ohne Interaktion erfolgen, hierfür ist der Parameter `-n` hinzuzufügen.
+Manuell auf einem System mit länger als 30 Tage gültigem Zertifikat aufgerufen, wird die Information ausgeben, dass keine Erneuerung notwendig ist:
+
+[{shell}]
+----
+{c-root} *certbot certonly -n --webroot -w /var/www/html -d checkmk.mydomain.com*
+Saving debug log to /var/log/letsencrypt/letsencrypt.log
+Plugins selected: Authenticator webroot, Installer None
+Cert not yet due for renewal
+Keeping the existing certificate
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Certificate not yet due for renewal; no action taken.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+----
+
+Um Zertifikate automatisch zu erneuern, erstellen Sie ein Shellscript, welches zunächst den letzten Befehl ausführt und anschließend den Apache-Webserver neustartet.
+Lassen Sie dieses Skript einmal pro Woche von einem Cronjob aufrufen, um rechtzeitig vor Zertifikatsablauf ein neues Zertifikat zu erhalten.
+
+Sie können nun mit den Dateien in `/etc/letsencrypt/live/checkmk.mydomain.com` die xref:configsample[Konfiguration des Apache-Servers] durchführen.
+
+==== Teilautomatische Konfiguration über DNS
+
+Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine "DNS-Challenge" vornehmen.
+Hier wird die Inhaberschaft einer Domain nicht darüber geprüft, Dateien auf dem Webserver ablegen zu können, sondern darüber, dass Sie Einträge im DNS hinzufügen können.
+Dabei kommen keine Einträge zur Anwendung, die einen Hostnamen zu einer IP-Adresse auflösen, sondern sogenannte TXT-Einträge, die beliebige Zeichenketten enthalten können.
+TXT-Einträge werden beispielsweise auch verwendet, um anzugeben, welche Server Mail für eine Domain versenden dürfen.
+
+Die Anforderung der Letsencrypt-Zertifikate muss nicht zwangsläufig auf dem Computer stattfinden, der als {CMK}-Server dient.
+Falls Sie die Anforderung von einem anderen Rechner aus durchführen, müssen Sie die Zertifikate und Schlüssel in `/etc/letsencrypt` anschließend mit `rsync` oder `scp` auf den {CMK}-Server kopieren.
+
+Das erste Zertifikat fordern Sie komplett manuell an:
+
+[{shell}]
+----
+{c-root} *certbot -d 'checkmk.mydomain.com' --manual --preferred-challenges dns certonly*
+Saving debug log to /var/log/letsencrypt/letsencrypt.log
+Plugins selected: Authenticator manual, Installer None
+Enter email address (used for urgent renewal and security notices) (Enter 'c' to
+cancel): mattias@schlenker.dk
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Please read the Terms of Service at
+https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf. You must
+agree in order to register with the ACME server at
+https://acme-v02.api.letsencrypt.org/directory
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+(A)gree/(C)ancel: A
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Would you be willing to share your email address with the Electronic Frontier
+Foundation, a founding partner of the Let's Encrypt project and the non-profit
+organization that develops Certbot? We'd like to send you email about our work
+encrypting the web, EFF news, campaigns, and ways to support digital freedom.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+(Y)es/(N)o: N
+Obtaining a new certificate
+Performing the following challenges:
+dns-01 challenge for certtestt.schlenker.dk
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+NOTE: The IP of this machine will be publicly logged as having requested this
+certificate. If you're running certbot in manual mode on a machine that is not
+your server, please ensure you're okay with that.
+
+Are you OK with your IP being logged?
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+(Y)es/(N)o: Y
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Please deploy a DNS TXT record under the name
+_acme-challenge.certtestt.schlenker.dk with the following value:
+
+cF1LxTIHTk6Fw5y_3nEJ3gr_7sskm5NuugXwnmP10Ps
+
+Before continuing, verify the record is deployed.
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Press Enter to Continue
+----
+
+Kopieren Sie nun die Zeichenkette und legen Sie einen entsprechenden TXT-Eintrag im DNS Ihrer Domain an. Eine _Time To Live_ von 600 oder 300 Sekunden verringert bei künftigen Aktualisierungen die maximale Wartezeit:
+
+image::omd_https_letsencrypt_dns.png[]
+
+Prüfen Sie nun an einem beliebigen Rechner, ob der Eintrag erfolgreich hinterlegt wurde:
+
+[{shell}]
+----
+johndoe@localhost:~$ *dig -t TXT _acme-challenge.checkmk.mydomain.com*
+[...]
+;; ANSWER SECTION:
+_acme-challenge.checkmk.mydomain.com.	600 IN TXT "cF1LxTIHTk6Fw5y_3nEJ3gr_7sskm5NuugXwnmP10Ps"
+
+;; Query time: 64 msec
+;; SERVER: 127.0.0.53#53(127.0.0.53)
+;; WHEN: Fr Apr 01 14:35:29 CEST 2022
+;; MSG SIZE  rcvd: 123
+----
+
+Ist der Eintrag noch nicht hinterlegt, warten Sie ein paar Minuten und versuchen es dann erneut.
+Wenn alles geklappt hat, schließen Sie die Zertifikatsanforderung durch Drücken der Eingabetaste ab:
+
+[{shell}]
+----
+Waiting for verification...
+Cleaning up challenges
+
+IMPORTANT NOTES:
+ - Congratulations! Your certificate and chain have been saved at:
+   /etc/letsencrypt/live/certtestt.schlenker.dk/fullchain.pem
+   Your key file has been saved at:
+   /etc/letsencrypt/live/certtestt.schlenker.dk/privkey.pem
+   Your cert will expire on 2022-06-30. To obtain a new or tweaked
+   version of this certificate in the future, simply run certbot
+   again. To non-interactively renew *all* of your certificates, run
+   "certbot renew"
+ - Your account credentials have been saved in your Certbot
+   configuration directory at /etc/letsencrypt. You should make a
+   secure backup of this folder now. This configuration directory will
+   also contain certificates and private keys obtained by Certbot so
+   making regular backups of this folder is ideal.
+ - If you like Certbot, please consider supporting our work by:
+
+   Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate
+   Donating to EFF:                    https://eff.org/donate-le
+----
+
+Sie können nun mit den Dateien in `/etc/letsencrypt/live/checkmk.mydomain.com` die xref:configsample[Konfiguration des Apache-Servers] durchführen.
+
+Wenn die erstmalige manuelle Anforderung der Zertifikate erfolgreich war, können Sie rechnerchieren, ob Ihr DNS-Anbieter über ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^] verfügt, das Automatisierung zulässt und die künftige Aktualisierung der Zertifikate per Cronjob vornehmen.
+
+// MFS: Alte Kommentare als Referenz:
+// Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
 //SP: Die Inhaberschaft wovon? Der Absatz ist insgesamt heftig, da gefühlt zu mehr als der Hälfte aus Fachbegriffen bestehend.
 // MFS: Ich habe nun "Domain" eingetragen, der Begriff impliziert auch Subdomains bezw. Wildcard-Domains oder halt einzelne Hostnamen.
 
-Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt, können Sie der Anleitung für `certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. 
-Hier passt das Skript die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein.
-Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
+// Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt, können Sie der Anleitung für `certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. 
+// Hier passt das Skript die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein.
+// Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
 //SP: erster Satz:Ist mit Apache ein Apache-Server gemeint? Ein Apache ist ein Indianer. letzter Satz: hinter "für den ein Certbot-Plugin" fehlt IMHO ein Verb, z.B. existiert oder vorliegt.
 // TK: Warum benennst Du die Fälle unterschiedlich: "Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt" und "Ist der {CMK}-Server nicht aus dem Internet erreichbar"?
 // TK: Der 1. certbot Link geht nicht in die Doku, sondern auf die Website.
 // TK: Entweder Du verlinkst direkt in die Anleitungen oder paraphrasierst die Überschriften, so dass man Sie wiederfinden kann. Zum Stichwort certbot --apache hab ich was gefunden, weiss aber nicht, ob es das ist, was Du meinst.
 
-Existiert kein Plugin, können Sie alle 90 Tage eine manuelle DNS-Validierung vornehmen. Dafür genügt der minimale Certbot ohne Apache-Plugin. 
-
-[{shell}]
-----
-{c-root} *certbot -d 'checkmk.mydomain.com' --manual \
-   --preferred-challenges dns certonly*
-----
-
-Die erstellten Zertifikate werden dann im Ordner `/etc/letsencrypt/live` abgelegt. 
-
-
-
+// Existiert kein Plugin, können Sie alle 90 Tage eine manuelle DNS-Validierung vornehmen. Dafür genügt der minimale Certbot ohne Apache-Plugin. 
 
 [#becomeca]
 === Selbst Certificate Authority werden
@@ -265,7 +482,7 @@ Um die Rollenverteilung im Zertifizierungsprozess zu verdeutlichen, nutzen wir _
 Systeme, die dem Zertifikat eines "verlorenen" Schlüssels vertrauen, sind damit anfällig für Woman-in-the-Middle-Angriffe!
 //SP: Trotz meiner Begeisterung für diesen Versuch der Geschlechter-Gleichstellung: Unter dem Begriff Woman-in-the-middle findet man im Internet keine Erklärung.
 // TK: Ich find diesen Stolperstein trotzdem gut :-)
-
+// MFS: Ich habe das nur reingenommen, um zu sehen, ob Ihr konzentriert lest!
 
 [#cakey]
 ==== Schlüssel für die CA und Root-Zertifikat erstellen
@@ -586,6 +803,7 @@ SSLCertificateFile /etc/certs/checkmk.starkindustries.test.crt
 ----
 // End new
 
+[#apachedefaultconfig]
 === Konfiguration der Apache Default Site 
 
 // Small change in wording
