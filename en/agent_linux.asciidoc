@@ -1,469 +1,836 @@
 include::global_attr.adoc[]
 = Monitoring Linux
-:revdate: 2018-04-23
-:title: The agent for Linux in detail
-:description: The Linux Agent is a simple bash script and thus quite transparent. How to use, expand and configure the agent is described here.
+:revdate: draft
+:title: Monitoring Linux - The new agent for Linux in detail
+:description: The Linux agent of {CMK} version 2.1.0 adds the Agent Controller and new features to the agent script. You can learn how to use the agent here.
 
 {related-start}
-link:wato_monitoringagents.html[Monitoring agents]
-link:agent_deployment.html[Automatic Agent Updates]
-link:datasource_programs.html[Datasource programs]
+xref:agent_linux_legacy#[Monitoring Linux in legacy mode]
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_deployment#[Automatic Agent Updates]
 {related-end}
 
-== Introduction
+
+_In order to quickly provide you the new information for {CMK} version {v21}, we have had this draft machine translated for now. Update and language revision will follow later._
 
 
-[{image-left}]
-image::linux.png[width=120]
+[#intro]
+== The new agent
 
-Linux systems can be especially well monitored by {CMK}. This has less
-to do with the {CMK} development team ‘feeling at home’ with Linux --
-rather it has more to do with Linux being a very open system, and it
-providing numerous very well documented and easily queried interfaces which
-enable a comprehensive monitoring operation.
+{image-left}]
+image::linux.png[alt="Linux-Logo.",width=120]
+You can monitor Linux systems particularly well with {CMK}.
+This is not so much because the {CMK} development team feels "at home" on Linux, but rather because Linux is a very open system and provides numerous well documented and easy to query interfaces for detailed monitoring.
 
-The installation of a monitoring agent is essential, since most of the
-interfaces are not in themselves accessible over a network. For this
-reason {CMK} has its own agent for the monitoring of Linux. This is easy
-to install and is economical in its use of system resources.
+Since most of the interfaces per se are not accessible via the network, the installation of a monitoring agent is inevitable.
+Therefore {CMK} has its own agent for monitoring Linux. 
+This is a simple shell script that is minimalistic, transparent and secure.
 
-The {CMK} agent for Linux is...
+In the {CMK} version {v21} there is now a new Linux agent.
+More precisely, the *Agent Script* `check_mk_agent` is joined by a new component: the *Agent Controller*.
+The Agent Controller precedes the agent script, queries it and communicates with the {CMK} server in its place.
+To do this, it registers with the *Agent Receiver*, which is also a new process running on the {CMK} server.
 
-* ... *minimalistic*, since it requires little CPU, RAM and hard drive space.
-* ... *transparent*, because it is a shell script, in which you can see which command it is executing.
-* ... *secure*, since it permits no access from the network whatsoever.
+The new Linux agent thus on the one hand takes over the agent script, and thus its advantages.
+On the other hand, it supplements the script in such a way that new functions can be added, such as TLS encryption of the communication, data compression -- and also reversal of the communication direction.
+This means that in addition to the registered, encrypted and compressed *pull mode*, an equally *push mode* is possible.
+More about this in the next chapter.
 
-The agent consists of a simple shell script that is installed in
-`/usr/bin/check_mk_agent`, and which invokes *available system commands*
-sequentially in order to seek data for the monitoring. It routes its output
-using either `xinetd` or `systemd` to TCP-Port 6556, or it is
-alternatively called per SSH. Should you like neither of these procedures
-you can also implement your own methods for {CMK} to receive data from agents.
+While push mode will be a feature of the next {CMK} version for the new {CMK} Plus Edition (CPE), TLS encryption and compression will be available for all {CMK} editions starting with version {v21} -- as long as both {CMK} server and agent have version {v21}.
 
-Monitoring of information that the standard agent doesn’t provide can be added
-in the form of agent plug-ins. In the {EE} you can bundle all settings and
-plug-ins together with the agent into an RPM or DEB packet using the
-link:wato_monitoringagents.html#bakery[Agent Bakery], this packet can then be installed
-with a single command and/or even be link:agent_deployment.html[updated] fully automatically.
+The Agent Controller is started as a background process (_daemon_) by the init system `systemd`, so the agent requires a Linux distribution with `systemd`.
+How to find out if the prerequisite is fulfilled for your Linux distribution can be found in the chapter xref:install[Installation.]
+
+However, the new agent also supports a so-called *legacy mode* to be executable under Linux distributions without `systemd`.
+In this mode the new agent works like the old one, i.e. without Agent Controller and therefore without registration at the {CMK} server.
+For this case you can find all information in the article xref:agent_linux_legacy#[Monitor Linux in Legacy Mode].
+There you will also learn how to set up the agent on Linux systems where neither an RPM nor a DEB package can be installed.
+
+The article you are reading covers installation, configuration and extensions of the new Linux agent *with* Agent Controller.
+
+
+[#architecture]
+== Architecture of the agent
+
+With the new agent, more software components are involved in communication than before.
+Therefore, we briefly introduce the components and their interaction.
+The architecture is identical for the Linux agent and the xref:agent_windows#agent_architecture[Windows agent].
+Only the technical implementation is specific to the operating systems.
+
+.Interaction of the software components
+[{image-border}]
+image::agent_linux_communication_flow.png[alt="Illustration of the communication between agent and site."]
+
+The *Agent Script* `check_mk_agent` is and remains responsible for collecting the monitoring data.
+For data collection, it calls existing system commands in order.
+To also obtain those information that require `root` privileges to obtain, `check_mk_agent` is executed under `root`.
+
+The agent script is:
+
+* minimalist, because it makes do with minimal resources of RAM, CPU, disk space and network.
+* secure, because it does not allow any access from the network.
+* easily extensible, because you can write plug-ins in any programming or scripting language and have them executed by the agent script.
+* transparent, because it is a shell script where you can see what commands it calls.
+
+The *Agent Controller* `cmk-agent-ctl` is the new component of the agent and is responsible for transporting the data collected by the agent script.
+It is run under the `cmk-agent` user, which has limited privileges, e.g. no login shell, and is used only for data transfer.
+The `cmk-agent` user is created during the installation of the agent package.
+The Agent Controller is started as a daemon of `systemd` and is coupled to it as a service.
+It listens on TCP port 6556 for incoming connections of the {CMK} site and queries the agent script via a Unix socket (a `systemd` unit).
+
+So why is the Agent Controller needed -- so far it worked very well without it?
+Well, the new software architecture of the agent is the prerequisite for offering new features that cannot be implemented with the minimalistic design of the agent script, such as encryption of the communication via Transport Layer Security (TLS), data compression and reversal of the communication direction.
+Previously, it was always the {CMK} server that initiated the communication and requested the data from the agent -- in what is known as pull mode.
+
+With the Agent Controller, the push mode can now additionally be realized, in which the initiative comes from the agent.
+Push mode is required for cloud-based configuration and in some compartmentalized networks.
+In both cases, the {CMK} server cannot access the network where the hosts to be monitored are located.
+Therefore, the agent periodically sends the data to the {CMK} server on its own.
+Agent Controller and Agent Receiver are already prepared for push mode, although this mode will be available only with the next {CMK} version for the new {CMK} Plus Edition (CPE).
+
+The *Agent Receiver* `agent-receiver` is a new component of the {CMK} server and the general endpoint for the Agent Controller communication, e.g. for connection registration.It also receives the data sent by the Agent Controller in push mode.
+In pull mode, data is exchanged with the xref:cmc_differences.html#fetcher_checker[{CMK} fetchers] of the site.
+
+All new features are implemented through the Agent Controller and Agent Receiver, i.e. {CMK} server and agent must have version {v21}.
+Here, the first step is to register the Agent Controller with the Agent Receiver of the {CMK} site, with which a trust relationship is established.
+During the registration, the TLS encryption of the communication is already set up.
 
 
 [#install]
 == Installation
 
-=== Various options
+{CMK} offers you various ways for installing the Linux agent -- from manual installation of the software package to fully automatic deployment including update function.
+Some of them are only available in {EE}:
 
-{CMK} provides a number of ways to install a Linux agent -- from the manual
-installation of its separate components, to a fully automated deployment.
-Some of these are only available in the {EE}:
-
-[cols="40,50,~,~"]
+[cols="40,50,~,~",options="header"]
 |===
-|Method |Description |CRE |CEE 
-
-|Included as standard RPM/DEB-Packet |Simple installation of a standard agent with a manual configuration over configuration files |X |X
-|RPM/DEB-Packet from the link:wato_monitoringagents.html#bakery[Agent Bakery] |Configuration via the GUI -- individual configuration of each host is possible | |X
-|link:agent_deployment.html[automated updates] |The packet from the agent bakery is initially installed manually or by using a script, and subsequently from there updated automatically. | |X
-|Manual installation |The individual files, without a packet, are copied to the target system and then `xinetd`, `systemd`, SSH or a user’s own access method are manually installed. |X |X
+|Method |Description |CRE |CEE
+|Supplied RPM/DEB package |Simple installation of a standard agent with manual configuration via configuration files. 
+The installation routine checks and configures `systemd` and `xinetd` in all editions -- in this order. |X |X
+|RPM/DEB package from xref:glossar#agent_bakery [Agent Bakery] |Configuration via GUI, individual configuration per host possible. | |X
+|xref:agent_deployment#[Automatic update] |The package from the Agent Bakery is installed for the first time by hand or by script and from then on automatically updated. | |X
 |===
 
 
-=== Installation using a RPM/DEB-Packet
+[#prerequisites]
+=== Prerequisites
 
-The agent files are located in the icon:icon_agents[]
-[.guihint]#Monitoring agents# WATO module. In the {EE} this will lead to the
-link:wato_monitoringagents.html#bakery[Agent Bakery]. From here, with the [.guihint]#Agent files# button
-the list of the agent files can be opened:
+For the installation of the Agent Controller to work, this requires a Linux distribution with `systemd`, more precisely `systemd` in a version 220 or newer.
 
-[{image-border}]
-image::agent_linux_agent_files.png[]
+There is a good chance that this prerequisite is met on your host, as since 2015 most Linux distributions have adopted `systemd` as their init system, replacing other init systems such as SysVinit, e.g. SUSE Linux Enterprise Server from version 12, openSUSE from version 12.1, Red Hat Enterprise Linux from version 7, Fedora from version 15, Debian from version 8 and Ubuntu from version 15.04.
+Unfortunately, comparing the version number alone does not bring certainty, since `systemd` may be missing even on a current Linux system if it has "only" been updated for years.
 
-Everything required is in the first section called [.guihint]#Packaged Agents#.
-Finished RPM and DEB packets for the installation of a Linux agent with
-standard settings can be found here (the package for link:agent_windows.html[Windows]
-with the `.msi` extension is also here):
-
-image::packaged_agents.png[]
-
-
-Whether you require RPM or DEB depends on the Linux distribution on which
-the package is to be installed:
-
-[cols="10,10,~"]
-|===
-|Packet |File extension |For installation on 
-
-|RPM |.rpm |Red Hat Enterprise Linux, Fedora, CentOS, openSUSE, SLES, and derivatives of these
-|DEB |.deb |Debian, Ubuntu, and all other DEB-based distributions
-|===
-
-
-
-Attention: in the [.guihint]#Linux/Unix-Agents# section can be found the straight agent
-scripts for the xref:manual[manual installation] to `/usr/bin/`.
-Only use these if the packaged agents do not function on your system, or if you
-wish to monitor Unix derivatives other than Linux.
-
-==== Exotic Linux distributions
-
-
-Also, if the {CMK}-server only supports Enterprise-Linux distributions
-that are still supported by their producer, the {CMK}-_agent_ is
-in such a case much less demanding. It supports *every* Linux distribution –
-even ancient ‘dinosaurs’ on which a Version 2.4 core is running!
-It is however possible that not all plug-ins will run correctly in the agent,
-but the basic monitoring itself will function.
-
-==== Installation with RPM
-
-The installation of an agent with the RPM package is very simple:
-
-
-. Download the agent packet with the `*.rpm` file extension.
-. Copy it to the target system to be monitored with `scp`, WinSCP or similar.
-. Install it on that system as `root` using the `rpm -U` command.
-. Next install the `xinetd` packet from your distribution, if it is not already installed.
-
-Here is an example of a package installation:
-
-[{shell}]
-----
-{c-root} rpm -U check-mk-agent-1.6.0p11-1.noarch.rpm
-----
-
-
-By the way, the `-U` stands for ‘Update’, but it can also perform an
-initial installation correctly. This means that the same command can also be
-used later for an update to a newer version.
-
-The subsequent installation of `xinetd` on Red Hat/CentOS is performed with:
-
-[{shell}]
-----
-{c-root} yum install xinetd
-----
-
-For SUSE Linux use `zypper`:
-
-[{shell}]
-----
-{c-root} zypper install xinetd
-----
-
-
-Following the installation an agent is immediately active and can be queried
-through TCP Port 6556.
-
-
-==== Installation with DEB
-
-
-This procedure is the same as for RPM, only the commands are different.
-An installation and a later update of the agent are both performed with:
-
-[{shell}]
-----
-{c-root} dpkg -i check-mk-agent_1.6.0p11-1_all.deb
-----
-
-A subsequent installation of `xinetd`:
-
-[{shell}]
-----
-{c-root} apt-get install xinetd
-----
-
-==== Get package via HTTP
-
-
-Sometimes `scp` or WinSCP can be very laborious. The packet can also be
-loaded directly from the {CMK}-server to the target system over HTTP.
-For this purpose the agent file downloads have deliberately been made possible
-_without needing a login_. The files after all contain no secrets. Anyone can download
-and install {CMK} themselves and then access the files.
-
-
-The easiest method is to use `wget`. The URLs can be identified via the browser.
-If you know the package’s name you can simply assemble the URL name yourself.
-Then simply set `/mysite/check_mk/agents/` before the file name:
-
-[{shell}]
-----
-{c-root} wget http://mycmkserver/mysite/check_mk/agents/check-mk-agent-1.6.0p11-1.noarch.rpm
-----
-
-
-RPM actually has an inbuilt `wget` -- with this you can perform the download and
-the installation in a single action:
-
-[{shell}]
-----
-{c-root} rpm -U http://mycmkserver/mysite/check_mk/agents/check-mk-agent-1.6.0p11-1.noarch.rpm
-----
-
-=== Installation with the Agent-Bakery
-
-
-{cee-only}
-The {CEE} utilises the link:wato_monitoringagents.html#bakery[Agent-Bakery] via a
-WATO-Modul to package individually-customised agents. This process will be
-described in the general chapter covering the link:wato_monitoringagents.html[Agents].
-
-Installation of the baked packets is performed exactly as described above.
-
-
-=== Automatic updates
-
-
-{cee-only}
-If you use the agent bakery, the agent’s automatic updates can set this up.
-This process is described in its link:agent_deployment.html[own article].
-
-
-
-[#manual]
-=== Manual installation
-
-
-The manual installation of an agent is rarely necessary,
-but is not very difficult. As well as the agent files from the site,
-you also require the [.guihint]#Linux/Unix agents# selection menu -- here you will find
-the [.guihint]#{CMK} Agent for Linux# file:
-
-image::agent_linux_agents_manual.png[]
-
-
-Load this file to the target system, and copy it to a directory that is
-executable for `root`. `/usr/local/bin/` is very well suited
-for this, since it is found in the search path and has been conceived for the
-user’s own extensions. Here you can also work directly with `wget`:
-
-[{shell}]
-----
-{c-root} cd /usr/local/bin
-{c-root} wget http://mycmkserver/mysite/check_mk/agents/check_mk_agent.linux
-{c-root} mv check_mk_agent.linux check_mk_agent
-{c-root} chmod 755 check_mk_agent
-----
-
-
-Please don’t forget the last two commands -- these remove the `.linux`
-file extension and make the file executable. If everything has been done
-correctly the agent should now simply be an executable command which will generate its usual output. 
-This also works if you are not in `/usr/local/bin`. 
-The `|{nbsp}head` truncates everything after the 11th line:
+Therefore, check on the host on which the agent is to be installed whether `systemd` is running and in which version:  
 
 [{shell-raw}]
 ----
-{c-root} check_mk_agent | head
-<<<check_mk>>>
-Version: 1.6.0p11
-AgentOS: linux
-Hostname: mycmkserver
-AgentDirectory: /etc/check_mk
-DataDirectory: /var/lib/check_mk_agent
-SpoolDirectory: /var/lib/check_mk_agent/spool
-PluginsDirectory: /usr/lib/check_mk_agent/plugins
-LocalDirectory: /usr/lib/check_mk_agent/local
-<<<df>>>
+{c-root} systemctl --version
+systemd 245 (245.4-4ubuntu3.15)
 ----
 
+If `systemd` is installed and running in the correct version as shown by the command output above, install the agent package and then run xref:registration[registration] to work with the agent in pull mode.
 
-In the case of a very old distribution which does not recognise the `timeout`
-command, load the small program `waitmax` from the agent page and install
-it likewise in `/usr/local/bin`. Both `timeout` and `waitmax` perform
-the same function -- they force a timeout when executing a program:
-
-[{shell}]
-----
-{c-root} timeout --help
-Usage: timeout [OPTION] DURATION COMMAND [ARG]...
-  or:  timeout [OPTION]
-  Start COMMAND, and kill it if still running after DURATION.
-----
+If `systemd` is not running, or only in a version that is too old, you can still install the agent as described in the rest of this chapter, and then use it in legacy mode.
+In this case, you should still first read the xref:agent_linux_legacy#install[installation chapter] in the article for the Linux agent in legacy mode, since this mode requires a superserver such as `xinetd` to monitor ports and start the agent script.
+Verification and, if necessary, installation of a superserver like `xinetd` should be done before installing the agent.
 
 
-Waitmax was developed as a {CMK} component at a time when `timeout`
-was not widely used. It has almost the same call syntax:
+[#download]
+=== Downloading the RPM/DEB package
 
-[{shell}]
-----
-{c-root} waitmax --help
-age: waitmax [-s SIGNUM] MAXTIME PROGRAM [ARGS...]
+You install the Linux agent by installing the RPM or the DEB package.
+Whether you need RPM or DEB depends on the Linux distribution you want to install the package on:
 
-Execute PROGRAM as a subprocess. If PROGRAM does not exit before MAXTIME
-seconds, it will be killed with SIGTERM or an alternative signal.
+[cols="10,10,~",options="header"]
+|===
+|Package |Extension |Install on
+|RPM |`.rpm` |Red Hat Enterprise Linux, Fedora, CentOS, openSUSE, SLES, derivatives thereof
+|DEB |`.deb` |Debian, Ubuntu, all other DEB-based distributions
+|===
 
-   -s, --signal SIGNUM   kill with SIGNUM on timeout
-   -h, --help            this help
-   -V, --version         show version an exit
-----
+Before installation you have to get the package and bring it to the host (for example with `scp` or WinSCP) where the agent should run.
+ 
 
+[#download_gui]
+==== Getting package via {CMK} GUI
 
-Should you wish to configure or extend the agent, you will need to create
-the required directories yourself. The location for the three required
-directories is hard coded in variables that begin with `MK_`,
-and which will also be provided to the plug-ins over the environment:
+In the {CRE} you can find the Linux packages of the agent via [.guihint]#Setup > Agents > Linux#.
+In the {EE}, you first get to the xref:wato_monitoringagents#bakery[Agent Bakery] in the [.guihint]#Setup# menu via [.guihint]#Agents > Windows, Linux, Solaris, AIX#, where you will find the baked packages.
+From there, the [.guihint]#Related > Linux, Solaris, AIX files# menu item will take you to the list of agent files:
 
-[{shell}]
-----
-{c-root} grep 'export MK_' check_mk_agent
-export MK_LIBDIR="/usr/lib/check_mk_agent"
-export MK_CONFDIR="/etc/check_mk"
-export MK_VARDIR="/var/lib/check_mk_agent"
-----
+.On the download page you will find the RPM and DEB packages
+image::agent_linux_agent_files.png[alt="Download page with the RPM/DEB packages."]
 
-These three directories should be created (with the standard permissions
-755):
-
-[{shell}]
-----
-{c-root} mkdir /usr/lib/check_mk_agent /etc/check_mk /var/lib/check_mk_agent
-----
+Everything you need can be found right in the first box named [.guihint]#Packaged Agents#:
+The ready RPM and DEB packages for installing the Linux agent with default settings.
 
 
-Should you want to change the file path, simply edit it in
-`/usr/local/bin/check_mk_agent`.
+==== Getting package via HTTP
 
+Sometimes downloading to a machine and then copying to the target machine using `scp` or WinSCP is very cumbersome.
+You can also download the package from the {CMK} server directly to the target system via HTTP.
+For this purpose, the downloads of the agent files are deliberately _without login_.
+After all, the files do not contain any secrets.
+Everyone can download and install {CMK} by himself and thus access the files.
 
-If you fundamentally want to call up the agents over SSH, a configuration for
-the `xinetd` is required, you just additionally need the SSH-configuration.
-How that is achieved will be described xref:ssh[below].
-
-
-The configuration per `xinetd` enables an access of the agent data
-via TCP Port 6556, and is the standard method in local networks.
-Install the `xinetd` package for this, and create the following file:
-
-./etc/xinetd.d/check-mk-agent
-[{file}]
-----
-service check_mk
-{
-        type           = UNLISTED
-        port           = 6556
-        socket_type    = stream
-        protocol       = tcp
-        wait           = no
-        user           = root
-        server         = /usr/local/bin/check_mk_agent
-        only_from      = 10.118.14.5 10.118.14.37
-        disable        = no
-}
-----
-
-
-Here enter the IP-Address of your {CMK}-server that will be permitted to access
-the agent under `only_from`.
-Then only an activation is required and the agent will be ready:
-
-[{shell}]
-----
-{c-root} /etc/init.d/xinetd reload
-----
-
-If you’re using systemd, you should execute the following command instead:
-
-[{shell}]
-----
-{c-root} systemctl reload xinetd.service
-----
-
-== Testing, and error diagnosis
-
-=== Overview
-
-Once the agent has been installed, the obvious question will surely be how
-to test whether everything has been done correctly. All of the possibilities
-that are available from the {CMK}-server are
-link:wato_monitoringagents.html#diagnostics[described] in the general chapter
-on the agents. There are of course further diagnostic possibilities when one
-is directly logged into the target system itself.
-
-
-Since the ‘agent’ is basically nothing more than a simple program that obtains
-data from your system and outputs it as loosely-formated text, you can also
-invoke it as a program, and in fact do so quite easily:
+The easiest way to do this is with `wget`.
+You can get the URL from the browser.
+If you already know the name of the package, you can easily compose the URL yourself.
+Just put `/mysite/check_mk/agents/` in front of the filename, in the following example for the RPM package:
 
 [{shell-raw}]
 ----
-{c-root} check_mk_agent
-<<<check_mk>>>
-Version: 1.6.0p11
-AgentOS: linux
-Hostname: myhost123
-AgentDirectory: /etc/check_mk
-DataDirectory: /var/lib/check_mk_agent
-SpoolDirectory: /var/lib/check_mk_agent/spool
-PluginsDirectory: /usr/lib/check_mk_agent/plugins
-LocalDirectory: /usr/lib/check_mk_agent/local
-<<<df>>>
-udev              devtmpfs     8155492         4   8155488       1% /dev
-tmpfs             tmpfs        1634036      1204   1632832       1% /run
-/dev/sda5         ext4       226298268 176973752  37806104      83% /
-none              tmpfs              4         0         4       0% /sys/fs/cgroup
+{c-root} wget http://mycmkserver/mysite/check_mk/agents/check-mk-agent-2.1.0b1-1.noarch.rpm
+----
+
+*Tip:* RPM even has a built-in `wget`.
+Here you can download and xref:install_package[installation] with one command:
+
+[{shell-raw}]
+----
+{c-root} rpm -U http://mycmkserver/mysite/check_mk/agents/check-mk-agent-2.1.0b1-1.noarch.rpm
 ----
 
 
-Because the output can be rather long, `less` can also be very practical
-here (you can quit it with the 'Q'-key):
+==== Getting package via REST API
+
+The xref:rest_api#[REST-API] of {CMK} provides the following ways to download agent packages from the {CMK} server:
+
+* Downloading the provided agent.
+* Downloading a baked agent by host name and operating system.
+* Downloading a baked agent by hash of the agent and operating system.
+
+Also via REST API you have the possibility to fetch the package from the {CMK} server directly to the target machine.
+For example, the Linux agent's supplied DEB package can be fetched using the following `curl` command:
 
 [{shell}]
+----
+{c-root} curl -OJG "http://mycmkserver/mysite/check_mk/api/1.0/domain-types/agent/actions/download/invoke" \
+--header 'Accept: application/octet-stream' \
+--header 'Authorization: Bearer automation myautomationsecret' \
+--data-urlencode 'os_type=linux_deb'
+----
+
+This is just a simple example to demonstrate how this one REST API endpoint works to download the agent.
+Details on this and other REST API endpoints can be found in the API documentation, which can be accessed in {CMK} via [.guihint]#Help > Developer resources > REST API documentation#.
+
+
+[#install_package]
+=== Installing the package
+
+After fetching the RPM or DEB package and -- if necessary -- copying it to the host to be monitored using `scp`, WinSCP or other means, the installation is done with one command.
+
+The installation of the RPM package is done under `root` with the command `rpm -U`:
+
+[{shell}]
+----
+{c-root} rpm -U check-mk-agent-2.1.0b1-1.noarch.rpm
+----
+
+By the way, the `-U` option stands for "update", but it can also do an initial installation correctly.
+This also means that you can use this command to update an already installed agent to the new version -- and use it for updates of the agent package in the future.
+
+The installation of the DEB package -- and an update -- is done under `root` with the command `dpkg -i`:
+
+[{shell}]
+----
+{c-root} dpkg -i check-mk-agent_2.1.0b1-1_all.deb
+(Reading database ... 769314 files and directories currently installed.)
+Preparing to unpack .../check-mk-agent_2.1.0b1-1_all.deb ...
+Unpacking check-mk-agent (2.1.0b1-1) ...
+Setting up check-mk-agent (2.1.0b1-1) ...
+
+Deploying systemd units: check-mk-agent.socket check-mk-agent-async.service cmk-agent-ctl-daemon.service check-mk-agent@.service
+Deployed systemd
+Creating/updating cmk-agent user account (new) ...
+Reloading xinetd
+Activating systemd unit 'check-mk-agent.socket'...
+Created symlink /etc/system/system/sockets.target.wants/check-mk-agent.socket → /lib/system/system/check-mk-agent.socket.
+Activating systemd unit 'check-mk-agent-async.service'....
+Created symlink /etc/systemd/system/multi-user.target.wants/check-mk-agent-async.service → /lib/systemd/system/check-mk-agent-async.service.
+Activating systemd unit 'cmk-agent-ctl-daemon.service'...
+Created symlink /etc/systemd/system/multi-user.target.wants/cmk-agent-ctl-daemon.service → /lib/systemd/system/cmk-agent-ctl-daemon.service.
+----
+
+Here, the package was installed for the first time on a previously agentless host.
+The `cmk-agent` user was created and `systemd` was configured.
+
+
+=== Installing with the Agent Bakery
+
+{cee-only}
+With the xref:wato_monitoringagents#bakery[Agent Bakery], the {CEE} have a software module for automatic packaging of customized agents.
+A detailed description of this can be found in the general chapter about the xref:wato_monitoringagents#[agents].
+Installation of the baked packages is done exactly as described for the included packages xref:install_package[above].
+
+
+=== Automatic update
+{cee-only}
+If you use the Agent Bakery, you can set up automatic updates of the agent.
+These are described in an xref:agent_deployment#[separate article].
+
+
+[#post_install]
+=== What happens after the installation?
+
+If the Agent Controller could be set up with `systemd` during the installation, the next step is the xref:registration[registration], which sets up TLS encryption so that the encrypted agent output can be decrypted by the {CMK} server and displayed in monitoring.
+
+There is a special feature when updating, i.e. when an already installed agent package has been updated to the new {v21} agent.
+With such an update the agent switches to the unencrypted *legacy pull mode*, so that the {CMK} server is not cut off from the monitoring data and can continue to display it.
+In the monitoring it looks like this:
+
+.Warning in {CMK} Monitoring that TLS is not used yet
+image::agent_linux_service_legacy_pull_mode.png[alt="The WARN state of the 'Check_MK' service due to lack of encryption."]
+
+The {CMK} site detects from the agent output that the Agent Controller is present and thus TLS encryption is possible -- but not yet enabled.
+The [.guihint]#Check_MK Agent# service changes to the {WARN} state and remains so until you register it after updating the agent.
+After registration, only encrypted pull mode is used for communication.
+The legacy pull mode is turned off and remains so.
+
+The case is different if the Agent Controller could not register as a daemon with `systemd` during the installation.
+Then the registration is not possible and the only communication path remains the *legacy mode*.
+For legacy mode, the installation routine tries to configure a superserver like `xinetd` to monitor ports and start the agent script.
+In this case, continue reading in the article xref:agent_linux_legacy#[Monitor Linux in legacy mode].
+
+
+[#uninstall]
+=== Uninstalling
+
+Like the installation, the uninstallation of the agent is done with the package manager of the operating system.
+Specify the name of the installed package here, not the filename of the original RPM/DEB file. 
+
+To find out which DEB package is installed:
+
+[{shell}]
+----
+{c-root} dpkg -l | grep check-mk-agent
+ii check-mk-agent 2.1.0b1-1 all Checkmk Agent for Linux
+----
+
+The uninstallation of the DEB package is then done with `dpkg --purge`:
+
+[{shell}]
+----
+{c-root} dpkg --purge check-mk-agent
+(Reading database ... 769345 files and directories currently installed.)
+Removing check-mk-agent (2.1.0b1-1) ...
+Removing systemd units: check-mk-agent.socket, check-mk-agent-async.service, cmk-agent-ctl-daemon.service, check-mk-agent@.service
+Deactivating systemd unit 'check-mk-agent.socket'...
+Deactivating systemd unit 'check-mk-agent-async.service'...
+Deactivating systemd unit 'cmk-agent-ctl-daemon.service'...
+Reloading xinetd
+Purging configuration files for check-mk-agent (2.1.0b1-1) ...
+----
+
+To find out which RPM package is installed:
+
+[{shell}]
+----
+{c-root} rpm -qa | grep check-mk
+----
+
+Uninstalling the RPM package is done under `root` with the command `rpm -e`.
+
+
+[#registration]
+== Registration
+
+=== Overview and requirements
+
+During a new installation of the {CMK} agent, the host to be included in the monitoring cannot yet exchange data with the {CMK} server.
+The reason is that a mutual trust relationship is missing - trust and encryption is mandatory from {CMK} {v21}.
+How to establish this is shown in this chapter.
+When updating the agent, the procedure is basically the same, even though unencrypted communication between {CMK} and the host in monitoring is possible here first.
+In this case the service [.guihint]#Check_MK Agent# shows you in the state {WARN} that a change to encrypted communication is advised.
+
+The registration and thus the establishment of the mutual trust relationship is done under a {CMK} user with access to the xref:rest_api#[REST API.]
+For this purpose, the xref:glossar#automation_user[automation user] is a good choice, which is created automatically with every {CMK} Installation and whose password you can dice out.
+
+
+=== Adding the host to monitoring
+
+First create the new host via [.guihint]#Setup > Hosts > Add host# and then add it to monitoring by xref:glossar#activate_changes[Activate changes].
+
+*Note:* In the host's properties in Setup, in the [.guihint]#Monitoring agents# box, you will find the [.guihint]#Checkmk agent connection mode# option, which offers pull mode and push mode as choices.
+In {CMK} version {v21} only pull mode is supported. The push mode is a feature of the next {CMK} version for the new {CMK} Plus Edition (CPE).
+The selection option is provided only to be prepared in case of a later upgrade or downgrade between {CMK} editions.
+
+
+=== Registering host with server
+
+Registration is done with the Agent Controller `cmk-agent-ctl`, which provides a command interface for configuring connections.
+You can use the command `cmk-agent-ctl help` to get help on the options.
+
+Now go to the host which should be registered.
+Here, with `root` privileges, make a request to the {CMK} xref:glossar#site[site]:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl register --hostname mynewhost \
+    --server cmkserver --site mysite \
+    --user automation --password test23
+----
+
+The host name behind the `--hostname` option must be specified exactly as it was before when creating it in Setup.
+The `--server` and `--site` options specify the name of the {CMK} server and site.
+The server name may also be the IP address, the site name (here `mysite`) corresponds to the one you see in the URL path of the web interface. 
+The options are completed by the name and password of the automation user.
+If you omit the `--password` option, the password will be requested interactively.
+
+If the given values were correct, you will be asked to confirm the identity of the {CMK} site to which you want to connect.
+We have shortened the server certificate to be confirmed for clarity:
+
+[{shell}]
+----
+Attempting to register at cmkserver:8000/mysite. Server certificate details:
+
+PEM-encoded certificate:
+---BEGIN CERTIFICATE---
+MIIC6zCCAdOgAwIBAgIUXbSE8FXQfmFqoRNhG9NpHhlRJ40wDQYJKoZIhvcNAQEL
+[...]
+nS+9hN5ILfRI+wkdrQLC0vkHVY8hGIEq+xTpG/Pxw==
+---END CERTIFICATE---
+
+Issued by:
+	Site 'mysite' local CA
+Issued to:
+	localhost
+Validity:
+	From Thu, 10 Feb 2022 15:13:22 +0000
+	To Tue, 13 Jun 3020 15:13:22 +0000
+
+Do you want to establish this connection? [Y/n]
+> #Y#
+----
+
+Confirm with `Y` to complete the process.
+
+If no error message is displayed, the encrypted connection is established.
+All data is transmitted in compressed form via this connection.
+
+
+=== Checking trust relationship
+
+The command `cmk-agent-ctl status` now shows exactly one trust relationship with the {CMK} server:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl status
+Connection: 12.34.56.78:8000/mysite
+	UUID: d38e7e53-9f0b-4f11-bbcf-d19617971595
+	Local:
+		Connection type: pull-agent
+		Certificate issuer: Site 'mysite' local CA
+		Certificate validity: Mon, 21 Feb 2022 11:23:57 +0000 - Sat, 24 Jun 3020 11:23:57 +0000
+	Remote:
+		Connection type: pull-agent
+		Registration state: operational
+		Host name: mynewhost
+----
+
+Afterwards you can perform a xref:glossar#service_discovery[service-discovery] on the {CMK} server, add the found services to the monitoring and finally activate the changes again.
+
+*Note:* There can only ever be one trust relationship between host and site.
+For example, if you register the already registered host `mynewhost` under a different name (`mynewhost2`) but with the same IP address, then the new connection replaces the existing one.
+The connection from `mynewhost` to the site will be disconnected and no more agent data will be supplied for the host for monitoring.
+
+
+=== Deregistering a host
+
+On a host connected to the {CMK} server, you can revoke the trust relationship with this command:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl delete d38e7e53-9f0b-4f11-bbcf-d19617971595
+----
+
+The Universally Unique Identifier (UUID) to be specified is the one that is output with the `cmk-agent-ctl status` command. 
+
+On the {CMK} server, for each connection of a host that is in monitoring, there exists a soft link with the UUID pointing to the folder containing the agent output:
+
+[{shell-raw}]
+----
+{c-omd} cd ~/var/agent-receiver/received-outputs
+{c-omd} ls -l d38e7e53-9f0b-4f11-bbcf-d19617971595
+lrwxrwx 1 mysite mysite 67 Feb 23 07:18 d38e7e53-9f0b-4f11-bbcf-d19617971595 -> /omd/sites/mysite/tmp/check_mk/data_source_cache/push-agent/mynewhost
+----
+
+If you delete this softlink, the host will need to be re-registered.
+
+
+=== Registering on behalf
+
+For easier registration of multiple hosts, any host on which the agent is installed can perform registration on behalf of others.
+This involves exporting a JSON file, which can then be transferred to the target host and imported there.
+Again, as before, the host registered in the job must already be set up in the site.
+
+First, the registration is performed on any host in the monitoring as a substitute.
+Here, of course, the {CMK} server is a good choice, as it is usually the first host to be included in the monitoring.
+As with the example above, you can pass the password by option or be asked for it interactively if you omit the `--password` option.
+We redirect the JSON output to a file in the example:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register \
+    --hostname mynewhost3 \
+    --server cmkserver --site mysite \
+    --user automation > /tmp/mynewhost3.json
+----
+
+Now we transfer the file `/tmp/mynewhost3.json` to the host we registered for and import the file:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl import /tmp/mynewhost3.json
+----
+
+
+[#test]
+== Testing and error diagnosis
+
+Once you have installed and registered the agent, you are probably wondering how to test out if you did everything correctly.
+All the possibilities that exist from the {CMK} server are described in the general chapter about xref:wato_monitoringagents#diagnostics[agents].
+But of course there are more diagnostic possibilities when logged in directly on the monitored host itself.
+
+As the new agent introduces the two components Agent Controller on the host and Agent Receiver on the {CMK} server, the number of places where something can go wrong increases.
+We work our way from the agent script to the Agent Controller to the {CMK} site.
+
+
+[#script_output]
+=== Output of the agent script
+
+The agent script is a simple shell script that obtains data about your system and outputs it as loosely formatted text.
+You can call it directly on the command line.
+Since the output can be somewhat long, `less` is very handy here, which you can exit in the output with the Q key:
+
+[{shell-raw}]
 ----
 {c-root} check_mk_agent | less
+<<check_mk>>
+Version: 2.1.0b1
+AgentOS: linux
+Hostname: mynewhost
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+AgentController: cmk-agent-ctl 0.1.0
 ----
 
+This way you can test if all desired data is included in the output - for example, if all installed plug-ins provide data.
 
-This output does not of course prove whether the agent is also accessible over
-the network. But in this way it can be tested whether all of the desired data
-is present in the output.
-
-
-Incidentally -- it is not essential to be `root` to be able to invoke
-the agent, however it is possible that the output could be missing some information
-which requires `root`-permissions to obtain
-(e.g., multipath information and the output from `ethtool`).
-
-=== Debug mode
+By the way, you do not have to be `root` to call the agent.
+However, the output may then be missing some information that requires `root` privileges to obtain (e.g. multipath information and the output of `ethtool`).
 
 
-So that possible erroneus outputs from defective plug-ins or commands do not
-‘corrupt’ the real production data, as a matter of principle the agent suppresses
-the standard error channel. If one is looking for a specific problem this can be
-reactivated by invoking the agent with a special debug mode. This is done
-with the `-d` option.
-In so doing all of the shell commands which the agent executes will be output.
+=== Agent script in debug mode
 
+To prevent possible error output from non-functioning plug-ins or commands from "contaminating" the actual data, the agent script generally suppresses the standard error channel.
+If you are looking for a specific problem, you can re-enable it by calling the agent script in a special debug mode.
+You do this with the `-d` option.
+This will also print all shell commands that the script executes.
 
-So that you can work with `less` here, the standard output and error
-channels must be combined with `2>&1`:
+To work with `less` here, you have to combine standard output and error channel with `2>&1`:
 
 [{shell}]
 ----
 {c-root} check_mk_agent -d 2>&1 | less
 ----
 
+
+=== Agent Controller in dump mode
+
+The Agent Controller provides its own subcommand `dump` which displays the full agent output as it arrives in the monitoring:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl dump | less
+<<check_mk>>
+Version: 2.1.0b1
+AgentOS: linux
+Hostname: mynewhost
+----
+
+This allows you to verify that the data from the agent script has arrived at the Agent Controller. 
+This output does not yet prove that the agent is also reachable over the network.
+
+
+=== Connection test from outside
+
+If it is ensured that locally the agent script and the installed plug-ins are executed correctly, you can check next from the {CMK} server via `netcat` (or `nc`) whether port 6556 is reachable:
+
+[{shell}]
+----
+{c-omd} echo | nc 10.76.23.189 6556
+16
+----
+
+The output `16` indicates that the connection establishment was successful and now the TLS handshake can take place.
+Since everything else here is TLS encrypted, no detailed check is possible.
+
+*Note:* If the communication between agent and {CMK} server is _still_ unencrypted (as in legacy pull mode) or is and remains unencrypted (as in xref:agent_linux_legacy#[legacy mode]), you will get the full unencrypted agent output with this command instead of the `16`.
+
+
+=== Test with the {CMK} command line
+
+Instead of using `nc`, you can use the {CMK} command line tool to request and display the complete agent output.
+The `--debug -v` options add some debugging information. 
+
+[{shell-raw}]
+----
+{c-omd} cmk --debug -v -d mynewhost
+----
+
+Eventually, the output will only contain a debug trace like this:
+
+[{shell-raw}]
+----
+[TCPFetcher] Execute data source
+Traceback (most recent call last):
+  File "/omd/sites/mysite/lib/python3/cmk/core_helpers/tcp.py", line 194, in _wrap_tls
+    return ctx.wrap_socket(self._socket, server_hostname=str(controller_uuid))
+  File "/omd/sites/mysite/lib/python3.9/ssl.py", line 500, in wrap_socket
+    return self.sslsocket_class._create(
+  File "/omd/sites/mysite/lib/python3.9/ssl.py", line 1040, in _create
+    self.do_handshake()
+  File "/omd/sites/mysite/lib/python3.9/ssl.py", line 1309, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLError: [SSL: TLSV1_ALERT_ACCESS_DENIED] tlsv1 alert access denied (_ssl.c:1129)
+[...]
+cmk.utils.exceptions.MKFetcherError: Error establishing TLS connection
+----
+
+In this case, you should first use `root` privileges on the new host to determine the status of the connection:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl status
+----
+
+If this command shows a correct registry on the {CMK} server, a simple restart of the Agent Controller daemon will suffice in many cases:
+
+[{shell-raw}]
+----
+{c-root} systemctl restart cmk-agent-ctl-daemon
+----
+
+
+[#security]
+== Security
+
+=== Preliminary consideration
+
+Security is an important criterion for any software, here monitoring must not make an exception.
+Since the monitoring agent is installed on every monitored server, a security problem here would have particularly serious consequences.
+
+That's why security was taken into account already during the design of {CMK} and since the first days of {CMK} there is an ironclad principle:
+_The agent does not read data from the network. Period._ 
+This certainly rules out the possibility of an attacker injecting any commands or script components through the 6556 monitoring port.
+
+
+=== Transport Layer Security (TLS)
+
+For an attacker, however, even a process list can be a first approach to draw conclusions about worthwhile targets.
+Therefore, transport encryption between agent and {CMK} server with Transport Layer Security (TLS) is mandatory starting with {CMK} version {v21}.
+Here, the {CMK} server "pings" the monitored host, which then establishes the TLS connection to the {CMK} server and transmits the agent output over it. 
+Since only {CMK} servers with which a trust relationship exists can initiate this data transfer, there is no risk of data falling into the wrong hands.
+
+
+=== Restricting access via IP addresses
+
+Since only authorized {CMK} servers can retrieve data and unauthorized servers fail after a few bytes of handshake, the risk of a _Denial of Service (DoS)_ attack is very low.
+For this reason, no further access restriction is currently planned.
+Of course you can block port 6556 against unauthorized access via `iptables`.
+A possibly existing rule to restrict access to certain IP addresses, which is transferred to clients via Bakery, is ignored by the Agent Controller.
+
+
+=== Disabling built-in encryption
+
+Especially when updating the agent, xref:agent_linux_legacy#encryption[built-in (symmetric) encryption] may be active, performed by the agent script itself.
+If TLS encryption and built-in encryption are active at the same time, then the entropy of the transmitted data is so high that compression, which is active as of version {v21}, will not save any transmitted data - and will burden the CPUs of both the host and the {CMK} server with additional further encryption and decryption steps.
+
+For this reason, you should disable the built-in encryption promptly after switching to TLS.
+Under {CRE} you can do this by renaming the configuration file `/etc/check_mk/encryption.cfg`.
+
+{cee-only} In the {CEE}, you can change existing rules to _Use TLS encryption_ in [.guihint]#Setup > Agents > Access to agents > Encryption (Linux, Windows)# in the [.guihint]#Encryption (Linux, Windows)# section and then xref:agent_deployment#[rebake] the agent packages.
+After the next automatic agent update, the agent script encryption is disabled, but guaranteed encryption by the Agent Controller.
+Note that after the automatic agent update, only registered hosts can provide monitoring data.
+
+
+[#disabled_sections]
+== Disabling sections
+
+The output of the {CMK} agent is divided into sections.
+Each of these sections contains related information and is usually simply the output of a diagnostic command.
+Sections always start with a section header.
+This is a line enclosed in `<<<` and `>>>`.
+
+Except for {CMK}'s own sections, you can individually disable any of the 30+ sections that the agent generates by default.
+Specifically, this means that the corresponding commands will not be executed by the agent at all, possibly saving computation time.
+Other reasons for disabling could be that you are simply not interested in certain information from a certain group of hosts, or that a particular host is providing erroneous values and you want to suspend retrieval of that data for a short time.
+
+As a user of one of the {CEE}, you can simply create a rule via [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Disabled sections (Linux agent)# which will then be taken into account by the xref:glossar#agent_bakery[Agent Bakery].
+
+.In the {EE} you can disable sections by rule
+image::agent_linux_disabled_sections.png[alt="List of agent rules for the Linux agent."]
+
+In the rule, you will find a separate checkbox for each section that can be disabled.
+For each checkbox selected, you will then find -- after the newly baked agent has been installed on the selected hosts -- a separate entry in the Agent Bakery `/etc/check_mk/exclude_sections.cfg` configuration file.
+For example, if you were to select `Running processes` and `Systemd services`, the appropriate configuration file would look like this:
+
+./etc/check_mk/exclude_sections.cfg
+[{file}]
+----
+MK_SKIP_PS=yes
+MK_SKIP_SYSTEMD=yes
+----
+
+Users of {CRE} can manually create the above `/etc/check_mk/exclude_sections.cfg` file and enter there the sections that should be disabled.
+All sections that can be disabled are listed in the `~/share/check_mk/agents/cfg_examples/exclude_sections.cfg` file.
+
+
+[#plugins]
+== Extending the agent by plug-ins
+
+=== What are agent plug-ins?
+
+The agent script `/usr/bin/check_mk_agent` contains a whole set of sections which provide monitoring data for various check plug-ins which are then automatically found by the service discovery.
+This includes all important monitoring of the operating system.
+
+In addition, there is the possibility to extend the agent with _agent plug-ins_.
+These are small scripts or programs that are called by the agent and extend it with additional sections with additional monitoring data.
+The {CMK} project provides a number of such plug-ins, which -- if installed and configured correctly -- automatically provide new services in the service discovery.
+
+Why aren't these plug-ins simply hard-coded into the agent?
+For each of the plug-ins, there is one of the following reasons:
+
+* The plug-in is written in a programming language other than shell and therefore cannot be implemented inline (example: `mk_logwatch`).
+* The plug-in needs a configuration anyway, without which it would not work (example: `mk_oracle`).
+* The plug-in is so special that it is not needed by most users (example: `plesk_domains`).
+
+
+[#manualplugins]
+=== Manual installation
+
+The included plug-ins for Linux and Unix can all be found on the {CMK} server under `share/check_mk/agents/plugins`.
+They are also available from the agents download page in the Setup menu (as described in the xref:download_gui[installation] chapter) in the [.guihint]#Plugins# box:
+
+.The beginning of the long list of available agent plug-ins
+image::agent_linux_files_agent_plugins.png[alt="Download page with agent plug-ins."]
+
+For all agent plug-ins we provide, there are matching check plug-ins that can evaluate their data and generate services.
+These are already installed, so that newly found services are immediately recognized and can be configured.
+
+*Note:* Before you install a plug-in on the host, take a look at the corresponding file.
+Often you will find important information there about the correct use of the plug-in.
+
+The actual installation is then simple:
+Copy the file to `/usr/lib/check_mk_agent/plugins`.
+Make sure that it is executable.
+If not, use a `chmod 755`.
+The agent will not run the plug-in otherwise.
+Especially if you do not transfer the files via `scp` but fetch them via HTTP from the download page, the execution permission will be lost.
+
+As soon as the plug-in is executable and in the correct directory, it will be called automatically by the agent and a new section will be created in the agent output.
+This usually has the same name as the plug-in.
+Complex plug-ins (e.g. `mk_oracle`) even create a whole set of new sections.
+
+
+[#pluginconfig]
+=== Configuration
+
+Some plug-ins need a configuration file in `/etc/check_mk/` to work.
+For others, a configuration is optional and allows special features or customizations.
+Still others just work that way.
+You have several sources to get information:
+
+* The documentation for the associated check plug-ins in your {CMK} site, which you can access via [.guihint]#Setup > Services > Catalog of check plugins#.
+* Comments in the plug-in itself (often very helpful!).
+* An appropriate article in this manual (e.g. about monitoring xref:monitoring_oracle#[Oracle]).
+
+
+[#async_plugins]
+=== Asynchronous execution
+
+Just like xref:mrpe[MRPE], you can also have plug-ins executed asynchronously.
+This is very useful if the plug-ins have a long runtime and the obtained state data does not need to be regenerated every minute anyway.
+
+Asynchronous execution is not configured via a file.
+Instead, you create a subdirectory under `/usr/lib/check_mk_agent/plugins` whose name is a number: a number of seconds.
+Plug-ins in this directory are not only executed asynchronously, but at the same time you specify a minimum waiting time with the number of seconds before the plug-in should be executed again.
+If the agent is queried again before the time expires, it uses cached data from the last time the plug-in was executed.
+This allows you to configure a longer interval for the plug-in than the typical one minute.
+
+The following example shows how to change the `my_foo_plugin` plug-in from synchronous execution to asynchronous execution with an interval of 5 minutes (or 300 seconds):
+
+[{shell}]
+----
+{c-root} cd /usr/lib/check_mk_agent/plugins
+{c-root} mkdir 300
+{c-root} mv my_foo_plugin 300
+----
+
+*Note:* Note that some plug-ins already implement asynchronous execution on their own.
+This includes `mk_oracle`.
+Install such plug-ins directly after `/usr/lib/check_mk_agent/plugins`.
+
+
+[#install_plugins_using_bakery]
+=== Installation via the Agent Bakery
+
+{cee-only}
+In the {CEE}, the included plug-ins can be configured via the xref:glossar#agent_bakery[Agent Bakery].
+This takes care of both the installation of the plug-in itself and the correct creation of the configuration file, should one be needed.
+
+Each plug-in is configured via an agent rule.
+You can find the appropriate rule sets in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Agent Plugins#:
+
+.List of rules for the agent plug-ins in the {EE}
+image::agent_linux_rules_agent_plugins.png[alt="Page with rules for configuring agent plug-ins in the {EE}."]
+
+
+=== Manual execution
+
+Since agent plug-ins are executable programs, you can run them manually for testing and diagnostic purposes.
+However, there are plug-ins that need certain environment variables set by the agent to find their configuration file, for example.
+Set these before executing by hand:
+
+[{shell-raw}]
+----
+{c-root} export MK_LIBDIR=/usr/lib/check_mk_agent
+{c-root} export MK_CONFDIR=/etc/check_mk
+{c-root} export MK_VARDIR=/var/lib/check_mk_agent
+{c-root} /usr/lib/check_mk_agent/plugins/mk_foobar
+<<foobar>>
+FOO BAR BLUBB 17 47 11
+----
+
+Some plug-ins also know special call options for debugging.
+Just take a look at the plug-in file.
+
+
+[#e2e_monitoring]
+== Including classic (Nagios) check plug-ins
+
 [#mrpe]
-== Integration of classic check plug-ins
+=== Running plug-ins via MRPE
 
-=== Executing plug-ins over MRPE
+There are two good reasons to use Nagios plug-ins also under {CMK}.
+If you migrated your monitoring from a Nagios based solution to {CMK}, you can continue to use older check plug-ins for which there is no {CMK} counterpart yet.
+In many cases these are self-written plug-ins in Perl or Shell. 
 
+The second reason for using Nagios plug-ins is true end-to-end monitoring.
+Let's assume you have your {CMK} server, a web server and a database server distributed over a large data center.
+In such a case, the response times of the database server measured from the {CMK} server are not very meaningful.
+It is far more important to know these values for the connection between the web server and the database server.
 
-If you have migrated your monitoring from a Nagios-based solution to {CMK},
-it cannot be ruled out that you have existing check plug-ins of a standard form
-for which no counterpart in {CMK} (yet) exists. In most cases these will be
-self-written plug-ins in Perl or Shell.
+The {CMK} agent provides a simple mechanism to meet both of these requirements:
+_MK's Remote Plug-in Executor_ or _MRPE_ for short.
+The name is deliberately an analogy to Nagios' _NRPE_, which performs the same task there.
 
-
-The {CMK}-agent offers a simple mechanism that enables such plug-ins still
-to be used: _MK’s Remote Plugin Executor_ or _MRPE_ for short.
-The name is intentionally an analogy to _NRPE_ in Nagios, for which it
-performs the same function.
-
-
-The MRPE is integral in agents and is configured with a simple text file
-which you yourself can save in `/etc/check_mk/mrpe.cfg`.
-In this file enter one plug-in call per line -- together with the name that
-{CMK} should use for the service that is to be automatically created.
+The MRPE is built into the agent and is configured with a simple text file, which you create as `/etc/check_mk/mrpe.cfg`.
+There you specify one plug-in call per line -- along with the name you want {CMK} to use for the service it automatically creates for it.
 Here is an example:
 
 ./etc/check_mk/mrpe.cfg
@@ -473,38 +840,30 @@ Foo_Application /usr/local/bin/check_foo -w 60 -c 80
 Bar_Extender /usr/local/bin/check_bar -s -X -w 4:5
 ----
 
-
-If the agent is allowed to run locally, for each plug-in a new section will be
-found with the title `+<<<mrpe>>>+`, containing the name,
-exit code and output from the the plug-in. This can be verified with the
-following practical `grep`-command:
+Now, if you run the agent locally, you will find a new section per plug-in called `+<<mrpe>>+` which contains the name, exit code and output of the plug-in.
+You can check this with the following handy `grep` command:
 
 [{shell-raw}]
 ----
 {c-root} check_mk_agent | grep -A1 '^...mrpe'
-<<<mrpe>>>
-(check_foo) Foo_Application 0 OK - Foo server up and running
-<<<mrpe>>>
+<<mrpe>>
+(check_foo) Foo_Application 0 OK - Foo server up and running.
+<<mrpe>>
 (check_bar) Bar_Extender 1 WARN - Bar extender overload 6.012|bar_load=6.012
 ----
 
+The `0` and `1` in the output represent the exit codes of the plug-ins and follow the classic scheme:
+`0` = {OK}, `1` = {WARN}, `2` = {CRIT} and `3` = {UNKNOWN}.
 
-The `0` or `2` in the output stand for the plug-in’s exit codes
-and conform to the standard pattern: `0` = {OK}, `1` =
-{WARN}, `2` = {CRIT} and `3` = {UNKNOWN}.
+The rest is now done automatically by {CMK}.
+Once you invoke service discovery for the host, the two new services will show up as xref:wato_services#available[available].
+It will look like this:
 
+.One service is detected for each of the two MRPE plug-ins
+image::agent_linux_mrpe_checks.png[alt="List of detected services for the plug-ins set up via MRPE."]
 
-The rest will be taken care of by {CMK} automatically. Once a service discovery
-has been performed for the host, the two new services will be shown as
-link:wato_services.html#available[available]. It will look like this:
-
-[{image-border}]
-image::agent_linux_mrpe_checks.png[]
-
-
-Incidentally: due to the file’s syntax the name is not permitted to contain blank characters.
-With the help of the same syntax as used in URLs, a space can be replaced by
-`%20` (the ASCII-Code 32 for ‘space’ is Hexadecimal 20):
+By the way, due to the syntax of the file, the name cannot contain spaces.
+However, using the same syntax as in URLs, you can replace a space with `%20` (ASCII code 32 for space is hexadecimal 20):
 
 ./etc/check_mk/mrpe.cfg
 [{file}]
@@ -514,24 +873,16 @@ Bar%20Extender /usr/local/bin/check_bar -s -X -w 4:5
 ----
 
 
-[#async_plugins]
 === Asynchronous execution
 
+Note that all plug-ins you list in `mrpe.cfg` are executed synchronously in order.
+Therefore, the plug-ins should not have too much execution time.
+If one plug-in hangs, the execution of all others will be delayed.
+This can cause the complete querying of the agent by {CMK} to time out and the host can no longer be reliably monitored.
 
-Please note that all plug-ins running in `mrpe.cfg` will be executed
-synchronously and sequentially.
-The plug-ins should thus not have overly long runtimes. If a plug-in hangs,
-all following plug-ins will be delayed. This could lead to the agent’s complete
-retrievals under {CMK} entering a timeout, meaning that the host can no longer
-be reliably monitored.
-
-
-If you really require longer running plug-ins, these should be converted to
-asynchronous processing, thus avoiding the problem described above.
-For this, define a time frame in seconds for which a calculated result will be
-valid -- for example, `300` for five minutes.
-To achieve this, set the expression `(interval=300)` following the service
-name in `mrpe.cfg`:
+If you really need longer running plug-ins, you should switch them to asynchronous execution and thus avoid the problem.
+To do this, set a time in seconds that a calculated result should be valid, e.g. `300` for five minutes.
+To do this, set `(interval=300)` in `mrpe.cfg` after the service name:
 
 ./etc/check_mk/mrpe.cfg
 [{file}]
@@ -540,744 +891,85 @@ Foo_Application (interval=300) /usr/local/bin/check_foo -w 60 -c 80
 Bar_Extender /usr/local/bin/check_bar -s -X -w 4:5
 ----
 
-This will have a number of effects:
+This has several effects:
 
+* The plug-in runs in a background process and no longer slows down the execution of the agent.
+* Because the agent does not wait for execution, the result is not delivered until the _next_ call to the agent.
+* At the earliest after 300 seconds the plug-in is executed again.
+Until then, the old result is reused.
 
-* The plug-in will be executed in a background process and will no longer hinder the agent’s processing.
-* Because the agent no longer waits for the execution, the result will be delivered until the _next_ call of the agent.
-* The plug-in will not be run before the defined 300 seconds have elapsed. Until that time the old result will be recycled.
-
-
-With this method tests that require very long processing times,
-as well as longer intervals, can also be run without needing to make changes to
-the configuration on the {CMK}-server.
+So you can run tests that need a bit more computing time in larger intervals without having to configure anything on the {CMK} server.
 
 
 === MRPE with the Agent Bakery
 
-
 {cee-only}
-Proud owners of the {EE} can also configure MRPE with the
-link:wato_monitoringagents.html#bakery[Agent Bakery]. The rule set
-[.guihint]#Monitoring Agents > Rules > Generic Options > Execute MRPE Checks# is responsible for this.
+Users of {EE} can also configure MRPE with the xref:glossary#agent_bakery[Agent Bakery].
+Responsible for this is the ruleset [.guihint]#Setup > Agents > Windows, Linux Solaris, AIX > Agent Rules > Generic Options > Execute MRPE checks#.
 There you can configure the same things as described above.
-The appropriate `mrpe.cfg` file will then be automatically generated by the bakery.
+The file `mrpe.cfg` will then be generated automatically by the Bakery.
 
-image::agent_linux_mrpe_rule.png[]
+.MRPEs can be configured conveniently by rule in the {EE}
+image::agent_linux_mrpe_rule.png[alt="Rule for MRPE configuration in the Agent Bakery."]
+
 
 ==== Baking the plug-ins
 
+You can also have the check plug-ins themselves delivered with the package.
+This then makes the agent complete and does not require manual installation of any additional files.
+The whole thing goes like this:
 
-Likewise the Check plug-ins themselves can be delivered with the package.
-With these the agent will be complete and will require no manual installation
-of additional files. This is all performed as follows:
+. Create the directory `local/share/check_mk/agents/custom` on the {CMK} server.
+. Create a subdirectory there -- e.g. `my_mrpe_plugins`.
+. Again, create the subdirectory `bin` in it.
+. Copy your plug-ins into the `bin` folder.
+. Create a rule in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Generic Options > Deploy custom files with agent# .
+. Select `my_mrpe_plugins`, save and bake!
 
+The check plug-ins will now be installed into the default `bin` directory of your agent.
+By default this is `/usr/bin`.
+So when configuring the MRPE checks, use `/usr/bin/check_foo` instead of `/usr/local/bin/check_foo`.
 
-. Create the directory `local/share/check_mk/agents/custom` on the {CMK}-server
-. Create a subdirectory, e.g. `my_mrpe_plugins` in the above directory
-. Then create the subdirectory `bin` in this
-. Copy your plug-ins to this directory
-. Create a rule in [.guihint]#Monitoring Agents > Rules > Generic Options > Deploy custom files with agent#.
-. Select `my_mrpe_plugins`, save and bake it!
 
+[#hw_monitoring]
+== Monitoring hardware
 
-The Check plug-ins will be installed in your agent’s standard-`bin`-directory.
-By default this is `/usr/bin`. Then when configuring the MRPE-checks,
-`/usr/bin/check_foo` will be required instead of `/usr/local/bin/check_foo`.
+To monitor a Linux server as completely as possible, the hardware is of course also part of the monitoring.
+The monitoring is done partly directly with the {CMK} agent, partly also via special xref:plugins[plug-ins].
+In addition, there are still cases where you can implement monitoring via SNMP or even via a separate management board.
 
 
-[#plugins]
-== Extending agents with plug-ins
+=== Monitoring of SMART values
 
-=== What are plug-ins?
+Modern hard disks almost always have _S.M.A.R.T._ (Self-Monitoring, Analysis and Reporting Technology).
+This system continuously records data about the state of the HDD or SSD and {CMK} can retrieve these values with the plug-in `smart` and evaluate the most important of them.
+For the plug-in to work after installation, the following requirements must be met:
 
+* The package `smartmontools` must be installed. You can install it on all modern distributions via the respective package manager.
+* If the hard disks are connected to a RAID controller and this controller allows access to the SMART values, the respective tool must be installed for this. Supported are `tw_cli` (3ware) and `megacli` (LSI).
 
-The standard agent `/usr/bin/check_mk_agent` contains a whole series of
-sections which provide monitoring data for various checks which will then be
-found automatically by a service discovery. These include all of an operating
-system’s important monitorings.
+If these requirements are met and the plug-in is installed, the data is automatically read and appended to the output of the agent.
+In {CMK} you can then activate the xref:wato_services#available[new services] directly:
 
+.SMART services found by service discovery
+image::agent_linux_smart_stats.png[alt="List of SMART services found in service discovery."]
 
-Additionally, there is also the possibility of augmenting an agent with plug-ins.
-These are small scripts or programs which are invoked by an agent to include
-further sections with additional monitoring data. The {CMK}-Project delivers
-a whole series of such plug-ins, which -- when correctly installed and configured --
-via a service discovery can provide new checks automatically.
+If -- as seen in the screenshot -- `cmd_timeout` occurs occasionally, switch the plug-in to asynchronous execution at intervals of a few minutes.
 
 
-Why are these plug-ins not simply built into the standard agent?
-For each plug-in one of the following reasons prevents such an integration:
+=== Monitoring using IPMI
 
+IPMI (Intelligent Platform Management Interface) is a hardware management interface that also allows hardware monitoring.
+{CMK} uses `freeipmi` to access the hardware directly without a network.
+`freeipmi` is installed from the package sources and is then ready to use, so that the data is already transmitted the next time {CMK} is called.
 
-* The plug-in is coded in a programming language other than Shell and thus cannot implemented inline (example: `mk_logwatch`).
-* The plug-in in any case requires a configuration without which it will not function (example: `mk_oracle`).
-* The plug-in is so specialised that most users will not require it (example: `plesk_domains`).
+If `freeipmi` is not available or there are other reasons not to install it, `ipmitool` can also be used.
+`ipmitool` is often already present on the system and only needs to be supplied with an IPMI device driver, such as that provided by the `openipmi` package.
+Again, you do not need to do anything else after that.
+The data will be collected automatically by {CMK}.
 
-
-[#manualplugins]
-=== Manual installation of plug-ins
-
-
-The plug-ins for Linux and UNIX included with the project are all located on the
-{CMK}-server in `share/check_mk/agents/plugins`.
-Additionally, these are available via the download page for the agents in WATO (as
-described at the beginning of this article) in the [.guihint]#Linux/Unix Agents - Plugins# menu box:
-
-image::agent_linux_files_agent_plugins.png[]
-
-
-For all of our standard agent plug-ins there are also the matching check plug-ins
-which can evaluate the data and create services from these. They are ready to use
-and do not require an extra installation.
-
-
-Before installing a plug-in in an agent, please have a look at its associated file.
-Important tips for the correct use of the plug-in can often be found there.
-
-
-The actual installation is then simple: simply save the file to
-`/usr/lib/check_mk_agent/plugins`.
-When doing this ensure that the file is _executable_.
-If not, use a `chmod 755`, otherwise the agent will not run the plug-in.
-Especially if the files are not transferred over `scp`, rather via HTTP
-from the download page, the execution permissions will be lost!
-
-
-Once a plug-in is executable and in the correct directory, it will be invoked
-by the agent and a new section will be generated in the agent’s output.
-This section usually has the same name as the plug-in. Complex plug-ins (e.g.,
-`mk_oracle`) in fact create a whole series of sections.
-
-In older versions of the {CMK} agent the plug-in directory can be in another
-location.
-If case of uncertainty, or you don’t know if this applies in your setup, the directory can be identified with the following:
-
-[#install_plugin]
-[{shell}]
-----
-{c-root} grep MK_LIBDIR= /usr/bin/check_mk_agent
-export MK_LIBDIR="/usr/lib/check_mk_agent"
-----
-
-[#pluginconfig]
-=== Configuration of plug-ins
-
-
-Some plug-ins require a configuration file in `/etc/check_mk/` to be able
-to function. With others a configuration is optional and allows special features or
-customisation. Others simply work as is. There are various sources of relevant information:
-
-
-* The documentation for the matching check plug-ins in the [.guihint]#Check plugins# WATO-module
-* Comments in the plug-in itself (often very helpful!)
-* A relevant article in this handbuch (e.g., on the monitoring of link:monitoring_oracle.html[Oracle])
-
-
-=== Asynchronous execution
-
-
-Plug-ins can process asynchronously in the same way as with MRPE.
-This is very useful if the plug-ins have a very long runtime,
-and the acquired status data in any case does not need to be refreshed every minute.
-
-
-An asynchronous execution is not configured with a file. Instead, create a subdirectory
-in `plugins` whose name is a numeric, representing a count in seconds. Plug-ins in this
-directory will not only be executed asynchronously, at the same time by specifying the second
-count a minimum waiting time is also specified before the plug-in can be run again.
-If the agent is again called before the specified time has elapsed, it will use
-cached data from the last run of the plug-in. In this way an interval longer than
-the typical one minute can in effect be configured for the plug-in.
-
-
-The following example shows how by specifying a 5 minute interval the >my_foo_plugin` 
-plug-in can be changed from synchronous to asynchronous execution:
-
-[{shell}]
-----
-{c-root} cd /usr/lib/check_mk_agent/plugins
-{c-root} mkdir 300
-{c-root} mv my_foo_plugin 300
-----
-
-
-Please note that a few plug-ins are set up internally to execute
-asynchronously by default. Among these is `mk_oracle`.
-Always install such plug-ins directly in `/usr/lib/check_mk_agent/plugins`!
-
-
-=== Installing plug-ins using the bakery
-
-
-Plug-ins included with {CMK} can be configured using the
-link:wato_monitoringagents.html#bakery[Agent Bakery]. This not only takes care of the installation
-of the plug-ins themselves, but also for the correct generation of the configuration file
-should one be required.
-
-
-Each plug-in is configured with an agent rule. The appropriate rule set can be
-found in [.guihint]#Monitoring agentes > Agent plugins#:
-
-image::agent_linux_rules_agent_plugins.png[]
-
-
-=== Manual execution of plug-ins
-
-
-Since agent plug-ins are executable programs, for testing and diagnosis
-they can be manually started. There are however plug-ins which require specific
-environment variables to be set by agents -- so that they can find their
-configuration file, for example. Set these variables manually before execution:
-
-[{shell-raw}]
-----
-{c-root} export MK_LIBDIR=/usr/lib/check_mk_agent
-{c-root} export MK_CONFDIR=/etc/check_mk
-{c-root} export MK_VARDIR=/var/lib/check_mk_agent
-{c-root} /usr/lib/check_mk_agent/plugins/mk_foobar
-<<<foobar>>>
-FOO BAR BLA BLUBB 17 47 11
-----
-
-
-Some plug-ins have special invocation options for debugging. Just have a look in the plug-in!
-
-[#security]
-== Security
-
-=== Considerations
-
-
-Nowadays everything must be _safe_ -- and of course monitoring is no exception.
-Because the monitoring agent is installed on every server being monitored,
-a security problem here can have serious consequences.
-
-
-For this reason emphasis is placed on security in the design of {CMK},
-and from the earliest days of {CMK} security has been an unshakeable principle:
-_An agent reads no data from the network -- full stop._ Consequently it is
-quite impossible that an attacker could sneak any type of command or script
-element over the monitoring port 6556.
-
-
-This alone provides such a high level of security that most users do without
-additional measures _in the LAN_.
-If the system being monitored is only accessible over an insecure internet connection,
-then of course quite different precedures are necessary, and an encryption
-with SSH would certainly be the ideal first choice.
-
-
-The {CMK} agent additionally includes an
-_inbuilt encryption_, which represents a good compromise between security and
-complexity.
-In the following section we will show all of the options for protection in detail.
-
-
-=== Restricting of access over IP-addresses
-
-
-Even if an attacker is unable to execute commands, the monitoring data could
-be useful to him as among other info, the data includes a list of all processes
-running on the system. Is is therefore best that the data is accessible to nobody.
-
-
-==== xinetd
-
-
-If the {CMK}-agents are as usual enabled over the `xinetd`, it is very
-simple and effective to restrict the access to specific IP-addresses -- to those
-of the monitoring server of course. This is easily done, and was in fact
-to be seen in the example above:
-
-./etc/xinetd.d/check-mk-agent
-[{file}]
-----
-service check_mk
-{
-        type           = UNLISTED
-        port           = 6556
-        socket_type    = stream
-        protocol       = tcp
-        wait           = no
-        user           = root
-        server         = /usr/bin/check_mk_agent
-        only_from      = 10.118.14.5 10.118.14.37
-        disable        = no
-}
-----
-
-
-Agent Bakery users can configure the permitted IP-addresses using the WATO rule set
-[.guihint]#Monitoring agents > Rules > Generic options > Allowed agent access via IP address#.
-
-
-An attacker can of course easily falsify their IP-address and thus make a connection
-to an agent -- but it is very unlikely that it will receive an answer since this goes
-to the genuine monitoring server. Or it really does receive an answer, but the
-{CMK}-server looks down the pipe and will very quickly record an error.
-
-
-==== Systemd
-
-
-Since Systemd is now the new toy that everyone uses, Linux distributors are
-working hard to retire the good old xinetd. The prepackaged Linux-Agent (not
-one from the Bakery!) already installs itself with Systemd instruments,
-if the target system is based on Systemd and _no_ xinetd is available.
-
-
-Systemd however cannot perform such simple tasks as `only_from`.
-One will be bluntly referred to `iptables`.
-Should your agent thus, without xinetd, be invoked purely with Systemd,
-there is unfortunately no simpler possibility for restricting the IP-addresses,
-other than using a firewall configuration.
-
-
-If you are not yet one of the Systemd evangelists, there is however a simple
-alternative: Even in Systemd-based systems it is (still) possible to use xinetd.
-This can be run as a service under Systemd -- and again the method with
-`only_from` as described above also works. To this end install
-the `xinetd` packet, and then _reinstall_ the {CMK}-agent -- this
-should then find and preferentially install xinetd.
-
-
-[#ssh]
-=== Invoking over SSH
-
-
-The ultimate security for invoking a {CMK}-agent is offered by invoking it
-via Secure Shell -- in Linux in the form of an implementation of _OpenSSH_.
-This method is advisable for:
-
-
-* The monitoring of Linux servers that are only accessible over the internet.
-* The monitoring of computers in a DMZ.
-* Similar situations in which a TCP-connection from the {CMK}-Server to the agent is at all possible.
-
-The setting-up is performed in the following steps:
-
-
-. Create an SSH-key pair especially for this purpose.
-. Enable an access to the agent on the target system using these keys.
-. Disconnect the access over xinetd.
-. Configure the {CMK} server to use SSH instead of the TCP connection on port 6556.
-
-
-And now the above procedure, step-by-step with all necessary details:
-
-
-==== Creating SSH-key pairs
-
-
-SSH works with a ‘Public-Key-Authorization’. For this purpose first create
-a pair of complementary keys -- one of which is public, and the other private.
-This is performed by an instance user with `ssh-keygen -t ed25519`:
-
-[{shell}]
-----
-{c-omd} ssh-keygen -t ed25519
-Generating public/private ed25519 key pair.
-Enter file in which to save the key (/omd/sites/mysite/.ssh/id_ed25519):
-Enter passphrase (empty for no passphrase):
-Enter same passphrase again:
-Your identification has been saved in /omd/sites/mysite/.ssh/id_ed25519.
-Your public key has been saved in /omd/sites/mysite/.ssh/id_ed25519.pub.
-The key fingerprint is:
-cc:87:34:d2:ed:87:ed:f7:1b:ec:58:1f:7c:23:00:e2 mysite@mycmkserver
-The key's randomart image is:
-+--[ED25519  256--+
-|                 |
-|       . .       |
-|      ..+..      |
-|      .=.+.o     |
-|       ES +.o    |
-|         . o. o  |
-|            ...B.|
-|             .=.*|
-|             . o+|
-+-----------------+
-----
-
-
-Important: *do not* enter a passphrase here! Encrypting the file with
-the secret key will not achieve anything, because you won’t want to have to
-enter the passphrase every time you start the {CMK}-server...
-
-This will result in two files in the `.ssh` directory:
-
-[{shell}]
-----
-{c-omd} ll .ssh
-total 8
--rw------- 1 mysite mysite 1679 Feb 20 14:18 id_ed25519
--rw-r--r-- 1 mysite mysite  398 Feb 20 14:18 id_ed25519.pub
-----
-
-
-The private key is called `id_ed25519`, and is only readable for the instance
-user (`-rw-------`) and that is what we want!
-The public key `id_ed25519.pub` will look something like this:
-
-[{shell}]
-----
-{c-omd} cat .ssh/id_ed25519.pub
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb6AaqRPlbEmDnBkeIW3Q6Emb5lr2QEbWEQLmA5pb48 mysite@mycmkserver
-----
-
-
-==== Enabling access over SSH
-
-
-The next step must be carried out on every Linux server that is to be
-monitored over SSH. Log in to the server as `root`, and -- if it
-does not already exist -- create the subdirectory `.ssh` in
-the (`/root`) home directory:
-
-[{shell}]
-----
-{c-root} mkdir /root/.ssh
-----
-
-
-The permissions for this directory *must be* `700`, so that it
-will be recognised by SSH. If you have created the directory yourself,
-you will also require:
-
-[{shell}]
-----
-{c-root} chmod 700 /root/.ssh
-----
-
-
-Now open the `authorized_keys` file with the (console-based) text
-editor of your choice. If the file does not already exist, it will be
-generated automatically by the editor:
-
-[{shell}]
-----
-{c-root} vim /root/.ssh/authorized_keys
-----
-
-
-Now copy the content of the public keys into this file. This can be done,
-for example, with the mouse and copy & paste. Be precise! Every blank character
-is valid. Be careful to *never* have *two* blank characters 
-together, -- AND, all of this is a *single line*!
-If the file already exists, simply add this as a new line at the end of the file.
-
-
-==== Restricting access to agent execution
-
-
-Now for something very important! The SSH-key should be used _exclusively_
-for executing the agent. SSH offers such a function under the name
-[.guihint]#Command restriction#. For this, set the text `command="/usr/bin/check_mk_agent"`
-at the beginning of the line which has just been created -- separated from
-the rest with *one* blank character. The result will look like this:
-
-./root/.ssh/authorized_keys
-[{file}]
-----
-command="/usr/bin/check_mk_agent" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb6AaqRPlbEmDnBkeIW3Q6Emb5lr2QEbWEQLmA5pb48 mysite@mycmkserver
-----
-
-
-Save the changed file, and check the permissions -- they *must* be set to `600`:
-
-[{shell}]
-----
-{c-root} chmod 600 /root/.ssh/authorized_keys
-{c-root} ll /root/.ssh/authorized_keys
-[hilite]#-rw-------# 1 root root 1304 Feb 20 14:36 authorized_keys
-----
-
-
-Now an access via SSH to the agent from the monitoring server should be possible.
-This can be checked with:
-
-[{shell-raw}]
-----
-{c-omd} ssh root@myhost123
-The authenticity of host 'localhost (127.0.0.1)' can't be established.
-ECDSA key fingerprint is 55:34:f9:dd:2b:db:a7:fc:5d:4c:9d:37:28:f7:69:62.
-Are you sure you want to continue connecting (yes/no)? yes
-<<<check_mk>>>
-Version: 1.6.0p3
-AgentOS: linux
-Hostname: myhost123
-AgentDirectory: /etc/check_mk
-DataDirectory: /var/lib/check_mk_agent
-SpoolDirectory: /var/lib/check_mk_agent/spool
-PluginsDirectory: /usr/lib/check_mk_agent/plugins
-LocalDirectory: /usr/lib/check_mk_agent/local
-<<<df>>>
-----
-
-
-By the way, the request for the [.guihint]#key fingerprint# is received
-only with the initial use. Should this not function, check the following:
-
-
-* Is the SSH-server actually installed on the target system?
-* Do the specified files and directories have the correct permissions?
-* Has the syntax in `authorized_keys` been coded correctly?
-* Has the correct public key been entered?
-* Have you logged in as the correct user (`root@...`)?
-* Have you thought of the `command="...."`?
-
-
-==== Disconnecting access over xinetd
-
-
-The implementation of SSH is not much use if the access over Port 6556
-remains possible as before.
-To close the port, set {CMK}’s xinetd-service to `disabled`.
-Do _not_ delete the complete configuration file, as this will then
-reappear with the next agent update anyway!
-
-Disabling is performed in `/etc/xinetd.d/check-mk-agent`:
-
-./etc/xinetd.d/check-mk-agent
-[{file}]
-----
-service check_mk
-{
-        type           = UNLISTED
-        port           = 6556
-        socket_type    = stream
-        protocol       = tcp
-        wait           = no
-        user           = root
-        server         = /usr/bin/check_mk_agent
-        disable        = yes
-}
-----
-
-Following the restart of xinetd, do not forget:
-
-[{shell}]
-----
-{c-root} /etc/init.d/xinetd restart
-----
-
-
-A deinstallation of xinetd is of course also possible -- but with the next
-update of the {CMK}-agent it will reactivate itself in any case over Systemd!
-
-
-Under no circumstances forget to test the setup at the end of this precedure.
-A connection to Port 6556 should no longer be possible:
-
-[{shell}]
-----
-{c-omd} telnet myhost123 6556
-Trying 10.118.15.23...
-telnet: Unable to connect to remote host: Connection refused
-----
-
-
-==== Migrating {CMK}’s access to SSH
-
-
-The target system is now ready. Now only the configuration of {CMK} itself
-needs to be done. This is performed via the 
-[.guihint]#Datasource programs > Individual program call instead of agent access# link:wato_rules.html[rule set].
-Create a rule here for the affected hosts, and enter the command `ssh -T
--oStrictHostKeyChecking=no root@&lt;IP&gt;`:
-
-image::agent_linux_rule_ssh_key.png[]
-
-
-After saving and an [.guihint]#Activate changes# everything should function as intended!
-For diagnostic purposes the commands `cmk -D` and `cmk -d` are well
-suited, as explained in the link:cmk_commandline.html#utilities[article on the command line].
-
-
-Details concerning the ‘Datasource programs’ can be viewed in
-its link:datasource_programs.html[own article].
-
-
-==== Multiple SSH-keys
-
-
-It is also possible to work with more than one SSH-key. Save the keys to any chosen
-directory. With ‘Datasource program’ the data path to the appropriate private key
-must include the _-i_ option. Ideally, use `$OMD_ROOT` as the substitute
-for the path to the instance directory (`/omd/sites/mysite`).
-The configuration will then also be runable in an instance with a different name:
-
-image::agent_linux_rule_multiple_ssh_keys.png[]
-
-
-Different host groups can use different SSH-keys, if multiple different rules are
-used in [.guihint]#Datasource programs#.
-
-
-[#encryption]
-=== Inbuilt encryption
-
-
-The {CMK} agent can encrypt its own data without additional tools.
-Strictly speaking, this is no substitute for an access control. But since an
-attacker cannot send commands, and can’t work with encrypted output data,
-as a solution this is nearly as effective.
-
-
-The complexity with the use of encryption and the additional CPU-load incurred
-are both less than with the SSH method as described above, the method which we
-nevertheless still recommend when transferring data over the internet.
-
-
-The encryption of course requires a suitable configuration, both on the server
-and in the agents.
-This can be created manually ({RE}) or with the Agent Bakery ({EE}).
-
-
-==== Installation without the Bakery
-
-
-Even without the Agent Bakery the first step is still performed in WATO:
-by creating a [.guihint]#Host & Service Parameters > Access to agents > Check_MK Agent > Encryption# rule in the rule set.
-The rule should apply to all hosts for which an encryption will be implemented.
-SNMP-hosts ignore this setting, so it is not necessary to explicitly exclude them.
-
-image::encrypt_agent.png[]
-
-
-Important is the [.guihint]#Encryption for agent# setting. As long as the rule retains
-the default [.guihint]#Disable#, everything naturally remains as in the old setup.
-The choice is thus between:
-
-
-* [.guihint]#Enable#: Encryption is active, but data from unencrypted agents will continue to be accepted.
-* [.guihint]#Enforce#: Encryption is active, and only encrypted data will be accepted.
-
-
-It makes sense to begin with [.guihint]#Enable# initially. Once you are satisfied that
-all agents have been converted to encryption, switch over to [.guihint]#Enforce#,
-in order to identify hosts which still send data as clear text.
-
-
-The encryption makes use of a shared password which must be stored on both the
-{CMK}-Server and on the agent as a simple text (‘Shared secret’),
-and which will be entered here. Choose a random password and have it ready for
-the second step -- the configuration of the agent.
-
-Create the file `/etc/check_mk/encryption.cfg` with the following contents on the agent:
-
-./etc/check_mk/encryption.cfg
-[{file}]
-----
-ENCRYPTED=yes
-PASSPHRASE='XEwks9fm'
-----
-
-
-Of course use your own password in `PASSPHRASE`. This file should definitely
-be secured against reading by other users:
-
-[{shell}]
-----
-{c-root} chmod 600 /etc/check_mk/encryption.cfg
-----
-
-
-Now the following tests can be made (for information on these, see the
-link:cmk_commandline.html[article on {CMK}’s command line]):
-
-
-* An invocation of `check_mk_agent` on the target system should produce a nonsense jumble of characters.
-* A `telnet myhost123 6556` from the {CMK}-server should produce the same jumble.
-* A `cmk -d myshost123` on the {CMK}-server should show the normal clear text.
-
-
-==== Implementing with the Bakery
-
-
-{cee-only}
-The implementation of the encryption with the agent bakery is very simple.
-By creating the rules as just described, one is basically finished. Now only new
-agents need to be baked and distributed. The file `/etc/check_mk/encryption.cfg`
-will be automatically generated and added to the agent package.
-
-
-[#snmp]
-== Monitoring Linux over SNMP
-
-Since an easily-installed SNMP-Agenten is available for Linux, the question arises
-whether it is possible or even desirable to monitor Linux over SNMP?
-The answer is quite simple: possible yes, sensible no. Why is this so?
-
-* The monitoring data from the SNMP-agents is very limited, so that in any case {CMK}-agents are required for a halfway adequate monitoring.
-* The SNMP-agent delivers no useful data that isn’t already provided by the {CMK}-Agent.
-* The SNMP-agent is more time-consuming to install.
-* Last but not least, the SNMP protocol consumes far more CPU and network resources than a normal {CMK} monitoring.
-
-There are however a few situations in which monitoring per SNMP
-*in addition to* the normal agents can be sensible. Such a case would be
-when either a user's software, or a hardware monitoring tool supplied by the
-server’s manufacturer only delivers data via SNMP.
-
-For such a situation, at the host’s characteristics in the [.guihint]#Data sources#
-submenu in WATO, set the [.guihint]#Check_MK Agent# to one of the options starting with
-[.guihint]#Normal {CMK} agent# and the option [.guihint]#SNMP# to either [.guihint]#SNMP v2 or v3# or
-[.guihint]#SNMP v1#. Services that are accessible over SNMP as well as per {CMK}-agent
-(e.g. CPU-load, file systems, network cards) will be automatically retrieved by
-{CMK}-agent and not over SNMP. In this way a duplicated data transfer will be
-automatically prevented.
-
-
-== Hardware monitoring
-
-=== Fundamentals
-
-
-To be as comprehensive as possible the monitoring of a Linux-server must of
-course include the hardware. This is achieved in part directly with the {CMK}-agents,
-and partly also using special xref:plugins[plug-ins].
-Additionally, there are also cases in which monitoring can be implemented per SNMP,
-or even over a separate management board.
-
-
-=== Monitoring the SMART-values
-
-
-Modern hard drives almost always use S.M.A.R.T. (Self-Monitoring,
-Analysis and Reporting Technology). This system continuously logs data on the condition
-of the HDD or SSD, and with the `smart` plug-in {CMK} can retrieve
-these values and evaluate the most important of them. In order that the plug-in
-functions after an installation, the following preconditions must be met:
-
-
-* The `smartmontools` packet must be installed. This can be installed on all modern distributions with the appropriate packet manager.
-* If the drives are connected via a RAID-controller and this allows access to the SMART-values, the appropriate tool must also be installed. `tw_cli` (3ware) and `megacli` (LSI) are supported.
-
-If these prerequisites have been satisfied, and the plug-in has been installed,
-the data will be automatically read and appended to the agent’s output.
-In {CMK} the link:wato_services.html#available[new services] can then also be activated directly:
-
-image::agent_linux_smart_stats.png[]
-
-=== Monitoring with the help of IPMI
-
-
-IPMI (Intelligent Platform Management Interface) is an interface for hardware
-management which, among other functions, enables the monitoring of hardware.
-{CMK} uses freeipmi for this, in order to access the hardware directly
-and without a network. It is installed from the package source and is ready for
-immediate use, so that the data will be transmitted at the next polling by {CMK}.
-
-
-If `freeipmi` is not available, or there are other grounds preventing an
-installation, `ipmitool` can also be used. This is often already present
-on a system and must only served by an IPMI hardware driver -- which can be provided
-by the `openipmi` package, for example.
-Likewise, nothing more needs to be done here subsequently. The data will be
-recorded by {CMK} automatically.
-
-
-For error diagnosis the tools can also be executed manually in a host shell.
-If the `freeipmi` packet has been installed it can be used to control the function:
+For error diagnosis you can also run the tools manually in a shell of the host.
+If you have installed the package `freeipmi`, you can control the function with this:
 
 [{shell}]
 ----
@@ -1292,9 +984,7 @@ If the `freeipmi` packet has been installed it can be used to control the functi
 480 Temperature_DIMM-2B NA(NA/115.00) [Unknown]
 ----
 
-
-Once `ipmitool` has been installed the data output can be checked
-with the following command:
+If `ipmitool` has been installed, you can check the output of the data with the following command:
 
 [{shell}]
 ----
@@ -1305,74 +995,69 @@ Ext._Health_LED 0.000 unspecified ok na na 0.000 na na na
 Power_Supply_1 0.000 unspecified nc na na 0.000 na na na
 Fan_Block_1 34.888 unspecified nc na na 75.264 na na na
 Fan_Block_2 29.792 unspecified nc na na 75.264 na na na
-Temp_1 39.000 degrees_C ok na na -64.000 na na na
-Temp_2 16.000 degrees_C ok na na -64.000 na na na
+Temp_1 39,000 degrees_C ok na na -64,000 na na na
+Temp_2 16,000 degrees_C ok na na -64,000 na na na na
 Power_Meter 180.000 Watts cr na na 384.00
 ----
 
-=== Manufacturer-specific Tools
+
+=== Manufacturer-specific tools
+
+Many large server manufacturers also offer their own tools to read out the hardware information and provide it via SNMP.
+The following requirements apply to be able to retrieve this data and provide {CMK}:
+
+* An SNMP server is set up on the Linux host.
+* The manufacturer's tool is installed (e.g. Dell's _OpenManage_ or Supermicro's _SuperDoctor_).
+* The host is configured in {CMK} for monitoring via SNMP *in addition* to the {CMK} agent.
+See the article on xref:snmp#snmp_cmk_agent[monitoring with SNMP] to learn how.
+
+The new services for hardware monitoring supported by this are then automatically detected.
+No further plug-ins are needed.
 
 
-Many server producers offer their own tools for recording hardware
-information and delivering this via xref:snmp[SNMP].
-The following prerequisites apply to be able to retrieve this data and
-provide it to {CMK}:
+=== Additional monitoring via management board
+
+You can configure a management board for each host and fetch additional data via SNMP.
+The services recognized thereby are assigned then likewise to the Host.
+
+The setup of the management board is very simple.
+Just enter the protocol, the IP address and the access data for SNMP in the properties of the host and save the new settings:
+
+.Configure the management board for SNMP in the properties of the host in the Setup
+image::agent_linux_snmp_management_board.png[alt="The configuration of the management board for SNMP in the properties of the host."]
+
+In service discovery, the newly discovered services are then enabled as usual.
 
 
-* An SNMP-server has been installed on the Linux host.
-* The manufacturer's tool has been installed -- e.g., Dell’s _OpenManage_ or Supermicros _SuperDoctor_.
-* The host has been configured in {CMK} for an additional monitoring per xref:snmp[SNMP].
-
-
-The new services for hardware monitoring thereby supported will then be
-automatically recognised. No further plug-ins will be required.
-
-=== Supplementary monitoring over the Management Board
-
-
-A management board can be configured for every
-host and additional data collected per SNMP. The services thereby recognised will
-likewise be assigned to the host.
-
-
-Setting up a management board is very easy. In the host’s attributes, just enter
-the protocol, the IP-address and the access data for SNMP, and save the new settings:
-
-image::agent_linux_snmp_management_board.png[]
-
-
-With a service discovery the newly-discovered services will then be activated as usual.
-
+[#files]
 == Files and directories
 
-=== Data paths on the monitored host
+=== Paths on the monitored host
 
-[cols="45,~"]
+[cols="45,~",options="header"]
 |===
-|Path |Function 
-
-|/usr/bin/check_mk_agent |Installation location of the {CMK} agent on the target system.
-|/usr/lib/check_mk_agent |The home directory for agent extensions
-|/usr/lib/check_mk_agent/plugins |Plug-ins which extend the agent for collecting supplementary monitoring data. Plug-ins can be written in any available programming language.
-|/usr/lib/check_mk_agent/local |The user's own link:localchecks.html[‘local checks’].
-|/var/lib/check_mk_agent |Data location of the {CMK} agent on the target system.
-|/var/lib/check_mk_agent/cache |Location of cached data from particular sections. These will be attached to the agent as long as the cache data is valid.
-|/var/lib/check_mk_agent/job |Location of job data. These files will be added to the output on every agent execution.
-|/var/lib/check_mk_agent/spool |Contains data created by e.g., cron jobs, and that includes its own section. These are also appended to the agent output.
-|/etc/check_mk |Location of configuration files for the agents.
-|/etc/check_mk/mrpe.cfg |Configuration file for xref:mrpe[MRPE] -- for the execution of standard, Nagios-compatible check plug-ins.
-|/etc/check_mk/encryption.cfg |Configuration for the xref:encryption[encryption] of the agent data.
-|/etc/xinetd.d/check-mk-agent |Configuration for the `xinetd`, which connects the agent’s output to TCP-Port 6556.
-|===
-
-
-
-=== Data paths on the {CMK} server
-
-[cols="45,~"]
-|===
-|Path |Function 
-
-|local/share/check_mk/agents/custom |The home directory for own files which are to be delivered with baked agents.
+|Path |Meaning
+|`/usr/bin` |Installation location of the agent script `check_mk_agent` and the Agent Controller `cmk-agent-ctl` on the target system.
+|`/usr/lib/check_mk_agent` |Base directory for extensions to the agent.
+|`/usr/lib/check_mk_agent/plugins` |Directory for plug-ins which should be automatically executed by the agent and extend its output with additional monitoring data. Plug-ins can be written in any available programming language.
+|`/usr/lib/check_mk_agent/local` |Directory for custom xref:localchecks#[local checks].
+|`/var/lib/check_mk_agent` |Base directory for agent data.
+|`/var/lib/check_mk_agent/cache` |Here cache data of individual sections is stored and appended back to the agent on each execution as long as the cache data is valid.
+|`/var/lib/check_mk_agent/job` |Directory for monitored jobs. These will be appended to the agent output on each execution.
+|`/var/lib/check_mk_agent/spool` |Contains data created e.g. by cronjobs which have their own section. These are also appended to the agent output.
+|`/var/agent-receiver/received-outputs` |Contains for each connection its UUID as a soft link pointing to the folder containing the agent output.
+|`/etc/check_mk` |Storage of configuration files for the agent.
+|`/etc/check_mk/mrpe.cfg` |Configuration file for xref:mrpe[MRPE] -- for running classic Nagios compatible check plug-ins.
+|`/etc/check_mk/encryption.cfg` |Configuration for xref:agent_linux_legacy#encryption[built-in encryption] of agent data.
+|`/etc/check_mk/exclude_sections.cfg` |Configuration file for the xref:disabled_sections[disabling certain sections] of the agent.
 |===
 
+
+=== Paths on the {CMK} server
+
+[cols="45,~",options="header"]
+|===
+|Path |Meaning
+|`local/share/check_mk/agents/custom` |Base directory for custom files to be delivered with a baked agent.
+|`share/check_mk/agents/cfg_examples/exclude_sections.cfg` |Example configuration file for disabling sections.
+|===

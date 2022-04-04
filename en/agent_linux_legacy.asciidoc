@@ -1,0 +1,556 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= Monitoring Linux in legacy mode
+:revdate: draft
+:title: Monitoring Linux in legacy mode
+:description: The Linux agent can be run in legacy mode without an agent controller if it does not meet the requirements for encrypted pull mode.
+
+
+{related-start}
+xref:agent_linux#[Monitoring Linux]
+{related-end}
+
+
+_In order to quickly provide you the new information for {CMK} version {v21}, we have had this draft machine translated for now. Update and language revision will follow later._
+
+
+== Introduction
+
+[{image-left}]
+image::linux.png[width=120]
+
+Since {CMK} version {v21} the new Linux agent with the *agent controller* is able to handle the registered, TLS encrypted and compressed *pull mode*.
+However, this requires the agent controller to be started as a background process (_daemon_) from the init system `systemd` on the host where it is to be installed.
+See the xref:agent_linux#[monitor Linux] article to learn how to install, configure and extend the agent with agent controller.
+
+In some cases, the new agent controller cannot be used, for example, if no or a very old `systemd` is installed, or you are installing under a processor architecture other than x86-64. 
+For this, the Linux agent supports the so-called *legacy mode*.
+In this mode the new agent works like the old agent up to version {v20}, i.e. without agent controller and therefore without registration, TLS encryption and compression.
+
+This article shows you how to set up the Linux agent in legacy mode.
+It covers both the situation where you were able to install via package manager and now just need to complete or control the configuration, and the use under more exotic environments that require manual installation.
+Only those tasks that need to be performed differently in legacy mode than in pull mode are covered here.
+
+The topics for which the agent's mode does not matter can be found in the article about the Linux agent in pull mode:
+
+* xref:agent_linux#disabled_sections[Disabling sections].
+* xref:agent_linux#plugins[Extending agent with plug-ins].
+* xref:agent_linux#e2e_monitoring[Including classic (Nagios) check plug-ins]
+* xref:agent_linux#hw_monitoring[Monitoring hardware]
+
+
+[#install]
+== Installation
+
+=== Prerequisites
+
+Legacy mode requires a running Internet superserver to monitor ports and start the agent script.
+The easiest way to determine this is to use the `ps` command:
+
+[{shell-raw}]
+----
+{c-root} ps ax  | grep inetd
+ 1913 ?        Ss     0:00 /usr/sbin/xinetd -pidfile /run/xinetd.pid -stayalive -inetd_compat -inetd_ipv6
+----
+
+You can tell from the process running whether it is the more modern `xinetd` or one of the other Internet superservers (GNU-Inetutils, OpenBSD-Inetd, Busybox-Inetd).
+
+If no `inetd` is active, make sure _before_ installing the {CMK} agent, make sure that `xinetd` is present on the system.
+For this, the {CMK} agent brings a ready prepared configuration.
+Other superservers can remain, but require manual configuration.
+
+If no internet superserver is configured so far, install the `xinetd` package before installing the agent, this will save you a configuration step.
+
+
+=== Installation via RPM/DEB package
+
+The agent can work in different modes, but the software package used to install it is always the same.
+
+You then install the RPM/DEB package exactly as described in the xref:agent_linux#download[installation chapter] for the agent in pull mode.
+
+After installation, the agent is immediately active and can be queried on TCP port 6556.
+
+
+[#manual]
+=== Manual installation
+
+{cee-only} Even though the {CMK} server only supports enterprise Linux distributions that their vendor still supports, the {CMK} _agent_ is much more frugal here.
+It supports _any_ Linux distribution -- even ancient "dinosaurs" still running a kernel of version 2.4!
+It may be that not all plug-ins run correctly in the agent, but the basic monitoring will work.
+The manual installation of the agent is rarely necessary, but also not very difficult.
+
+You will need the Linux agent in TGZ archive format, which can be downloaded from the {EE} in the Setup menu via [.guihint]#Agents > Windows, Linux, Solaris, AIX#.
+The TGZ archive contains the complete directory structure of the Linux agent for unpacking the agent in the root directory of the monitored host.
+
+image::agent_linux_legacy_agents.png[]
+
+To make sure that all paths are correct, the parameter `-C` ("change directory") is essential when unpacking.
+We also use `--no-overwrite-dir` so that permissions of already existing directories are not changed:
+
+[{shell-raw}]
+----
+{c-root} tar -C / --no-overwrite-dir -xvf /tmp/check-mk-agent_2.1.0b1.tar.gz
+----
+
+If you did everything right, the agent should now simply be executable as a command and produce its typical output.
+The `|{nbsp}head` here cuts away everything from the 11th line on:
+
+[{shell-raw}]
+----
+{c-root} check_mk_agent | head
+<<check_mk>>
+Version: 2.1.0b1
+AgentOS: linux
+Hostname: mycmkserver
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+<<df>>
+----
+
+If a version number lower than {v21} is printed here, you probably still have an older version of the agent script installed as `/usr/local/bin/check_mk_agent`.
+Move this old script, or rename it, for example by appending `.bak` to the filename.
+
+If you basically want to retrieve the agent via SSH, you don`t need any configuration for the `xinetd` and only need the SSH configuration.
+We describe how to do this xref:ssh[below].
+
+
+[#inetdconfig]
+== (x)inetd configuration
+
+[#xinetd]
+=== xinetd
+
+For configuring an existing `xinetd` that uses the `/etc/xinetd.d/` directory for configuration, a script is included in the unpacked TGZ archive that first installs the configuration in two steps and then lets `xinetd` read the new configuration.
+You have to call the script with full path:
+
+[{shell-raw}]
+----
+{c-root} /var/lib/cmk-agent/scripts/super-server/1_xinetd/setup deploy
+{c-root} /var/lib/cmk-agent/scripts/super-server/1_xinetd/setup trigger
+----
+
+Again:
+If an older version of the {CMK} agent installed, check the paths which are entered in the `/etc/xinetd.d/check-mk-agent` file.
+The installation folder of the agent script is now `/usr/bin`.
+If your `xinetd` uses the old configuration scheme with only one large `/etc/xinetd.conf`, transfer the sample configuration from `/etc/check_mk/xinetd-service-template.cfg` to `/etc/xinetd.conf`.
+
+
+[#otherinetd]
+=== Other inetd
+
+First, check if your `/etc/services` already contains an entry for port 6556:
+
+[{shell}]
+----
+{c-root} *grep 6556/ /etc/services
+----
+
+If this is not the case, {CMK} must be made known as a service.
+To do this, add the following line, the spelling is exactly the same as in link:https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml?search=checkmk-agent[IANA table deposited^] with only one hyphen:
+
+./etc/services
+[{file}]
+----
+checkmk-agent 6556/tcp #Checkmk monitoring agent
+----
+
+The format of the `/etc/inetd.conf` configuration file differs between the different variants.
+Refer to the comments in the configuration file and the manual page (`man 5 inetd.conf`) for the format that matches your `inetd`.
+This is followed by the configuration matching `openbsd-inetd` with two lines for IPv4 and IPv6 support.
+Again, please note the correct spelling:
+
+./etc/inetd.conf
+[{file}]
+----
+checkmk-agent stream tcp nowait root /usr/bin/check_mk_agent
+checkmk-agent stream tcp6 nowait root /usr/bin/check_mk_agent
+----
+
+After changing the configuration file, restart `inetd`, for example with: 
+
+[{shell}]
+----
+{c-root} */etc/init.d/inetd restart*
+----
+
+Depending on the init system used and the installed superserver, this command may differ.
+
+
+[#testing]
+== Testing and error diagnosis
+
+To test the connection between the agent and the {CMK} server, proceed in principle as described in the article xref:agent_linux#test[monitor Linux].
+However, you can save the test for calling the agent controller, because it is not available in legacy mode.
+
+
+[#security]
+== Security
+
+=== Preliminary consideration
+
+Security is an important criterion for any software, and monitoring must not be an exception.
+Since the monitoring agent is installed on every monitored server, a security problem here would have particularly serious consequences.
+
+That's why security was taken into account already during the design of {CMK} and since the first days of {CMK} there is an ironclad principle:
+_The agent does not read data from the network. Period._ 
+This certainly rules out the possibility of an attacker being able to inject any commands or script components through the 6556 monitoring port.
+
+This alone provides such a high level of security that most users _on the LAN_ will not take any further measures.
+If the monitored system can only be reached via an insecure Internet connection, of course completely different standards apply and here encryption with SSH is certainly the first choice.
+
+The {CMK} agent also has _built-in encryption_, which is a good compromise between security and effort.
+In the following we will show you all the possibilities for securing in detail.
+
+
+=== Restrict access via IP addresses
+
+Even if an attacker cannot execute commands:
+The agent's monitoring data might already be useful to him, because it contains, among other things, a list of all processes running on the system.
+It is therefore best if the data cannot be easily accessed by anyone.
+
+
+==== xinetd
+
+If you run the {CMK} agent normally via `xinetd`, it is very easy and effective to restrict access to certain IP addresses -- those of the monitoring server, of course.
+This can be quickly achieved via the `only_from` directive of your `xinetd` configuration file.
+Enter IP addresses or address ranges (in the form `12.34.56.78/29` or `1234::/46`) separated by spaces.
+Host names are also permitted: in this case, the system checks whether the host name determined by _backward resolution_ of the IP address of the requesting host matches the one entered:
+
+./etc/xinetd.d/check-mk-agent
+[{file}]
+----
+service check_mk
+{
+        type = UNLISTED
+        port = 6556
+        socket_type = stream
+        protocol = tcp
+        wait = no
+        user = root
+        server = /usr/bin/check_mk_agent
+        only_from = 10.118.14.5 10.118.14.37
+        disable = no
+}
+----
+
+{cee-only}
+In the {EE}, agent bakery users can configure the allowed IP addresses via the [.guihint]#Allowed agent access via IP address (Linux, Windows)# rule set.
+This rule set can be found via [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Generic Options#.
+
+Of course, an attacker can very easily spoof its IP address and thus get a connection to the agent.
+But then it is very likely that he will not get the response -- because it will go to the real monitoring server.
+Or he actually gets it, but the {CMK} server doesn't get any data and will report an error very soon.
+
+
+[#ssh]
+=== Call via SSH
+
+The best security when calling the {CMK} agent is to call it via Secure Shell -- on Linux, in the form of the _OpenSSH_ implementation.
+This method is appropriate for:
+
+* Monitoring Linux servers that are only accessible via the Internet.
+* Monitoring of computers in a DMZ.
+* In similar situations where a TCP connection from the {CMK} server to the agent is possible at all.
+
+The setup is done in the following steps:
+
+. Create an SSH key pair specifically for this purpose.
+. On the target systems, allow access to the agent using this key.
+. Disable access via `xinetd`.
+. Configure the {CMK} server to use SSH instead of the TCP connection on port 6556.
+
+And now the whole thing step by step with all the necessary details:
+
+
+==== Create SSH key pair
+
+SSH works with a "public key authentication".
+To do this, you first create a pair of matched keys, where one is public and one is private.
+When choosing the algorithm you can choose between `rsa`, `ecdsa` or `ed25519`.
+In the following example, you use the `ssh-keygen -t ed25519` command as the site user:
+
+[{shell-raw}]
+----
+{c-omd} ssh-keygen -t ed25519
+Generating public/private ed25519 key pair.
+Enter file in which to save the key (/omd/sites/mysite/.ssh/id_ed25519):
+Enter passphrase (empty for no passphrase):
+Enter same passphrase again:
+Your identification has been saved in /omd/sites/mysite/.ssh/id_ed25519.
+Your public key has been saved in /omd/sites/mysite/.ssh/id_ed25519.pub.
+The key fingerprint is:
+cc:87:34:d2:ed:87:ed:f7:1b:ec:58:1f:7c:23:00:e2 mysite@mycmkserver
+The key's randomart image is:
++--[ED25519  256--+
+|                 |
+|       . .       |
+|      ..+..      |
+|      .=.+.o     |
+|       ES +.o    |
+|         . o. o  |
+|            ...B.|
+|             .=.*|
+|             . o+|
++-----------------+
+----
+
+*Important*: Do *not* specify a passphrase here!
+It is no use for you to encrypt the file with the secret key.
+After all, you certainly don't want to have to enter the passphrase every time you start the {CMK} server....
+
+The result is two files in the `.ssh` directory:
+
+[{shell}]
+----
+{c-omd} ll .ssh
+total 8
+-rw------- 1 mysite mysite 1679 Feb 20 14:18 id_ed25519
+-rw-r--r-- 1 mysite mysite 398 Feb 20 14:18 id_ed25519.pub
+----
+
+The private key is called `id_ed25519` and is readable only by the site user (`-rw-------`) -- and that's a good thing!
+The public key `id_ed25519.pub` looks something like this:
+
+[{shell}]
+----
+{c-omd} cat .ssh/id_ed25519.pub
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAIGb6AaqRPlbEmDnBkeIW3Q6Emb5lr2QEbWEQLmA5pb48 mysite@mycmkserver
+----
+
+==== Allow access via SSH
+
+The next step must now take place on (each) Linux server monitored via SSH.
+Log in there as `root` and create the subdirectory `.ssh` in its home directory (`/root`) if it does not already exist.
+The following command will set the access rights correctly to 700 right away:
+
+[{shell}]
+----
+{c-root} mkdir -m 700 /root/.ssh
+----
+
+Now open the `authorized_keys` file with a (console-based) text editor of your choice.
+If the file does not exist, the editor will create it automatically:
+
+[{shell}]
+----
+{c-root} vim /root/.ssh/authorized_keys
+----
+
+Now copy the contents of the public keys into this file.
+This can be done e.g. with the mouse and copy & paste.
+Be exact!
+Every space counts.
+Also make sure that *nowhere are there two* spaces in a row.
+And: The whole thing is *one line!*.
+If the file already exists, just append a new line below.
+
+
+==== Restrict access to the execution of the agent
+
+What comes now is very important!
+The SSH key should be used _exclusively_ to execute the agent.
+SSH offers something like this called _command restriction_.
+To do this, put the text `command="/usr/bin/check_mk_agent"` at the beginning of the line you just created -- separated from the rest by *one* space.
+It will look something like this:
+
+./root/.ssh/authorized_keys
+[{file}]
+----
+command="/usr/bin/check_mk_agent" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb6AaqRPlbEmDnBkeIW3Q6Emb5lr2QEbWEQLmA5pb48 mysite@mycmkserver
+----
+
+Save the file, check the permissions.
+These *must* be set to `600`:
+
+[{shell}]
+----
+{c-root} chmod 600 /root/.ssh/authorized_keys
+{c-root} ll /root/.ssh/authorized_keys
+#-rw-------# 1 root root 1304 Feb 20 14:36 authorized_keys
+----
+
+Now test accessing the agent via SSH once.
+The first time you have to confirm the fingerprint of the key by entering `yes`.
+Only after that the access can be done in the background by {CMK}:
+
+[{shell-raw}]
+----
+{c-omd} ssh root@myhost123
+The authenticity of host 'localhost (127.0.0.1)' can't be established.
+ECDSA key fingerprint is 55:34:f9:dd:2b:db:a7:fc:5d:4c:9d:37:28:f7:69:62.
+Are you sure you want to continue connecting (yes/no)? yes
+<<check_mk>>
+Version: 2.1.0b1
+AgentOS: linux
+Hostname: myhost123
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+<<df>>
+----
+
+By the way, the query for `key fingerprint` comes only the first time.
+If it does not work, please check:
+
+* Is the SSH server even installed on the target system?
+* Do the mentioned files and directories have the correct permissions?
+* Have you typed the syntax of `authorized_keys` correctly?
+* Did you enter the correct public key there?
+* Did you log in as the correct user (`root@...`)?
+* Did you remember the `command="..."`?
+
+With very old target systems it can also happen that keys with elliptic curves (ed25519 and ecdsa) are not known.
+In this case, generate an additional RSA key and enter this into the `authorized_keys` as well.
+SSH will then automatically use the strongest known key for the connection.
+
+
+==== Disable access via xinetd
+
+All this setting up of SSH is of no use if access via port 6556 is still possible.
+To shut that down, set the xinetd service from {CMK} to `disabled`.
+Do _not_ delete the whole configuration file.
+Otherwise this would show up again at the next agent update!
+
+Disabling is done in `/etc/xinetd.d/check-mk-agent`:
+
+./etc/xinetd.d/check-mk-agent
+[{file}]
+----
+service check_mk
+{
+        type = UNLISTED
+        port = 6556
+        socket_type = stream
+        protocol = tcp
+        wait = no
+        user = root
+        server = /usr/bin/check_mk_agent
+        disable = yes
+}
+----
+
+Then restart xinetd:
+
+[{shell}]
+----
+{c-root} /etc/init.d/xinetd restart
+----
+
+Do not forget to do a final test.
+It must not be possible to connect to port 6556 now:
+
+[{shell}]
+----
+{c-omd} telnet myhost123 6556
+Trying 10.118.15.23...
+telnet: Unable to connect to remote host: Connection refused
+----
+
+
+==== Switch access from {CMK} to SSH
+
+The target system is prepared.
+Now only the configuration of {CMK} itself is missing.
+This is done via the rule set [.guihint]#Setup > Agents > Other integrations> Custom integrations > Individual program call instead of agent access#.
+Create a rule here for the affected hosts and enter `ssh -T root@$HOSTADDRESS$` as command:
+
+.The call of the agent via SSH is done by rule
+image::agent_linux_rule_ssh_key.png[alt=rule to call the agent via SSH."]
+
+After a save and a xref:glossar#activate_changes[activate changes] everything should work!
+As a diagnostic, the `cmk -D` and `cmk -d` commands are useful, and are explained in the xref:cmk_commandline#cmk[article about the command line].
+
+
+==== Multiple SSH keys
+
+You can also work with more than one SSH key.
+Place the keys in any directory.
+In the rule [.guihint]#Individual program call instead of agent access# you must then specify the path to the respective private key with the `-i` option.
+It is best to use `$OMD_ROOT` here as a replacement for the path to the site directory (`/omd/sites/mysite`).
+The full command could then be `ssh -i $OMD_ROOT/.ssh/my_key -T root@$HOSTADDRESS$` and this would allow the configuration to run in a site with a different name:
+
+.To use multiple SSH keys, the command usually needs to be extended
+image::agent_linux_rule_multiple_ssh_keys.png[alt=rule for calling the agent with multiple SSH keys."]
+
+This allows you to use different SSH keys for different groups of hosts by using multiple different rules.
+
+
+==== Common error messages when dealing with SSH
+
+When you try to retrieve the {CMK} agent over SSH, it can sometimes happen that this very retrieval fails and the [.guihint]#Check_MK# service on your host changes to the {CRIT} state.
+These error messages often start with `Agent exited with code 255`.
+
+Information on how to fix such errors, can be found in the link:https://kb.checkmk.com/display/KB/Executing+the+Linux+agent+over+ssh[corresponding article in our knowledge base^].
+
+
+[#encryption]
+=== Built-in (symmetric) encryption
+
+The {CMK} agent can encrypt its own data without any additional means.
+Strictly speaking, this is not a substitute for access control.
+But since an attacker can't send commands and can't do anything with encrypted output data, it comes very close to one.
+
+The effort for using encryption and the necessary additional CPU load are both lower than with the above described method using SSH, which we still recommend when transferring data over the Internet.
+
+Encryption of course needs a suitable configuration on both the agent and the server.
+This can either be created manually ({RE}) or with the agent bakery ({EE}).
+
+
+==== Setup without agent bakery
+
+Again, without agent baking, the first step is to go to the [.guihint]#Setup# menu and create a rule in the ruleset [.guihint]#Setup > Agents > Access to agents > Checkmk agent > Encryption (Linux, Windows)#.
+The rule should apply to all hosts for which you want to use encryption.
+SNMP hosts ignore this setting, so you don't need to explicitly exclude them.
+
+.Also the built-in encryption is set up by a rule
+image::agent_linux_encrypt.png[alt="Rule to configure built-in encryption."]
+
+The setting for [.guihint]#Encryption for Agent# is important.
+As long as you leave the rule at the default [.guihint]#Disable#, of course, everything stays the same.
+So you have the choice between:
+
+* [.guihint]#Enable#: Encryption is enabled, but data from agents without encryption will still be accepted.
+* [.guihint]#Enforce#: Encryption is enabled, but only encrypted data will be accepted.
+
+It makes sense to start with [.guihint]#Enable# first.
+As soon as you think that all agents are switched to encryption, set to [.guihint]#Enforce# to thereby find hosts that still send data in plain text.
+
+Encryption works with a shared password, which you specify here and must be stored in clear text on both the {CMK} server and the agent (_shared secret_).
+Choose a random password and have it ready for the second step: configuring the agent.
+
+There you create the file `/etc/check_mk/encryption.cfg` with the following content:
+
+./etc/check_mk/encryption.cfg
+[{file}]
+----
+ENCRYPTED=yes
+PASSPHRASE='MyPassword'
+----
+
+Of course you set your own password here at `PASSPHRASE`.
+And you should definitely protect the file from read access by other users:
+
+[{shell}]
+----
+{c-root} chmod 600 /etc/check_mk/encryption.cfg
+----
+
+Now you can do the following tests (see also the xref:cmk_commandline#[article about the command line of {CMK}]):
+
+* The call to `check_mk_agent` on the target system must output confused character salad.
+* Access via `telnet myhost123 6556` from the {CMK} server must output the same character salad.
+* The command `cmk -d myhost123` on the {CMK} server must display the clean plain text data.
+
+
+==== Set up with agent bakery
+
+{cee-only}
+Setting up encryption with agent bakery is very simple.
+By creating the rule just described, you are basically done.
+All you need to do is bake new agents and deploy them.
+The file `/etc/check_mk/encryption.cfg` is automatically created for you and included in the agent packages.
