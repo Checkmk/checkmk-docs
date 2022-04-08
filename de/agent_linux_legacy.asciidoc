@@ -262,60 +262,26 @@ Deswegen wurde schon beim Design von {CMK} auf Sicherheit Wert gelegt und es gil
 _Der Agent liest keine Daten vom Netzwerk. Punkt._
 Somit ist mit Sicherheit ausgeschlossen, dass ein Angreifer über den Überwachungsport 6556 irgendwelche Befehle oder Skriptbestandteile einschleusen kann.
 
-Das allein liefert bereits ein so hohes Sicherheitsniveau, dass die meisten Anwender _im LAN_ auf weitere Maßnahmen verzichten.
-Kann das überwachte System nur über eine unsichere Internetverbindung erreicht werden, gelten natürlich ganz andere Maßstäbe und hier ist sicher eine Verschlüsselung mit SSH die erste Wahl.
+Doch, selbst wenn ein Angreifer keine Befehle ausführen kann:
+Die Monitoring-Daten des Agenten könnten für ihn bereits nützlich sein, denn sie enthalten unter anderem eine Liste von allen auf dem System laufenden Prozessen, Hinweise auf die Betriebssystemversion und häufig noch ausstehende Updates.
 
-Der {CMK} Agent verfügt ferner über eine _eingebaute Verschlüsselung_, welche einen guten Kompromiss aus Sicherheit und Aufwand darstellt.
-Im Folgenden zeigen wir Ihnen alle Möglichkeiten zur Absicherung im Detail.
+Aus diesem Grund empfehlen wir in jedem Fall die Absicherung der Datenübertragung.
+Wenn die Verwendung des seit {v21} vorhandenen Agent Controllers mit TLS-Verschlüsselung nicht möglich ist, haben Sie die folgenden Möglichkeiten, Zugriff und Transport abzusichern:
+
+* Das niedrigste Schutzniveau bietet die IP-Beschränkung via `xinetd` Konfiguration: Daten werden dennoch im Klartext übertragen, lediglich die direkte Anforderung durch einen potentiellen Angreifer schlägt fehl.
+* Ein etwas höheres Schutzniveau bietet die symetrische Verschlüsselung. Da hier derselbe Schlüssel für Ver- und Entschlüsselung verwendet wird, kann ein Angreifer, der ein Update-Paket abgefangen hat oder Zugriff auf einen Host im Monitoring erlangt hat, die Agentenkommunikation aller so verschlüsselnden Hosts mitlesen.
+* Ein sehr gutes Schutzniveau bietet die Übertragung der Agentenausgabe über einen SSH-Tunnel, hier kommt Public-Key-Kryptographie zum Einsatz: Ein Angreifer kann weder mit einem abgefangenen öffentlichen Schlüssel noch mit mitgeschnittenen Kommunikationsinhalten etwas anfangen.
+
+Die ersten beiden Möglichkeiten werden hier vor allem aus Gründen der Kompatibilität zu vorhandenen {CMK}-Umgebungen beschrieben.
+Wo immer möglich ,empfehlen wir die Nutzung des SSH-Tunnels.
+
+// Das allein liefert bereits ein so hohes Sicherheitsniveau, dass die meisten Anwender _im LAN_ auf weitere Maßnahmen verzichten. 
+// Kann das überwachte System nur über eine unsichere Internetverbindung erreicht werden, gelten natürlich ganz andere Maßstäbe und hier ist sicher eine Verschlüsselung mit SSH die erste Wahl.
+
+// Der {CMK} Agent verfügt ferner über eine _eingebaute Verschlüsselung_, welche einen guten Kompromiss aus Sicherheit und Aufwand darstellt.
+// Im Folgenden zeigen wir Ihnen alle Möglichkeiten zur Absicherung im Detail.
 // FIXME!
 // MFS: Leider gaukelt die eingebaute Verschlüsselung Sicherheit vor, die nicht immer gegeben ist. Sie ist symetrisch, jeder, der ein Agentenpaket mit dem Schlüssel in die Finger bekommt, kann entschlüsseln!
-
-=== Zugriff auf xinetd beschränken
-
-Auch wenn ein Angreifer keine Befehle ausführen kann:
-Die Monitoring-Daten des Agenten könnten für ihn bereits nützlich sein, denn sie enthalten unter anderem eine Liste von allen auf dem System laufenden Prozessen.
-Am besten ist es daher, wenn die Daten nicht jeder einfach abrufen kann.
-
-// SK: Hier passt dann auch das "ganz normal" nicht mehr. Ganz normal sollte ja der Agent Controller sein.
-// MFS: Fixed it…
-
-Wenn Sie den {CMK} Agenten über den `xinetd` freigeben, ist es sehr einfach und effektiv, den Zugriff auf bestimmte IP-Adressen zu beschränken -- und zwar natürlich auf die des Monitoring-Servers.
-Das ist über die Direktive `only_from` der Konfigurationsdatei Ihres `xinetd` schnell zu erreichen.
-Tragen Sie durch Leerzeichen getrennt IP-Adressen oder Adressbereiche (in der Form `12.34.56.78/29` oder `1234::/46`) ein.
-// SK: Doppelpunkt nach Doppelpunkt finde ich persönlich seltsam.
-// MFS: IPv6 meint dazu: Is halt so.
-Zulässig sind auch Host-Namen: in diesem Fall wird geprüft, ob der durch _Rückwärtsauflösung_ der IP-Adresse des anfragenden Hosts ermittelte Host-Name mit dem eingetragenen übereinstimmt:
-
-./etc/xinetd.d/check-mk-agent
-[{file}]
-----
-service check_mk
-{
-        type           = UNLISTED
-        port           = 6556
-        socket_type    = stream
-        protocol       = tcp
-        wait           = no
-        user           = root
-        server         = /usr/bin/check_mk_agent
-        only_from      = 10.118.14.5 10.118.14.37
-        disable        = no
-}
-----
-
-{cee-only}
-In den {EE} können Benutzer der Agentenbäckerei die erlaubten IP-Adressen über den Regelsatz [.guihint]#Allowed agent access via IP address (Linux, Windows)# konfigurieren.
-Diesen Regelsatz finden Sie über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Generic Options#.
-
-Natürlich kann ein Angreifer sehr leicht seine IP-Adresse fälschen und so eine Verbindung zum Agenten bekommen.
-Aber dann ist es sehr wahrscheinlich, dass er die Antwort nicht bekommt -- weil diese zum echten Monitoring-Server geht.
-Oder er bekommt sie tatsächlich, aber der {CMK} Server bekommt keinerlei Daten und wird sehr bald einen Fehler melden.
-
-// SK: Zurück zur Struktur: Meines Erachtens könnten wir in diesem Artikel xinted und ssh *die* zwei sinnvollen Wege für die Datenübertragung im Legacy-Modus gleichwertig nebeneinander stellen.
-// SK: SSH würde also ein eigenes (Unter-)Kapitel auf der gleichen Ebene wie xinetd bekommen und der ganze übrige Absicherungskram kommt dann in den Abschnitt von xinetd.
-// SK: Aktuell ist nämlich das Kapitel 5 von der Story her unklar. Der Leser könnte sich fragen, ob sich die Kapitel 5.2 bis 5.4 irgendwie ergänzen und aufeinander folgen, oder ob sie jeweils Alternativen darstellen.
-// SK: So könnte man dann auch den ersten Satz von 5.3 ("Die beste Sicherheit") besser in den Kontext des Artikels einbauen. Alleine genommen steht der sonst wieder in harter Konkurrenz zum Agent Controller.
-// MFS: Zusammengezogen, früher hatte IP-Adressbeschränkung zwei Unterkapitel, da es hier nur xinetd gibt, ist das unnötig
 
 [#ssh]
 === Aufruf über SSH
@@ -680,3 +646,50 @@ Das Aufsetzen der Verschlüsselung mit der Agentenbäckerei ist sehr einfach.
 Mit dem Erstellen der gerade beschriebenen Regel sind Sie im Grunde fertig.
 Sie brauchen nur noch neue Agenten zu backen und zu verteilen.
 Die Datei `/etc/check_mk/encryption.cfg` wird automatisch für Sie erzeugt und mit in die Agentenpakete eingebaut.
+
+=== xinetd: IP-Beschränkung
+
+Auch wenn ein Angreifer keine Befehle ausführen kann:
+Die Monitoring-Daten des Agenten könnten für ihn bereits nützlich sein, denn sie enthalten unter anderem eine Liste von allen auf dem System laufenden Prozessen.
+Am besten ist es daher, wenn die Daten nicht jeder einfach abrufen kann.
+
+// SK: Hier passt dann auch das "ganz normal" nicht mehr. Ganz normal sollte ja der Agent Controller sein.
+// MFS: Fixed it…
+
+Wenn Sie den {CMK} Agenten über den `xinetd` freigeben, ist es sehr einfach und effektiv, den Zugriff auf bestimmte IP-Adressen zu beschränken -- und zwar natürlich auf die des Monitoring-Servers.
+Das ist über die Direktive `only_from` der Konfigurationsdatei Ihres `xinetd` schnell zu erreichen.
+Tragen Sie durch Leerzeichen getrennt IP-Adressen oder Adressbereiche (in der Form `12.34.56.78/29` oder `1234::/46`) ein.
+// SK: Doppelpunkt nach Doppelpunkt finde ich persönlich seltsam.
+// MFS: IPv6 meint dazu: Is halt so.
+Zulässig sind auch Host-Namen: in diesem Fall wird geprüft, ob der durch _Rückwärtsauflösung_ der IP-Adresse des anfragenden Hosts ermittelte Host-Name mit dem eingetragenen übereinstimmt:
+
+./etc/xinetd.d/check-mk-agent
+[{file}]
+----
+service check_mk
+{
+        type           = UNLISTED
+        port           = 6556
+        socket_type    = stream
+        protocol       = tcp
+        wait           = no
+        user           = root
+        server         = /usr/bin/check_mk_agent
+        only_from      = 10.118.14.5 10.118.14.37
+        disable        = no
+}
+----
+
+{cee-only}
+In den {EE} können Benutzer der Agentenbäckerei die erlaubten IP-Adressen über den Regelsatz [.guihint]#Allowed agent access via IP address (Linux, Windows)# konfigurieren.
+Diesen Regelsatz finden Sie über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Generic Options#.
+
+Natürlich kann ein Angreifer sehr leicht seine IP-Adresse fälschen und so eine Verbindung zum Agenten bekommen.
+Aber dann ist es sehr wahrscheinlich, dass er die Antwort nicht bekommt -- weil diese zum echten Monitoring-Server geht.
+Oder er bekommt sie tatsächlich, aber der {CMK} Server bekommt keinerlei Daten und wird sehr bald einen Fehler melden.
+
+// SK: Zurück zur Struktur: Meines Erachtens könnten wir in diesem Artikel xinted und ssh *die* zwei sinnvollen Wege für die Datenübertragung im Legacy-Modus gleichwertig nebeneinander stellen.
+// SK: SSH würde also ein eigenes (Unter-)Kapitel auf der gleichen Ebene wie xinetd bekommen und der ganze übrige Absicherungskram kommt dann in den Abschnitt von xinetd.
+// SK: Aktuell ist nämlich das Kapitel 5 von der Story her unklar. Der Leser könnte sich fragen, ob sich die Kapitel 5.2 bis 5.4 irgendwie ergänzen und aufeinander folgen, oder ob sie jeweils Alternativen darstellen.
+// SK: So könnte man dann auch den ersten Satz von 5.3 ("Die beste Sicherheit") besser in den Kontext des Artikels einbauen. Alleine genommen steht der sonst wieder in harter Konkurrenz zum Agent Controller.
+// MFS: Zusammengezogen, früher hatte IP-Adressbeschränkung zwei Unterkapitel, da es hier nur xinetd gibt, ist das unnötig
