@@ -1,0 +1,495 @@
+
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= Authentication with SAML
+:revdate: 21-Apr-2022
+:title: Authentication with SAML
+:description: For a single sign-on solution, {CMK} can cooperate with Active Directory. Read here how to set up authentication with SAML.
+
+
+== Introduction
+
+In this article you will learn how to set up a login using _Secure Assertion Markup Language_ (SAML).
+The implementation in {CMK} runs at the Apache level via link:https://github.com/latchset/mod_auth_mellon[mod_auth_mellon^], which takes on the role of a Service Provider (SP) in the SAML design.
+
+This guide describes in detail the procedure for using Active Directory Federation Services (AD FS) as the Identity Provider (IDP).
+In further sections, you will receive instructions on how to configure other IDPs, such as Azure AD and Micro Focus NetIQ Access Manager.
+
+*Note:* This feature is not supported by SUSE Linux Enterprise Server (SUSE) versions 12 SP3, 12 SP4 and 15 due to missing dependencies (SLES 15 SP1 and later allow the connection).
+
+*Caution:* The whole topic of transport encryption (TLS/SSL) is only included in the examples here in a simple implementation for demonstration purposes.
+In production environments with your own CA and diligent certificate handling, there will be corresponding deviations that depend on your own infrastructure.
+
+
+== Logging in with Active Directory Federation Services
+
+=== Prerequisites
+
+Logging on to {CMK} using Active Directory is basically relatively simple:
+AD Federation Service (FS) serves as _Identity Provider_ (IDP), the Apache module link:https://github.com/Uninett/mod_auth_mellon[mod_auth_mellon^] provides authentication as a Service Provider via _Security Assertion Markup Language_ (SAML).
+Prerequisites for this tutorial are accordingly:
+
+* Functioning LDAP-AD integration
+* Working AD FS as IDP
+* {CMK} server with SSL
+
+The setup is accomplished in three steps:
+
+. Configuration of Apache (one result: XML file with metadata).
+. Configuring AD FS: setting up Relying Party Trust with Mellon metadata.
+. Enabling the login to {CMK} itself.
+
+
+=== Configuration of Apache
+
+Additional dependencies may still need to be installed, under Debian/Ubuntu for example:
+
+[{shell}]
+----
+{c-root} apt-get update
+{c-root} apt-get install wget libxmlsec1-openssl
+----
+
+This is, of course, about configuring the site's own Apache server, so log in there first:
+
+[{shell}]
+----
+{c-root} omd su mysite
+----
+
+Now create a directory for mod_auth_mellon and switch to it:
+
+[{shell}]
+----
+{c-omd} mkdir etc/apache/mellon
+{c-omd} cd etc/apache/mellon
+----
+
+Now make `mellon_create_metadata` executable and run it specifying your server as well as your site with the _mellon_ suffix:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ chmod +x ~/bin/mellon_create_metadata
+OMD[mysite]:~/etc/apache/mellon$ mellon_create_metadata https://myserver "https://myserver/mysite/mellon"
+----
+
+This module generates three files: Certificate (`.cert`), key (`.key`) and static metadata (`.xml`) -- the `.xml` files are not required and can be deleted:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ rm *.xml
+----
+
+Rename the key and certificate files for simplicity:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ mv *.key mellon.key
+OMD[mysite]:~/etc/apache/mellon$ mv *.cert mellon.cert
+----
+
+Now get the required metadata directly from your AD-FS server (here _myadfs_) and save it as `idp-metadata.xml`:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ wget --no-check-certificate -O ./idp-metadata.xml https://myadfs/FederationMetadata/2007-06/FederationMetadata.xml 
+----
+
+Now you need the public certificate for the AD-FS server, which is stored in the `idp-public-key.pem` file:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ echo -n | openssl s_client -connect myadfs:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | openssl x509 -pubkey -noout > idp-public-key.pem
+----
+
+Just in case you are wondering about the `echo -n`: This is used to terminate the following SSL session.
+
+*Note:* The certificate should, or even _must_ be uploaded to the trust store in case, for example, the IDP service checks the certificate chain.
+For more information on this topic, see the xref:omd_https#[HTTPS article].
+
+As a last step, replace the authentication configuration file `~/etc/apache/conf.d/auth.conf` with the following variant -- specifying your {CMK} server (here `myserver`) and site (here `mysite`), of course:
+
+.~/etc/apache/conf.d/auth.conf
+[{file}]
+----
+# Set this to the Name of your Checkmk site, e.g.
+#Define SITE
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server. auth_mellon uses this
+# to generate the needed URLs in the metadata
+ServerName https://myserver
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /omd/sites/${SITE}/lib/apache/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+#MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.txt
+#MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no Check_MK authentication
+	# cookie provided by the user and whitelist also some other required URLs
+	<If "! %{HTTP_COOKIE} =~ /^auth_/ && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/webapi.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+		! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+		! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+		
+		MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+		MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+		MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+		MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+		MellonEndpointPath "/${SITE}/mellon"
+		MellonDefaultLoginPath "/${SITE}/check_mk/"
+		
+		Order allow,deny
+		Allow from all
+
+		MellonSecureCookie On
+		MellonCookieSameSite None
+
+		AuthType Mellon
+		AuthName "Check_MK SAML Login"
+		MellonEnable auth
+		Require valid-user
+		
+		# Get Username
+		# ADFS sends username as DOMAIN\username pair.
+		# Checkmk just wants the username.
+		RewriteEngine on
+		RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+		RequestHeader edit X-Remote-User "^.*\\\(.*)$" "$1"
+		
+		# When SAML auth fails, show the login page to the user. This should only happen,
+		# if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+		# A failed login at the IDP will not return you here at all.
+		
+    ErrorDocument 401 '<html> \
+      <head> \
+        <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+      </head> \
+      <body> \
+        SAML authentication failed, redirecting to login page. \
+        <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+      </body> \
+    </html>'
+	
+	</If>
+	
+	# This header is also needed after authentication (outside of the If clause)
+	RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+	RequestHeader edit X-Remote-User "^.*\\\(.*)$" "$1"
+	
+</Location>
+----
+
+Then restart Apache:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ omd restart apache
+----
+
+Last but not least, you now download the dynamically created Mellon metadata as an XML file so that you can import it into AD Management right away:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ wget https://myserver/mysite/mellon/metadata -o metadata.xml
+----
+
+
+== Configuring Active Directory
+
+To create a Relying Party Trust in AD FS, do the following:
+
+Start the AD FS interface:
+
+[.border]
+image::saml_adfs_01.png[]
+
+Click [.guihint]#Add Relying Party Trust#:
+
+[.border]
+image::saml_adfs_02.png[]
+
+Leave the option set to [.guihint]#Claims aware# and continue with the Start button:
+
+[.border]
+image::saml_adfs_03.png[]
+
+Now select [.guihint]#Import data on the relying party from a file# and specify the XML file you just downloaded:
+
+[.border]
+image::saml_adfs_04.png[]
+
+You can safely ignore the [.guihint]#AD FS Management# warning:
+
+[.border]
+image::saml_adfs_05.png[]
+
+Under [.guihint]#Specify Display Name# now enter `Checkmk` as name:
+
+[.border]
+image::saml_adfs_06.png[]
+
+When assigning permissions, *for testing purposes* you can first select for [.guihint]#Choose Access Control Policy# the value [.guihint]#Permit everyone#; you should later change this to [.guihint]#Permit specific group#.
+
+[.border]
+image::saml_adfs_07.png[]
+
+Confirm the summary under [.guihint]#Ready to Add Trust:#
+
+[.border]
+image::saml_adfs_08.png[]
+
+Finally, confirm the [.guihint]#Finish# dialog and keep the checkmark at [.guihint]#Configure claims issuance policy for this application:#
+
+[.border]
+image::saml_adfs_09.png[]
+
+Select the Relying Party Trust you just created and then start the editor with [.guihint]#Edit Claim Issuance Policy... :#
+
+[.border]
+image::saml_adfs_10.png[]
+
+Add a new rule in the following dialog via [.guihint]#Add Rule...#:
+
+[.border]
+image::saml_adfs_11.png[]
+
+In the first step [.guihint]#Select Rule Template# select [.guihint]#Transform to Incoming Claim# and confirm:
+
+[.border]
+image::saml_adfs_12.png[]
+
+In the second step [.guihint]#Configure Rule# set the following values:
+
+* [.guihint]#Incoming claim type#: `Windows account name`
+* [.guihint]#Outgoing claim type#: `Name ID`
+* [.guihint]#Outgoing name ID format#: `Transient Identifier`
+
+[.border]
+image::saml_adfs_13.png[]
+
+This also completes the AD-FS configuration.
+FS can now derive authentication for {CMK} from Windows authentication, which you instruct to authenticate users via HTTP requests in the next step.
+
+
+== Configure {CMK}
+
+In {CMK} you now only have to activate under [.guihint]#Setup > General > Global Settings > User Interface > Authenticate users by incoming HTTP requests# at [.guihint]#Current settings# the [.guihint]#Activate HTTP header authentication# option.
+
+image::saml_adfs_cmk.png[]
+
+
+== Other IDPs
+
+The following sections only describe the configuration of Mellon/Apache for different IDPs already running.
+The connection in {CMK} itself is limited in each case to the last step from the detailed AD-FS instructions.
+
+
+=== Azure AD
+
+When Azure AD acts as an IDP, there are some differences in the configuration procedure, for example, the user name can be set directly without being rewritten.
+
+Prerequisites for the following sample configuration:
+
+- Set UserPrincialName in LDAP connection as identifier (more infos at link:https://ldapwiki.com/wiki/UserPrincipalName#:~:text=UserPrincipalName%20is%20a%20SINGLE%2DVALUE,the%20Internet%20standard%20RFC%20822.&text=By%20convention%2C%20this%20should%20map%20to%20the%20user's%20email%20name[LDAPwiki.com^]).
+- Custom Enterprise App in Azure AD with UserPrincialName as 'name' attribute -- more details in the link:https://docs.microsoft.com/en-us/azure/active-directory/manage-apps/add-application-portal[Microsoft documentation^]).
+
+Here is a sample configuration:
+
+.~/etc/apache/conf.d/auth.conf
+[{file}]
+----
+#Set this to the Name of your Checkmk site, e.g.
+# Define SITE mysite
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server.
+# auth_mellon uses this to generate the needed URLs in the metadata.
+ServerName https://myserver
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /omd/sites/${SITE}/lib/apache/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+# MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.log
+# MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no Check_MK authentication
+	# cookie provided by the user and whitelist also some other required URLs.
+   <If "! %{HTTP_COOKIE} =~ /^auth_/ && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/webapi.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+	! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+        ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+        ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+
+        RequestHeader unset X-Remote-User
+        MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+        # Azure-AD-specific: Not needed because in metadata:
+        #MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+        MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+        MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+        MellonEndpointPath "/${SITE}/mellon"
+        MellonDefaultLoginPath "/${SITE}/check_mk/"
+
+		Order allow,deny
+		Allow from all
+				       
+		MellonSecureCookie On
+		MellonCookieSameSite None
+        
+		AuthType Mellon
+		MellonEnable auth
+		require valid-user
+
+        # Azure-AD-specific:
+        # Get Username
+        # If your assertion offers the username for Check_MK in an attribute you can set it directly as the remote user (REMOTE_USER):
+        MellonUser "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+        RequestHeader set X-Remote-User "%{MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name}e" env=MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name
+		
+        # When SAML auth fails, show the login page to the user. This should only happen, if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+        # A failed login at the IDP will not return you here at all.
+        ErrorDocument 401 '<html> \
+          <head> \
+            <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+          </head> \
+          <body> \
+            SAML authentication failed, redirecting to login page. \
+            <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+          </body> \
+        </html>'
+		
+	</If>
+	
+	# Azure-AD-specific:
+	# This header is also needed after authentication (outside of the If clause)
+	RequestHeader set X-Remote-User "%{MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name}e" env=MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name
+	
+</Location>
+----
+
+
+=== NetIQ Access Manager
+
+When NetIQ Access Manager acts as an IDP, there are some differences in the configuration procedure, for example, the user name can be set directly without being rewritten.
+
+Here is an example configuration:
+
+.~/etc/apache/conf.d/auth.conf
+[{file}]
+----
+
+# Set this to the Name of your Checkmk site, e.g.# Define SITE mysite
+# Define SITE mysite
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server. auth_mellon uses this to generate the needed URLs in the metadata.
+
+ServerName https://myserver.mydomain.tld
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /omd/sites/mysite/lib/apache/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+#MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.log
+#MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no Check_MK authentication
+	# Cookie provided by the user and whitelist also some other required URLs.
+
+    <If "! %{HTTP_COOKIE} =~ /^auth_/ && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/webapi.py' && \
+        ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+        ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+
+        MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+        # NetIQ-specific: Not needed because in metadata:
+        #MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+        MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+        MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+        MellonEndpointPath "/${SITE}/mellon"
+        MellonDefaultLoginPath "/${SITE}/check_mk/"
+
+		Order allow,deny
+		Allow from all
+		
+		MellonSecureCookie On
+		MellonCookieSameSite None
+
+		AuthType Mellon
+		MellonEnable auth
+		require valid-user
+
+
+        # NetIQ-specific:
+        # Even though it is set as 'optional' in https://docs.oasis-open.org/security/saml/v2.0/saml-metadata-2.0-os.pdf
+        # a NetIQ Access Manager requires it to be set.
+        # Specified in oasis link above - line 396
+        MellonOrganizationName "<countrycode>" "<your organisation name>"
+        # Specified in oasis link above - line 443 / 452
+        MellonOrganizationURL  "<countrycode>" "<your organisation url>"
+        # Specified in oasis link above - line 454
+        MellonOrganizationDisplayName "<countrycode>" "<your organisation display name>"
+
+        # NetIQ-specific:
+        # If your assertion offers the username for Check_MK in an attribute you can set it directly as the remote user (REMOTE_USER)
+        MellonUser "myusername"
+
+        # NetIQ-specific:
+        # If the assertion does contain the username (and was set to MellonUser) then you can set the header directly.
+        RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+
+    # When SAML auth fails, show the login page to the user. This should only happen,
+    # if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+    # A failed login at the IDP will not return you here at all.
+        ErrorDocument 401 '<html> \
+          <head> \
+            <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+          </head> \
+          <body> \
+            SAML authentication failed, redirecting to login page. \
+            <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+          </body> \
+        </html>'
+
+# This header is also needed after authentication (outside of the If clause)
+RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+
+</Location>
+----
