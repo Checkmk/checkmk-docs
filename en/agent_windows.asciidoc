@@ -10,6 +10,13 @@ xref:wato_monitoringagents#[Monitoring agents]
 xref:agent_deployment#[Automatic agent updates]
 {related-end}
 
+////
+Hints for translation:
+At the beginning of this article, their is an (outdated) Deepl translated text, that will be displayed for our readers as long as you are not finished.
+You can delete it right away.
+The German text to be translated is commented out at the end of this file (starting at line 1130.
+////
+
 
 _In order to quickly provide you the new information for {CMK} version {v21}, we have had this draft machine translated for now. Update and language revision will follow later._
 
@@ -1116,3 +1123,1109 @@ In the directory `Program Files *(x86)*` the agent is installed for compatibilit
 |`local/share/check_mk/agents/custom` |Base directory for custom files to be delivered with a baked agent.
 |`share/check_mk/agents/windows/` |Directory containing the agent's MSI package. This directory also contains configuration examples and all agent plugins.
 |===
+
+
+
+
+////
+[#intro]
+== Der neue Agent
+
+Die Überwachung von Windows-Servern war von Anfang an eine der wichtigsten Aufgaben von {CMK}.
+Wie für alle anderen Server-Betriebssysteme liefert {CMK} daher auch für Windows einen eigenen Agenten aus.
+
+In der {CMK}-Version {v21} gibt es nun einen neuen Windows-Agenten.
+Präziser gesagt, wird dem *Agentenprogramm* `check_mk_agent.exe` eine neue Komponente zur Seite gestellt: der *Agent Controller*.
+Der Agent Controller ist dem Agentenprogramm vorgeschaltet, fragt dieses ab und kommuniziert an dessen Stelle mit dem {CMK}-Server.
+Dazu registriert er sich am *Agent Receiver*, einem ebenfalls neuen Prozess, der auf dem {CMK}-Server läuft.
+
+Der neue Windows-Agent übernimmt also zum einen das Agentenprogramm, und damit dessen Vorteile.
+Zum anderen ergänzt er das Programm so, dass neue Funktionen hinzugefügt werden können wie die TLS-Verschlüsselung der Kommunikation, Datenkomprimierung -- und auch die Umkehrung der Kommunikationsrichtung.
+
+Der registrierte, verschlüsselte und komprimierte *Pull-Modus* mit dem Agent Controller ist ab Version {v21} für alle {CMK}-Editionen verfügbar -- sofern sowohl {CMK}-Server als auch Agent Version mindestens {v21} haben.
+
+Der Agent Controller ist nur auf bestimmten (neueren) Windows Versionen ausführbar.
+Welche das sind, können Sie aus der nachfolgenden Tabelle ablesen.
+
+Allerdings beherrscht der Agent auch einen sogenannten *Legacy-Modus*, um ältere Windows-Versionen zu unterstützen.
+In diesem Modus arbeitet der neue wie der alte Agent, d.h. ohne Agent Controller und damit auch ohne Registrierung am {CMK}-Server.
+Für den Legacy-Modus sind einige Besonderheiten zu beachten, die im xref:post_install[Installationskapitel] zusammengefasst sind.
+
+Aus Kompatibilitätsgründen unterstützt der Agent nur die aktuellen Versionen der link:https://de.wikipedia.org/wiki/Microsoft_Windows_NT[Microsoft Windows NT^] Produktlinie (Edition).
+Die folgende Tabelle listet diese explizit auf.
+In der Spalte Version finden Sie den Anfang der Versionsnummer, die Sie sich mit den Kommandos `ver` und `systeminfo` auf dem Windows-System ausgeben lassen können.
+
+[#windows_versions]
+[cols="50,25,~",options="header"]
+|===
+|Edition |Version |Agent Controller
+|Windows Vista |6.0 |ohne
+|Windows Server 2008 (R1) |6.0 |ohne
+|Windows 7 |6.1 |mit
+|Windows Server 2008 R2 |6.1 |mit
+|Windows 8 |6.2 |mit
+|Windows Server 2012 (R1) |6.2 |mit
+|Windows 8.1 |6.3 |mit
+|Windows Server 2012 R2 |6.3 |mit
+|Windows 10 |10.0  |mit
+|Windows Server 2016 |10.0 |mit
+|Windows Server 2019 |10.0 |mit
+|Windows 11 |10.0  |mit
+|Windows Server 2022 |10.0 |mit
+|===
+
+*Wichtig*: Editionen, die in der Tabelle nicht erwähnt werden, werden nicht offiziell unterstützt.
+Dazu gehört zum Beispiel auch _Windows Embedded_.
+
+Die Installation, Registrierung und Einrichtung des Agenten ist mit wenigen Schritten erledigt, denn dieser braucht für seine Funktion zum Beispiel keine zusätzlichen Bibliotheken.
+Zudem wird der Agent mit einer Grundkonfiguration ausgeliefert, die für die meisten Anwendungsfälle ausreicht.
+
+
+[#agent_architecture]
+== Architektur des Agenten
+
+Mit dem in der {v21} eingeführten neuen Agenten sind mehr Software-Komponenten als zuvor in die Kommunikation involviert.
+Daher stellen wir die Komponenten und ihr Zusammenspiel kurz vor.
+Die Architektur ist beim Windows-Agenten und beim xref:agent_linux#architecture[Linux-Agenten] identisch.
+Nur die technische Realisierung ist spezifisch für die Betriebssysteme.
+
+.Zusammenspiel der Software-Komponenten
+[{image-border}]
+image::agent_windows_communication_flow.png[alt="Illustration der Kommunikation zwischen Agent und Instanz."]
+
+Das *Agentenprogramm* `check_mk_agent.exe` ist und bleibt zuständig für die Sammlung der Monitoring-Daten.
+Es wird als Windows-Dienst unter dem lokalen Systemkonto (_Local System account_) gestartet.
+Es sammelt bei einem Aufruf Daten zu dem lokalen System und stellt sie dem Agent Controller zur Verfügung.
+
+Das Agentenprogramm ist:
+
+* minimalistisch, denn es begnügt sich mit minimalen Ressourcen an RAM, CPU, Plattenplatz und Netzwerk.
+* umfassend, denn es hat Zugriff auf wichtige Daten, die per WMI oder SNMP nicht erreichbar sind. +
+In einigen Fällen kann allerdings die Überwachung per SNMP *zusätzlich* zum {CMK}-Agenten sinnvoll sein.
+Im Artikel zur xref:snmp#snmp_cmk_agent[Überwachung mit SNMP] finden Sie mehr zu diesem Thema.
+* sicher, denn es erlaubt keinerlei Zugriffe aus dem Netzwerk.
+* leicht erweiterbar, denn Sie können Plugins in einer beliebigen Programmier- oder Skriptsprache schreiben und vom Agentenprogramm ausführen lassen.
+* so transparent, wie es eine als ausführbar gelieferte Datei sein kann, denn Sie haben jederzeit Zugriff auf den Quellcode und damit Einsicht in die Funktionalität und können den Agenten prinzipiell auch selbst kompilieren.
+
+Der *Agent Controller* `cmk-agent-ctl.exe` ist die Komponente des Agenten, die für den Transport der vom Agentenprogramm gesammelten Daten zuständig ist.
+Er wird als Hintergrundprozess unter dem lokalen Systemkonto von Windows ausgeführt.
+Er lauscht am TCP-Port 6556 auf eingehende Verbindungen der {CMK}-Instanz und fragt das Agentenprogramm über eine TCP-Verbindung ab.
+
+Der *Agent Receiver* `agent-receiver` ist die Komponente des {CMK}-Servers, die als genereller Endpunkt für die Kommunikation des Agent Controllers dient, z.B. für die Registrierung der Verbindung.
+Im Pull-Modus erfolgt der Datenaustausch mit den xref:cmc_differences.html#fetcher_checker[{CMK}-Fetchern] der Instanz.
+
+TLS-Verschlüsselung und Datenkomprimierung werden über den Agent Controller und den Agent Receiver realisiert, d.h. {CMK}-Server und Agent müssen mindestens Version {v21} haben.
+Dabei ist nach der Installation der erste Schritt die Registrierung des Agent Controller beim Agent Receiver der {CMK}-Instanz, mit der ein Vertrauensverhältnis hergestellt wird.
+Bei der Registrierung wird bereits die TLS-Verschlüsselung der Kommunikation eingerichtet.
+
+
+[#install]
+== Installation
+
+{CMK} bietet Ihnen für die Installation des Windows-Agenten verschiedene Wege -- von der manuellen Installation des Software-Pakets bis hin zum vollautomatischen Deployment inklusive Updatefunktion.
+Manche davon stehen nur in den {EE} zur Verfügung:
+
+[cols="40,50,~,~",options="header"]
+|===
+|Methode |Beschreibung |CRE |CEE
+|Mitgeliefertes MSI-Paket |Einfache Installation eines Standard-Agenten mit manueller Konfiguration über Konfigurationsdateien. |X |X
+|MSI-Paket aus der xref:glossar#agent_bakery[Agentenbäckerei] |Konfiguration über die GUI, individuelle Konfiguration pro Host möglich. | |X
+|xref:agent_deployment#[Automatisches Updaten] |Das Paket aus der Agentenbäckerei wird erstmalig von Hand oder per Skript installiert und von da an automatisch aktualisiert. | |X
+|===
+
+Alternativ können Sie das MSI-Paket auch über andere Wege, wie zum Beispiel das Microsoft Active Directory, verteilen.
+Die Installation kann hier durch das MSI-Format komplett automatisiert werden.
+
+[#download]
+=== Download des MSI-Pakets
+
+Sie installieren den Windows-Agenten durch Installation des MSI-Pakets.
+
+Vor der Installation müssen Sie das Paket holen und auf den Host bringen (zum Beispiel mit `scp` oder WinSCP), auf dem der Agent laufen soll.
+ 
+
+[#download_gui]
+==== Paket per {CMK}-GUI holen
+
+In der {CRE} finden Sie das Windows-Paket des Agenten über [.guihint]#Setup > Agents > Windows#.
+In den {EE} gelangen Sie im [.guihint]#Setup#-Menü über [.guihint]#Agents > Windows, Linux, Solaris, AIX# zunächst in die xref:wato_monitoringagents#bakery[Agentenbäckerei], wo Sie die gebackenen Pakete finden.
+Von dort aus kommen Sie mit dem Menüeintrag [.guihint]#Related > Windows files# zur Liste der Agentendateien:
+
+.Auf der Download-Seite finden Sie das MSI-Paket
+image::agent_windows_agent_files.png[alt="Download-Seite mit dem MSI-Paket."]
+
+Alles was Sie brauchen, finden Sie gleich im ersten Kasten mit dem Namen [.guihint]#Packaged Agents#:
+die fertige MSI-Paketdatei `check_mk_agent.msi`.
+
+
+==== Paket per REST-API holen
+
+Die xref:rest_api#[REST-API] von {CMK} bietet die folgenden Möglichkeiten Agentenpakete vom {CMK}-Server herunterzuladen:
+
+* Herunterladen des mitgelieferten Agenten.
+* Herunterladen eines gebackenen Agenten nach Host-Name und Betriebssystem.
+* Herunterladen eines gebackenen Agenten nach Hash des Agenten und Betriebssystems.
+
+Per REST-API haben Sie die Möglichkeit, das Paket vom {CMK}-Server direkt auf den Zielrechner zu holen.
+
+Das mitgelieferte MSI-Paket des Windows-Agenten lässt sich beispielsweise mit dem folgenden `curl`-Kommando holen.
+In neueren Windows-Versionen wird `curl` bereits mitgeliefert, in älteren müssen Sie sich vorher die `curl`-Kommandoumgebung per link:https://curl.se/windows/[curl for Windows^] extra installieren. 
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> curl -OJG "http://mycmkserver/mysite/check_mk/api/1.0/domain-types/agent/actions/download/invoke" ^
+--header "Accept: application/octet-stream" ^
+--header "Authorization: Bearer automation myautomationsecret" ^
+--data-urlencode "os_type=windows_msi" 
+----
+
+*Hinweis:* Der Befehl wurde zugunsten der Lesbarkeit in vier Zeilen aufgeteilt.
+
+Hierbei handelt es sich nur um ein einfaches Beispiel, um die Funktionsweise dieses einen REST-API-Endpunkts zum Herunterladen des Agenten zu demonstrieren.
+Details zu diesem und anderen REST-API-Endpunkten finden Sie in der API-Dokumentation, die Sie in {CMK} über [.guihint]#Help > Developer resources > REST API documentation# aufrufen können.
+
+
+[#install_paket]
+=== Paket installieren
+
+[#install_manual]
+==== Manuelle Installation
+
+Nachdem Sie das MSI-Paket geholt und -- falls nötig -- mit `scp`, WinSCP oder anderen Mitteln auf den zu überwachenden Host kopiert haben, starten Sie die Installation entweder per Doppelklick auf die MSI-Datei oder wie folgt von der Kommandozeile:
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> check_mk_agent.msi
+----
+
+Sie erhalten die Startseite des Setup-Assistenten:
+
+.Die Installation startet mit einem Willkommen
+image::agent_windows_setup_wizard_1.png[alt="Startseite des Setup-Assistenten."]
+
+Mit den [.guihint]#Next#-Knöpfen hangeln Sie sich durch die Seiten des Assistenten.
+Akzeptieren Sie die Lizenzbedingungen der [.guihint]#GNU GENERAL PUBLIC LICENSE#, um fortzufahren.
+Anschließend präsentiert Ihnen der Setup-Assistent die folgende Seite:
+
+[#agent_windows_setup_wizard_3b]
+.Auswahlmöglichkeiten beim Update eines sehr alten Agenten
+image::agent_windows_setup_wizard_3b.png[alt="Seite des Setup-Assistenten zum Vorgehen beim Update eines alten Agenten."]
+
+Die Auswahlmöglichkeiten dieser Seite sind für Sie nur dann relevant, wenn bereits ein Windows-Agent auf dem Host installiert ist und dieser *älter* als Version {v16} ist.
+In der Version {v16} hatte sich die Architektur des Windows-Agenten grundlegend geändert.
+Falls Sie von einem Windows-Agenten *vor* Version {v16} auf den aktuellen Agenten updaten (oder _migrieren_), dann lesen Sie zuerst im {CMK}-Handbuch der Version {v20} das link:https://docs.checkmk.com/2.0.0/de/agent_windows.html#legacy[Kapitel zum alten Agenten.]
+Dort erfahren Sie, welche der angebotenen Optionen Sie in diesem speziellen Update-Fall auswählen sollten.
+
+In allen anderen Fällen empfehlen wir die Auswahl von [.guihint]#Clean installation.#
+
+Bestätigen Sie den Start der Installation und erlauben Sie dann noch im Dialog zur Benutzerkontensteuerung ([.guihint]#User Account Control#), dass das Installationsprogramm Änderungen durchführen darf.
+Nach dem Abschluß können Sie den Setup-Assistenten beenden.
+
+Nach der Installation wird der Agent sofort als Windows-Dienst gestartet und ist für die Überwachung des Systems bereit.
+
+
+[#install_unattended]
+==== Unbeaufsichtigte Installation
+
+Windows bietet über die Kommandozeile für Administratoren mit `msiexec` die Möglichkeit, MSI-Pakete automatisiert ohne Benutzerinteraktion zu installieren.
+Eine automatisierte Installation kann dann zum Beispiel folgendermaßen aussehen:
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn
+----
+
+In diesem Fall wird der Agent ohne Benutzerinteraktion und Benutzeroberfläche (`/qn`) installiert (`/i`) und ebenfalls sofort als Windows-Dienst gestartet.
+Diese Methode eignet sich also hervorragend zum automatischen Ausrollen des Agenten auf viele Hosts.
+
+Sie können auf diesem Wege auch die drei Optionen auswählen, die Ihnen während der manuellen Installation xref:agent_windows_setup_wizard_3b[im Setup-Assistenten] angeboten wurden.
+Für jede Option gibt es einen Bezeichner, den Sie für das Installationskommando verwenden können:
+
+[cols="65,~",options="header"]
+|===
+|Option im Setup-Assistenten | Bezeichner
+|[.guihint]#Clean installation.# |`WIXUI_CLEANINSTALL`
+|[.guihint]#Remove Legacy Windows Agent (pre 1.6) if present.# |`WIXUI_REMOVELEGACY`
+|[.guihint]#Migrate from Legacy Windows Agent (pre 1.6) configuration if present.# |`WIXUI_MIGRATELEGACY`
+|===
+
+Um eine Option zu _aktivieren_, hängen Sie deren Bezeichner gefolgt von einem Gleichheitszeichen an:
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn WIXUI_CLEANINSTALL=
+----
+
+Um eine Option explizit zu _deaktivieren_, müssen Sie hinter dem Gleichheitszeichen noch zwei Anführungszeichen anfügen:
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn WIXUI_MIGRATELEGACY=""
+----
+
+
+=== Installation mit der Agentenbäckerei
+
+{cee-only}
+Die {CEE} verfügen mit der xref:wato_monitoringagents#bakery[Agentenbäckerei] über ein Software-Modul zum automatischen Paketieren von individuell angepassten Agenten -- auch Windows-Agenten.
+Eine ausführliche Beschreibung dazu finden Sie im allgemeinen Kapitel über die xref:wato_monitoringagents#[Agenten].
+Die Installation des gebackenen MSI-Pakets geschieht dann wieder genau wie xref:install_paket[oben] beschrieben.
+
+
+=== Automatisches Updaten
+
+{cee-only}
+Wenn Sie die Agentenbäckerei verwenden, können Sie automatische Updates des Agenten einrichten.
+Diese werden in einem xref:agent_deployment#[eigenen Artikel] beschrieben.
+
+
+[#config_files]
+=== Konfigurationsdateien des Agenten
+
+Das MSI-Paket speichert bei der Installation die programmspezifischen Dateien in `C:\Program Files (x86)\checkmk\service\` und die host-spezifischen Dateien in `C:\ProgramData\checkmk\agent\`.
+Die programmspezifischen Dateien brauchen Sie nicht anzupassen.
+Mit den host-spezifischen Dateien werden Plugins, Log- und Konfigurationsdateien abgelegt und das Verhalten des Agenten konfiguriert.
+
+*Hinweis*: Standardmäßig ist das gesamte Verzeichnis `C:\ProgramData` in Windows versteckt (_hidden_).
+
+Der Agent liest nacheinander drei Konfigurationsdateien ein:
+
+. `C:\Program Files (x86)\checkmk\service\check_mk.yml` +
+ist die Standardkonfigurationsdatei, die Sie nicht ändern.
+. `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` +
+wird von der Agentenbäckerei erstellt und sollte nicht manuell geändert werden.
+. `C:\ProgramData\checkmk\agent\check_mk.user.yml` +
+ist Ihre Konfigurationsdatei, in der Sie von Hand individuelle Anpassungen vornehmen können, um eine Einstellung oder eine Erweiterung auf einem Host zu testen.
+
+Wird eine Option in mehreren Dateien gesetzt, dann bestimmt die zuletzt eingelesene Datei den Wert dieser Option.
+Für das manuelle Arbeiten mit dem Agenten ist also lediglich die letzte Konfigurationsdatei `check_mk.user.yaml` relevant, weil sie als letzte eingelesen wird und damit _das letzte Wort hat_.
+Wenn die Agentenbäckerei nicht genutzt wird, ist sie sogar die einzige Datei, in der Anpassungen an der Konfiguration des Agenten vorgenommen werden dürfen.
+
+Wie Sie vielleicht schon an der Dateiendung der Konfigurationsdateien erkannt haben, wird als Dateiformat link:https://yaml.org[YAML^] verwendet.
+
+
+[#post_install]
+=== Wie geht es weiter nach der Installation?
+
+Nach der Installation des Agenten mit Agent Controller ist der nächste Schritt die xref:registration[Registrierung], mit der die TLS-Verschlüsselung eingerichtet wird, so dass die verschlüsselte Agentenausgabe vom {CMK}-Server entschlüsselt und im Monitoring angezeigt werden kann.
+
+Eine Besonderheit gibt es, falls der Agent mit Agent Controller erstmalig installiert wurde.
+Dann schaltet der Agent in den unverschlüsselten *Legacy-Pull-Modus*, damit der {CMK}-Server nicht von den Monitoring-Daten abgeschnitten wird und diese weiterhin anzeigen kann.
+Das betrifft sowohl eine Neuinstallation als auch das Update eines Agenten der Version {v20} und älter.
+
+Im Monitoring sieht das dann etwa so aus:
+
+.Warnung im {CMK}-Monitoring, dass TLS noch nicht genutzt wird
+image::agent_windows_service_legacy_pull_mode.png[alt="Der WARN-Zustand des 'Check_MK' Services wegen fehlender Verschlüsselung."]
+
+Die {CMK}-Instanz erkennt an der Agentenausgabe, dass der Agent Controller vorhanden und damit die TLS-Verschlüsselung möglich ist -- aber noch nicht eingeschaltet ist.
+Der Service [.guihint]#Check_MK Agent# wechselt in den Zustand {WARN} und bleibt es solange, bis Sie die Registrierung nach dem Update des Agenten durchgeführt haben.
+Nach der Registrierung wird nur noch im verschlüsselten Pull-Modus kommuniziert.
+Der Legacy-Pull-Modus wird abgeschaltet und bleibt es auch.
+
+Anders liegt der Fall, wenn der Agent auf sehr alten xref:windows_versions[Windows-Systemen] installiert ist.
+Die Installation des Agenten mag erfolgreich sein.
+Falls der Agent Controller aber wegen API-Inkompatibilitäten nicht gestartet werden kann, wird auf die unverschlüsselte Übertragung zurückgegriffen.
+Ohne Agent Controller ist die Registrierung nicht möglich und der einzige Kommunikationsweg verbleibt der *Legacy-Modus*.
+Im Legacy-Modus sind im Kapitel xref:registration[Registrierung] nur die Abschnitte relevant, um den Host ins Setup und anschließend ins Monitoring aufzunehmen.
+Im Kapitel xref:test[Test und Fehlerdiagnose] können Sie sich den Test zum Aufruf des Agent Controllers sparen, da dieser im Legacy-Modus nicht vorhanden ist.
+Da es ohne Agent Controller auch keine TLS-Verschlüsselung gibt, müssen Sie bei Bedarf andere Wege der Verschlüsselung wählen.
+Wir empfehlen, in diesem Fall die eingebaute (symmetrische) Verschlüsselung zu nutzen mit der Regel [.guihint]#Encryption (Linux, Windows)# und/oder einen xref:ssh[SSH-Tunnel] einzurichten.
+
+
+[#registration]
+== Registrierung
+
+=== Übersicht und Voraussetzungen
+
+Der Host, der ins Monitoring aufgenommen werden soll, kann noch keine verschlüsselten Daten mit dem {CMK}-Server austauschen.
+Der Grund ist, dass ein gegenseitiges Vertrauensverhältnis fehlt – Vertrauen und Verschlüsselung sind ab {CMK} {v21} Pflicht.
+Zwar ist unmittelbar nach der erstmaligen Installation des {v21} Agenten (auch als Update eines älteren Agenten) eine unverschlüsselte Kommunikation im Legacy-Pull-Modus möglich, diese wird aber spätestens beim nächsten Update des Agenten deaktiviert.
+Führen Sie die Registrierung daher zeitnah nach Installation/Update durch.
+Wie Sie dies bewerkstelligen, zeigt dieses Kapitel.
+
+Die Registrierung und damit die Herstellung des gegenseitigen Vertrauensverhältnisses erfolgt unter einem {CMK}-Benutzer mit Zugriff auf die xref:rest_api#[REST-API.]
+Dafür bietet sich der xref:glossar#automation_user[Automationsbenutzer] an, der bei jeder {CMK}-Installation automatisch angelegt wird und dessen Passwort Sie auswürfeln können.
+
+*Hinweis:* Da es auf sehr alten xref:windows_versions[Windows-Systemen] keinen Agent Controller, und damit keine Registrierung und TLS-Verschlüsselung gibt, müssen Sie bei Bedarf andere Wege der Verschlüsselung wählen.
+Wir empfehlen, in diesem Fall die eingebaute (symmetrische) Verschlüsselung zu nutzen mit der Regel [.guihint]#Encryption (Linux, Windows)# oder einen xref:ssh[SSH-Tunnel] einzurichten.
+
+
+=== Host ins Setup aufnehmen
+
+Erstellen Sie zunächst den neuen Host über [.guihint]#Setup > Hosts > Add host#.
+Ein Host muss in der xref:glossar#configuration_environment[Konfigurationsumgebung] existieren, bevor er registriert werden kann.
+
+
+=== Host beim Server registrieren
+
+Die Registrierung erfolgt mit dem Agent Controller `cmk-agent-ctl`, der für die Konfiguration der Verbindungen eine Kommandoschnittstelle bietet.
+Sie können sich mit dem Kommando `cmk-agent-ctl help` die Hilfe zu den Optionen anzeigen lassen.
+
+Begeben Sie sich nun zum Host, der registriert werden soll.
+Hier ist mit Administratorrechten eine Anfrage an die {CMK}-xref:glossar#site[Instanz] zu stellen:
+
+[{shell}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" ^
+    register ^
+    --hostname mynewhost ^
+    --server cmkserver --site mysite ^
+    --user automation --password test23
+----
+
+Dabei ist der Host-Name hinter der Option `--hostname` exakt so anzugeben, wie zuvor beim Erstellen im Setup.
+Die Optionen `--server` und `--site` geben den Namen des {CMK}-Servers und der Instanz an.
+Der Server-Name darf auch die IP-Adresse sein, der Instanzname (hier `mysite`) entspricht demjenigen, den Sie im URL-Pfad der Weboberfläche sehen. 
+Komplettiert werden die Optionen durch Name und Passwort des Automationsbenutzers.
+Wenn Sie die Option `--password` auslassen, wird das Passwort interaktiv abgefragt.
+
+Waren die angegebenen Werte korrekt, werden Sie aufgefordert, die Identität der {CMK}-Instanz zu bestätigen, zu der Sie die Verbindung herstellen wollen.
+Das zu bestätigende Server-Zertifikat haben wir aus Gründen der Übersichtlichkeit stark verkürzt:
+
+
+[{shell}]
+----
+Attempting to register at cmkserver:8000/mysite. Server certificate details:
+
+PEM-encoded certificate:
+---BEGIN CERTIFICATE---
+MIIC6zCCAdOgAwIBAgIUXbSE8FXQfmFqoRNhG9NpHhlRJ40wDQYJKoZIhvcNAQEL
+[...]
+nS+9hN5ILfRI+wkdrQLC0vkHVYY8hGIEq+xTpG/Pxw==
+---END CERTIFICATE---
+
+Issued by:
+	Site 'mysite' local CA
+Issued to:
+	localhost
+Validity:
+	From Thu, 10 Feb 2022 15:13:22 +0000
+	To   Tue, 13 Jun 3020 15:13:22 +0000
+
+Do you want to establish this connection? [Y/n]
+> #Y#
+----
+
+Bestätigen Sie mit `Y`, um den Vorgang abzuschließen.
+
+Falls keine Fehlermeldung angezeigt wird, ist die verschlüsselte Verbindung hergestellt.
+Über diese Verbindung werden alle Daten komprimiert übertragen.
+
+
+=== Vertrauensverhältnis überprüfen
+
+Das Kommando `cmk-agent-ctl status` zeigt nun genau ein Vertrauensverhältnis zum {CMK}-Server:
+
+[{shell-raw}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" status
+Connection: 12.34.56.78:8000/mysite
+	UUID: d38e7e53-9f0b-4f11-bbcf-d196deadbeef
+	Local:
+		Connection type: pull-agent
+		Certificate issuer: Site 'mysite' local CA
+		Certificate validity: Mon, 21 Feb 2022 11:23:57 +0000 - Sat, 24 Jun 3020 11:23:57 +0000
+	Remote:
+		Connection type: pull-agent
+		Registration state: operational
+		Host name: mynewhost
+----
+
+*Hinweis:* Es kann stets nur ein Vertrauensverhältnis zwischen Host und Instanz geben.
+Wenn Sie beispielsweise den bereits registrierten Host `mynewhost` unter anderem Namen (`mynewhost2`), aber mit der gleichen IP-Adresse registrieren, dann ersetzt die neue Verbindung die bestehende.
+Die Verbindung von `mynewhost` zur Instanz wird gelöst und für den Host werden keine Agentendaten mehr für das Monitoring geliefert.
+
+
+=== Im Auftrag registrieren
+
+Zur leichteren Registrierung mehrerer Hosts kann ein beliebiger Host, auf dem der Agent installiert ist, eine Registrierung im Auftrag anderer durchführen.
+Dabei wird eine JSON-Datei exportiert, die dann auf den Ziel-Host übertragen und dort importiert werden kann.
+Auch hier gilt wie zuvor: Der im Auftrag registrierte Host muss in der Instanz bereits eingerichtet sein.
+
+Zunächst wird auf einem beliebigen im Setup befindlichen Host die Registrierung stellvertretend durchgeführt.
+Hier bietet sich natürlich der {CMK}-Server an, der in der Regel als erster Host eingerichtet wird.
+Wie beim Beispiel oben gilt, dass Sie das Passwort per Option übergeben können oder interaktiv danach gefragt werden, wenn Sie die Option `--password` weglassen.
+Die JSON-Ausgabe leiten wir im Beispiel in eine Datei um:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register \
+    --hostname mynewhost3 \
+    --server cmkserver --site mysite \
+    --user automation > /tmp/mynewhost3.json
+----
+
+Nun übertragen wir die Datei `/tmp/mynewhost3.json` auf den Host, für den wir die Registrierung durchgeführt haben, und importieren die Datei:
+
+[{shell}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" ^
+    import /tmp/mynewhost3.json
+----
+
+
+=== Host ins Monitoring aufnehmen
+
+Sobald die Registrierung fertiggestellt ist, führen Sie im Setup des {CMK}-Servers einen xref:wato_monitoringagents#diagnosticpage[Verbindungstest] und eine xref:wato_services#discovery[Service-Erkennung] durch. 
+Anschließend nehmen Sie die gefundenen Services ins Monitoring auf, indem Sie als letzten Schritt xref:wato#activate_changes[die Änderungen aktivieren.]
+
+Falls der Verbindungstest fehlschlägt, finden Sie im xref:test[folgenden Kapitel] Informationen zu Test und Fehlerdiagnose.
+
+
+=== Host deregistrieren
+
+Die Registrierung eines Hosts können Sie auch wieder rückgängig machen.
+Auf einem Host, der mit dem {CMK}-Server verbunden ist, können Sie das Vertrauensverhältnis mit diesem Kommando widerrufen:
+
+[{shell}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" ^
+    delete d38e7e53-9f0b-4f11-bbcf-d196deadbeef
+----
+
+Der anzugebende Universally Unique Identifier (UUID) ist derjenige, der beim Kommando `cmk-agent-ctl status` ausgegeben wird. 
+
+Auf dem {CMK}-Server existiert für jede Verbindung eines Hosts, der sich im Monitoring befindet, ein Softlink mit der UUID, welcher auf den Ordner mit der Agentenausgabe zeigt:
+
+[{shell-raw}]
+----
+{c-omd} cd ~/var/agent-receiver/received-outputs
+{c-omd} ls -l d38e7e53-9f0b-4f11-bbcf-d196deadbeef
+lrwxrwxrwx 1 mysite mysite 67 Feb 23 07:18 d38e7e53-9f0b-4f11-bbcf-d196deadbeef -> /omd/sites/mysite/tmp/check_mk/data_source_cache/push-agent/mynewhost
+----
+
+Wenn Sie diesen Softlink löschen, ist eine erneute Registrierung des Hosts erforderlich.
+Hier können Sie auch unbenutzte Softlinks löschen, die beispielsweise von mehreren Registrierungen desselben Hosts herrühren.
+
+
+[#test]
+== Test und Fehlerdiagnose
+
+Ein modulares System kann an vielen Stellen nicht wie vorgesehen funktionieren.
+Da mit dem Agenten in der {v21} die beiden Komponenten Agent Controller auf dem Host und Agent Receiver auf dem Checkmk-Server eingeführt wurden, steigt die Zahl der Stellen, an denen etwas schief gehen kann.
+
+Bei der Fehlersuche ist daher eine strukturierte Vorgehensweise sinnvoll.
+Selbstverständlich können Sie die hier beschriebene schrittweise Analyse auch nutzen, die Datenerhebung und Kommunikation von Checkmk näher kennenzulernen.
+
+Alle Möglichkeiten, die es vom {CMK}-Server aus gibt, sind im allgemeinen Kapitel über die Agenten xref:wato_monitoringagents#diagnostics[beschrieben].
+Aber natürlich gibt es noch weitere Diagnosemöglichkeiten, wenn man direkt auf dem überwachten Host selbst eingeloggt ist.
+
+Wir arbeiten uns im Folgenden vom Agentenprogramm über den Agent Controller und den TCP-Port 6556 bis zur Checkmk-Instanz durch.
+In den meisten Fällen können Sie nach Korrektur eines Fehlers die Diensteerkennung erneut starten und die Aufnahme ins Monitoring abschließen.
+
+=== Prüfen der Konfiguration
+
+Um zu prüfen, ob die Konfiguration so eingelesen wurde, wie Sie das erwarten, rufen Sie das Agentenprogramm mit der Option `showconfig` auf.
+Mit dieser Option bekommen Sie nicht nur die Konfiguration ausgegeben, wie sie derzeit vom Agenten benutzt wird.
+Zusätzlich werden auch immer die benutzten Umgebungsvariablen sowie die verwendeten Konfigurationsdateien angezeigt.
+
+Ist nur ein bestimmter Teil der Konfiguration interessant, schränken Sie die Ausgabe auf diesen Teil ein.
+Hier wird zum Beispiel geprüft, ob die Optionen der Sektion `ps` korrekt gesetzt sind:
+
+[{shell}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" showconfig ps
+# Environment Variables:
+# MK_LOCALDIR="C:\ProgramData\checkmk\agent\local"
+# MK_STATEDIR="C:\ProgramData\checkmk\agent\state"
+# MK_PLUGINSDIR="C:\ProgramData\checkmk\agent\plugins"
+# MK_TEMPDIR="C:\ProgramData\checkmk\agent\tmp"
+# MK_LOGDIR="C:\ProgramData\checkmk\agent\log"
+# MK_CONFDIR="C:\ProgramData\checkmk\agent\config"
+# MK_SPOOLDIR="C:\ProgramData\checkmk\agent\spool"
+# MK_INSTALLDIR="C:\ProgramData\checkmk\agent\install"
+# MK_MSI_PATH="C:\ProgramData\checkmk\agent\update"
+# Loaded Config Files:
+# system: 'C:\Program Files (x86)\checkmk\service\check_mk.yml'
+# bakery: 'C:\ProgramData\checkmk\agent\bakery'
+# user  : 'C:\ProgramData\checkmk\agent\check_mk.user.yml'
+
+# ps
+enabled: yes
+use_wmi: yes
+full_path: no
+----
+
+Über diesen Weg bekommen Sie einen schnellen Überblick, wie die drei verschiedenen xref:config_files[Konfigurationsdateien] vom Agentenprogramm zusammengeführt und benutzt werden. 
+Fehler werden somit sofort sichtbar.
+
+
+[#script_output]
+=== Ausgabe des Agentenprogramms
+
+Das Agentenprogramm ist ein simples Windows Executable, welches Daten über Ihr System beschafft und als lose formatierten Text ausgibt.
+Sie können es direkt auf der Kommandozeile aufrufen.
+Mit dem Parameter `test` gibt es alles auf die Standardausgabe aus.
+Mit der Option `help` bekommen Sie unter anderem eine ausführliche und vollständige Liste an Möglichkeiten, die Ihnen über die hier beschriebenen hinaus zur Verfügung stehen.
+Da die Ausgabe etwas länger sein kann, ist der Pager `more` hier sehr praktisch, Sie können Ihn mit der Ausgabe mit der Taste Q verlassen:
+
+[{shell-raw}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" test | more
+<<<check_mk>>>
+Version: 2.1.0b1
+AgentOS: windows
+Hostname: DESKTOP-XYZA123
+AgentController: cmk-agent-ctl 0.1.0
+----
+
+So können Sie testen, ob in der Ausgabe alle gewünschten Daten enthalten sind – beispielsweise, ob alle installierten Plugins Daten liefern.
+
+Da das Agentenprogramm auf dem lokalen Loopback-Interface (127.0.0.1) auf Port 50001 lauscht, können Sie auch die Verbindungsaufnahme zu diesem mit Telnet oder Putty testen.
+
+
+=== Agent Controller im Dump-Modus
+
+Der Agent Controller stellt ein eigenes Subkommando `dump` bereit, das die vollständige Agentenausgabe anzeigt, wie sie im Monitoring ankommt:
+
+[{shell-raw}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" dump | more
+<<<check_mk>>>
+Version: 2.1.0b1
+BuildDate: Mar 14 2022
+AgentOS: windows
+Hostname: DESKTOP-QVPV284
+Architecture: 64bit
+WorkingDirectory: C:\Windows\system32
+ConfigFile: C:\Program Files (x86)\checkmk\service\check_mk.yml
+LocalConfigFile: C:\ProgramData\checkmk\agent\check_mk.user.yml
+AgentDirectory: C:\Program Files (x86)\checkmk\service
+PluginsDirectory: C:\ProgramData\checkmk\agent\plugins
+StateDirectory: C:\ProgramData\checkmk\agent\state
+ConfigDirectory: C:\ProgramData\checkmk\agent\config
+TempDirectory: C:\ProgramData\checkmk\agent\tmp
+LogDirectory: C:\ProgramData\checkmk\agent\log
+SpoolDirectory: C:\ProgramData\checkmk\agent\spool
+LocalDirectory: C:\ProgramData\checkmk\agent\local
+OnlyFrom:
+<<<cmk_agent_ctl_status:sep(0)>>>
+----
+
+So können Sie überprüfen, ob die Daten vom Agentenprogramm beim Agent Controller angekommen sind. 
+Diese Ausgabe beweist noch nicht, dass der Agent auch über das Netzwerk erreichbar ist.
+
+=== Verbindungstest von außen
+
+Ist sichergestellt, dass lokal das Agentenskript und mitinstallierte Plugins korrekt ausgeführt werden, können Sie als nächstes vom {CMK}-Server per `netcat` (oder `nc`) prüfen, ob Port 6556 erreichbar ist:
+
+[{shell}]
+----
+{c-omd} echo | nc 10.76.23.189 6556
+16
+----
+
+Die Ausgabe `16` zeigt an, dass die Verbindungsaufnahme erfolgreich war und nun der TLS-Handshake stattfinden kann.
+Da alles weitere hier TLS verschlüsselt stattfindet, ist keine detaillierte Prüfung möglich.
+
+*Hinweis:* Falls die Kommunikation zwischen Agent und {CMK}-Server _noch_ unverschlüsselt ist (wie im Legacy-Pull-Modus), erhalten Sie mit diesem Kommando statt der `16` die komplette unverschlüsselte Agentenausgabe.
+
+Sie können einen xref:wato_monitoringagents#diagnosticpage[Verbindungstest] auch über die {CMK}-Oberfläche durchführen.
+Das Ergebnis erhalten Sie im Kasten [.guihint]#Agent:#
+
+.Fehler beim Verbindungstest zum Agenten
+image::agent_windows_communication_failed.png[alt="Fehlermeldung eines nicht erreichbaren Agenten beim Verbindungstest.",width=64%]
+
+Falls Sie beim Verbindungstest, wie im obigen Beispiel, keine Informationen bzw. nur eine Fehlermeldung über einen Timeout erhaltenso sollten Sie auf dem Host die [.guihint]#Inbound Rules# der Windows-Firewall prüfen.
+
+
+[#windows_firewall]
+=== Windows Firewall
+
+Der Agent legt bei seiner Installation bereits eine Regel in der Windows Firewall an, damit der Agent Controller über den Port 6556 von außen erreichbar ist.
+
+In aktuellen Versionen von Windows können Sie die [.guihint]#Windows Defender Firewall with Advanced Security# über die Windows Einstellungen ([.guihint]#Settings > Windows Security#) finden oder über den Aufruf von `wf.msc` über die Kommandozeile starten:
+
+.Windows Firewall mit der eingehenden Regel für den {CMK}-Agenten
+image::agent_windows_windows_firewall.png[alt="Eintrag des {CMK}-Agenten für die Windows Firewall."]
+
+Sollten Sie in den Einstellungen der Windows Firewall keinen solchen Eintrag finden, können Sie diesen genau an dieser Stelle hinzufügen.
+Klicken Sie dafür im Menü [.guihint]#Action# auf [.guihint]#New Rule#.
+
+Daraufhin öffnet sich ein Assistent für die Erstellung einer neuen Firewall-Regel.
+Stellen Sie die fünf Auswahlmöglichkeiten wie folgt ein:
+
+[cols="15,~"]
+|====
+|[.guihint]#Rule Type# |Belassen Sie die Auswahl hier auf [.guihint]#Program.#
+|[.guihint]#Program# |Tragen Sie unter [.guihint]#This program path# `%ALLUSERSPROFILE%\checkmk\agent\bin\cmk-agent-ctl.exe` ein oder wählen Sie über den Knopf [.guihint]#Browse# die Datei `cmk-agent-ctl.exe` aus.
+|[.guihint]#Action# |Belassen Sie die Auswahl auf [.guihint]#Allow the connection.#
+|[.guihint]#Profile# |Dieser Punkt kommt stark auf die Konfiguration Ihres Netzwerks an. Es empfiehlt sich allerdings in den meisten Fällen hier nur [.guihint]#Domain# und [.guihint]#Private# zu aktivieren.
+|[.guihint]#Name# |Geben Sie der Regel einen prägnanten und kurzen Namen.
+|====
+
+Alternativ können Sie auch diesen Schritt automatisieren und die Regel direkt auf der Kommandozeile setzen.
+Passen Sie den folgenden Befehl gegebenenfalls Ihrem angepassten Installationspfad an:
+
+[{shell}]
+----
+C:\Windows\System32> netsh advfirewall firewall add rule name="Checkmk Agent" ^
+description="Allow inbound network traffic to the Checkmk Agent" dir=in localport=6556 protocol=tcp action=allow ^
+program="%ALLUSERSPROFILE%\checkmk\agent\bin\cmk-agent-ctl.exe" ^
+profile=private,domain enable=yes
+OK.
+----
+
+*Hinweis:* Der Befehl wurde zugunsten der Lesbarkeit in vier Zeilen aufgeteilt.
+
+
+=== Test mit der {CMK}-Kommandozeile
+
+Statt mit `nc` können Sie mit dem {CMK}-Kommandozeilentool die komplette Agentenausgabe anfordern und sich anzeigen lassen.
+Die Optionen `--debug -v` fügen noch einige Debugging-Informationen hinzu. 
+
+[{shell-raw}]
+----
+{c-omd} cmk --debug -v -d mynewhost
+----
+
+
+[#security]
+== Absicherung
+
+=== Vorüberlegung
+
+Sicherheit ist ein wichtiges Kriterium für jegliche Software, hier darf Monitoring keine Ausnahme machen.
+Da der Monitoring-Agent auf jedem überwachten Server installiert wird, hätte hier ein Sicherheitsproblem besonders gravierende Auswirkungen.
+
+Deswegen wurde schon beim Design von {CMK} auf Sicherheit Wert gelegt und es gilt seit den ersten Tagen von {CMK} ein eherner Grundsatz:
+_Der Agent liest keine Daten vom Netzwerk. Punkt._ 
+Somit ist mit Sicherheit ausgeschlossen, dass ein Angreifer über den Überwachungsport 6556 irgendwelche Befehle oder Skriptbestandteile einschleusen kann.
+
+
+=== Transport Layer Security (TLS)
+
+Für einen Angreifer kann jedoch bereits eine Prozessliste ein erster Ansatz sein, Rückschlüsse auf lohnenswerte Ziele zu ziehen.
+Daher ist die Transportverschlüsselung zwischen Agent und {CMK}-Server mit Transport Layer Security (TLS) ab {CMK}-Version {v21} obligatorisch.
+Hierbei "pingt" der {CMK}-Server den überwachten Host an, der daraufhin die TLS-Verbindung zum {CMK}-Server aufbaut und darüber die Agentenausgabe überträgt. 
+Da nur {CMK}-Server, zu denen ein Vertrauensverhältnis besteht, diese Datenübertragung initiieren können, besteht schon einmal kein Risiko, dass Daten in die falschen Hände gelangen.
+
+*Hinweis:* Da es auf sehr alten xref:windows_versions[Windows-Systemen] keinen Agent Controller, und damit keine Registrierung und TLS-Verschlüsselung gibt, müssen Sie bei Bedarf andere Wege der Verschlüsselung wählen.
+Wir empfehlen, in diesem Fall die eingebaute (symmetrische) Verschlüsselung zu nutzen mit der Regel [.guihint]#Encryption (Linux, Windows)# und/oder einen xref:ssh[SSH-Tunnel] einzurichten.
+
+
+=== Zugriff über IP-Adressen beschränken
+
+Die Einschränkung auf bestimmte IP-Adressen können Sie zwar auch über die xref:agent_windows#firewall[Firewall] konfigurieren.
+Zusätzlich bietet aber auch der Agent selbst die Möglichkeit, Anfragen von fremden IP-Adressen schlicht zu ignorieren.
+Fügen Sie der Konfigurationsdatei lediglich die folgende Einschränkung in den globalen Optionen hinzu.
+Beachten Sie, dass davor oder danach noch andere Parameter in der Konfigurationsdatei gesetzt sein können und dies nur ein Ausschnitt ist:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+global:
+  only_from: 127.0.0.1/32 192.168.42.0/24
+----
+
+Wie in dem Beispiel gut zu sehen ist, können Sie prinzipiell beliebig viele Subnetze erlauben.
+Mit einem `/32` geben Sie z.B. ein Subnetz der Größe 1 an, so dass nur diese eine Adresse erlaubt ist, während sie mit `192.168.42.0/24` alle Adressen zwischen `192.168.42.0` und `192.168.42.255` erlauben.
+
+{cee-only}
+In der Agentenbäckerei können Sie die erlaubten IP-Adressen über folgenden Regelsatz konfigurieren:
+[.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX >  Agent rules > Allowed agent access via IP address (Linux, Windows)#
+
+
+[#ssh]
+=== Aufruf über SSH
+
+Neuere Versionen von Windows (Windows 10 ab Version 1809 und Windows Server ab 2019) haben eine native Unterstützung für SSH.
+OpenSSH kann hier über [.guihint]#Apps > Apps & Features > Optionale Features# nachinstalliert werden.
+Aber auch bei älteren Versionen können Sie einen SSH-Server über link:https://www.cygwin.com[Cygwin^] nachrüsten und damit eine identische Konfiguration nachstellen, wie Sie unter xref:agent_linux_legacy#ssh[Linux] möglich ist.
+Beachten Sie dabei die aktuellen Hilfestellungen seitens Cygwin oder Microsoft für die Einrichtung.
+Sobald ein SSH-Server gestartet und erreichbar ist, ist die weitere Einrichtung identisch zu der unter Linux:
+Sie richten die `authorized_keys` auf dem überwachten Host ein und beschränken den Zugriff auf die Ausführung des Agenten.
+
+Der Eintrag in der Datei `authorized_keys` ist auf Windows Hosts allerdings etwas holprig, da hier viele Zeichen maskiert werden müssen.
+Orientieren Sie sich an dem folgenden (gekürzten) Beispiel.
+Die _Forwardslashes_ als Pfadtrenner sind in beiden Beispielen eine zulässige und bevorzugte (erspart Escaping) Ausnahme von den sonst üblichen Backslashes:
+
+.~\.ssh\authorized_keys:
+[{file}]
+----
+command="\"C:/Program Files (x86)/checkmk/service/check_mk_agent.exe\" test" ssh-rsa AAAA...pb48 mysite@mycmkserver
+----
+
+Soll der Aufruf unter einem Nutzer mit Administratorrechten erfolgen, müssen beim Microsoft OpenSSH-Server die folgenden beiden Zeilen in der globalen Konfigurationsdatei `sshd_config` mit Raute (`#`) auskommentiert werden:
+
+.C:\ProgramData\ssh\sshd_config:
+[{file}]
+----
+Match Group administrators
+    AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
+----
+
+Beachten Sie, dass Sie den Windows-Dienst danach stoppen können und auch eine eventuell eingerichtete Firewall-Regel damit obsolet ist.
+
+
+=== Eingebaute Verschlüsselung abschalten
+
+Bei einem Update des Agenten kann es vorkommen, dass die vom Agentenprogramm selbst durchgeführte eingebaute (symmetrische) Verschlüsselung aktiv bleibt.
+Sind TLS-Verschlüsselung und eingebaute Verschlüsselung gleichzeitig aktiv, dann ist die Entropie der übertragenen Daten so hoch, dass die ab Version {v21} aktive Komprimierung keine Ersparnis der übertragenen Daten bringt – und die CPUs sowohl des Hosts als auch des {CMK}-Servers mit zusätzlichen Ver- und Entschlüsselungsschritten belasten,
+
+Aus diesem Grund sollten Sie die eingebaute Verschlüsselung zeitnah nach dem Wechsel auf TLS deaktivieren.
+In der {CRE} erreichen Sie das, indem Sie in der Konfigurationsdatei `C:\ProgramData\CheckMK\Agent\check_mk.user.yml` den Wert des Parameters `encrypted` auf `no` setzen.
+
+.C:\ProgramData\CheckMK\Agent\check_mk.user.yml
+[{file}]
+----
+global:
+  encrypted: no
+  passphrase: D0e5NotMat7erAnym0r3
+----
+
+{cee-only} In den {CEE} können Sie vorhandene Regeln unter [.guihint]#Setup > Agents > Access to agents > Encryption (Linux, Windows)# im Abschnitt  [.guihint]#Encryption (Linux, Windows)# auf _Use TLS encryption_ umstellen und anschließend die Agentenpakete xref:agent_deployment#[neu backen].
+Nach dem nächsten automatischen Agenten-Update ist die Verschlüsselung des Agentenskriptes abgeschaltet, aber durch den Agent Controller die Verschlüsselung garantiert.
+Beachten Sie, dass nach dem automatischen Agenten-Update nur noch registrierte Hosts Monitoring-Daten liefern können.
+
+
+[#disable_sections]
+== Sektionen deaktivieren
+
+Die Ausgabe des {CMK}-Agenten ist in Sektionen unterteilt.
+Jede dieser Sektionen enthält zusammengehörige Informationen.
+Sektionen beginnen immer mit einem Sektions-Header.
+Dies ist eine Zeile, die in `<<<` und `>>>` eingeschlossen ist.
+
+Bis auf die {CMK} eigenen Sektionen, können Sie jede der über 30 Sektionen, die der Agent standardmäßig erzeugt, einzeln deaktivieren.
+Konkret bedeutet dies, dass die entsprechenden Befehle durch den Agenten überhaupt nicht ausgeführt werden und ggf. Rechenzeit eingespart werden kann.
+Andere Gründe für die Deaktivierung könnten sein, dass Sie sich für bestimmte Informationen einer gewissen Gruppe von Hosts schlicht nicht interessieren, oder dass ein bestimmter Host fehlerhafte Werte liefert und Sie den Abruf dieser Daten kurzzeitig aussetzen wollen.
+
+Als Nutzer einer der {CEE} können Sie über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Disabled sections (Windows agent)# einfach eine Regel anlegen, welche dann von der xref:glossar#agent_bakery[Agentenbäckerei] berücksichtigt wird.
+
+.In den {EE} können Sie Sektionen per Regel deaktivieren
+image::agent_windows_disabled_sections.png[alt="Liste der Agentenregeln für den Windows-Agenten."]
+
+*Hinweis:* Das obige Bild zeigt, dass es zu [.guihint]#Disabled sections (Windows agent)# auch eine gegenteilige Regel [.guihint]#Enabled sections (Windows agent)# gibt.
+Sie können also statt mit der Negativ- auch mit der Positivliste arbeiten.
+Um den Überblick zu behalten, empfehlen wir aber, nur _eine_ der beiden Regeln zu verwenden.
+
+In der Regel [.guihint]#Disabled sections (Windows agent)# finden Sie für jede deaktivierbare Sektion eine eigene Checkbox.
+Für die angewählten Checkboxen finden Sie dann -- nachdem der neu gebackene Agent auf den ausgewählten Hosts installiert wurde -- in der Konfigurationsdatei der Agentenbäckerei `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` unterhalb von `global:` eine Zeile `disabled_sections:`, in der die ausgewählten Sektionen aufgelistet sind.
+
+Nutzer der {CRE} können einen Eintrag in der Konfigurationsdatei `C:\ProgramData\checkmk\agent\check_mk.user.yml` manuell anlegen und dort die Sektionen eintragen, die deaktiviert werden sollen.
+Alle deaktivierbaren Sektionen sind in dieser Datei unterhalb von `global:` im Abschnitt `_sections:` aufgelistet.
+
+Um beispielsweise die beiden Sektionen `uptime` (für „System uptime“) und `wmi_webservices` (für „Web Services“) zu deaktivieren, sähe der passende Ausschnitt der Konfigurationsdatei wie folgt aus:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+global:
+    disabled_sections: [uptime, wmi_webservices]
+----
+
+
+[#plugins]
+== Agent um Plugins erweitern
+
+=== Was sind Agentenplugins?
+
+Das Agentenskript `check_mk_agent.exe` enthält eine ganze Reihe von Sektionen, welche Überwachungsdaten für diverse Check-Plugins liefern, die dann von der Service-Erkennung automatisch gefunden werden.
+Dazu gehören alle wichtigen Überwachungen des Betriebssystems.
+
+Darüber hinaus gibt es die Möglichkeit, den Agenten um _Agentenplugins_ zu erweitern.
+Das sind kleine Skripte oder Programme, die vom Agenten aufgerufen werden und diesen um weitere Sektionen mit zusätzlichen Monitoring-Daten erweitern.
+Das {CMK}-Projekt liefert eine ganze Reihe solcher Plugins mit aus, welche -- wenn sie korrekt installiert und konfiguriert sind -- in der Service-Erkennung automatisch neue Services liefern.
+
+Warum sind diese Plugins nicht einfach in den Agenten fest integriert?
+Für jedes der Plugins gibt es einen der folgenden Gründe:
+
+* Das Plugin kann seine Daten nur über interne Schnittstellen holen, die der Agent nicht bereitstellt (Beispiel: PowerShell).
+* Das Plugin benötigt sowieso eine Konfiguration, ohne die es nicht funktionieren würde (Beispiel: `mk_oracle.ps1`).
+* Das Plugin ist so speziell, dass es von den meisten Anwendern nicht benötigt wird (Beispiel: `citrix_licenses.vbs`).
+
+
+[#manual_installation_of_plugins]
+=== Manuelle Installation
+
+Die mitgelieferten Plugins für Windows finden Sie alle auf dem überwachten Host im Installationsverzeichnis des Agenten unter `C:\Program Files (x86)\checkmk\service\plugins`.
+Sie werden dort abgelegt, damit sie auch direkt zur Verfügung stehen.
+
+Alternativ liegen die Plugins für Windows auch auf dem {CMK}-Server unter `share/check_mk/agents/windows/plugins`.
+Auch über die Download-Seite des Agenten im Setup-Menü (wie im Kapitel xref:download_gui[Installation] beschrieben) sind diese im Kasten [.guihint]#Plugins# verfügbar:
+
+.Der Anfang der Liste verfügbarer Agentenplugins
+image::agent_windows_files_plugins.png[alt="Download-Seite mit den Agentenplugins."]
+
+Zu allen von uns mitgelieferten Agentenplugins existieren die passenden Check-Plugins, welche deren Daten auswerten und Services erzeugen können.
+Diese sind bereits mitinstalliert, so dass neu gefundene Services sofort erkannt werden und konfiguriert werden können.
+
+*Hinweis:* Bevor Sie ein Plugin auf dem Host installieren, werfen Sie einen Blick in die entsprechende Datei.
+Oft finden Sie dort wichtige Hinweise zur korrekten Verwendung des Plugins.
+
+Die eigentliche Installation ist dann einfach:
+Kopieren Sie die Datei nach `C:\ProgramData\checkmk\agent\plugins`.
+
+Sobald das Plugin im richtigen Verzeichnis liegt, wird es vom Agenten automatisch aufgerufen und es entsteht eine neue Sektion in der Agentenausgabe.
+Diese trägt üblicherweise den gleichen Namen wie das Plugin.
+Komplexe Plugins (z.B. `mk_oracle.ps1`) erzeugen sogar eine ganze Reihe an neuen Sektionen.
+
+
+[#pluginconfig]
+=== Konfiguration
+
+Manche Plugins benötigen eine Konfigurationsdatei in `C:\ProgramData\checkmk\agent\config`, damit sie funktionieren können.
+Bei anderen ist eine Konfiguration optional (z.B. `mssql.vbs`) und ermöglicht besondere Features oder Anpassungen.
+Wieder andere funktionieren einfach so.
+Sie haben verschiedene Quellen, um an Informationen zu kommen:
+
+* Die Dokumentation der zugehörigen Check-Plugins in Ihrer {CMK}-Instanz, welche Sie über [.guihint]#Setup > Services > Catalog of check plugins# erreichen.
+* Kommentare in der Plugindatei (oft sehr hilfreich!)
+* Einen passenden Artikel in diesem Handbuch (z.B. über das Überwachen von xref:monitoring_oracle#[Oracle])
+
+Bei speziellen (Skript)-Sprachen kann es notwendig sein, diese erst in der Konfiguration des Agenten _freizuschalten_.
+So werden beispielsweise Python-Skripte nicht ausgeführt, wenn sie nicht explizit freigegeben wurden.
+Sie können dazu in der Konfigurationsdatei `check_mk.user.yml` in der Sektion `global` die Dateiendungen erweitern, wie im folgenden Ausschnitt zu sehen:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+global:
+    execute: [exe, bat, vbs, cmd, ps1, py]
+----
+
+*Wichtig*: Der Einsatz solcher Plugins setzt voraus, dass die Dateien auch in einer regulären Kommandozeile ohne spezielle Pfade aufgerufen werden können.
+Im Fall von Python muss dieses entsprechend korrekt installiert und der Pfad zu dem Interpreter in den Umgebungsvariablen vorhanden sein.
+Anleitungen, wie Sie Python korrekt einrichten, finden Sie direkt auf den Seiten der link:https://www.python.org/doc/[Python Software Foundation.^]
+
+
+[#customizeexecution]
+=== Ausführung eines speziellen Plugins anpassen
+
+Jedes Plugin kann in unterschiedlichen Modi ausgeführt werden.
+Dabei stehen die folgenden Optionen zur Eingabe in der Konfigurationsdatei zur Verfügung.
+Der jeweils fett gedruckte Wert ist der Standardwert:
+
+[cols="12,15,~"]
+|===
+|Option |Wert |Beschreibung 
+
+|`pattern` |`'@user\*.ps1'` |Setzt die Reichweite der nachfolgenden Optionen. Hier kann auch mit Wildcards gearbeitet werden. Dann beziehen sich die nachfolgenden Optionen auf alle Plugins, auf die der Ausdruck zutrifft. Führend wird bestimmt, ob das Plugin direkt aus dem Installationsverzeichnis unter `C:\Program Files (x86)\` oder aus dem Datenverzeichnis unter `C:\ProgramData` ausgeführt werden soll. 
+|`run` |`*yes*/no` |Bestimmt, ob die Ausführung eines Plugins unterdrückt werden soll.
+|`async` |`*yes*/no` |Führt ein Plugin asynchron aus und legt die Daten in einer Datei ab. Bei synchroner Ausführung wird die Ausgabe direkt dem Agenten übergeben.
+|`timeout` |`*60*` |Setzt die maximale Ausführungszeit. Danach wird das Plugin beendet, auch wenn keine Ausgabe gekommen ist. Der Standardwert orientiert sich an dem Standard für das Abfrageintervall des Agenten.
+|`cache_age` |`*60*` |Legt in Sekunden fest, wie lange eine Ausgabe gültig ist. 
+|`retry_count` |`*1*` |Die Häufigkeit, wie oft ein Plugin fehlschlagen darf, bevor eine Ausgabe aus dem Cache verworfen wird.
+|`description` |`'Text'` |Hier können Sie einen freien Text eintragen, der den Logs angefügt werden soll.
+|===
+
+Eine Konfiguration für das Veeam-Plugin sieht dann zum Beispiel so aus (der Auszug ist gekürzt und enthält nur den relevanten Teil für das Beispiel):
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+plugins:
+    enabled: yes
+    execution:
+        - pattern: $CUSTOM_PLUGINS_PATH$\veeam_backup_status.ps1
+          async: yes
+          timeout: 120
+          cache_age: 300
+          retry_count: 2
+----
+
+Nach der obigen beispielhaften Konfiguration wird das Plugin im Datenverzeichnis `C:\ProgramData\checkmk\agent\plugins` ausgeführt, und zwar asynchron alle fünf Minuten (300 Sekunden) und darf dabei maximal zwei Minuten (120 Sekunden) laufen.
+Falls das Plugin in diesen Timeout läuft, wird ein zweites Mal versucht ein Ergebnis zu bekommen.
+
+
+=== Installation über die Agentenbäckerei
+
+{cee-only}
+In den {CEE} können die mitgelieferten Plugins über die xref:glossar#agent_bakery[Agentenbäckerei] konfiguriert werden.
+Diese sorgt sowohl für die Installation des Plugins selbst als auch für die korrekte Erstellung der Konfigurationsdatei, falls eine notwendig sein sollte.
+
+Jedes Plugin wird über eine Agentenregel konfiguriert.
+Sie finden die passenden Regelsätze in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Agent Plugins#:
+
+.Liste mit Regeln für die Agentenplugins in den {EE}
+image::agent_linux_rules_agent_plugins.png[alt="Seite mit den Regeln zur Konfiguration der Agentenplugins in den {EE}."]
+
+
+=== Manuelle Ausführung
+
+Da Agentenplugins ausführbare Programme sind, können Sie diese zu Test-und Diagnosezwecken auch von Hand ausführen.
+Es gibt allerdings Plugins, welche bestimmte vom Agenten gesetzte Umgebungsvariablen brauchen, um z.B. ihre Konfigurationsdatei zu finden.
+Setzen Sie diese gegebenenfalls von Hand, wenn sie in dem Skript oder Programm benötigt werden.
+
+
+[#e2e_monitoring]
+== Einbinden von klassischen (Nagios-) Check-Plugins
+
+[#mrpe]
+=== Plugins über MRPE ausführen
+
+Es gibt zwei gute Gründe, Nagios-Plugins auch unter {CMK} zu nutzen.
+Wenn Sie Ihr Monitoring von einer Nagios-basierten Lösung auf {CMK} migriert haben, können Sie ältere Check-Plugins, zu denen es noch kein {CMK}-Pendant gibt, zunächst weiternutzen.
+In vielen Fällen sind das selbst geschriebene Plugins in Perl oder Shell. 
+
+Der zweite Grund für die Verwendung von Nagios-Plugins ist echtes End-to-End-Monitoring.
+Nehmen wir an, Sie haben Ihren {CMK}-Server, einen Webserver und einen Datenbankserver über ein großes Rechenzentrum verteilt.
+In so einem Fall sind die Antwortzeiten des Datenbankservers vom {CMK}-Server aus gemessen wenig aussagekräftig.
+Weit wichtiger ist es, diese Werte für die Verbindung zwischen Web- und Datenbankserver zu kennen.
+
+Der {CMK}-Agent bietet einen einfachen Mechanismus, diesen beiden Anforderungen gerecht zu werden:
+_MK's Remote Plugin Executor_ oder kurz _MRPE_.
+Der Name ist bewusst eine Analogie zum _NRPE_ von Nagios, der dort die gleiche Aufgabe übernimmt.
+
+Der MRPE ist im Agenten fest eingebaut und wird über verschiedene Konfigurationsdateien gesteuert.
+
+
+==== MRPE aktivieren und deaktivieren
+
+Standardmäßig ist die Berücksichtigung von MRPE-Plugins aktiviert.
+Falls Sie diese Funktion nicht nutzen wollen, können Sie sie in der Konfigurationsdatei deaktivieren, indem Sie die folgende Definition hinzufügen:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+mrpe:
+  enabled: no
+----
+
+
+==== Die Ausführungszeit begrenzen
+
+Manchmal ist die Laufzeit eines Skripts oder Nagios-Plugins nicht vorhersehbar und im schlimmsten Fall wird ein Plugin nie beendet.
+Um hier die Kontrolle zu behalten, können Sie die maximale Laufzeit der MRPE-Plugins begrenzen.
+Der hier gezeigte Wert ist auch gleichzeitig der Standardwert in Sekunden.
+Anpassungen sind also nur notwendig, wenn Sie ein kürzeres oder längeres Intervall festlegen möchten:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+mrpe:
+  # enabled: yes
+  timeout: 60
+----
+
+
+==== MRPE-Plugins hinzufügen
+
+Um dem Agenten mitzuteilen, wo sich die auszuführende Datei befindet und wie diese aufzurufen ist, fügen Sie einen Eintrag in der Konfiguration des MRPE hinzu:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{file}]
+----
+mrpe:
+  config:
+    - check = MyServiceName 'C:\ProgramData\checkmk\agent\mrpe\my_check_plugin.bat' -w 10 -c 20 MyParameter
+----
+
+Es ist nicht notwendig, die Datei ebenfalls in dem Verzeichnis des Agenten abzulegen, auch wenn es sich anbietet, um alle an einem gemeinsamen Ort zu sammeln.
+In dieser Beispielkonfiguration sehen Sie nun folgende Elemente der relevanten Zeile:
+
+[cols="40,~"]
+|===
+|Element |Beschreibung 
+
+|`MyServiceName` |Der Servicename, wie er in {CMK} angezeigt werden soll.
+|`'C:\ProgramData\checkmk\agent\mrpe\my_check_plugin.bat'` |Auszuführendes Programm; Anführungszeichen für eventuelle Leerzeichen.
+|`-w 10 -c 20` |Übergebene Optionen: Ein Schwellwert von 10 für {WARN} und 20 für {CRIT}.
+|`MyParameter` |Beispielhafte Übergabe weiterer Parameter.
+|===
+
+Nachdem Sie das MRPE-Plugin eingerichtet haben, ist es direkt und ohne Neustart des Agenten aktiv und wird der Ausgabe hinzugefügt.
+In der Service-Erkennung werden Sie nun Ihren neuen Service automatisch finden:
+
+image::agent_windows_service_discovery.png[]
+
+
+=== MRPE mit der Agentenbäckerei
+
+{cee-only}
+Alternativ zu der Konfiguration direkt auf einem Host in der benutzerspezifischen Konfigurationsdatei können Sie Ihre MRPE-Plugins auch direkt im [.guihint]#Setup#-Menü definieren.
+Benutzen Sie dazu den Regelsatz [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent > Agent rules > Execute MRPE checks#.
+Der notwendige Eintrag wird dann automatisch in der xref:agent_windows#files[Konfigurationsdatei der Agentenbäckerei] erzeugt.
+
+
+[#hw_monitoring]
+== Hardware überwachen
+
+Die Hardware-Überwachung von Windows-Hosts wird vom {CMK}-Agenten, mitgelieferten Plugins und in der link:https://exchange.checkmk.com/[{CMK} Exchange^] erhältlichen Erweiterungen gut abgedeckt.
+Dennoch gibt es Situationen, in denen weder fertige Plugins noch Programmierschnittstellen zur Erstellung eigener Plugins erhältlich sind, aber entweder eine Anwendungssoftware oder ein Hardware-Überwachungstool eines Hardware-Herstellers Überwachungsdaten per SNMP liefern kann.
+
+Setzen Sie in so einem Fall in den Eigenschaften des Hosts im Setup im Kasten [.guihint]#Monitoring agents# die Einstellung [.guihint]#SNMP# auf die geeignete Verbindungsart (SNMP v2 or v3 oder SNMP v1).
+Services, die sowohl per SNMP als auch per {CMK}-Agent verfügbar sind (z.B. CPU-Auslastung, Dateisysteme, Netzwerkkarten), werden dann automatisch vom {CMK}-Agenten geholt und nicht per SNMP.
+Damit wird eine Doppelübertragung automatisch vermieden.
+
+Weitere Informationen entnehmen Sie dem Artikel zur xref:snmp#snmp_cmk_agent[Überwachung mit SNMP.]
+
+
+[#uninstall]
+== Deinstallation
+
+Für die Deinstallation des Agenten haben Sie in Windows mehrere Möglichkeiten.
+In allen Versionen von Windows finden Sie einen Eintrag in der Systemsteuerung unter [.guihint]#Control Panel > Programs and Features > Uninstall a program.#
+In neueren Versionen finden Sie den Eintrag für den {CMK}-Agenten zudem in den Einstellungen unter [.guihint]#Settings > Apps > Apps & features.#
+
+Über die Kommandozeile für Administratoren haben Sie mehrere Möglichkeiten den Agenten zu entfernen.
+Sollte Ihnen das zuletzt installierte MSI-Paket noch vorliegen, können Sie dieses wie folgt für die Deinstallation nutzen:
+
+[{shell}]
+----
+C:\Users\hhirsch\Downloads\> msiexec /x check_mk_agent.msi /qn
+----
+
+Alternativ können Sie auch das Windows Management Instrumentation Command (WMIC) für die Deinstallation verwenden:
+
+[{shell}]
+----
+C:\> wmic product where name="Check MK Agent 2.1" call uninstall /nointeractive
+----
+
+War die Deinstallation erfolgreich, erhalten Sie als Bestätigung die Meldung `Method execution successful.`
+
+*Hinweis:* Der String hinter `name=` muss exakt stimmen.
+Wenn Sie hier eine andere Version des Agenten deinstallieren wollen, finden Sie eine Auflistung aller installierten Produkte mit folgendem Aufruf:
+
+[{shell}]
+----
+C:\> wmic product get name
+----
+
+Der Vorgang kann bisweilen recht lange dauern und gibt derweil keinerlei Statusmeldungen aus, dafür dann aber sehr lange Listen.
+Zum Filtern können Sie den Befehl zur Pipe ausbauen:
+
+[{shell}]
+----
+C:\> wmic product get name | findstr Check
+Check MK Agent 2.1
+----
+
+Da die verschiedenen Routinen von Windows nur Dateien entfernen, welche auch durch den Installationsprozess dorthin gekommen sind, ist es vollkommen normal, dass in den xref:files[Verzeichnissen des Agenten] noch Dateien übrig bleiben.
+Diese können manuell gelöscht werden.
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Pfade auf dem überwachten Windows-Host
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`C:\Program Files (x86)\checkmk\service\` |Installationsverzeichnis für die programmspezifischen Dateien inklusive des Agentenskripts `check_mk_agent.exe` und des Agent Controllers `cmk-agent-ctl.exe`. Anpassungen sind hier nicht notwendig. +
+In das Verzeichnis `Program Files *(x86)*` wird der Agent aus Gründen der Kompatibilität installiert. Dies ist unabhängig davon, ob der Agent auf ein 32- oder 64-Bit Betriebssystem installiert wird. Die Installationsroutine wählt automatisch den richtigen Agenten aus.
+|`C:\Program Files (x86)\checkmk\service\check_mk.yml` |Die Standardkonfigurationsdatei des Agenten. Ändern Sie diese Datei nicht.
+|`C:\ProgramData\checkmk\agent\` |Installationsverzeichnis für die host-spezifischen Dateien. Hier befinden sich Erweiterungen, Log- und Konfigurationsdateien, welche spezifisch für diesen Host gelten.
+|`C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` |Diese Konfigurationsdatei wird von der Agentenbäckerei erstellt und überschreibt gegebenenfalls Werte aus der Standardkonfigurationsdatei.
+|`C:\ProgramData\checkmk\agent\check_mk.user.yml` |Konfigurationsdatei für Ihre individuellen Anpassungen. Diese Datei wird als letztes eingelesen und überschreibt gegebenenfalls Werte aus den anderen  Konfigurationsdateien.
+|`C:\ProgramData\checkmk\agent\plugins` |Verzeichnis für Plugins, welche automatisch vom Agenten ausgeführt werden sollen und dessen Ausgabe um zusätzliche Überwachungsdaten erweitern.
+|`C:\ProgramData\checkmk\agent\config` |Ablage von Konfigurationsdateien für den Agenten.
+|`C:\ProgramData\checkmk\agent\local` |Verzeichnis für eigene xref:localchecks#[lokale Checks].
+|`C:\ProgramData\checkmk\agent\mrpe` |MRPE-Erweiterungen können hier gespeichert werden.
+|`C:\ProgramData\checkmk\agent\backup` |Nach jeder Änderung des {CMK}-Agenten-Service wird von der Benutzerkonfiguration hier ein Backup angelegt.
+|===
+
+
+=== Pfade auf dem {CMK}-Server
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`local/share/check_mk/agents/custom` |Basisverzeichnis für eigene Dateien, die mit einem gebackenen Agenten ausgeliefert werden sollen.
+|`share/check_mk/agents/windows/` |Verzeichnis mit dem MSI-Paket des Agenten. In diesem Verzeichnis finden Sie auch Konfigurationsbeispiele und alle Agentenplugins.
+|===
+////
