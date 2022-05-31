@@ -1,7 +1,7 @@
 // -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = Linux überwachen
-:revdate: 30-May-2022
+:revdate: 31-May-2022
 :title: Linux überwachen - Der neue Agent für Linux im Detail
 :description: Der Linux-Agent der {CMK}-Version 2.1.0 ergänzt das Agentenskript mit dem Agent Controller und neuen Funktionen. Wie Sie den Agenten nutzen, erfahren Sie hier.
 
@@ -296,9 +296,15 @@ Wie Sie dies bewerkstelligen, zeigt dieses Kapitel.
 Die Registrierung und damit die Herstellung des gegenseitigen Vertrauensverhältnisses erfolgt unter einem {CMK}-Benutzer mit Zugriff auf die xref:rest_api#[REST-API.]
 Dafür bietet sich der xref:glossar#automation_user[Automationsbenutzer] an, der bei jeder {CMK}-Installation automatisch angelegt wird und dessen Passwort Sie auswürfeln können.
 
+==== Voraussetzungen auf dem Host
+
 Die Registrierung mit dem Agent Controller setzt ein Linux-System voraus mit einem init-System `systemd` ab Version 220 und einer x86_64-Rechnerarchitektur.
 Im Abschnitt xref:test_environment[Agent Controller und Systemumgebung testen] erfahren Sie, wie Sie diese Voraussetzungen überprüfen.
 
+==== Voraussetzungen auf dem {CMK}-Server
+
+Damit die Registrierung direkt auf dem ins Monitoring aufzunehmenden Host durchgeführt werden kann, muss dieser das REST-API des {CMK}-Servers (Port 443 oder 80) und den _Agent Receiver_ (Port 8000 bei der ersten Site, 8001 für die zweite…) erreichen können.
+Lesen Sie den Abschnitt xref:networkrequirements[Netzwerkumgebung für die Registrierung], falls in Ihrer IT-Infrastruktur eine dieser Bedingungen nicht erfüllt werden kann.
 
 === Host ins Setup aufnehmen
 
@@ -454,7 +460,7 @@ Connection: 12.34.56.78:8000/mysite
 Wenn Sie beispielsweise den bereits registrierten Host `mynewhost` unter anderem Namen (`mynewhost2`), aber mit der gleichen IP-Adresse registrieren, dann ersetzt die neue Verbindung die bestehende.
 Die Verbindung von `mynewhost` zur Instanz wird gelöst und für den Host werden keine Agentendaten mehr für das Monitoring geliefert.
 
-
+[#proxyregister]
 === Im Auftrag registrieren
 
 Zur leichteren Registrierung mehrerer Hosts kann ein beliebiger Host, auf dem der Agent installiert ist, eine Registrierung im Auftrag anderer durchführen.
@@ -588,6 +594,65 @@ Damit Sie hier mit `less` arbeiten können, müssen Sie Standardausgabe (STDOUT)
 [{shell}]
 ----
 {c-root} check_mk_agent -d 2>&1 | less
+----
+
+
+[#networkrequirements]
+=== Netzwerkumgebung für die Registrierung
+
+Schlägt die Registrierung eines Hosts im Monitoring fehl, ohne dass überhaupt das Zertifikat angezeigt wird, hilft Kenntnis der involvierten Netzwerkkommunikation bei der Identifizierung des Problems -- und natürlich bei der Behebung.
+
+Der erste Schritt ist eine Anfrage nach dem Port des Agent Receivers, hier wird eine URL für den Zugriff auf das REST-API generiert und diese dann abgerufen.
+Sie können die Anfrage auf dem Host, der ins Monitoring aufgenommen werden soll mit einem Programm wie `curl` simulieren:
+
+[{shell-raw}]
+----
+{c-root} curl -v https://cmk.m-app.mobi/app/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke
+----
+
+Der Inhalt der Antwort ist lediglich wenige Byte groß und besteht aus der Port-Nummer des Agent-Receiver.
+Typische Probleme bei dieser Anfrage sind:
+
+* Der {CMK}-Server ist vom Host aus gar nicht erreichbar
+* Das Zertifikat des {CMK}-Servers wurde selbst signiert oder von einer internen CA ausgestellt
+
+In diesem Fall können Sie die Routing- oder Firewall-Einstellungen so verändern, dass der Zugriff möglich ist, beziehungsweise die interne CA der Trust-Chain des Hosts hinzufügen.
+In vielen Fällen dürfte es einfacher sein, auf dem {CMK}-Server den Port des Agent Receiver herauszufinden und sich zu notieren:
+
+[{shell-raw}]
+----
+{c-omd} omd config show | grep AGENT_RECEIVER
+AGENT_RECEIVER: on
+AGENT_RECEIVER_PORT: 8000
+----
+
+Sie können nun den ermittelten Port bei der Registrierung direkt angeben und so die Anfrage beim REST-API umgehen:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl register --hostname mynewhost \
+    --server cmkserver:8000 --site mysite \
+    --user automation --password test23
+----
+
+Auch dieser Port 8000 muss vom Host aus erreichbar sein.
+Ist er das nicht, erhalten Sie die eindeutige Fehlermeldung:
+
+[{shell-raw}]
+----
+ERROR [cmk_agent_ctl] Connection refused (os error 111)
+----
+
+Auch in diesem Fall können Sie die Routing- oder Firewall-Einstellungen so anpassen, dass aufzunehmende Hosts den {CMK}-Server auf Port 8000 (oder 8001…) erreichen können.
+Sollten Sicherheits-Policies in Ihrer Umgebung den Zugriff auf den Agent Receiver nicht zulassen, haben sie die Möglichkeit, auf dem {CMK}-Server selbst die xref:proxyregister[Registrierung im Auftrag] vorzunehmen.
+Dies ist auch in einer Pipeline möglich, in der Sie die Ausgabe von `cmk-agent-ctl proxy-register` an `ssh hostname cmk-agent-ctl import` übergeben:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register --hostname mynewhost \
+    --server localhost --site mysite \
+    --user automation --password test23 | \
+    ssh root@mynewhost cmk-agent-ctl import
 ----
 
 
