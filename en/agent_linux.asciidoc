@@ -292,9 +292,15 @@ This chapter shows how to do this.
 Registration, and thus the establishment of the mutual trust relationship, is done from a {CMK} user with access to the xref:rest_api#[REST API.]
 For this purpose, a good choice is the xref:glossar#automation_user[automation user], which is automatically created with every {CMK} installation and whose password you can randomly generate.
 
+==== Requirements for the host
+
 Registering with the Agent Controller requires a Linux system with an init system `systemd` version 220 or later and an x86_64 computer architecture.
 See the xref:test_environment[Testing Agent Controller and system environment] section to learn how to verify these prerequisites.
 
+==== Requirements for the server
+
+To register a host for monitoring, this host must be able to reach the REST API of the {CMK} server (port 443 or 80) and the _Agent Receiver_ (port 8000 for the first site, 8001 for the second...).
+Read the section xref:networkrequirements[network environment for registration], in case your infrastructure cannot fulfil one of these requirements.
 
 === Adding a host to the Setup
 
@@ -568,6 +574,72 @@ To be able to work with `less` here, you have to combine standard output (STDOUT
 [{shell}]
 ----
 {c-root} check_mk_agent -d 2>&1 | less
+----
+
+
+[#networkrequirements]
+=== Network environment for registration
+
+If registering a host fails even before a certificate is presented, knowledge about the ways of communication can help identifying the problem -- and of course solving it.
+
+After entering the command `cmk-agent-ctl register` the Agent Controller first runs a request to the REST API of the {CMK} server to ask for the port of the Agent Receiver.
+As second step a connection to the Agent Receiver is established to request the certificate.
+You can simulate the first request using a program like `curl`. On the host that is to be added to the monitoring, run:
+
+[{shell-raw}]
+----
+{c-root} curl -v https://cmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke
+----
+
+The response is only a few bytes, containing the port number of the Agent Receiver.
+In most cases this is just `8000`.
+Common problems regarding this request are:
+
+* The {CMK} server is unreachable from the host
+* The certificate used by the REST API is either self signed or signed by an internal CA
+* The port used by the REST API differs from the default ports 443 (https) or 80 (http) 
+
+In this case you might change routing or firewall settings to enable access, respectively add the internal CA to the trust chain of the host.
+However often it may be easier to find out the port of the Agent Receiver and note it down.
+To do so, on the {CMK} server run, logged in as site user:
+
+[{shell-raw}]
+----
+{c-omd} omd config show | grep AGENT_RECEIVER
+AGENT_RECEIVER: on
+AGENT_RECEIVER_PORT: 8000
+----
+
+Now you can specify the port when entering the command for registration.
+This skips the first request to the REST API.
+Communication is now directly to the Agent Receiver wirthout any detour:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl register --hostname mynewhost \
+    --server cmkserver:8000 --site mysite \
+    --user automation --password test23
+----
+
+Port 8000 also must be reachable from the host.
+In case it is not, you will get this error message:
+
+[{shell-raw}]
+----
+ERROR [cmk_agent_ctl] Connection refused (os error 111)
+----
+
+Equivalent to port 443 (respectively 80) mentioned above you can now change routing or firewall settings in a way the host to be registered can reach port 8000 (or 8001...) of the {CMK} server.
+
+Should security policies prohibit access to the agent receiver, there is still the possibility to use xref:proxyregister[proxy registration] on the {CMK} server.
+This is also possible using a pipeline where the output of `cmk-agent-ctl proxy-register` is handed over as input to `ssh hostname cmk-agent-ctl import`:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register --hostname mynewhost \
+    --server localhost --site mysite \
+    --user automation --password test23 | \
+    ssh root@mynewhost cmk-agent-ctl import
 ----
 
 
