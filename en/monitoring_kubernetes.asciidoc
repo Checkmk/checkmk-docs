@@ -33,6 +33,7 @@ Kubernetes monitoring in {CMK} has been rewritten from scratch. The amount of da
 == Introduction
 
 Kubernetes has been the most widely used tool for container orchestration for quite some time. {CMK} helps you monitor your Kubernetes environments.
+
 Starting with version {v21}, you can use {CMK} to monitor the following Kubernetes objects:
 
 * Cluster
@@ -45,51 +46,130 @@ Starting with version {v21}, you can use {CMK} to monitor the following Kubernet
 For a complete listing of all available check plugins for Kubernetes monitoring, see our link:https://checkmk.com/integrations?tags=kubernetes[Catalog of Check Plug-ins^].
 
 
-== Setting up the monitoring
+== Perequisites in the cluster
 
-=== Perequisites in the cluster
+To be able to monitor your Kubernetes cluster in {CMK},
+first create the prerequisites in your cluster.
+First and foremost,
+tell the cluster which pods/containers to deploy and how to configure them.
 
-==== Setting up via Helm Chart
+=== Setting up the Helm repository
 
-Currently, we recommend installing Kubernetes monitoring using the `helm` tool, as it is suitable for less experienced users. To do this, first of all, make the repository known. In the following example, we use the name `k8scmk` to make it easier to access the repository later. You can of course use any other name:
+Currently, we recommend installing Kubernetes monitoring using the tool `helm`,
+as it is also suitable for less experienced users and
+standardizes the management of configurations.
+Helm is a kind of a package manager for Kubernetes.
+You can use it to include _repositories_ as sources and
+easily add the Helm charts they contain like packages to your cluster.
+To do this, first of all make the repository known.
+In the following example,
+we use the name `tribe29` to make it easier to access the repository later.
+However, you can of course use any other name:
+
+=== Adjustments to the configuration
+
+With Helm, you create the necessary configuration files completely on your own.
+In order to be able to determine certain parameters over all configurations,
+you give thereby a control file along, the so-called `values.yaml`.
+As a starting point we recommend
+the link:https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/charts/checkmk/values.yaml[template^] provided by us.
+Copy it and adapt it to your own environment.
+
+Since we cannot know in advance how your Kubernetes cluster is set up,
+we have chosen the safest option for how the {CMK} collectors are started:
+By default, they do not expose any ports to be reached from the outside.
+To allow you to access the collectors later, adjust these settings accordingly.
+
+For simplicity, let's take our template as a starting point.
+We support two communication paths by default: the query via _Ingress_ and the query via _NodePort_.
+Depending on which variant you support in your cluster, the configuration will vary.
+
+==== Provide communication via Ingress
+
+If you use link:https://kubernetes.io/docs/concepts/services-networking/ingress/[Ingress^] to control access to your services, adjust the already prepared parts in `values.yaml` accordingly.
+For a better overview only the relevant part is shown in the following example.
+Set the value `enabled` to `true`. You adjust the remaining values according to your environment:
+
+[{yaml}]
+----
+  ingress:
+    enabled: true
+    className: ""
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+    hosts:
+      - host: checkmk-cluster-collector.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+    #  - secretName: chart-example-tls
+    #    hosts:
+    #      - chart-example.local
+----
+
+==== Provide communication via NodePort
+
+You can also provide access to the services directly through a port.
+This is necessary if you do not use Ingress.
+Also in the following example only the relevant section is shown.
+You set the value `type` to `NodePort` and remove the comment for the value `nodePort`:
+
+[{yaml}]
+----
+  service:
+    # if required specify "NodePort" here to expose the cluster-collector via the "nodePort" specified below
+    type: NodePort
+    port: 8080
+    nodePort: 30035
+----
+
+=== Let create the configuration files
+
+After customizing `values.yaml` or creating your own,
+use the following command to create all the necessary configuration files
+to set up your Kubernetes cluster for monitoring in {CMK}:
 
 [{shell}]
 ----
-{c-user} helm repo add k8scmk \https://tribe29.github.io/checkmk_kube_agent
+{c-user} helm upgrade --install --create-namespace -n cmk-monitoring checkmk tribe29/checkmk -f values.yaml
 ----
 
-After updating the freshly cloned repository with `helm repo update`, you can do the rest of the installation with the second step. Here you assign a so-called _namespace_ -- in the example this is 'checkmk-monitoring' and a _release name_. If you set the latter to `checkmk`, you automatically benefit from giving Kubernetes objects short names. Lastly, specify the path where `helm` will find the necessary configuration files:
+Since the command is not self-explanatory, we provide an explanation of each option below:
 
-[{shell}]
-----
-{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring checkmk k8scmk/checkmk
-----
+[cols="30,~",options="header"]
+|===
+|command part |meaning
+|`helm upgrade --install` |This part is the basic command to send the configuration to the Kubernetes cluster.
+|`--create-namespace` |In Kubernetes you always specify to which _namespace_ the configuration should be added. You need this option if the namespace does not exist yet. Helm will create it in this case.
+|`-n cmk-monitoring` |This option specifies the namespace to which the configuration should be added. cmk-monitoring` is just an example of what it could be called.
+|`checkmk` |`checkmk` is an example for the name of the helmet chart. Ideally, you should leave this name as it is, because only then you will automatically benefit from the fact that Kubernetes objects get short names.
+|`tribe29/checkmk` |The first part of this option describes the repository you created with the command before. The second part -- after the slash -- is the _package_ where the necessary information is located to be able to create the configuration of your Kubernetes monitoring.
+|`-f values.yaml` |Finally, specify the configuration file that you created or customized earlier. It contains all the customizations to be included in the configuration files created with `helm`.
+|===
 
-Alternatively, you can specify at the end of the command if you want to use a specific version. For example, you could specify `-- version 1.0.0-beta.2` here, or specific markers, such as the `--devel` in the following example:
+After you run the command, your Kubernetes cluster is prepared to be monitored with {CMK}.
+The cluster will now take care of itself to ensure that the necessary pods and the containers within them are running and accessible.
 
-[{shell}]
-----
-{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring checkmk k8scmk/checkmk --devel
-----
+=== Alternative: Set up via manifest
 
-More information can be found in the _README_ file of the link:https://github.com/tribe29/checkmk_kube_agent/tree/main/deploy/charts/checkmk[Helm Charts^] already mentioned in the introduction.
+Normally, it does not make sense for you to customize the manifests (configuration files) yourself.
+On the one hand,
+because you need detailed knowledge of the architecture of the _{CMK} Kubernetes Collectors_ for this and,
+on the other hand,
+because manual customization is much more error-prone.
+For example, in `helm` you set up communication over TLS once,
+instead of adding it to all relevant places in the manifests themselves.
 
+However, if you don`t use `helm`, or want to have control over all the setup details,
+you can still go this route.
 
-==== Setting up via manifest
+To do so, first download the manifests we have pre-built from our corresponding link:https://github.com/tribe29/checkmk_kube_agent/tree/main/deploy/kubernetes[repository at GitHub^].
+We have split the whole configuration into several files to facilitate their maintenance or to provide more concise files for clearly defined purposes.
 
-If you already have a lot of experience with Kubernetes and want to have control over all details of the setup, setting up Kubernetes monitoring with the manifests we prefabricated is also suitable. To do this, first download the manifests we have prebuilt from our corresponding link:https://github.com/tribe29/checkmk_kube_agent/tree/main/deploy/kubernetes[repository at GitHub^].
-You will need at least the following five files:
+You need at least the following five files:
 
- 00_namespace.yaml
- checkmk-serviceaccount.yaml
- cluster-collector.yaml
- node-collector.yaml
- service.yaml
-
-We have split the entire configuration into several files to facilitate their maintenance or to provide more concise files for clearly defined purposes.
-Specifically, these manifests serve the following purposes:
-
-[cols="55,~"]
+[cols="30,~",options="header"]
 |===
 |filename |purpose
 |`00_namespace.yaml` |Create namespace named checkmk-monitoring
@@ -103,7 +183,7 @@ If you don't want to clone the whole repo right away - which you are free to do,
 
 [{shell}]
 ----
-{c-user} URL='https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in 00_namespace checkmk-serviceaccount cluster-collector node-collector service; do wget "${URL}${i}.yaml"; done
+{c-user} URL='\https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in 00_namespace checkmk-serviceaccount cluster-collector node-collector service; do wget "${URL}${i}.yaml"; done
 ----
 
 If you also want to set up a network policy and a pod security policy, you also need the following two files:
@@ -113,7 +193,7 @@ If you also want to set up a network policy and a pod security policy, you also 
 
 [{shell}]
 ----
-{c-user} URL='https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in network-policy pod-security-policy; do wget "${URL}${i}.yaml"; done
+{c-user} URL='\https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in network-policy pod-security-policy; do wget "${URL}${i}.yaml"; done
 ----
 
 In the files `cluster-collector.yaml` and `node-collector.yaml` you have to fill four placeholders with concrete content.
@@ -171,14 +251,14 @@ Furthermore, you can also check all services within the namespace as follows:
 ----
 
 
-=== Prerequisites in {CMK}
+== Set up the monitoring in {CMK}
 
 Next, in the GUI of {CMK}, we move on to setting up the xref:glossar#special_agent[specialagent] and a rule to automatically create hosts for your Kubernetes objects.
 However, to set up the special agent, there are a few prerequisites that need to be met first:
 
 
 [#token]
-==== Store password (token) in {CMK}
+=== Store password (token) in {CMK}
 
 The best way to store the password (token) of the service account is to store it in the password store of {CMK}.
 This is the most secure variant, because you can separate the storage and use of the password organizationally.
@@ -212,7 +292,7 @@ image::kubernetes_password.png[]
 
 
 [#certimport]
-==== Import CA of the service account into {CMK}
+=== Import CA of the service account into {CMK}
 
 In order for {CMK} to trust the Certificate Authority (CA) of the service account, you must store the CA certificate in {CMK}. You can read out the certificate - provided you have kept `checkmk-monitoring` as the namespace - with the following command:
 
@@ -226,13 +306,13 @@ Copy everything here including the lines `BEGIN CERTIFICATE` and `END CERTIFIACT
 image::kubernetes_ca.png[]
 
 [#source-host]
-==== Create Piggyback source host
+=== Create Piggyback source host
 
 Create a new host in Checkmk in the usual way and name it `mykubernetesclusterhost`, for example.
 As the title and host name suggest, this host is used to collect the Piggyback data and also to map all services and metrics at the cluster level.
 Since this host only receives data via the special agent, set the [.guihint]#IP address family# option to [.guihint]#No IP#.
 
-==== Set up dynamic host configuration
+=== Set up dynamic host configuration
 
 To ensure separation between the numerous Kubernetes objects and the rest of your monitoring environment, it is a good idea to first create a folder via [.guihint]#Setup > Hosts > Add folder# in which the xref:dcd#[dynamic host configuration] can automatically create all necessary hosts.
 Creating or using such a folder is certainly to be considered optional.
@@ -265,28 +345,45 @@ The next part of the host name will then always be the namespace in which this K
 
 Under [.guihint]#Token#, now select the xref:token[previously created entry] from the password store of {CMK}.
 
-Under [.guihint]#API server connection > Endpoint# {CMK} now asks you to enter the URL (or IP address) through which your Kubernetes API server can be reached.
-The port is also required here.
-The easiest way to find out this IP address - if you don't already have it at hand - depends on your Kubernetes environment.
-For a Vanilla Kubernetes, `kubectl` is again a good place to start.
-You can use the following command to view all endpoints in your environment.
+Under [.guihint]#API server connection > Endpoint# {CMK} now requires the entry of the URL (or IP address) via which your Kubernetes API server can be reached.
+The port must also be specified here if the service was not provided via a virtual host.
+The easiest way to find out this IP address -- if you don't already have it handy -- depends on your Kubernetes environment.
+The following command will give you the endpoint of the API server as IP address and port, which you will find as the last entry under `server` in the shortened output:
 
 [{shell}]
 ----
-{c-user} kubectl get endpoints --all-namespaces
+{c-user} kubectl config view
+apiVersion: v1
+clusters:
+  - cluster:
+    certificate-authority-data: DATA+OMITTED
+    server: \https://10.73.42.21:6443
+    name: my-kubernetes
 ----
 
-Depending on the context `kubectl` is currently set to, you can omit `--all-namespaces` if necessary.
-If you have set the CA of your cluster - xref:certimport[as described above] - in {CMK}, you can select under [.guihint]#SSL certificate verification# the [.guihint]#Verify the certificate# option.
+If the server is provided via a DNS record, the output will look more like this instead:
 
-If your Kubernetes API server is only accessible via a proxy or if special timeouts are required for the connection, you can enter them under [.guihint]#HTTP proxy# and [.guihint]#TCP timeouts#.
+[{shell}]
+----
+{c-user} kubectl config view
+apiVersion: v1
+clusters:
+  - cluster:
+    certificate-authority-data: DATA+OMITTED
+    server: \https://DFE7A4191DCEC150F63F9DE2ECA1B407.mi6.eu-central-1.eks.amazonaws.com
+    name: xyz:aws:eks:eu-central-1:150143619628:cluster/my-kubernetes
+----
+
+If you have stored the CA of your cluster - xref:certimport[as described above] - in {CMK}, you can select [.guihint]#Verify the certificate# under [.guihint]#SSL certificate verification#.
+
+If your Kubernetes API server is only accessible via a proxy or special timeouts are required for the connection, you can enter them under [.guihint]#HTTP proxy# and [.guihint]#TCP timeouts#.
 
 Next, you have the choice to enrich the monitoring of your Kubernetes cluster with usage data collected by the {CMK} cluster collector.
 To do this, you need to specify the protocol, URL, and port of the cluster collector under [.guihint]#Collector NodePort/Ingress endpoint#.
 If you set it up using our manifests, the port here is `30035` by default.
-If you have customized the port in the `service.yaml` file, please change the port here accordingly.
+If you have customized the port in the `service.yaml` file, change the port here accordingly.
 You should be able to find out the URL or IP address of the nodeport from the description of the `cluster-collector` pod.
-Just run the following command and look in the line that starts with `Node`:
+Just run the following command and look in the output in the line starting with `Node:`:
 
 [{shell}]
 ----
