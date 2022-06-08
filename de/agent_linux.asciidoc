@@ -1,7 +1,7 @@
 // -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = Linux überwachen
-:revdate: 31-May-2022
+:revdate: 08-Jun-2022
 :title: Linux überwachen - Der neue Agent für Linux im Detail
 :description: Der Linux-Agent der {CMK}-Version 2.1.0 ergänzt das Agentenskript mit dem Agent Controller und neuen Funktionen. Wie Sie den Agenten nutzen, erfahren Sie hier.
 
@@ -32,11 +32,8 @@ Dazu registriert er sich am *Agent Receiver*, einem ebenfalls neuen Prozess, der
 
 Der neue Linux-Agent übernimmt also zum einen das Agentenskript, und damit dessen Vorteile.
 Zum anderen ergänzt er das Skript so, dass neue Funktionen hinzugefügt werden können wie die TLS-Verschlüsselung der Kommunikation, Datenkomprimierung -- und auch die Umkehrung der Kommunikationsrichtung.
-Das bedeutet, dass zusätzlich zum registrierten, verschlüsselten und komprimierten *Pull-Modus* ein ebensolcher *Push-Modus* möglich wird.
-Mehr dazu im nächsten Kapitel.
 
-Der Push-Modus wird ein Feature der neuen {CMK} Plus Edition (CPE) sein, die mit der nächsten {CMK}-Version eingeführt wird.
-TLS-Verschlüsselung und Komprimierung sind ab Version {v21} für alle {CMK}-Editionen verfügbar -- sofern sowohl {CMK}-Server als auch Agent Version mindestens {v21} haben.
+Der registrierte, verschlüsselte und komprimierte *Pull-Modus* mit dem Agent Controller ist ab Version {v21} für alle {CMK}-Editionen verfügbar -- sofern sowohl {CMK}-Server als auch Agent Version mindestens {v21} haben.
 
 Der Agent Controller wird als Hintergrundprozess (_Daemon_) vom init-System `systemd` gestartet, daher setzt der Agent eine Linux-Distribution mit `systemd` voraus.
 Wahrscheinlich wird diese Voraussetzung auf Ihrem Host erfüllt sein, da seit 2015 die meisten Linux-Distributionen `systemd` als init-System übernommen haben.
@@ -52,49 +49,20 @@ Im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] finden Si
 [#architecture]
 == Architektur des Agenten
 
-Mit dem in der {v21} eingeführten neuen Agenten sind mehr Software-Komponenten als zuvor in die Kommunikation involviert.
-Daher stellen wir die Komponenten und ihr Zusammenspiel kurz vor.
-Die Architektur ist beim Linux-Agenten und beim xref:agent_windows#agent_architecture[Windows-Agenten] identisch.
-Nur die technische Realisierung ist spezifisch für die Betriebssysteme.
+Der {CMK}-Agent besteht aus dem Agentenskript und dem Agent Controller, der mit dem Agent Receiver auf dem {CMK}-Server kommuniziert.
+Im allgemeinen Artikel über die xref:wato_monitoringagents#agents[Monitoring-Agenten] finden Sie Einzelheiten zur gemeinsamen Architektur von Linux-Agent und xref:agent_windows#[Windows-Agent.]
+In diesem Kapitel geht es um die für Linux spezifische Implementierung.
 
-.Zusammenspiel der Software-Komponenten
-[{image-border}]
-image::agent_linux_communication_flow.png[alt="Illustration der Kommunikation zwischen Agent und Instanz."]
-
-Das *Agentenskript* `check_mk_agent` ist und bleibt zuständig für die Sammlung der Monitoring-Daten.
-Für die Datensammlung ruft es der Reihe nach vorhandene Systembefehle auf.
+Das *Agentenskript* `check_mk_agent` ist zuständig für die Sammlung der Monitoring-Daten und ruft für die Datensammlung der Reihe nach vorhandene Systembefehle auf.
 Um auch diejenigen Informationen zu erhalten, zu deren Beschaffung `root`-Rechte erforderlich sind, wird `check_mk_agent` unter `root` ausgeführt.
 
-Das Agentenskript ist:
+Das Agentenskript ist minimalistisch, sicher, leicht erweiterbar und transparent, denn es ist ein Shellskript, in dem Sie sehen können, welche Befehle es aufruft.
 
-* minimalistisch, denn es begnügt sich mit minimalen Ressourcen an RAM, CPU, Plattenplatz und Netzwerk.
-* sicher, denn es erlaubt keinerlei Zugriffe aus dem Netzwerk.
-* leicht erweiterbar, denn Sie können Plugins in einer beliebigen Programmier- oder Skriptsprache schreiben und vom Agentenskript ausführen lassen.
-* transparent, denn es ist ein Shellskript, in dem Sie sehen können, welche Befehle es aufruft.
-
-Der *Agent Controller* `cmk-agent-ctl` ist die Komponente des Agenten, die für den Transport der vom Agentenskript gesammelten Daten zuständig ist.
+Der *Agent Controller* `cmk-agent-ctl` kümmert sich um den Transport der vom Agentenskript gesammelten Daten.
 Er wird unter dem Benutzer `cmk-agent` ausgeführt, der nur beschränkte Rechte besitzt, z.B. keine Login-Shell hat und nur zur Datenübertragung genutzt wird.
 Der Benutzer `cmk-agent` wird während der Installation des Agentenpakets angelegt.
 Der Agent Controller wird als Daemon von `systemd` gestartet und ist als Service an diesen gekoppelt.
 Er lauscht am TCP-Port 6556 auf eingehende Verbindungen der {CMK}-Instanz und fragt das Agentenskript über einen Unix-Socket (einer `systemd` Unit) ab.
-
-Wozu wird nun der Agent Controller gebraucht -- bisher funktionierte es doch auch sehr gut ohne ihn?
-Nun, die Software-Architektur des Agenten ist die Voraussetzung dafür, neue Funktionen anzubieten, die mit dem minimalistischen Design des Agentenskripts nicht umsetzbar sind, wie beispielsweise die Verschlüsselung der Kommunikation per Transport Layer Security (TLS), Datenkomprimierung und die Umkehrung der Kommunikationsrichtung.
-Bisher war es stets der {CMK}-Server, der die Kommunikation initiierte und die Daten vom Agenten abfragte -- im sogenannten Pull-Modus.
-
-Mit dem Agent Controller wird die Voraussetzung geschaffen, zukünftig zusätzlich den Push-Modus zu realisieren, in dem die Initiative vom Agenten ausgeht.
-Der Push-Modus ist für eine Cloud-basierte Konfiguration und in einigen abgeschotteten Netzwerken erforderlich.
-In beiden Fällen kann der {CMK}-Server nicht auf das Netzwerk zugreifen, in dem sich die zu überwachenden Hosts befinden.
-Daher sendet der Agent von sich aus regelmäßig die Daten an den {CMK}-Server.
-Agent Controller und Agent Receiver sind bereits für den Push-Modus vorbereitet, auch wenn dieser Modus erst mit der nächsten {CMK}-Version für die neue {CMK} Plus Edition (CPE) verfügbar sein wird.
-
-Der *Agent Receiver* `agent-receiver` ist die Komponente des {CMK}-Servers, die als genereller Endpunkt für die Kommunikation des Agent Controllers dient, z.B. für die Registrierung der Verbindung.
-Er wird auch zukünftig die vom Agent Controller im Push-Modus gesendeten Daten empfangen.
-Im Pull-Modus erfolgt der Datenaustausch mit den xref:cmc_differences.html#fetcher_checker[{CMK}-Fetchern] der Instanz.
-
-TLS-Verschlüsselung und Datenkomprimierung werden über den Agent Controller und den Agent Receiver realisiert, d.h. {CMK}-Server und Agent müssen mindestens Version {v21} haben.
-Dabei ist nach der Installation der erste Schritt die Registrierung des Agent Controller beim Agent Receiver der {CMK}-Instanz, mit der ein Vertrauensverhältnis hergestellt wird.
-Bei der Registrierung wird bereits die TLS-Verschlüsselung der Kommunikation eingerichtet.
 
 
 [#install]
