@@ -566,6 +566,67 @@ So können Sie testen, ob in der Ausgabe alle gewünschten Daten enthalten sind 
 
 Da das Agentenprogramm auf dem lokalen Loopback-Interface (127.0.0.1) auf Port 50001 lauscht, können Sie auch die Verbindungsaufnahme zu diesem mit Telnet oder Putty testen.
 
+[#networkrequirements]
+=== Netzwerkumgebung für die Registrierung
+
+Schlägt die Registrierung eines Hosts im Monitoring fehl, ohne dass überhaupt das Zertifikat angezeigt wird, hilft Kenntnis der involvierten Netzwerkkommunikation bei der Identifizierung des Problems -- und natürlich bei der Behebung.
+
+Nach Absetzen des Kommandos `cmk-agent-ctl register` fragt der Agent Controller zunächst mittels REST-API den {CMK}-Server nach dem Port des Agent Receivers.
+Im zweiten Schritt wird eine Verbindung zum Agent Receiver aufgebaut, um das Zertifikat abzurufen.
+Sie können die erste Anfrage auf dem Host mit einem Programm wie link:https://curl.se/windows/microsoft.html[`curl`^] simulieren:
+
+[{shell-raw}]
+----
+C:\Windows\system32> curl.exe -v https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke
+----
+
+Die Antwort ist lediglich wenige Byte groß und besteht aus der Port-Nummer des Agent Receiver.
+Bei der ersten Instanz auf einem Server wird die Antwort einfach `8000` lauten, bei der zweiten `8001` und so weiter.
+Typische Probleme bei dieser Anfrage sind:
+
+* Der {CMK}-Server ist vom Host aus gar nicht erreichbar.
+* Das Zertifikat des {CMK}-Servers wurde selbst signiert oder von einer internen CA ausgestellt.
+* Der von der REST-API verwendete Port weicht von den Standard-Ports 443 (https) oder 80 (http) ab
+
+Falls die obige Anfrage fehlschlägt, können Sie die Routing- oder Firewall-Einstellungen so verändern, dass der Zugriff möglich ist, beziehungsweise die interne CA der Trust Chain des Hosts hinzufügen.
+
+Wenn der zu registrierende Host einen HTTP-Proxy verwendet, nutzt `curl` diesen, `cmk-agent-ctl` jedoch nicht in den Standardeinstellungen.
+Mit dem zusätzlichen Flag `--detect-proxy` weisen Sie `cmk-agent-ctl` an, den systemweit konfigurierten Proxy zu nutzen.
+
+Oft dürfte es am einfachsten sein, auf dem {CMK}-Server den Port des Agent Receiver auszulesen und zu notieren.
+Führen Sie dazu den folgenden Befehl als Instanzbenutzer aus:
+
+[{shell-raw}]
+----
+{c-omd} omd config show | grep AGENT_RECEIVER
+AGENT_RECEIVER: on
+AGENT_RECEIVER_PORT: 8000
+----
+
+Sie können nun den ermittelten Port bei der Registrierung direkt angeben und so die erste Anfrage via REST-API überspringen.
+Die Kommunikation findet dann ohne Umwege direkt mit dem Agent Receiver statt:
+
+[{shell}]
+----
+C:\Windows\system32> "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" ^
+    register ^
+    --hostname mynewhost ^
+    --server cmkserver:8000 --site mysite ^
+    --user automation --password test23
+----
+
+Auch dieser Port 8000 muss vom Host aus erreichbar sein.
+Ist er das nicht, erhalten Sie die eindeutige Fehlermeldung:
+
+[{shell-raw}]
+----
+ERROR [cmk_agent_ctl] Connection refused (os error 111)
+----
+
+Analog zu Port 443 (respektive 80) oben können Sie jetzt die Routing- oder Firewall-Einstellungen so anpassen, dass der zu registrierende Host den {CMK}-Server auf dem Port des Agent Receiver (8000 oder 8001…) erreichen kann.
+
+Sollten Sicherheitsrichtlinien in Ihrer Umgebung den Zugriff auf den Agent Receiver nicht zulassen, haben sie die Möglichkeit, auf dem {CMK}-Server selbst die xref:proxyregister[Registrierung im Auftrag] vorzunehmen.
+
 
 === Agent Controller im Dump-Modus
 
