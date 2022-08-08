@@ -1,7 +1,7 @@
 // encoding: utf-8
 include::global_attr.adoc[]
 = Konfiguration via {CMK} REST-API
-:revdate: 2022-07-21
+:revdate: draft
 :title: Konfiguration via {CMK} REST-API
 :description: Mit der {CMK} REST-API können Sie Aufgaben, die Sie sonst über die GUI erledigen, per HTTP-Anfragen vom {CMK}-Server ausführen lassen.
 
@@ -155,7 +155,7 @@ Der Client authentisiert sich mit den Zugangsdaten eines auf dem {CMK}-Server ei
 Idealerweise ist dies der sogenannte xref:glossar#automation_user[Automationsbenutzer], der in {CMK} für die Ausführung von Aktionen über eine API vorgesehen ist.
 Die Bearer-Authentifizierung wird für die Verwendung in Skripten empfohlen.
 
-Für die Authentifizierung benötigen Sie den Benutzernamen und das zugehörige, sogenannte „automation secret for machine accounts“, das heißt das Passwort des Automationsbenutzers.
+Für die Authentifizierung benötigen Sie den Benutzernamen und das zugehörige, sogenannte _automation secret for machine accounts_, das heißt das Passwort des Automationsbenutzers.
 Beide Informationen müssen im Header jeder Anfrage an den {CMK}-Server übermittelt werden.
 Bei einer neu erstellten xref:glossar.html#site[Instanz] ist der Benutzer `automation` bereits angelegt.
 Sie finden ihn, wie andere Benutzer auch, unter [.guihint]#Setup > Users > Users.#
@@ -679,6 +679,298 @@ In den Skripten können sensible Daten, wie Konfigurationsdaten, Passwörter usw
 Stellen Sie daher sicher, dass ausschließlich berechtigte Benutzer und Gruppen diese Skripten lesen können.
 
 
+[#examples]
+== Beispiele mit REST-API-Anfragen
+
+In diesem Kapitel finden Sie Beispiele, die zeigen, wie Sie mit Hilfe der REST-API häufig benötigte Aktionen ausführen können.
+Die Beispiele orientieren sich erneut an dem Beispiel-Code für das Kommandozeilenprogramm _cURL._
+Im Unterschied zum Vorgehen im Kapitel xref:using_the_api[Die API nutzen] werden die Anfragen jedoch nicht per Skript sondern als `curl`-Befehle auf der Kommandozeile abgesetzt.
+Dadurch können Sie die Beispiele gleich ausprobieren -- nachdem Sie sie auf die bei Ihnen vorhandene Umgebung angepasst haben.
+
+Um die Befehle noch übersichtlich darstellen zu können, haben wir aus dem Beispiel-Code nur die für die Befehlsausführung absolut notwendigen Zeilen übernommen.
+Für die Aufbereitung der standardmäßig unformatierten Antworten der REST-API können Sie die Ausgabe wieder in den Kommandozeilen-JSON-Prozessor `jq` umleiten, indem Sie am Ende eines `curl`-Befehls ein `| jq` anhängen.
+Mehr zu `jq` steht weiter oben im Kapitel xref:testing[Die API lokal testen.]
+
+So wie der Beispiel-Code in der API-Dokumentation enthalten auch die Beispiele in diesem Kapitel Variablen:
+um die Basis-URL für die REST-API auf Ihrem {CMK}-Server zusammenzubauen und die Zugangsdaten des xref:glossar#automation_user[Automationsbenutzers] für die genutzte xref:bearerauth[Bearer-Authentifizierung] festzulegen:
+
+[cols="15,35,~",options="header"]
+|===
+|Variable |Beispielwert |Bedeutung 
+|`HOST_NAME` |`myserver` |Name des {CMK}-Servers
+|`SITE_NAME` |`mysite` |Name der {CMK}-Instanz
+|`API_URL` |`\http://$HOST_NAME/$SITE_NAME/check_mk/api/1.0` |Basis-URL der REST-API
+|`USERNAME` |`automation` |Name des Automationsbenutzers
+|`PASSWORD` |`theautomationsecret` |Passwort des Automationsbenutzers
+|===
+
+Bevor Sie die `curl`-Kommandos absetzen, können Sie die Variablen mit den folgenden Kommandos in der Shell auf Ihre Umgebung anpassen:
+
+[{shell}]
+----
+{c-user} HOST_NAME="myserver"; SITE_NAME="mysite"; API_URL="http://$HOST_NAME/$SITE_NAME/check_mk/api/1.0"; \
+USERNAME="automation"; PASSWORD="theautomationsecret";
+----
+
+
+[#examples_hosts_folders]
+=== Hosts und Ordner
+
+Die in diesem Kapitel beschriebenen Anfragen finden Sie in der API-Dokumentation in den Endpunktordnern [.guihint]#Hosts# und [.guihint]#Folders#.
+Die in der API-Dokumentation enthaltenen Titel der jeweiligen Endpunkte stehen in den folgenden Überschriften in Klammern.
+
+
+[#restapi_show_all_folders]
+[discrete]
+=== Alle Ordner anzeigen (Show all folders)
+
+Hier werden _alle_ Ordner im Setup angezeigt -- rekursiv ausgehend vom Hauptordner [.guihint]#Main# -- _ohne_ Auflistung der enthaltenen Hosts:
+
+[{shell}]
+----
+{c-user} curl -G \
+--request GET \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--data-urlencode #'parent=~'# \
+--data-urlencode #'recursive=true'# \
+--data-urlencode #'show_hosts=false'# \
+"$API_URL/domain-types/folder_config/collections/all"
+----
+
+
+[#restapi_show_all_hosts_in_a_folder]
+[discrete]
+=== Alle Hosts eines Ordners anzeigen (Show all hosts in a folder)
+
+Hier werden die Hosts im Unterordner [.guihint]#Main > Linux# angefordert:
+
+[{shell}]
+----
+{c-user} curl \
+--request GET \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+"$API_URL/objects/folder_config/#~linux#/collections/hosts"
+----
+
+
+[#restapi_create_a_folder]
+[discrete]
+=== Ordner erstellen (Create a folder)
+
+Hier wird in [.guihint]#Main > Linux# ein Unterordner [.guihint]#Production Hosts# erstellt -- im Dateisystem als Verzeichnis `production_hosts`.
+Dem neuen Ordner wird dabei das xref:glossar#host_tag[Host-Merkmal] [.guihint]#Productive system# aus der xref:host_tags#predefined_tags[vordefinierten Host-Merkmalsgruppe] [.guihint]#Criticality# zugewiesen:
+
+[{shell}]
+----
+{c-user} curl \
+--request POST \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json"     \
+--header "Content-Type: application/json" \
+--data '{
+    "attributes": {
+        "tag_criticality": "prod"
+    },
+    "name": "production_hosts",
+    "parent": "~linux",
+    "title": "Production Hosts"
+    }' \
+"$API_URL/domain-types/folder_config/collections/all"
+----
+
+
+[#restapi_create_a_host]
+[discrete]
+=== Host erstellen (Create a host)
+
+Hier wird im Ordner [.guihint]#Main > Linux > Production Hosts# der Host `mylinuxserver` mit der IP-Adresse `192.168.0.123` und dem Host-Merkmal [.guihint]#Use piggyback data from other hosts if present# erstellt:
+
+[{shell}]
+----
+{c-user} curl \
+--request POST \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "Content-Type: application/json" \
+--data '{
+    "attributes": {
+        "ipaddress": "192.168.0.123",
+        "tag_piggyback": "auto-piggyback"
+    },
+    "folder": "\~linux~production_hosts",
+    "host_name": "mylinuxserver"
+    }' \
+"$API_URL/domain-types/host_config/collections/all"
+----
+
+
+[#restapi_show_a_host]
+[discrete]
+=== Host anzeigen (Show a host)
+
+Durch die Anzeige eines Hosts erhalten Sie die Liste der ihm zugewiesenen Attribute.
+Zusätzlich wird dabei das HTTP ETag (_entity tag_) geliefert, das Sie benötigen, um einen Host zu ändern.
+Die Änderung eines Objekts via REST-API erfolgt nicht über die ID oder den Titel des Objekts. Stattdessen wird das generierte ETag genutzt, mit dem verhindert werden soll, dass mehrere konkurrierende Anfragen Werte desselben Objekts gegenseitig überschreiben.
+
+Das ETag wird im Antwort-Header (_response header_) zurückgeliefert.
+Damit dieser Header angezeigt wird, rufen Sie `curl` mit der Option `-v` (für _verbose_) auf.
+Hier wird der Host `mylinuxserver` abgefragt -- und aus der Antwort nur die Zeile mit dem ETag gezeigt:
+
+[{shell}]
+----
+{c-user} curl -vG \
+--request GET \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+"$API_URL/objects/host_config/#mylinuxserver#"
+...
+< ETag: "57db3792f23bd81ca7447ba4885fa2865d0c78aed4753229b29e179e539da48b"
+...
+----
+
+
+[#restapi_update_a_host]
+[discrete]
+=== Host ändern (Update a host)
+
+Vor der Änderung besorgen Sie sich das ETag des Hosts, wie im Abschnitt xref:restapi_show_a_host[Host anzeigen (Show a host)] beschrieben.
+Das ETag tragen Sie dann im Anfrage-Header unter `If-Match` ein.
+Hier wird das beim Erstellen des Hosts gesetzte Host-Merkmal aus der Gruppe [.guihint]#Piggyback# wieder gelöscht und stattdessen das vordefinierte Merkmal [.guihint]#API integrations if configured, else Checkmk agent# gesetzt:
+
+[{shell}]
+----
+{c-user} curl \
+--request PUT \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "If-Match: "57db3792f23bd81ca7447ba4885fa2865d0c78aed4753229b29e179e539da48b"" \
+--header "Content-Type: application/json" \
+--data '{
+    "remove_attributes": [
+        "tag_piggyback"
+    ],
+    "update_attributes": {
+        "tag_agent": "cmk-agent"
+    }
+    }' \
+"$API_URL/objects/host_config/#mylinuxserver#"
+----
+
+
+[#restapi_execute_a_service_discovery_on_a_host]
+[discrete]
+=== Service-Erkennung auf einem Host durchführen (Execute a service discovery on a host)
+
+Damit eine xref:hosts_setup#services[Service-Erkennung] auch tatsächlich die erwarteten Services liefert, müssen Sie zuvor auf Linux- und Windows-Hosts die zugehörigen xref:wato_monitoringagents#[Monitoring-Agenten] installieren und registrieren.
+
+Hier wird die Service-Erkennung auf dem Host `mylinuxserver` durchgeführt mit der Option `refresh`, was in der {CMK}-GUI dem Knopf [.guihint]#Full service scan# entspricht:
+
+[{shell}]
+----
+{c-user} curl \
+--request POST \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "Content-Type: application/json" \
+--data '{
+    "host_name": "mylinuxserver",
+    "mode": "refresh"
+    }' \
+"$API_URL/domain-types/service_discovery_run/actions/start/invoke"
+----
+// TK: Bei diesem Request gibt es keine Rückmeldung und Erfolgskontrolle in der GUI ist auch nicht möglich.
+
+
+[#restapi_bulk_create_host]
+[discrete]
+=== Mehrere Hosts erstellen (Bulk create hosts)
+
+Hier werden zwei Hosts im Ordner [.guihint]#Main > Linux > Production Hosts# erstellt: der erste nur mit IP-Adresse und der zweite zusätzlich mit einem xref:monitoring_basics#parents[Parent-Host] und mit zwei xref:glossar#label[Labels:]
+
+[{shell}]
+----
+{c-user} curl \
+--request POST \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "Content-Type: application/json" \
+--data '{
+	"entries": [
+	{
+	"attributes": {
+	    "ipaddress": "192.168.0.130"
+	},
+	"folder": "\~linux~production_hosts",
+	"host_name": "mylinuxserver02"
+	},
+	{
+	"attributes": {
+	    "ipaddress": "192.168.0.131",
+	    "parents": [ "router01" ],
+	    "labels": {
+	    	"color": "blue-metallic",
+	    	"admin": "Fozzie Bear"
+	    }
+	},
+	"folder": "\~linux~production_hosts",
+	"host_name": "mylinuxserver03"
+	}
+	]
+	}' \
+"$API_URL/domain-types/host_config/actions/bulk-create/invoke"
+----
+
+
+[#restapi_activate_pending_changes]
+[discrete]
+=== Änderungen aktivieren (Activate pending changes)
+
+Bevor die komplexe Aktion der Umbenennung eines Hosts in Angriff genommen werden kann, ist es nötig, alle in der xref:glossar#configuration_environment[Konfigurationsumgebung] aufgelaufenden Änderungen zu aktivieren.
+Hier werden die Änderungen für die Instanz `mysite` gesammelt aktiviert:
+
+[{shell}]
+----
+{c-user} curl \
+--request POST \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "Content-Type: application/json" \
+--data '{
+    "force_foreign_changes": false,
+    "redirect": false,
+    "sites": [
+        "mysite"
+     ]
+     }' \
+"$API_URL/domain-types/activation_run/actions/activate-changes/invoke"
+----
+
+
+[#restapi_bulk_rename_a_host]
+[discrete]
+=== Host umbenennen (Rename a host)
+
+Auch ein neuer Name ändert den Host.
+Besorgen Sie sich daher zuerst das aktuelle ETag des Hosts, z.B. von `mylinuxserver`, wie im Abschnitt xref:restapi_show_a_host[Host anzeigen (Show a host)] beschrieben, und tragen es im Anfrage-Header unter `If-Match` ein.
+Hier wird der Host in `mylinuxserver01` umbenannt:
+
+[{shell}]
+----
+{c-user} curl \
+--request PUT \
+--header "Authorization: Bearer $USERNAME $PASSWORD" \
+--header "Accept: application/json" \
+--header "If-Match: "a200832df1b3c5ebe8f30809177630abbdcf8f7cbd9d0f69bd9f229b359f4d00"" \
+--header "Content-Type: application/json" \
+--data '{
+	"new_name": "mylinuxserver01"
+	}' \
+"$API_URL/objects/host_config/#mylinuxserver#/actions/rename/invoke"
+----
+
+
 [#rest-web-api]
 == REST-API und Web-API im Vergleich
 
@@ -696,7 +988,7 @@ In der Tabelle enthält die Spalte für die REST-API die HTTP-Methoden (bei Mehr
 |für einen Host erstellen |POST host |-
 |für einen Service erstellen |POST service |-
 |entfernen |POST delete |-
-|Host-Status |Hosts eines Zustands anzeigen |GET all |-
+|Host-Status |Hosts eines Zustands anzeigen |GET |-
 .3+|Service-Status |Service auf einem Host anzeigen |GET show_service |-
 |Services auf einem Host anzeigen |GET services |-
 |Alle Services anzeigen |GET all |-
