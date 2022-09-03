@@ -51,13 +51,30 @@ Eine vollständige Auflistung aller verfügbaren Check-Plugins für die Überwac
 
 Für einen Einstieg in das neue Monitoring von Kubernetes empfehlen wir unsere beiden Videos link:https://www.youtube.com/watch?v=H9AlO98afUE[Kubernetes Monitoring with {CMK}^] und link:https://www.youtube.com/watch?v=2H-cLhyfYbc[Detecting issues and configuring alerts for Kubernetes clusters^].
 
+=== Aufbau der Monitoring-Umgebung
+
+Da es in Kubernetes-Clustern sehr schnell auch zu größeren Veränderungen, was die Anzahl und Verortung der einzelnen Komponenten angeht, kommen kann, empfehlen wir für das Monitoring Ihrer Kubernetes-Umgebung eine eigene Instanz zu erstellen.
+Diese können Sie dann wie üblich über das xref:distributed_monitoring#[verteilte Monitoring] an Ihre Zentralinstanz anbinden.
+
+=== Ablauf des Kubernetes-Monitorings in {CMK}
+
+{CMK} überwacht Ihre Kubernetes-Cluster auf zwei Wegen. Grundlegende Informationen holt der Spezialagent einfach über den API-Server Ihres Clusters ab.
+Hierüber lassen sich bereits die Zustände von Nodes und Containern abrufen. Auch die meisten Meta-Informationen über Ihre Pods und Deployment werden auf diesem Wege gewonnen.
+
+Für ein umfängliches Monitoring fehlt bis zum diesem Punkt allerdings noch etwas. Die Fragen wieviel Last beispielsweise ein bestimmtes Deployment auf der CPU erzeugt oder wieviel Arbeitsspeicher ein DaemonSet gerade bindet, lassen sich so nicht beantworten.
+
+An dieser Stelle kommt unser Cluster-Collector ins Spiel.
+Dieser ist ein unerlässlicher Teil des Kubernetes-Monitorings in {CMK}.
+Ein nicht unerheblicher Teil der folgenden Ausführungen drehen sich dann auch darum, den Cluster-Collector zu installieren und einzurichten. Auch ist die Verwendung der Kubernetes-Dashboards in den {EE} von {CMK} nur dann sinnvoll, wenn der Cluster-Collector hierfür Daten zur Auslastung liefern kann.
+
+image::monitoring_kubernetes_architecture.png[]
+
 
 === Unterschiede zum bisherigen Kubernetes-Monitoring
 
 Das Kubernetes-Monitoring in {CMK} wurde von Grund auf neu geschrieben.
 Der Umfang der überwachbaren Daten ist stark gewachsen.
 Da die technische Grundlage für das Kubernetes-Monitoring in {CMK} {v21} grundlegend anders ist, ist eine Übernahme oder auch eine Weiterschreibung bisheriger Monitoring-Daten Ihrer Kubernetes-Objekte nicht möglich.
-// MA: Hier fehlt mir eine Beschreibung, _wie_ wir nun Kubernetes überwachen. Also: Was ich richte ich eigentlich in Kapitel 3 ein? Hint: Wahrscheinlich die Definition, welche Pods mit welchen Container, etc. im Cluster laufen sollen.
 
 
 == Voraussetzungen im Cluster schaffen
@@ -68,9 +85,11 @@ Vor allem, indem Sie dem Cluster mitteilen, welche Pods/Container bereitgestellt
 
 === Helm-Repository einrichten
 
-Aktuell empfehlen wir die Installation des Kubernetes-Monitoring mit Hilfe des Tools `helm`,
-da es sich auch für weniger versierte Nutzer eignet und die Verwaltung der Konfigurationen standardisiert.
+Die Installation des Kubernetes-Monitoring geschiet mit Hilfe des Tools `helm`.
+Helm eignet sich auch für weniger versierte Nutzer und standardisiert die Verwaltung der Konfigurationen.
 Helm ist eine Art Paketmanager für Kubernetes.
+Sollten Sie Helm noch nicht verwenden, so erhalten Sie es im Regelfall über die Paketverwaltung Ihrer Linux-Distribution oder über link:https://helm.sh/docs/intro/install/[die Webseite des Helm-Projekts].
+
 Sie können darüber _Repositories_  als Quellen einbinden und die darin enthaltenen Helm-Charts wie Pakete ganz einfach Ihrem Cluster hinzufügen.
 Machen Sie dafür zuallererst das Repository bekannt.
 In dem folgenden Beispiel nutzen wir den Namen `tribe29`, um später einfacher auf das Repository zugreifen zu können.
@@ -181,13 +200,13 @@ Sie setzen dabei den Wert `type` auf `NodePort` und entfernen die Auskommentieru
 ----
 
 
-=== Konfigurationsdateien erstellen lassen
+=== Helm-Charts installieren
 
-Nachdem Sie die `values.yaml` angepasst oder eine eigene erstellt haben, erstellen Sie mit dem folgenden Kommando alle notwendigen Konfigurationsdateien, um Ihr Kubernetes-Cluster für die Überwachung in {CMK} einzurichten:
+Nachdem Sie die `values.yaml` angepasst oder eine eigene erstellt haben, installieren Sie mit dem folgenden Kommando alle notwendigen Komponenten in Ihrem Cluster, um es in {CMK} überwachen zu können:
 
 [{shell}]
 ----
-{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring myrelease tribe29/checkmk -f values.yaml
+{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring myrelease tribe29/checkmk -f values.yaml         
 ----
 
 Da das Kommando nicht selbsterklärend ist, bieten wir Ihnen nachfolgend eine Erläuterung zu den einzelnen Optionen:
@@ -206,7 +225,73 @@ Da das Kommando nicht selbsterklärend ist, bieten wir Ihnen nachfolgend eine Er
 Nachdem Sie das Kommando ausgeführt haben, ist Ihr Kubernetes-Cluster vorbereitet, um mit {CMK} überwacht zu werden.
 Das Cluster wird sich nun selbstständig darum kümmern, dass die notwendigen Pods und die darin enthaltenen Container laufen und erreichbar sind.
 
+==== Ausgabe der Helm-Charts
 
+Als nächstes steht nun die Einrichtung in {CMK} an.
+Um Ihnen diese Einrichtung so einfach wie möglich zu machen, haben wir den Output unserer Helm-Charts mit einer ganzen Reihe an Kommandos ausgestattet.
+Dieser Output passt sich auch automatisch an die von Ihnen eingestellten Werte in der Datei `values.yaml` an. Verwenden Sie also den NodePort, bekommen Sie hier unter anderem die Befehle um IP und Port des NodePort anzuzeigen.
+Verwenden Sie aber einen Ingress, wird die Ausgabe entsprechend aungepasst.
+Im Folgenden zeigen wir die - leicht gekürzte - Ausgabe nach erfolgreicher Installation bei der Verwendung des NodePort:
+
+[{shell},highlight=13..15;19..20;23]
+----
+{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring myrelease tribe29/checkmk -f values.yaml
+Release "myrelease" does not exist. Installing it now.
+...
+NAME: myrelease
+LAST DEPLOYED: Sat May  11 07:44:11 2022
+NAMESPACE: checkmk-monitoring
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+You can access the checkmk `cluster-collector` via:
+NodePort:
+  export NODE_PORT=$(kubectl get --namespace checkmk-monitoring -o jsonpath="{.spec.ports[0].nodePort}" services myrelease-checkmk-cluster-collector);
+  export NODE_IP=$(kubectl get nodes --namespace checkmk-monitoring -o jsonpath="{.items[0].status.addresses[0].address}");
+  echo \http://$NODE_IP:$NODE_PORT
+  # Cluster-internal DNS of `cluster-collector`: myrelease-checkmk-cluster-collector.checkmk-monitoring
+With the token of the service account named `myrelease-checkmk-checkmk` in the namespace `checkmk-monitoring` you can now issue queries against the `cluster-collector`.
+Run the following to fetch its token, resp. ca-certificate:
+  export TOKEN=$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode);
+  export CA_CRT="$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode)";
+  # Note: Quote the variable when echo'ing to preserve proper line breaks: `echo "$CA_CRT"`
+To test access you can run:
+  curl -H "Authorization: Bearer $TOKEN" \http://$NODE_IP:$NODE_PORT/metadata | jq
+----
+
+Kopieren Sie aus dieser Ausgabe einfach die farblich markierten Zeilen und führen Sie Befehle aus.
+Der obere Block zeigt Ihnen dann Informationen zum NodePort an:
+
+[{shell-raw}]
+----
+{c-user} export NODE_PORT=$(kubectl get --namespace checkmk-monitoring -o jsonpath="{.spec.ports[0].nodePort}" services myrelease-checkmk-cluster-collector);
+{c-user} export NODE_IP=$(kubectl get nodes --namespace checkmk-monitoring -o jsonpath="{.items[0].status.addresses[0].address}");
+{c-user} echo \http://$NODE_IP:$NODE_PORT
+http://10.184.38.103:30035
+----
+
+Genau diese Adresse müssen in {CMK} später in der Kubernetes-Regel im Feld [.guihint]#Collector NodePort / Ingress endpoint# eintragen.
+
+Mit den Befehlen aus dem nächsten Block erhalten Sie sowohl den Token and auch das Zertifikat des Serviceaccounts.
+Die Daten werden so in den Umgebubgsvariablen `TOKEN` und `CA_CRT` gespeichert.
+Achten Sie bei der Ausgabe der Variablen `CA_CRT` ungedingt darauf diese in Hochkommata einzuschließen, da ansonsten die wichtigen Zeilenumbrüche des Zertifikats verloren gehen.
+
+[{shell}]
+----
+{c-user} export TOKEN=$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode);
+{c-user} export CA_CRT="$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode)";
+{c-user} echo $TOKEN
+eyJhbGciOiJSUzI1NiIsImtpZCI6InR6VXhGSU ...
+{c-user} echo "$CA_CRT"
+-----BEGIN CERTIFICATE-----
+MIIBdjCCAR2gAwIBAgIBADAKBggqhkjOPQQDAjAjMSEwHwYDVQQDDBhrM3Mtc2Vy
+dmVyLWNhQDE2NjIxNDc5NTMwHhcNMjIwOTAyMTk0NTUzWhcNMzIwODMwMTk0NTUz
+...
+-----END CERTIFICATE-----
+----
+
+Halten Sie Shell mit diesen Informationen bereit oder kopieren Sie sie an einen Ort an dem Sie währen der folgenden Einrichtung in {CMK} sofort darauf zugreifen können.
 
 == Monitoring in {CMK} einrichten
 
@@ -221,30 +306,6 @@ Das Passwort (Token) des Service-Accounts können Sie am besten im Passwortspeic
 Das ist die sicherste Variante, da Sie Hinterlegung und Benutzung des Passworts organisatorisch trennen können.
 Alternativ geben Sie es beim Anlegen der Regel (siehe weiter unten) direkt im Klartext ein.
 
-Der Output des 
-
-Wenn Sie als Namespace für das Monitoring Ihres Kubernetes-Clusters das vorgegebene `checkmk-monitoring` beibehalten haben, schneidet die folgende Befehlszeile das Passwort direkt aus der Ausgabe von `kubectl get secrets` aus:
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode
-eyJhbGciOiJSUzI1NiIsImtpZCI6IiJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJjaGVjay1tayIsI
-mt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJjaGVjay1tay10b2tlbi16OWhicCIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5
-hbWUiOiJjaGVjay1tayIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjIxODE3OWEzLTFlZTctMTFlOS1iZjQzLTA4MDAyN2E1ZjE0MSIsInN1YiI6I
-nN5c3RlbTpzZXJ2aWNlYWNjb3VudDpjaGVjay1tazpjaGVjay1tayJ9.gcLEH8jjUloTeaAj-U_kRAmRVIiETTk89ujViriGtllnv2iKF12p0L9ybT1fO-1Vx7XyU8jneQRO9lZw8JbhVmaPjrkEc8
-kAcUdpGERUHmVFG-yj3KhOwMMUSyfg6wAeBLvj-y1-_pMJEVkVbylYCP6xoLh_rpf75JkAicZTDmhkBNOtSf9ZMjxEmL6kzNYvPwz76szLJUg_ZC636OA2Z47qREUtdNVLyutls7ZVLzuluS2rnfoP
-JEVp_hN3PXTRei0F5rNeA01wmgWtDfo0xALZ-GfvEQ-O6GjNwHDlsqYmgtz5rC23cWLAf6MtETfyeEJjRqwituhqUJ9Jp7ZHgQ%
-----
-
-Das Passwort ist wirklich so lang.
-Wenn Sie direkt unter Linux arbeiten, können Sie hinten noch ein `| xsel --clipboard` hinzufügen.
-Dann wird das Passwort gar nicht ausgegeben, sondern direkt in die Zwischenablage kopiert (also als ob Sie das mit der Maus kopiert hätten):
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode | xsel --clipboard
-----
-
 Fügen Sie das Passwort in den {CMK}-Passwortspeicher ein mit [.guihint]#Setup > General > Passwords > Add password# z.B. unter der ID und dem Titel `kubernetes`:
 
 image::kubernetes_password.png[]
@@ -254,12 +315,6 @@ image::kubernetes_password.png[]
 === CA des Service-Accounts in {CMK} importieren
 
 Damit {CMK} der Certificate Authority (CA) des Service-Accounts vertrauen kann, müssen Sie das CA-Zertifikat in {CMK} hinterlegen.
-Auslesen können Sie das Zertifikat -- sofern Sie als Namespace `checkmk-monitoring` beibehalten haben -- mit dem folgenden Befehl:
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode
-----
 
 Kopieren Sie hier alles inklusive der Zeilen `BEGIN CERTIFICATE` und `END CERTIFIACTE` und fügen Sie das Zertifikat im Setup-Menü unter [.guihint]#Setup > General > Global settings > Site management > Trusted certificate authorities for SSL# hinzu.
 
@@ -271,17 +326,19 @@ image::kubernetes_ca.png[]
 
 Erzeugen Sie in {CMK} auf gewohnte Weise einen neuen Host und nennen Sie diesen beispielsweise `mykubernetesclusterhost`.
 Wie Überschrift und Host-Name schon nahelegen, dient dieser Host dazu die Piggyback-Daten zu sammeln und außerdem alle Services und Metriken auf Cluster-Ebene abzubilden.
-Da dieser Host ausschließlich über den Spezialagenten Daten erhält, setzen Sie in den Eigenschaften des Hosts die Option [.guihint]#IP address family# auf [.guihint]#No IP#.
+Da dieser Host ausschließlich über den Spezialagenten Daten erhält, setzen Sie in den Eigenschaften des Hosts die Option [.guihint]#IP address family# auf [.guihint] unbedingt auf #No IP#.
 
 image::monitoring_kubernetes_no_ip.png[alt="Beispielhafte Einrichtung eines Cluster-Hosts mit der wichtigen Einstellung 'No IP'."]
 
 
 === Dynamische Host-Konfiguration einrichten
 
-Um eine Trennung zwischen den zahlreichen Kubernetes-Objekten und Ihrer restlichen Monitoring-Umgebung zu gewährleisten, bietet es sich an zuerst über [.guihint]#Setup > Hosts > Add folder# einen Ordner anzulegen, in welchem die xref:dcd#[dynamische Host-Konfiguration] automatisch alle notwendigen Hosts anlegen kann.
-Einen solchen Ordner zu erzeugen bzw. zu nutzen ist aber optional.
+{cee-only}
 
-Unbedingt notwendig hingegen ist die Einrichtung eines Konnektors fürs die anfallenden Piggyback-Daten.
+Um eine Trennung zwischen den Objekten verschiedener Kubernetes-Cluster zu gewährleisten, kann es sich anbieten über [.guihint]#Setup > Hosts > Add folder# pro Cluster einen Ordner anzulegen, in welchem die xref:dcd#[dynamische Host-Konfiguration] automatisch alle Hosts eines Clusters anlegen kann.
+Einen solchen Ordner zu erzeugen bzw. zu nutzen ist aber sicherlich optional.
+
+Als nächstes richten Sie in den {EE} von {CMK} einen Konnektors für die anfallenden Piggyback-Daten.
 Über [.guihint]#Setup > Hosts > Dynamic host management > Add connection# gelangen Sie zur Seite für die entsprechende Einrichtung.
 Tragen Sie zuerst einen Titel ein und klicken Sie anschließend unter [.guihint]#Connection Properties# auf [.guihint]#show more#.
 
@@ -348,8 +405,8 @@ Wenn Sie die CA Ihres Clusters - xref:certimport[wie oben beschrieben] - in {CMK
 Sollte Ihr Kubernetes API Server nur über einen Proxy erreichbar sein oder für die Verbindung spezielle Timeouts benötigt werden, können Sie diese unter [.guihint]#HTTP proxy# und [.guihint]#TCP timeouts# eintragen.
 // TK: Den Satz kannste streichen.
 
-Als Nächstes haben Sie die Wahl das Monitoring Ihres Kubernetes-Clusters mit Nutzungsdaten anzureichern, welche der {CMK} Cluster Collector einsammelt.
-Dazu müssen Sie unter [.guihint]#Collector NodePort/Ingress endpoint# Protokoll, URL und Port des Cluster Collectors angeben.
+Als Nächstes haben Sie die Wahl das Monitoring Ihres Kubernetes-Clusters mit Nutzungsdaten anzureichern, welche der {CMK} Cluster-Collector einsammelt.
+Dazu müssen Sie unter [.guihint]#Collector NodePort/Ingress endpoint# Protokoll, URL und Port des Cluster-Collectors angeben.
 Wenn Sie die Einrichtung mit unseren Manifesten vorgenommen haben, ist der Port hier standardmäßig `30035`.
 Falls Sie den Port in der Datei `service.yaml` angepasst haben, so ändern Sie den Port hier entsprechend.
 Die URL bzw. die IP-Adresse des Nodeport sollte sich über die Beschreibung des Pods `cluster-collector` herausfinden lassen.
@@ -405,7 +462,9 @@ So lassen sich in der Folge sehr einfach Filter und Regeln für alle Objekte gle
 
 {CEE-only}
 
-Die {EE} von {CMK} werden mit sechs eingebauten Dashboards für Kubernetes ausgeliefert. Im einzelnen heißen diese Dashboards:
+Die {EE} von {CMK} werden mit sechs eingebauten Dashboards für Kubernetes ausgeliefert.
+Um diese Dashboards auch sinnvoll verwenden zu können, ist es außerdem notwendig, dass unser Cluster-Collector installiert und konfiguriert ist.
+Im einzelnen heißen diese Dashboards:
 
 * Kubernetes
 * Kubernetes Cluster
@@ -432,8 +491,62 @@ Die Kubernetes-Überwachung von {CMK} unterstützt auch die xref:inventory#[HW-/
 Auf dem gleichen Weg - also über die Boxen mit den großen Namen der jeweiligen Objekte gelangen Sie jeweils zur Inventur des Objekts.
 Im folgenden Beispiel sehen Sie die HW-/SW-Inventur eines Pods:
 
-image::kubernetes_monitoring_hw_sw_inventory.png[alt="Exemplarische Ansicht der Hardware- und Software-Inventur eines Pods"]
+image::kubernetes_monitoring_hw_sw_inventory.png[width=88% alt="Exemplarische Ansicht der Hardware- und Software-Inventur eines Pods"]
 
+[#rancher]
+== Kubernetes in Rancher-Installationen
+
+=== Service-Account anlegen
+
+Mit Rancher ist die Einrichtung des Monitorings in {CMK} grundsätzlich identisch mit der xref:setup[oben] beschriebenen Variante direkt über Kubernetes.
+Auch hier benötigen Sie den Service-Account, damit {CMK} auf das Cluster zugreifen kann.
+Den Account erstellen Sie direkt in der Rancher-Weboberfläche, wo Sie anschließend auch dessen Token und Zertifikat finden, die Sie wiederum in {CMK} importieren.
+
+Navigieren Sie in Rancher zunächst nach [.guihint]#Global > Security > Roles > Cluster#, um eine neue Rolle `checkmk` anzulegen:
+
+[{image-border}]
+image::rancher_roles.png[]
+
+Der Einfachheit halber klonen Sie die Rolle [.guihint]#Cluster Owner#:
+
+[{image-border}]
+image::rancher_roles_clone.png[]
+
+Entziehen Sie der geklonten Rolle unter [.guihint]#Grant Resources# die Rechte [.guihint]#Create,# [.guihint]#Delete,# [.guihint]#Patch# und [.guihint]#Update#:
+
+[{image-border}]
+image::rancher_roles_clone_rights.png[]
+
+Erstellen Sie nun einen neuen Rancher-Benutzer `checkmk` unter [.guihint]#Global > Users > Add User#.
+Bei [.guihint]#Global Permissions# wählen Sie die Option [.guihint]#User-Base#, um dem Benutzer nur die nötigsten Leserechte einzuräumen:
+
+[{image-border}]
+image::rancher_adduser.png[]
+
+
+=== Clusterrolle zuordnen
+
+Wechseln Sie nun zu Ihrem Cluster und klicken Sie im Cluster-Menü oben rechts auf [.guihint]#Edit.#
+Hier können Sie über [.guihint]#Add Member# den eben angelegten Benutzer [.guihint]#checkmk# mit der zugehörigen Rolle [.guihint]#checkmk# zum Cluster hinzufügen:
+
+[{image-border}]
+image::rancher_addmember.png[]
+
+
+=== Weiteres Vorgehen
+
+Melden Sie sich anschließend mit dem neuen Benutzer bei Rancher an, rufen Sie den Cluster auf und klicken Sie auf [.guihint]#Kubeconfig File#.
+Hier finden Sie drei Angaben, die Sie für das Monitoring in {CMK} benötigen:
+
+* [.guihint]#clusters > cluster > server#: URL-/Pfadangaben für die xref:rule[{CMK}-Regel]
+* [.guihint]#clusters > cluster > certificate-authority-data#: Das base64-kodierte Zertifikat
+* [.guihint]#users > user > token#: Zugangspasswort in Form eines Bearer Tokens
+
+image::rancher_kubeconfig.png[]
+
+Das Zertifikat müssen Sie noch dekodieren, auf der Kommandozeile beispielsweise mit `base64 --decode` oder in einem der vielen nline-Dienste.
+
+Die Einrichtung in {CMK} entspricht ab hier dem Vorgehen bei purer Kubernetes-Nutzung ab dem Abschnitt xref:certimport[Zertifikat in {CMK} importieren].
 
 == {CMK} entfernen
 
@@ -444,8 +557,8 @@ Sollten Sie sich beim Namen des Releases unsicher sein, lassen Sie sich zuerst a
 [{shell}]
 ----
 {c-user} helm list --all-namespaces
-NAME       	NAMESPACE           REVISION  UPDATED                                   STATUS    CHART          APP VERSION
-myrelease	  checkmk-monitoring  1         2022-08-15 19:00:42.318666784 +0200 CEST  deployed  checkmk-1.0.1  1.0.1
+NAME        NAMESPACE           REVISION  UPDATED                                   STATUS    CHART          APP VERSION
+myrelease   checkmk-monitoring  1         2022-08-15 19:00:42.318666784 +0200 CEST  deployed  checkmk-1.0.1  1.0.1
 ----
 
 Wie in der obigen Beispielausgabe sollten Sie hier ein Release finden, welches in der Spalte `CHART` einen Hinweis auf {CMK} enthält.
