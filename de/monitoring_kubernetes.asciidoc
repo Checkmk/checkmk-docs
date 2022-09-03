@@ -69,6 +69,11 @@ Ein nicht unerheblicher Teil der folgenden Ausführungen drehen sich dann auch d
 
 image::monitoring_kubernetes_architecture.png[]
 
+=== Unterschiede zum übrigen Monitoring in {CMK}
+//SK: Hier ist sicherlich eine genauere Erklärung erforderlich.
+Beim Monitoring von Kubernetes-Clustern kommt es mitunter wesentlich häufiger zu Statusänderungen bei den Checks.
+Um dem Rechnungs zu tragen ändern die Checks des Kubernetes-Monitorings erst nach 10 Minuten ihren Status.
+
 
 === Unterschiede zum bisherigen Kubernetes-Monitoring
 
@@ -225,6 +230,7 @@ Da das Kommando nicht selbsterklärend ist, bieten wir Ihnen nachfolgend eine Er
 Nachdem Sie das Kommando ausgeführt haben, ist Ihr Kubernetes-Cluster vorbereitet, um mit {CMK} überwacht zu werden.
 Das Cluster wird sich nun selbstständig darum kümmern, dass die notwendigen Pods und die darin enthaltenen Container laufen und erreichbar sind.
 
+[#helm_output]
 ==== Ausgabe der Helm-Charts
 
 Als nächstes steht nun die Einrichtung in {CMK} an.
@@ -293,6 +299,35 @@ dmVyLWNhQDE2NjIxNDc5NTMwHhcNMjIwOTAyMTk0NTUzWhcNMzIwODMwMTk0NTUz
 
 Halten Sie Shell mit diesen Informationen bereit oder kopieren Sie sie an einen Ort an dem Sie währen der folgenden Einrichtung in {CMK} sofort darauf zugreifen können.
 
+Wenn Sie die beiden vorherigen Export-Befehle ausgeführt haben, können Sie mit dem letzten Befehl können prüfen, ob die Einrichtung erfolgreich war:
+
+[{shell}]
+----
+curl -H "Authorization: Bearer $TOKEN" \http://$NODE_IP:$NODE_PORT/metadata | jq
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100  1815  100  1815    0     0   126k      0 --:--:-- --:--:-- --:--:--  126k
+{
+  "cluster_collector_metadata": {
+    "node": "mynode",
+    "host_name": "myrelease-checkmk-cluster-collector-58f97df9c9-mdhsw",
+    "container_platform": {
+      "os_name": "alpine",
+      "os_version": "3.15.4",
+      "python_version": "3.10.4",
+      "python_compiler": "GCC 10.3.1 20211027"
+    },
+    "checkmk_kube_agent": {
+      "project_version": "1.0.1"
+    }
+  }
+  ...
+----
+
+Am Anfang die stark gekürzten Ausgabe sehen beispielsweise die Version des Cluster-Collector.
+Weiter unten würden dann noch Meta-Informationen zu allen Nodes in diesem Cluster folgen.
+
+
 == Monitoring in {CMK} einrichten
 
 Als nächstes geht es in der GUI von {CMK} an die Einrichtung des xref:glossar#special_agent[Spezialagenten] und einer Regel für die automatische Erzeugung von Hosts für Ihre Kubernetes-Objekte.
@@ -306,7 +341,7 @@ Das Passwort (Token) des Service-Accounts können Sie am besten im Passwortspeic
 Das ist die sicherste Variante, da Sie Hinterlegung und Benutzung des Passworts organisatorisch trennen können.
 Alternativ geben Sie es beim Anlegen der Regel (siehe weiter unten) direkt im Klartext ein.
 
-Fügen Sie das Passwort in den {CMK}-Passwortspeicher ein mit [.guihint]#Setup > General > Passwords > Add password# z.B. unter der ID und dem Titel `kubernetes`:
+Fügen Sie das Passwort in den {CMK}-Passwortspeicher ein mit [.guihint]#Setup > General > Passwords > Add password# z.B. unter der ID und dem Titel `My Kubernetes Token`:
 
 image::kubernetes_password.png[]
 
@@ -326,7 +361,7 @@ image::kubernetes_ca.png[]
 
 Erzeugen Sie in {CMK} auf gewohnte Weise einen neuen Host und nennen Sie diesen beispielsweise `mykubernetesclusterhost`.
 Wie Überschrift und Host-Name schon nahelegen, dient dieser Host dazu die Piggyback-Daten zu sammeln und außerdem alle Services und Metriken auf Cluster-Ebene abzubilden.
-Da dieser Host ausschließlich über den Spezialagenten Daten erhält, setzen Sie in den Eigenschaften des Hosts die Option [.guihint]#IP address family# auf [.guihint] unbedingt auf #No IP#.
+Da dieser Host ausschließlich über den Spezialagenten Daten erhält, setzen Sie in den Eigenschaften des Hosts die Option [.guihint]#IP address family# auf unbedingt auf [.guihint]#No IP#.
 
 image::monitoring_kubernetes_no_ip.png[alt="Beispielhafte Einrichtung eines Cluster-Hosts mit der wichtigen Einstellung 'No IP'."]
 
@@ -353,6 +388,23 @@ Der Abschnitt [.guihint]#Connection Properties# dieses neuen Konnektors könnte 
 
 image::monitoring_kubernetes_connection_properties.png[alt="Beispielhafte Einstellungen einer dynamische Host-Konfiguration."]
 
+=== Periodische Serviceerkennung anpassen
+
+Standardmäßig führt {CMK} alle zwei Stunden eine Serviceerkennung durch und zeigt das Ergebnis dieser Erkennung im Service [.guihint]#Check_MK Discovery# an.
+Sie finden diese Einstellung im Regelsatz [.guihint]#Periodic service discovery#.
+Im Kontext von Kubernetes empfehlen wir eine Regel für alle Hosts mit dem Label `cmk/kubernetes:yes` zu erstellen.
+Sie sollten hier ein kürzeres Intervall für die Serviceerkennung wählen und auch die Option [.guihint]#Automatically update service configuration# aktivieren.
+Die Einstellungen im folgenden Screenshot sind nur exemplarisch.
+Was für Ihre Cluster Sinn ergibt müssen Sie von Fall zu Fall entscheiden.
+
+image::monitoring_kubernetes_periodic_service_discovery.png[alt="Exemplarische Einrichtung der periosischen Serviceerkennung für Kubernetes-Objekte."]
+
+Um diese Regel auf alle Hosts Ihrer Cluster zu beschränken genügt es bei den [.guihint]#Conditions# unter [.guihint]#Host labels# `cmk/kubernetes:yes` einzutragen.
+Wollen Sie jedoch für verschiedene Cluster auch verschiedene Regel erstellen zu verwenden Sie hier einfach das jeweilige Cluster-spezifische Label.
+Diese Labels haben immer die Form `cmk/kubernetes/cluster:mycluster`.
+
+image::monitoring_kubernetes_periodic_service_discovery_conditions.png[alt="Exemplarische Einschränkung auf Hosts mit einem Cluster-spezifischen Label."]
+
 
 [#rule]
 === Spezialagent einrichten
@@ -361,32 +413,20 @@ Nachdem nun alle Voraussetzungen im Cluster und in {CMK} geschaffen sind, könne
 Diese finden Sie über [.guihint]#Setup > Agents > VM, Cloud, Container > Kubernetes#.
 
 Zuallererst müssen Sie einen Namen für das zu überwachende Cluster vergeben.
-// TK: Die Texte zu den einzelnen Parametern sind schon seeeeehr weit vom Screenshot unten weg.
 Diesen Namen können Sie frei wählen.
 Er dient dazu alle Objekte, die aus genau diesem Cluster stammen mit einem eindeutigen Namen zu versehen.
 Wenn Sie hier beispielsweise `mycluster` eintragen, werden die Namen der Hosts aller Pods aus diesem Cluster später mit `pod_mycluster` beginnen.
 Der nächste Teil des Host-Namens wird dann immer der Namespace sein, in dem dieses Kubernetes-Objekt existiert.
-// TK: also pod_myclustermynamespace?
+Der Hostname eines Pods könnte dann beispielsweise `pod_mycluster_kube-system_svclb-traefik-8bgw7` lauten.
 
 Wählen Sie unter [.guihint]#Token# nun den xref:token[zuvor angelegten Eintrag] aus dem Passwortspeicher von {CMK} aus.
 
+image::monitoring_kubernetes_cluster_name_and_token.png[alt="Beispielhafter Cluster-Name und Auswahl des Tokens"]
+
 Unter [.guihint]#API server connection > Endpoint# verlangt {CMK} nun die Eingabe der URL (bzw. IP-Adresse) über welche ihr Kubernetes API Server erreichbar ist.
-Die Angabe des Ports ist hier ebenfalls notwendig, wenn der Dienst nicht über einen virtuellen Host bereitgestellt wurde.
-Wie Sie diese IP-Adresse am einfachsten herausfinden können -- falls Sie sie nicht bereits zur Hand haben -- hängt von Ihrer Kubernetes-Umgebung ab.
-Mit dem folgenden Befehl erhalten Sie den Endpunkt des API-Servers als IP-Adresse und Port, den Sie als letzten Eintrag unter `server` in der gekürzten Ausgabe finden:
-
-[{shell-raw}]
-----
-{c-user} kubectl config view
-apiVersion: v1
-clusters:
-  - cluster:
-    certificate-authority-data: DATA+OMITTED
-    server: https://10.73.42.21:6443
-    name: my-kubernetes
-----
-
-Wird der Server über einen DNS-Eintrag bereitgestellt, wird die Ausgabe stattdessen eher so aussehen:
+Die Angabe des Ports ist nur notwendig, wenn der Dienst nicht über einen virtuellen Host bereitgestellt wird.
+Wie Sie diese Adresse am einfachsten herausfinden können -- falls Sie sie nicht bereits zur Hand haben -- hängt von Ihrer Kubernetes-Umgebung ab.
+Mit dem folgenden Befehl erhalten Sie den Endpunkt des API-Servers in der Zeile `server`:
 
 [{shell-raw}]
 ----
@@ -399,44 +439,43 @@ clusters:
     name: xyz:aws:eks:eu-central-1:150143619628:cluster/my-kubernetes
 ----
 
-Wenn Sie die CA Ihres Clusters - xref:certimport[wie oben beschrieben] - in {CMK} hinterlegt haben, können Sie unter [.guihint]#SSL certificate verification# den Eintrag [.guihint]#Verify the certificate# auswählen.
-// TK: Warum "Wenn"? Ist doch oben nicht als optional beschrieben.
+Die tatsächlich Ausgabe von `kubectl config view` variert allerdings sehr stark. Wird hier in der Zeile `server` auch ein Port angegeben, so fügen Sie diese unbedingt auch in der Regel ein.
 
-Sollte Ihr Kubernetes API Server nur über einen Proxy erreichbar sein oder für die Verbindung spezielle Timeouts benötigt werden, können Sie diese unter [.guihint]#HTTP proxy# und [.guihint]#TCP timeouts# eintragen.
-// TK: Den Satz kannste streichen.
+Wenn Sie diese Anleitung bisher Schritt für Schritt befolgt haben und die CA Ihres Clusters - xref:certimport[wie oben beschrieben] - in {CMK} hinterlegt haben, wählen Sie unter [.guihint]#SSL certificate verification# den Eintrag [.guihint]#Verify the certificate# aus.
 
 Als Nächstes haben Sie die Wahl das Monitoring Ihres Kubernetes-Clusters mit Nutzungsdaten anzureichern, welche der {CMK} Cluster-Collector einsammelt.
-Dazu müssen Sie unter [.guihint]#Collector NodePort/Ingress endpoint# Protokoll, URL und Port des Cluster-Collectors angeben.
-Wenn Sie die Einrichtung mit unseren Manifesten vorgenommen haben, ist der Port hier standardmäßig `30035`.
-Falls Sie den Port in der Datei `service.yaml` angepasst haben, so ändern Sie den Port hier entsprechend.
-Die URL bzw. die IP-Adresse des Nodeport sollte sich über die Beschreibung des Pods `cluster-collector` herausfinden lassen.
-// TK: Das klingt schon sehr vage (oder schwammig?): Die URL ... ermitteln Sie über die Beschreibung ...
-// TK: NodePort oder Nodeport?
-Führen Sie dazu einfach den folgenden Befehl aus und schauen Sie in der Ausgabe in der Zeile nach, die mit `Node:` beginnt:
 
-[{shell}]
-----
-{c-user} kubectl describe pod $(kubectl get pods --no-headers -o custom-columns=":metadata.name") | grep -A5 Name:.*cluster-collector
-Name:         cluster-collector-5b7c8468cf-5t5hj
-Namespace:    checkmk-monitoring
-Priority:     0
-Node:         minikube/[green]#172.16.23.2#
-Start Time:   Wed, 03 Mar 2022 20:54:45 +0100
-Labels:       app=cluster-collector
-----
+Wir wiederholen es an dieser Stelle ein weiteres Mal, im die Wichtigkeit erneut zu unterstreichen:
+Die Einrichtung des Cluster-Collectors ist für ein vollumfängliches Monitoring Ihrer Cluster absolut unerlässlich.
+Nur so erhalten Sie wichtige Daten wie CPU- und Speicherauslastung und werden über die Dateisysteme der einzelnen Komponenten informiert.
 
-Mit den Optionen [.guihint]#Collect information about...# können Sie nun endgültig auswählen, welche Objekte innerhalb Ihres Cluster denn überwacht werden sollen.
+Aktivieren Sie also die Option [.guihint]#Enrich with usage data from Checkmk Cluster Collector# und geben Sie den Endpunkt des NodePorts bzw. des Ingress an, welchen Sie bei der Installation über die Helm-Charts ausgegeben haben.
+
+Mit den Optionen [.guihint]#Collect information about...# können Sie nun noch auswählen, welche Objekte innerhalb Ihres Cluster überwacht werden sollen.
 Unsere Vorauswahl deckt hier die relevantesten Objekte ab.
 Sollten Sie sich dazu entscheiden auch die [.guihint]#Pods of CronJobs# zu überwachen, so beachten Sie die xref:user_interface#inline_help[Inline-Hilfe] zu diesem Punkt.
 
-Zu guter Letzt können Sie noch auswählen, ob Sie nur bestimmte Namespaces innerhalb Ihres Clusters überwachen möchten oder ob explizite Namespaces aus der Überwachung ausgeschlossen werden sollen.
-Dies legen Sie über die Option [.guihint]#Monitor namespaces# fest.
+Mit den nächsten beiden Auswahlmöglichkeiten, können Sie die zu überwachenden Objekte weiter eingrenzen.
+Falls Sie sich nur für die Objekte aus bestimmten Namensräumen interessieren, stellen Sie dies entsprechend unter [.guihint]#Monitor namespaces# ein.
+Hier können entweder einzelne Namensräume, die überwacht werden sollen eintragen, oder aber einzelne Namensräume explizit vom Monitoring ausschließen.
 
-Ihre Regel könnte jetzt wie folgt aussehen:
+Mit der Option [.guihint]#Cluster resource aggregation# können Sie Nodes bennen, welche keine Resourcen für die Arbeitslast Ihres Clusters zur Verfügung stellen.
+Diese Nodes sollten aus der Berechnung der zur Verfügung stehenden Resources ausgenommen werden.
+Ansonsten besteht die Gefahr, dass Kapazitätsengpässe nicht erkannt werden.
+Standardmäßig nehmen wir beispielsweise schon die Nodes `control-plane` und `infra` aus Berechnung raus.
+
+image::monitoring_kubernetes_namespaces_and_resource_aggregation.png[alt="Beispielhafte Konfiguration für Namensräume und Resourcen-Aggregation"]
+
+Als letzte Option können Sie noch sogenannte _Annotations_ aus Kubernetes importieren.
+In {CMK} werden diese _Annotations_ zuxref:wato_rules.html#hosttags[Host-Merkmalen] und können somit als Konditionen in Regeln weiterverwendet werden.
+Welche _Annotations_ importiert werden sollen, können über reguläre Ausdrücke festlegen.
+Konsultieren Sie an dieser Stelle bitte erneut die ausführliche Inline-Help.
+
+Nachdem Sie nun alles eingerichtet haben, könnte Ihre Regel wie folgt aussehen:
 
 image::monitoring_kubernetes_rule.png[alt="Exemplarisch ausgefüllte Regel für den Kubernetes Spezialagenten."]
 
-*Wichtig:* Unter [.guihint]#Conditions > Explicit hosts# müssen Sie nun den xref:source-host[zuvor angelegten Host] eintragen:
+*Wichtig:* Unter [.guihint]#Conditions > Explicit hosts# *müssen* Sie nun den xref:source-host[zuvor angelegten Host] eintragen:
 
 image::monitoring_kubernetes_explicit_hosts.png[alt="Regeln für Spezialagenten müssen, wie hier zu sehen, immer auf explizite Hosts festgelegt werden."]
 
@@ -455,6 +494,7 @@ Diese wird schon nach kurzer Zeit alle Hosts für Ihre Kubernetes-Objekte erzeug
 Alle Labels zu Kubernetes-Objekten, die {CMK} automatisch erzeugt, beginnen mit `cmk/kubernetes/`.
 Ein Pod erhält beispielsweise immer ein Label der Node (`cmk/kubernetes/node:mynode`), ein Label, welches eben zeigt, dass es sich bei diesem Objekt um einen Pod handelt (`cmk/kubernetes/object:pod`) und ein Label für den Namespace (`cmk/kubernetes/namespace:mynamespace`).
 So lassen sich in der Folge sehr einfach Filter und Regeln für alle Objekte gleichen Typs bzw. im gleichen Namespace erstellen.
+
 
 == Dashboards und Ansichten
 
@@ -492,6 +532,32 @@ Auf dem gleichen Weg - also über die Boxen mit den großen Namen der jeweiligen
 Im folgenden Beispiel sehen Sie die HW-/SW-Inventur eines Pods:
 
 image::kubernetes_monitoring_hw_sw_inventory.png[width=88% alt="Exemplarische Ansicht der Hardware- und Software-Inventur eines Pods"]
+
+//SK: Der folgenden Abschnitt könnte natürlich auch früher kommen. Aber dann beschreibt man ständig die Dashbaords, die dann halt erst weiter unten beschrieben wären. Deshalb habe ich mich entschieden den Abschnitt "Prüfung" erst darunter zu bringen.
+== Prüfung der Installation
+
+Im Abschnitt xref:#helm_output[Ausgabe der Helm-Charts] haben Sie bereits die erste Möglichkeit kennengelernt, um die erfolgreiche Installation des Monitoring-Komponenten zu prüfen.
+In der GUI von {CMK} können Sie ebenfalls einige Stellen prüfen, um eine erfolgriche Installation und Konfiguration zu prüfen.
+
+Die wichtigsten Services sind hier sicherlich [.guihint]#Kubernetes API# und [.guihint]#Cluster collector#.
+Diese müssen vorhanden auf dem von Ihnen erstellten Cluster-Host vorhanden sein und sollten auch bestimmte Informationen anzeigen.
+Der Service [.guihint]#Kubernetes API# sollte im Normalfall unter [.guihint]#Summary# [.guihint]#Live, Ready# vermelden.
+Der Service [.guihint]#Cluster collector# muss die Versionsnummer des installierten Cluster-Collectors anzeigen.
+Ist eins von beidem nicht der Fall, müssen Sie die Installation der Helm-Charts und Kofiguration des Spezialagenten prüfen.
+
+Weitere Möglichkeiten dies zu prüfen bieten in den {EE} die Cluster-Bashboards.
+
+Im Dashboard [.guihint]#Kubernetes# können Sie bereits sehr früh erkennen, ob der Cluster-Collector in einem Cluster läuft und Daten sammelt.
+Wenn die Spalten [.guihint]#CPU resources# und [.guihint]#Memory resoruces# keine Daten enhalten, ist dies bereits ein starker Indikator, dass der Cluster-Collector nicht ordnungsgemäß läuft.
+Bei korrekter Einrichtung sollte das Dashboard [.guihint]#Kubernetes# in etwa so aussehen:
+
+image:kubernetes_monitoring_validation_dashboard.png[alt="Kubernetes-Dashbaord mit Daten für CPU resources und Memory resources"]
+
+Wenn Sie hier nun auf den Namen des Clusters klicken, landen Sie im Dashboard [.guihint]#Kubernetes Cluster# des jeweiligen Clusters.
+Hier sollten die drei Boxen [.guihint]#Primary datasource#, [.guihint]#Cluster collector# und [.guihint]#API health# grün sein und [.guihint]#OK# anzeigen.
+
+image::monitoring_kubernetes_cluster_state.png[alt="Funktionierendes Cluster-Monitoring."]
+
 
 [#rancher]
 == Kubernetes in Rancher-Installationen
@@ -547,6 +613,7 @@ image::rancher_kubeconfig.png[]
 Das Zertifikat müssen Sie noch dekodieren, auf der Kommandozeile beispielsweise mit `base64 --decode` oder in einem der vielen nline-Dienste.
 
 Die Einrichtung in {CMK} entspricht ab hier dem Vorgehen bei purer Kubernetes-Nutzung ab dem Abschnitt xref:certimport[Zertifikat in {CMK} importieren].
+
 
 == {CMK} entfernen
 
