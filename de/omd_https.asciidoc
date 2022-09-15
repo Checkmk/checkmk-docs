@@ -19,7 +19,7 @@ xref:ldap#[Benutzerverwaltung mit LDAP/Active Directory]
 // TK: Meine generellen Kommentare stehen im Ticket
 
 
-== Voraussetzungen
+== Einleitung
 
 Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann müssen Sie auf Ihrem Monitoring-Server -- unabhängig von Ihren Instanzen -- folgende Voraussetzungen schaffen:
 
@@ -28,53 +28,20 @@ Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann müss
 * Der Server ist über HTTPS erreichbar.
 * Das Rewrite- und das Headers-Modul für den Webserver sind vorhanden und geladen.
 
-// Neu.
 Was dafür zu tun ist, erklärt dieser Artikel.
-// TK: Nur zum Teil: Wie man überprüft, dass `mod_ssl` und das Rewrite- und Headers-Modul für den Webserver da sind, wird nicht beschrieben.
 
 == Apache-Module aktivieren
 
-// MA: Mir ist nicht klar, weshalb das Kapitel in der Unterpunkte gegliedert ist. Vor
-// MA: allem deshalb, weil sie in sich auch sehr kurz sind und nur jeweils einen
-// MA: SChritt beinhalten. Was spricht dagegen, die Anleitung der Module in ein
-// MA: Kapitel ohne Unterpunkte zu packen?]
+Die HTTPS-Absicherung der {CMK}-Oberfläche benötigt das Apache-Modul `mod_ssl`, wir gehen im weiteren Verlauf der Einrichtung zudem davon aus, dass eine eingehende Verbindung auf den unverschlüsselten Port 80 auf den SSL verschlüsselten Port 443 weitergeleitet werden soll. Hierfür sind die Module `mod_headers` und `mod_rewrite` nötig. 
 
-=== Geladene Module anzeigen
-
-Verwenden Sie das Kommando `apachectl` (alte CentOS- und RHEL-Versionen benötigen möglicherweise stattdessen `httpd`), um eine Liste der geladenen Apache-Module anzuzeigen:
+Verwenden Sie das Kommando `apachectl` (alte CentOS- und RHEL-Versionen benötigen möglicherweise stattdessen `httpd`), um die geladenen Module anzuzeigen. Mit `grep` prüfen Sie gleich, ob alle drei benötigten Module vorhanden sind:
 
 [{shell}]
 ----
-{c-root} *apachectl -M*
-Loaded Modules:
- core_module (static)
- so_module (static)
- watchdog_module (static)
- http_module (static)
- log_config_module (static)
- logio_module (static)
- version_module (static)
- unixd_module (static)
- access_compat_module (shared)
- alias_module (shared)
- [...]
+{c-root} *apachectl -M | grep -E 'headers|rewrite|ssl'*
+ headers_module (shared)
+ rewrite_module (shared)
 ----
-
-// MA: Auslassungszeichen wollen wir eigentlich vermeiden. Stattdessen hat es sich
-// MA: eingebürgert, dass wir es im Fließtext vorher ankündigen, dass die Ausgabe
-// MA: (z.B. aus Gründen der Übersichtlichkeit) gekürzt ist. So vermeidet man
-// MA: [...] oder ... und damit im Zweifel die Verwirrung, ob sie Teil der Ausgabe
-// MA: sind, oder nicht. Generell gilt: Pro Kommandozeilenausgabe nur ein Kommando
-// MA: und ggf. die Ausgabe dazu.
-
-Sind in der angezeigten Liste `headers_module`, `rewrite_module` und `ssl_module` bereits geladen, können Sie die nächsten beiden Schritte überspringen.
-
-// MA: Es scheint mir hier eine Ausnahme zu sein, dass sie nicht geladen sind. Damit
-// MA: klingt es mir eher, wie ein Teil für das Troubleshooting, wenn etwas nicht
-// MA: funktioniert. Umgekehrt ist es verwirrend, direkt mit dem "Troubleshooting"
-// MA: anzufangen.
-
-=== Module aktivieren
 
 Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem Script `a2enmod`. Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an. Die Datei mit Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, `.conf` die eigentliche Konfiguration des Moduls:
 
@@ -83,6 +50,7 @@ Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem 
 // MA: man mit a2enmod auch mehrere Module gleichzeitig aktivieren. Also sozusagen
 // MA: alle, die benötigt werden. Damit würde man sich auch die Prüfung aus
 // MA: Abschnitt 2.1 sparen.
+// MFS: Didaktik - der Nutzer soll wissen, was neu zu aktivieren ist, hilft mglw. beim Troubleshooting
 
 [{shell}]
 ----
@@ -93,27 +61,20 @@ To activate the new configuration, you need to run:
 ----
 
 // MFS: Getestet mit CentOS 7, alles davor solle irrelevat sein, globale /etc/httpd/conf/httpd.conf nur nach Update früherer Versionen
-Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl`ein eigenes Paket, das Sie separat installieren müssen:
+Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl` ein eigenes Paket, das Sie separat installieren müssen:
 
 [{shell}]
 ----
 {c-root} *yum install -y httpd mod_ssl*
 ----
 
-Distributionen mit monolithischer Konfiguration erfordern die Anpassung der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` dergestalt, dass die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit wird.
+Ist das Kommando `a2enmod` nicht vorhanden, arbeiten Sie mit einer Distribution, welche die Apache-Konfiguration statt auf Verzeichnisse und viele Einzeldateien aufzuteilen in einer einzigen Konfigurationsdatei vorhält.
+In solch einem Fall muss in der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit werden.
+Analog ist für die beiden anderen Module vorzugehen.
 
-// MA: Der letzte Satz wirkt etwas aus dem Kontext gerissen. Brauche ich das? Wie erkenne ich, ob ich eine Distribution mit monolithischer Konfigration habe? Was ist eine monilithische Konfiguration? Würde ich einfacher beschreiben.
+Ob der Apache-Webserver bereits jetzt oder erst später neu gestartet werden kann, entscheidet sich an der Frage, ob bei der Installation von Apache einfache, selbst signierte Zertifikate automatisch erzeugt wurden.
 
-=== Apache neu starten
-
-// MA: Ganz schön langer Absatz dafür, dass ich eigentlich nur den apache2
-// MA: neustarten soll. Ich habe den Eindruck, dass die Zertifikate spÄter behandelt
-// MA: werden sollten, geht es in Abschnitt 2 doch dem Titel zufolge nur darum,
-// MA: wie ich sicherstelle, dass die notwendigen Module im apache2 geladen sind.
-
-Nach der Aktivierung der Module muss der Apache-Webserver neu gestartet werden. Falls Ihre Distribution bereits bei der Apache-Installation ein selbst signiertes Zertifikat für Testzwecke erzeugt hat, werfen Sie bitte einen Blick in die Datei `/etc/apache2/mods-enabled/ssl.conf` und prüfen Sie. ob die hier angegebenen Zertifikatsdateien vorhanden sind. 
-
-Ob bei der Installation oder Aktivierung des SSL-Moduls ein Zertifikat erstellt wurde, erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Dateien existieren (bei RHEL ist als Startverzeichnis der Suche `/etc/httpd` anzugeben):
+Dies erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Dateien existieren (bei RHEL ist als Startverzeichnis der Suche `/etc/httpd` anzugeben):
 
 [{shell}]
 ----
@@ -122,20 +83,21 @@ Ob bei der Installation oder Aktivierung des SSL-Moduls ein Zertifikat erstellt 
 /etc/apache2/sites-available/default-ssl.conf:33: SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
 ----
 
-Falls kein automatisch erstelltes Zertifikat vorhanden ist, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben.
+Prüfen Sie, ob die in der Konfigurationsdatei angegebenen Dateinamen existieren.
+Falls kein automatisch erstelltes Zertifikat vorhanden ist, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben – sonst schlägt der Neustart fehl.
 
 // MA: Warum? Mache ich etwas kaputt, wenn ich die Module schon lade, obwohl ich keine Zertifikate eingestellt habe?
+// MFS: Ergänzt.
 
-Wurden Schlüssel und Start automatisch erzeugt, starten Sie mit einem der folgenden Befehle den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` ist der erste Befehl zu verwenden:
+Wurden Schlüssel und Start automatisch erzeugt, starten Sie den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` ist der erste Befehl zu verwenden:
 
 [{shell}]
 ----
 {c-root} systemctl restart apache2
-{c-root} systemctl restart httpd
-{c-root} service apache2 restart
-{c-root} /etc/init.d/apache2 restart
-{c-root} /etc/init.d/httpd restart
 ----
+
+Wieder gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
+Passen Sie in diesem Fall den Befehl an.
 
 // MA: Sehr unübersichtlich. Pro Kommandozeilenbeispiel immer nur ein Kommando
 // MA: verwenden. Da es hier normalerweise keine Ausgabe gibt, könnte man sich ein
@@ -155,56 +117,61 @@ Wurden Schlüssel und Start automatisch erzeugt, starten Sie mit einem der folge
 Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat zu gelangen:
 // TK: Ich würde die Reihenfolge umstellen, ist logischer und ausserdem kommt der Riemen dann am Schluss: 1. oldschoolcsr 2. letsencrypt 3. becomeca
 
-* Sie bezahlen für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_).
-Je nach Stufe der Validierung wird nur geprüft, ob Sie Webmaster einer Domain sind oder es müssen Handelsregisterauszüge eingereicht werden.
-Nachteil: das Verfahren kostet Geld und verursacht Verwaltungsaufwand.
+* Sie greifen auf einen externen Dienstleister für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_) zurück, dessen Root-Zertifikat von Browser- und Betriebssystemherstellern vertraut wird.
+Dieses Verfahren erlaubt auch Organisations-Validierung und höher, wie sie in einigen Branchen aus regulatorischen Gründen verpflichtend ist.
+// Je nach Stufe der Validierung wird nur geprüft, ob Sie Webmaster einer Domain sind oder es müssen Handelsregisterauszüge eingereicht werden.
+// Nachteil: das Verfahren kostet Geld und verursacht Verwaltungsaufwand.
 // TK: Registergericht problematisch: als Info für D kennzeichnen
 // MFS: Das prinzipielle Vorgehen ist in jeder Jurisdiktion gleich, Englisch: trade register, oder commercial register
 // MA: Generell ziemlich wertend. Der Nachteil mit dem Geld betrifft aus meiner Sicht nur Privatpersonen.
+// MFS: Weg der Validierung hier nicht mehr, stattdessen 
 * Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Letsencrypt_].
-Nachteil: Sie müssen entweder Zugriff auf den Server haben, dessen Zertifikate Sie ausstellen wollen (und der muss von außen erreichbar sein), oder Sie müssen im Nameserver Ihrer Domain Einträge anlegen und ändern können.
-// TK: "im DNS TXT-Einträge anlegen": ist mir nicht klar, was das bedeutet
-// MFS: allgemein formuliert, Details später
+Dieses Verfahren erlaubt nur Validierung auf Domain-Ebene.
+Um Zertifikate anfordern zu können, muss der abzusichernde Server von außen erreichbar sein oder Sie müssen die Möglichkeit haben, (automatisiert) Einträge im öffentlichen DNS der verwendeten Domain anzulegen.
+// Nachteil: Sie müssen entweder Zugriff auf den Server haben, dessen Zertifikate Sie ausstellen wollen (und der muss von außen erreichbar sein), oder Sie müssen im Nameserver Ihrer Domain Einträge anlegen und ändern können.
 * Sie werden Ihre xref:becomeca[eigene _Certificate Authority_ (CA)] und erzeugen Zertifikate selbst.
-Nachteil: Sie müssen strikte Sicherheitsregeln einhalten und die CA in die Browser der Nutzer importieren, die {CMK} verwenden sollen.
+Das Root-Zertifikat der eigenen CA muss auf allen Rechnern vorhanden sein, die mit Servern kommunizieren, die mit dem CA-Schlüssel signierte Zertifikate verwenden.
+Zudem sollten im Umgang mit der eigenen CA hohe Sicherheitsstandards eingehalten werden, da mit ihr Zertifikate für beliebige Domains ausgestellt werden können.
+// Nachteil: Sie müssen strikte Sicherheitsregeln einhalten und die CA in die Browser der Nutzer importieren, die {CMK} verwenden sollen.
 // MA: Wir wollen eigentlich "müssen" vermeiden. Was sind das für Sicherheitsregeln? Was passiert, wenn ich sie nicht einhalte? Der Punkt ist sehr unkonkret.
+// MFS: "sollten" und konkreter. In dem Fall ist "sollten" aber eigentlich "müssen", weil bei Nichteinhaltung Schaden droht.
 
 [#oldschoolcsr]
 === Zertifikate per CSR erhalten
 
 Zertifikate bei einer kommerziellen Certificate Authority signieren zu lassen, war lange Zeit der einzige Weg, von allen Browsern und Betriebssystemen akzeptierte Zertifikate zu erhalten. 
-Dieses Verfahren ist heute insbesondere dann noch üblich, wenn lange Gültigkeitszeiträume oder Validierung auf Organisationsebene (Organization Validation, kurz OV) oder höher (Extended Validation, kurz EV) erwünscht ist.
+Dieses Verfahren ist heute insbesondere dann noch üblich, wenn lange Gültigkeitszeiträume erwünscht ist.
+Es ist erforderlich, wenn Validierung auf Organisationsebene (Organization Validation, kurz OV) oder höher (Extended Validation, kurz EV) benötigt wird.
 // TK: "Organisationsebene oder höher": ?
 //  MFS: bspw. Bestätigtung, dass die Domain checkmk-topsupport.com auch wirklich tribe29 GmbH gehört, ist OV
 // MA: Da das eher Insiderwissen ist, hätte ich eher auf einfache Beispiele verwiesen. Der Fokus des Artikels ist ja u.a.: "Ich hab jetzt einen CMK-Server. Was muss ich tun, damit der nur noch über HTTPS erreichbar ist?" Hilft die Einleitung, besser zu vertehen, weshalb ich eine CSR benötige und was eine CSR ist? Bisher ist mir nur gezeigt worden, was hinter der Abkürzung steht.
 
-Die Kosten für dieses Verfahren liegen zwischen gratis (3 Monate Gültigkeit, ein Hostname), wenigen Euro (12 Monate, ein Hostname) und mehreren hundert Euro (24 Monate, mehrere Hostnamen, Validierung auf Organisationsebene).
-//SP: Ich würde den ersten Satz teilen, da er sehr lang und unübersichtlich ist. Eine Frage am Rande: Wollen wir wirklich fixe Preise nennen? Preise können sich schnell ändern, es handelt sich um Preise die nicht im Einflussbereich unseres Unternehmens liegen, ist uns jede Änderung bekannt etc.
-// TK: Ähnlicher Einwand zu den Preisen. Vielleicht so: von gratis über wenige Euro bis zu mehreren hundert Euro
-// TK: Kann man hier nicht eine oder ein paar CA verlinken? Was ist damit? https://www.globalgap.org/de/what-we-do/the-gg-system/certification/Approved-CBs/index.html
-// MFS: Die zertifizieren nicht im SSL-Bereich, sondern Zertifizierungsstellen für landwirtschaftliche Normen
-// MFS: Zertifizierungsstellen zu verlinken, ist schwierig, weil viele der schnellen günstigen mit IM-Zertifikaten der "großen" als schnelle, günstige Quasi-Reseller auftreten, per Suchmaschine zu suchen oder die vom eigenen Webhoster empfohlene Zertifizierungsstelle zu untzen, ist daher der beste Weg
-// MA: Auch ich würde den Absatz streichen - er bringt mir keinen erkennbaren Mehrwert, der mir hilft, zu verstehen, wie ich eine CSR erhalte.
+Die Abfolge ist, dass Sie zunächst den privaten Serverschlüssel erzeugen und dann für diesen ein _Certificate Signing Request_ erstellen, welches Sie an den ausgewählten Anbieter übertragen.
+Der prüft dann die Inhaberschaft der Domain, bestätigt das CSR mit seinem Schlüssel und schickt Ihnen das resultierende Serverzertifikat.
 
+[#createcsr]
 ==== Schlüssel und CSR erzeugen
 
-Der Standardweg ist, zunächst den privaten Server-Schlüssel zu erzeugen.
-Diesen Schritt können Sie direkt auf dem Server durchführen können, auf dem Ihre {CMK}-Instanz läuft:
-// TK: Zu meinem Verständnis: einen privaten Schlüssel erzeugen, der für das Zertifikat des Servers verwendet werden soll?
-// TK: Ist es nicht umgekehrt? Durch CMK bekomme ich erst einen Webserver, für den ich jetzt HTTPS einrichten muss?
-// MFS: Ich gehe davon aus, dass CMK bereits läuft, bislang unverschlüsselt. Zunächst muss dafür der private Serverschlüssel erzeugt werden, der auf dem Server verbleiben kann
+Zunächst erzeugen Sie den privaten Server-Schlüssel.
+Diesen Schritt können Sie direkt auf dem Server durchführen, auf dem die abzusichernde {CMK}-Instanz läuft.
+
+Der Ordner `/etc/certs` entspricht dem Standard vieler Distributionen, Sie können aber jeden beliebigen Ordner verwenden, auf den der Apache-Prozess lesend zugreifen kann.
+Den Schlüssel nach dem primären Domainnamen zu benennen, für den er verwendet wird, dient hier der besseren Übersicht.
+Insbesondere wenn später weitere Hostnamen hinzukommen sollten, für die eigene Schlüssel/Zertifikate verwendet werden, erleichtert dieses Namensschema die Zuordnung:
 
 [{shell}]
 ----
-{c-root} *mkdir /etc/certs*
-{c-root} *cd /etc/certs*
-{c-root} *openssl genrsa -out checkmk.mydomain.com.key 2048*
+{c-root} *openssl genrsa -out /etc/certs/checkmk.mydomain.com.key 2048*
+Generating RSA private key, 2048 bit long modulus (2 primes)
+.....+++++
+...............................................................+++++
+e is 65537 (0x010001)
 ----
 // TK: Kommandoausgabe sagt, dass ich einen "RSA private key" erzeuge: siehe Frage von oben?
 // MFS: Das ist korrekt, dieser Schlüssel dient später dazu, den TLS-Verkehr zu verschlüsseln
 // MA: Auch hier wieder mehrere Kommandos in einem prompt-Beispiel. Diesmal sogar ohne Ausgabe, damit ich nachprüfen kann, ob es bei mir ähnlich aussieht. Hier fehlt mir einiges: Eine Erläuterung, weshalb ich ein Verzeichnis unter /etc erzeugen soll, was das openssl-Kommando denn nun mit genau diesen Optionen macht und warum ich das eigentlich mache. TK hatte ja dasselbe Problem. Dem Leser wird nicht zwangsläufig klar, was er und warum er es tut. Wofür benötigt er einen privaten Server-Schlüssel? Was macht der? Wir sollten auch midnestens einmal pro Artikel erwähnen, dass "checkmk.mydomain.com.key" ein Beispiel ist, welches wir hier verwenden.
 
-Im nächsten Schritt erstellen Sie das "Certificate Signing Request":
+Im nächsten Schritt erstellen Sie das _Certificate Signing Request_:
 // MA: Was genau ist denn nun ein "Certificate Signing Request"? Das sollte direkt am Anfang kurz geklärt werden, damit man dem Rest besser folgen kann.
 
 [{shell}]
@@ -231,71 +198,40 @@ A challenge password []:
 An optional company name []:
 ----
 
-// Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen. Die eingetragene E-Mail-Adresse sollte in derselben Domain liegen und zu einem existierenden und gelesenen Postfach gehören.
-// TK: im Bsp. als Common Name checkmk.mydomain.com?
-//SP: Wo werden die Angaben eingetragen? Kann hier ein Screenshot oder ähnliches eingefügt werden?
-// TK: Hier zumindest schreiben, dass mit diesem Kommando diverse Eingaben abgefragt werden (Location, Org, Server-Name, E-Mail...) + Verweis auf das becomeca Kapitel, in dem die beiden Kommandos genau vorgestellt werden.
-// Die CSR-Datei wird nun per Webformular an den Zertifikatsdienstleister übertragen.
-// TK: So schnell geht es doch wohl nicht, oder? Das klingt so, als ob per openssl genrsa Kommando ein Webformular geöffnet wird.
-// TK: Die generierte Dateien checkmk.mydomain.com.csr und checkmk.mydomain.com.key müssen anschließend zur CA geschickt werden, idR per Webformular der CA
-// Je nach Validierungsstufe kann es sein, dass zusätzliche Dokumente wie ein Handelsregistereintrag beigefügt werden müssen.
-// TK: Handelsregistereintrag problematisch: als Info für D kennzeichnen
-// MFS: englischsprachig commercial register oder trade register, Verfahren ist letztlich überall gleich
-// Im einfachsten Fall der reinen Domain-Validierung besteht diese darin, dass das Zertifikat einfach an `webmaster@mydomain.com` oder `postmaster@mydomain.com` geschickt wird. 
-// TK: Ist dieser einfachste Fall etwas, was ich ich im Webformular an die CA auswählen kann?
-// TK: Und muss die EMail dann die sein, die ich in der CSR-Datei hinterlegt habe? 
-// MFS: Wie tief Konsistenz der E-Mail-Adresse gegen anderen Quellen geprüft wird (auch Kontakte im Handle des Registrars), ist den Zertifizierungsstellen überlassen 
-
-// MFS: Nochmal am Stück mit neuen Formulierungen:
 Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen. Die eingetragene E-Mail-Adresse sollte in derselben Domain liegen und zu einem existierenden und gelesenen Postfach gehören.
 
-Die CSR-Datei wird anschließend per Webformular an den von Ihnen ausugewählten Zertifikatsdienstleister übertragen.
-Je nach Validierungsstufe kann es sein, dass zusätzliche Dokumente wie ein Handelsregistereintrag beigefügt werden müssen.
-Im einfachsten Fall der reinen Domain-Validierung besteht diese darin, dass eine E-Mail mit Bestätigungslink an `webmaster@mydomain.com` oder `postmaster@mydomain.com` geschickt wird. Das fertige Zertifikat kann dann aus dem Webfrontend des Dienstleisters heruntergeladen werden oder es wird ebenfalls per E-Mail zugestellt.
+==== Extension-Datei erstellen
 
-// MA: Hier werden sehr viele Annahmen getroffen, die nicht unbedingt zutreffen
-// MA: müssen. Zum Beispiel, dass die csr per Webformular hochgeladen wird. Viel
-// MA: wichtiger finde ich die Info, dass eine CA Vorgaben macht, was in der csr
-// MA: enthalten sein muss, wie sie aufgebaut sein muss und was an zusätzlichen
-// MA: Dokumenten übermittelt werden muss. Auch hier wieder: Wir wollen ja kein
-// MA: Tutorial machen, wie man sich ein Zertifikat einer großen CA holt, sondern
-// MA: beschreiben, wie ich meinen Checkmk-Server über HTTPS laufen lasse.
+Moderne Browser erfordern Zertifikate, welche die Erweiterung für _Alternate Hostnames_ nutzen, selbst wenn sie nur für einen Hostnamen ausgestellt werden. Dies erfordert eine Extension-Datei, welche manche Anbieter automatisch erstellen und integrieren. Ist das nicht der Fall oder Sie sind unsicher, erstellen Sie eine solche Datei:
 
-==== Upload des CSR
+./tmp/checkmk.mydomain.com.ext
+[source]
+----
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
 
-// MA: Bitte keine Dienstleister oder andere Unternehmen nennen, wenn nicht unbedingt
-// MA: nötig. Die Frage, weshalb wir diesen nehmen und keine nanderen drängt sich
-// MA: sofort auf und diskriminiert automatisch die anderen. Im Zweifel wird ein
-// MA: Leser denken, wir empfehlen explizit ZeroSSL. Generell finde ich es schwierig,
-// MA: diesen Prozess komplett zu beschreiben, da es sehr stark anbieterspezifisch
-// MA: ist. Ich finde es auch nicht schlimm, wenn wir genau das schreiben: Es ist
-// MA: Anbieterspezifisch und daher können keine Pauschalen Aussagen getroffen
-// MA: werden.  Aus meiner Sicht besteht der Abschnitt 3.1 aus zwei Komponenten:
-// MA: Was ist eine csr und wofür brauche ich sie? Wie erstelle ich eine csr,
-// MA: wenn ich nicht eh schon einen intern vorgeschriebenen Prozess dafür habe?
+[alt_names]
+DNS.1 = checkmk.mydomain.com
+----
 
+==== Unterlagen einreichen
 
-Die folgenden Screenshots zeigen beispielhaft die wesentlichen Schritte bei Verwendung der Online-Formulare des Dienstleisters link:https://www.zerossl.com/[ZeroSSL^]. Die Verlinkung stellt dabei keine Empfehlung dar, ZeroSSL eignet sich jedoch der wegen drei möglichen 90-Tage-Gratis-Zertifikate pro Nutzerkonto gut für Tests. Die folgenden Screenshots zeigen die für die Zertifikatsanforderung relevanten Schritte
+Je nach angestrebtem Validierungslevel kann es erforderlich sein, weitere Unterlagen wie Handelsregisterauszüge oder Bankdaten zusammenzustellen.
+Da die angeforderten Unterlagen, die Wege der Einreichung und die Wege der Bestätigung von Anbieter zu Anbieter verschieden sind, kann hier keine allgemein gültige Anleitung gegeben werden.
+So kann Extended Validation beispielsweise auch bedeuten, dass per Einschreiben ein Code an Geschäftsführer oder Prokurist verschickt wird, der über ein Webformular eingegeben werden muss.
 
-Zunächst wird die Domain angegeben, für die das Zertifikat ausgestellt werden soll. Je nach Dienstleister sind auch Multidomain-Zertifikate mit unterschiedlicher Flexibilität (und Preisgestaltung) möglich:
-
-image::omd_https_zerossl_step01.png[]
-
-Es folgt der Upload des zuvor erzeugten CSR. Einige Zertifizierungsstellen bieten an, Schlüssel und CSR online zu erzeugen. Verzichten Sie aus Sicherheitsgründen darauf und laden Sie die selbst erzeugte Signierungsanfrage hoch:
-
-image::omd_https_zerossl_step02.png[]
+Im einfachsten Fall einer Validierung nur auf Domain-Ebene wird die CSR-Datei und gegebenenfalls die EXT-Datei über ein Webinterface hochgeladen.
+Sie erhalten dann die Möglichkeit, eine E-Mail-Adresse aus den für Admin-C (Inhaber) oder Tech-C (technisch verantwortlicher) der Domain hinterlegten oder generischen E-Mail-Adressen wie `webmaster@domain.tld` auszuwählen.
+An diese Adresse wird dann ein Bestätigungslink verschickt.
 
 ==== Erhalten des Zertifikates
 
-Meist müssen Sie jetzt die Laufzeit angeben (und sich damit für ein Preismodell entscheiden) und daraufhin die E-Mail-Adresse wählen, an die ein Validierungslink oder ein Token (Zeichenkette) für die Eingabe in ein Formular verschickt wird.
-
-image::omd_https_zerossl_step03.png[]
-
-Befolgen Sie die Anweisungen in der E-Mail an die ausgewählte Adresse. So gelangen Sie zu einem Link zum Download des Zertifikates oder Sie bekommen das Zertifikat in einer weiteren E-Mail zugeschickt.
-
-image::omd_https_zerossl_step04.png[]
-
-In unserem Fall enthielt das heruntergeladene Zip-Archiv zwei Dateien: `certificate.crt` (das eigentliche Zertifikat) und `ca_bundle.crt`, die Verkettung ein oder mehrerer Intermediate-Zertifikate. Sie können mit diesen beiden Dateien nun die xref:configsample[Konfiguration des Apache-Servers] durchführen.
+Der Prüfungsvorgang selbst dauert bei Validierung auf Domainebene maximal einige Minuten, bei EV-Validierung mehrere Tage.
+Sobald dieser abgeschlossen ist, erhalten Sie das zu Ihrem Schlüssel gehörende Zertifikat per E-Mail oder Download.
+Neben dem Zertifikat erhalten Sie auch einen Downloadlink zur _Zertifikatskette_ (_Certificate Chain File_).
+Speichern Sie diese unbedingt mit ab. 
 
 [#letsencrypt]
 === Letsencrypt
@@ -321,14 +257,15 @@ Er kommuniziert hierfür über das Protokoll link:https://en.wikipedia.org/wiki/
 
 Es existieren drei Möglichkeiten, Certbot zu installieren. Welche Sie wählen, dürfte vor allem vom Alter der eingesetzten Distribution und den Policies in Ihrem Unternehmen zur Installation aus fremden Paketquellen abhängen:
 
+* Wenn das Paketmanagement Ihrer Linux-Distribution Certbot-Version 1.10 oder höher bereitstellt, kann diese verwendet werden.
+* Certbot ist über das Python-Paketinstallationstool `pip3` aus dem link:https://pypi.org/project/certbot/#[Python Package Index] installierbar. Der Befehl `pip3 install certbot` installiert alle abhängig benötigten Python-Module. 
+* Die EFF bevorzugt auf ihrer link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite] die Installation aus einem Snap-Image. Es gelten die bekannten Vor- und Nachteile des Snap-Paketformates.
 
-* Die EFF empfiehlt auf der link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite] die Installation aus einem Snap-Image. Vorteil der Lösung ist, dass immer ein aktueller Certbot bereitsteht und Abhängigkeiten (beispielsweise zur benötigten Python-Version) problemlos aufgelöst werden. Nachteil der Lösung ist, dass eine Pakete als Dubletten installiert werden und der Platzbedarf relativ hoch ist.
-* Certbot ist über sind über das Python-Paketinstallationstool `pip3` aus dem link:https://pypi.org/project/certbot/#[Python Package Index] installierbar. Der Befehl `pip3 install certbot` installiert alle abhängig benötigten Python-Module. 
-* Falls Sie eine über das Paketmanagement Ihrer Distribution bereitgestellten Certbot-Version installieren wollen, informieren Sie sich über mögliche Einschränkungen: So implementiert Certbot 0.40 in Ubuntu 20.04 zwar das erforderliche ACME v2 Protokoll, unterstützt aber keine ECDSA signierten Zertifikate, was bei Certbot 1.21 in Ubuntu 22.04 der Fall ist.
+
 
 // MA: Ich würde eigentlich nur die dritte Variante erwähnen. Die Installation wirkt jetzt sehr kompliziert und abschreckend.
-
-*Hinweis:* Certbot 0.40 aus Ubuntu 20.04 war die früheste Certbot-Version, mit der wir Stand März 2022 ohne Änderung der Konfiguration Letsencrypt-Zertifikate anfordern konnten. Ältere Versionen mögen ACME v2 fähig sein, decken aber unter Umständen nicht den kompletten Funktionsumfang von ACME v2, lassen DNS-Plugins vermissen oder erfordern teils manuelle Konfiguration.
+// MFS: Deutlich verkürzt
+// *Hinweis:* Certbot 0.40 aus Ubuntu 20.04 war die früheste Certbot-Version, mit der wir Stand März 2022 ohne Änderung der Konfiguration Letsencrypt-Zertifikate anfordern konnten. Ältere Versionen mögen ACME v2 fähig sein, decken aber unter Umständen nicht den kompletten Funktionsumfang von ACME v2, lassen DNS-Plugins vermissen oder erfordern teils manuelle Konfiguration.
 
 // MA: Wenn der Hinweis eine Relevanz in einem späteren Abschnitt hat, sollte der
 // MA: Abschnitt hier schon verlinkt werden. Ansonsten sehe ich den Mehrwert nicht.
@@ -344,472 +281,66 @@ Falls der {CMK}-Server aus dem Internet erreichbar ist und Sie an der Konfigurat
 
 Das Script fragt nun interaktiv einige Informationen zu Kontaktdaten (E-Mail-Kontakt für zusätzliche Informationen wie notwendige Zertifikatsrückrufe) und Installationspfaden ab, am Ende steht die funktionsfähige SSL-Konfiguration.
 
-Da die Parameter des Scriptes gelegentlichen Änderungen unterworfen sind, empfehlen wir, der jeweils aktuellen Anleitung in der Certbot-Dokumentation (link:https://certbot.eff.org/instructions?ws=apache&os=ubuntufocal[hier für Ubuntu 20.04, andere Betriebssysteme per Dropdown auswählbar^]) zu folgen.
+// Da die Parameter des Scriptes gelegentlichen Änderungen unterworfen sind, empfehlen wir, der jeweils aktuellen Anleitung in der Certbot-Dokumentation (link:https://certbot.eff.org/instructions?ws=apache&os=ubuntufocal[hier für Ubuntu 20.04, andere Betriebssysteme per Dropdown auswählbar^]) zu folgen.
 
-// MA: Ich weis nicht... entweder beschreiben wir die Parameter, oder wir erwähnen nur den einfachsten Fall.
-// MA: Ich tendiere zu dem einfachsten Fall und ein Verweis auf eine exakte Dokumentation bei certbot
-// MA: für alle anderen.
+==== Teilautomatische Konfiguration
 
-==== Teilautomatische Konfiguration über Webroot
-
-// MA: Das ganzen beiden folgenden Unterkapitel sehe ich etwas schwierig. Ich würde erwähnen, dass es die Möglichkeiten gibt (webroot und DNS challenge), aber nicht ausführlich beschreiben, wie sie funktionieren. Hier passiert mir allgemein zuviel außerhalb von Checkmk. Es gibt ja hunderte Anleitungen. wie man sich ein letsencrypt-Zertifikat besorgt. Relevanter sehe ich die Information, dass man letsencrypt nutzen kann und was man konkret bezogen auf Checkmk tun muss, damit es läuft.
-
-Ist der {CMK}-Server zwar aus dem Internet erreichbar, aber Sie wollen oder können keine automatische Konfigurationsänderung vornehmen, kann das Certbot-Skript zwar Schlüssel generieren und Zertifikate anfordern, aber die restliche Konfiguration überspringen.
-Sie müssen die weitere Konfiguration dann manuell vornehmen und können die Zertifikate auch für andere Dienste einbinden, die Sie auf dem {CMK}-Server verwenden – zum Beispiel einen Mailserver für Benachrichtigungen.
-
-Zunächst sollten Sie sicherstellen, dass für das Wurzelverzeichnis des Webservers keine Weiterleitung existiert oder zumindest der Ordner `.well-known` xref:apachedefaultconfig[hiervon ausgenommen] ist.
-In diesem Ordner legt das Certbot-Skript eine Datei mit an, deren Inhalt von den Letsencrypt-Servern vorgegeben wird.
-Mit dem Abruf der Datei können die Letsencrypt-Server dann bestätigen, dass derjenige, der das Zertifikat anfordert, Schreibrechte im Webroot des Servers hat.
-
-Jetzt erzeugen Sie per `certbot` Schlüssel und fordern Zertifikate für die verwendete Domain an.
-Der erste Aufruf des Scriptes erfolgt interaktiv:
+Falls Sie wie im letzten Abschnitt beschrieben Zertifikate anfordern, aber die Apache-Konfiguration selbst anpassen wollen, verwenden Sie den Befehl:
 
 [{shell}]
 ----
-{c-root} certbot certonly --webroot -w /var/www/html -d checkmk.mydomain.com
-Saving debug log to /var/log/letsencrypt/letsencrypt.log
-Plugins selected: Authenticator webroot, Installer None
-Enter email address (used for urgent renewal and security notices) (Enter 'c' to
-cancel): *johndoe@mydomain.com*
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Please read the Terms of Service at
-https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf. You must
-agree in order to register with the ACME server at
-https://acme-v02.api.letsencrypt.org/directory
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-(A)gree/(C)ancel: *A*
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Would you be willing to share your email address with the Electronic Frontier
-Foundation, a founding partner of the Let's Encrypt project and the non-profit
-organization that develops Certbot? We'd like to send you email about our work
-encrypting the web, EFF news, campaigns, and ways to support digital freedom.
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-(Y)es/(N)o: *N*
-Obtaining a new certificate
-Performing the following challenges:
-http-01 challenge for checkmk.mydomain.com
-Using the webroot path /var/www/html for all unmatched domains.
-Waiting for verification...
-Cleaning up challenges
-
-IMPORTANT NOTES:
- - Congratulations! Your certificate and chain have been saved at:
-   /etc/letsencrypt/live/checkmk.mydomain.com/fullchain.pem
-   Your key file has been saved at:
-   /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
-[...]
+{c-root} certbot certonly --apache
 ----
 
-Künftige Aufrufe des Skriptes können dann ohne Interaktion erfolgen, hierfür ist der Parameter `-n` hinzuzufügen.
-Manuell auf einem System mit länger als 30 Tage gültigem Zertifikat aufgerufen, wird die Information ausgeben, dass keine Erneuerung notwendig ist:
+Die Konfiguration schließen Sie dann wie unten beschrieben in der Konfigurationsdatei für `mod_ssl` ab.
 
-[{shell}]
-----
-{c-root} *certbot certonly -n --webroot -w /var/www/html -d checkmk.mydomain.com*
-Saving debug log to /var/log/letsencrypt/letsencrypt.log
-Plugins selected: Authenticator webroot, Installer None
-Cert not yet due for renewal
-Keeping the existing certificate
+==== Weitere Möglichkeiten
 
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Certificate not yet due for renewal; no action taken.
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-----
-
-Um Zertifikate automatisch zu erneuern, erstellen Sie ein Shellscript, welches zunächst den letzten Befehl ausführt und anschließend den Apache-Webserver neustartet.
-Lassen Sie dieses Skript einmal pro Woche von einem Cronjob aufrufen, um rechtzeitig vor Zertifikatsablauf ein neues Zertifikat zu erhalten.
-
-Sie können nun mit den Dateien in `/etc/letsencrypt/live/checkmk.mydomain.com` die xref:configsample[Konfiguration des Apache-Servers] durchführen.
-
-==== Teilautomatische Konfiguration über DNS
-
-Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine "DNS-Challenge" vornehmen.
+Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine _DNS-Challenge_ vornehmen.
 Hier wird die Inhaberschaft einer Domain nicht darüber geprüft, Dateien auf dem Webserver ablegen zu können, sondern darüber, dass Sie Einträge im DNS hinzufügen können.
 Dabei kommen keine Einträge zur Anwendung, die einen Hostnamen zu einer IP-Adresse auflösen, sondern sogenannte TXT-Einträge, die beliebige Zeichenketten enthalten können.
 TXT-Einträge werden beispielsweise auch verwendet, um anzugeben, welche Server Mail für eine Domain versenden dürfen.
 
-Die Anforderung der Letsencrypt-Zertifikate muss nicht zwangsläufig auf dem Computer stattfinden, der als {CMK}-Server dient.
-Falls Sie die Anforderung von einem anderen Rechner aus durchführen, müssen Sie die Zertifikate und Schlüssel in `/etc/letsencrypt` anschließend mit `rsync` oder `scp` auf den {CMK}-Server kopieren.
-
-Das erste Zertifikat fordern Sie komplett manuell an:
-
-[{shell}]
-----
-{c-root} *certbot certonly --manual --preferred-challenges dns -d 'checkmk.mydomain.com'*
-Saving debug log to /var/log/letsencrypt/letsencrypt.log
-Plugins selected: Authenticator manual, Installer None
-Enter email address (used for urgent renewal and security notices) (Enter 'c' to
-cancel): *johndoe@mydomain.com*
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Please read the Terms of Service at
-https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf. You must
-agree in order to register with the ACME server at
-https://acme-v02.api.letsencrypt.org/directory
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-(A)gree/(C)ancel: *A*
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Would you be willing to share your email address with the Electronic Frontier
-Foundation, a founding partner of the Let's Encrypt project and the non-profit
-organization that develops Certbot? We'd like to send you email about our work
-encrypting the web, EFF news, campaigns, and ways to support digital freedom.
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-(Y)es/(N)o: *N*
-Obtaining a new certificate
-Performing the following challenges:
-dns-01 challenge for checkmk.mydomain.com
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-NOTE: The IP of this machine will be publicly logged as having requested this
-certificate. If you're running certbot in manual mode on a machine that is not
-your server, please ensure you're okay with that.
-
-Are you OK with your IP being logged?
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-(Y)es/(N)o: *Y*
-
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Please deploy a DNS TXT record under the name
-_acme-challenge.checkmk.mydomain.com with the following value:
-
-cF1LxTIHTk6Fw5y_3nEJ3gr_7sskm5NuugXwnmP10Ps
-
-Before continuing, verify the record is deployed.
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-Press Enter to Continue
-----
-
-Kopieren Sie nun die Zeichenkette und legen Sie einen entsprechenden TXT-Eintrag im DNS Ihrer Domain an. Eine _Time To Live_ von 600 oder 300 Sekunden verringert bei künftigen Aktualisierungen die maximale Wartezeit:
-
-image::omd_https_letsencrypt_dns.png[]
-
-// MA: Das hier ist so ein Beispel. Unter hosteurope sieht es zwar ähnlich aus. Aber hier greifen wir sehr tief in die Wissenskiste und lassen unbedarfte Benutzer zu sehr stehen. Zudem istes nur sinnvoll, wenn der Anbieter überhaupt eine API zur Verfügung stellt, um das automatisiert nutzen zu können. Der Hinweis darauf kommt mir persönlich etwas arg spät.
-
-Prüfen Sie nun an einem beliebigen Rechner, ob der Eintrag erfolgreich hinterlegt wurde:
-
-[{shell}]
-----
-johndoe@localhost:~$ *dig -t TXT _acme-challenge.checkmk.mydomain.com*
-[...]
-;; ANSWER SECTION:
-_acme-challenge.checkmk.mydomain.com.	600 IN TXT "cF1LxTIHTk6Fw5y_3nEJ3gr_7sskm5NuugXwnmP10Ps"
-
-;; Query time: 64 msec
-;; SERVER: 127.0.0.53#53(127.0.0.53)
-;; WHEN: Fr Apr 01 14:35:29 CEST 2022
-;; MSG SIZE  rcvd: 123
-----
-
-Ist der Eintrag noch nicht hinterlegt, warten Sie ein paar Minuten und versuchen es dann erneut.
-Wenn alles geklappt hat, schließen Sie die Zertifikatsanforderung durch Drücken der Eingabetaste ab:
-
-[{shell}]
-----
-Waiting for verification...
-Cleaning up challenges
-
-IMPORTANT NOTES:
- - Congratulations! Your certificate and chain have been saved at:
-   /etc/letsencrypt/live/checkmk.mydomain.com/fullchain.pem
-   Your key file has been saved at:
-   /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
-[...]
-----
-
-Sie können nun mit den Dateien in `/etc/letsencrypt/live/checkmk.mydomain.com` die xref:configsample[Konfiguration des Apache-Servers] durchführen.
-
-Wenn die erstmalige manuelle Anforderung der Zertifikate erfolgreich war, können Sie rechnerchieren, ob Ihr DNS-Anbieter über ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^] verfügt, das Automatisierung zulässt und die künftige Aktualisierung der Zertifikate per Cronjob vornehmen.
-
-// MFS: Alte Kommentare als Referenz:
-// Er kommuniziert aber auch über das ACME-API mit den Letsencrypt-Servern und legt Dateien im Unterverzeichnis `.well-known` des Webroot an, mit denen die Inhaberschaft der Domain verifiziert wird.
-//SP: Die Inhaberschaft wovon? Der Absatz ist insgesamt heftig, da gefühlt zu mehr als der Hälfte aus Fachbegriffen bestehend.
-// MFS: Ich habe nun "Domain" eingetragen, der Begriff impliziert auch Subdomains bezw. Wildcard-Domains oder halt einzelne Hostnamen.
-
-// Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt, können Sie der Anleitung für `certbot --apache` im link:https://certbot.eff.org/[Certbot-Handbuch^] folgen. 
-// Hier passt das Skript die Konfiguration selbsttätig an und fügt die richtigen Pfade zu den Zertifikatsdateien ein.
-// Ist der {CMK}-Server nicht aus dem Internet erreichbar, aber Sie verwenden einen DNS-Anbieter, für den ein link:https://certbot.eff.org/docs/using.html#dns-plugins[Certbot-Plugin^], folgen Sie bitte der Anleitung für Wildcard-Zertifikate.
-//SP: erster Satz:Ist mit Apache ein Apache-Server gemeint? Ein Apache ist ein Indianer. letzter Satz: hinter "für den ein Certbot-Plugin" fehlt IMHO ein Verb, z.B. existiert oder vorliegt.
-// TK: Warum benennst Du die Fälle unterschiedlich: "Bei einem frisch aufgesetzten Apache, der aus dem Internet erreichbar ist und nur {CMK} bereitstellt" und "Ist der {CMK}-Server nicht aus dem Internet erreichbar"?
-// TK: Der 1. certbot Link geht nicht in die Doku, sondern auf die Website.
-// TK: Entweder Du verlinkst direkt in die Anleitungen oder paraphrasierst die Überschriften, so dass man Sie wiederfinden kann. Zum Stichwort certbot --apache hab ich was gefunden, weiss aber nicht, ob es das ist, was Du meinst.
-
-// Existiert kein Plugin, können Sie alle 90 Tage eine manuelle DNS-Validierung vornehmen. Dafür genügt der minimale Certbot ohne Apache-Plugin. 
+DNS-Challenges können manuell durchgeführt werden, was bei 90 Tagen Gültigkeit meist nur für einzelne Testsysteme praktikabel ist.
+Verfügt Ihr DNS-Anbieter über ein von Letsencrypt unterstütztes API, kann auch automatische Erneuerung durchgeführt werden.
+Lesen Sie hierfür die link:https://letsencrypt.org/de/docs/challenge-types/[Übersicht der Challenge Typen] bei Letsencrypt.
 
 [#becomeca]
-=== Selbst Certificate Authority werden
+=== Interne CA verwenden
 
-Sie können sich selbst in die Rolle einer CA versetzen und Zertifikate für beliebige Domains (Ihre Domains, fremde Domains und Phantasie-Domains) ausstellen. 
-// Allerdings müssen Sie allen Clients, die auf Server zugreifen sollen, die diese Zertifikate nutzen, beibringen, dass dieser CA zu vertrauen ist.
-//SP: Den vorherigen Satz finde ich zu verschachtelt. Wem ist hier zu vertrauen?
-// MFS: Nächster Versuch:
-Allerdings muss ein Vertrauensverhältnis zwischen den Clients und der eigenen Zertifizierungsstelle existieren.
-Wie Sie dieses herstellen, erklären wir am Ende des Kapitels.
-// MA: Warum wird es hier erwähnt, wenn es hier gar nicht relevant ist/erklärt wird?
-
+Sie können sich selbst in die Rolle einer CA versetzen und Zertifikate für beliebige Domains (Ihre Domains, fremde Domains und Phantasie-Domains) ausstellen.
 Der Weg über die eigene CA ist vor allem für Testumgebungen oder abgeschottete {CMK}-Server mit überschaubarer Nutzerzahl sinnvoll.
-Sie ist zudem die einzige Möglichkeit, Zertifikate zu erhalten, wenn Sie intern eine der fünf reservierten TLDs `.example`, `.invalid`, `.local`, `.localhost`, oder `.test` verwenden.
-// MA: Warum sollte man das wollen? Wenn es erwähnt wird, sollte dem Leser klar werden, weshalb das für ihn relevant sein könnte. Ist es für den weiteren Verlauf relevant, dass man für .example nur intern eine CA werden kann?
-// MFS:  .local ist eigentlich ein Sonderfall für die interne Nutzung innerhalb des Domain Name System, technisch macht das keinen Unterschied zur expliziten Reservierung für interne Zwecke und in der 
-Für diese Domains gibt es keine Registrare, folglich kann keine Inhaberschaft bestätigt werden. 
-// TK: Echt? Why?
-// MFS: Satz ergänzt. Kein Registrar…
-// In Umgebungen, in denen ein Samba 4 Active Directory Domain Controller Nutzer- und Maschinenkonten verwaltet, ist dies der Standardweg.
-// TK: Hm, was soll mir dieser Satz sagen?
-// MFS: Ich habe es umformuliert, aber: Bringt es relevante Zusatzinformation?
-// Wer schon einmal in einer Umgebung gearbeitet hat, in der ein Samba 4 Active Directory Domain Controller Nutzer- und Maschinenkonten verwaltet, hat diese Vorgehensweise – dann meist mit der Default-Domain `.local` – kennen gelernt.
-// MA: Kommt das in produktiven Umgebungen üblicherweise vor? Aus meiner Sicht ist es nur in einem solchen Fall relevant, weil es den oberen Teil erläutert.
+Dies ist zudem die einzige Möglichkeit, Zertifikate zu erhalten, wenn Sie intern eine der fünf reservierten TLDs `.example`, `.invalid`, `.local`, `.localhost`, oder `.test` verwenden.
+Für diese Domains gibt es keine Registrare, folglich kann keine Inhaberschaft bestätigt werden.
 
-Selbst wenn eine Person auf einem Rechner alle Schritte durchführt:
-Um die Rollenverteilung im Zertifizierungsprozess zu verdeutlichen, nutzen wir _Carla_ als Verwalterin der _Certificate Authority_, _Bob_ als Betreuer des _Intermediate Keys_ und schließlich _Alice_, die Administratorin, die _Server-Zertifikate_ signieren lässt.
-// TK: Bob als Betreuer des Intermediate Keys: Warum nicht des Intermediate-Zertifikats?
-// MFS: Weil Carla für den Intermediete Key (den Bob zur Signierung nutzt) ein Intermediate-Zertifikat ausstellt. Wird im weiteren Verlauf nochmal erläutert.
-// MA: Harter Stilbruch, der ohne Vorankündigung kommt und wo den meisten Lesern nicht klar sein dürfte, woher die Namen Bob und Carla kommen. Eigentlich ist es auch Bob und Alice.
-// MA: Hier fehlt mir noch etwas der Scope des Kapitels. Für große Unternehmen wird es irrelevant sein, weil sie schon eine bestehende Infrastruktur zu ihrer internen, eigenen CA haben. Kleinere Unternehmen, die darüber nachdenken, eine eigene CA intern einzuführen, werden wahrscheinlich nicht hier in der Doku lesen, wie das geht. Ich sehe den Scope hier erstmal im privaten Bereich und für Lab-Umgebungen.
-// MA: Ich würde daher auch hier stark entschlacken und schauen, welche Schritte in einem einfachen Fall notwendig sind und welche Fachbegriffe/Konzepte dafür notwendigerweise erklärt werden müssen, um die Kommandos nachvollziehen zu können. In der jetzigen Form ist das Kapitel sehr abschreckend.
-// MA: Wichtig auch hier: Es geht nicht darum, alle Möglichkeiten und Details zu erklären, sondern vielmehr den Nutzer durch ein einfaches Beispiel zu führen und für die notwendigen Schritte zu sensibilisieren. Vor allem, damit der Leser von dem Beispiel auf seinen Fall abstrahieren kann (ggf. durch lesen von mehr oder minder offiziellen Quellen).
+Dieses Kapitel erklärt die Ausstellung von Zertifikaten mit solch einer internen CA.
+Als Voraussetzungen werden angenommen, dass Sie bereits über den privaten CA-Root- oder CA-Intermediate-Schlüssel verfügen und diesen nun verwenden sollen, um Zertifikate zur Absicherung eines {CMK}-Servers auszustellen. 
+Die Erstellung der CA-Schlüssel, des CA-Zertifikats und der dazugehörigen Konfigurationsdatei ist nicht Bestandteil der Anleitung.
 
+==== Schlüssel und CSR erzeugen
 
-==== Sicherheitshinweise 
+Gehen Sie für die Erstellung von Serverschlüssel, Certificate Signing Request und Extension-Datei wie im Abschnitt xref:createcsr[Schlüssel und CSR erzeugen] erklärt vor.
+Die Vorgehensweise und die benötigten Dateien sind identisch.
 
+[#signyourself]
+==== CSR signieren
 
-* Diese Anleitung verzichtet auf die Verwendung einer _Certificate Revocation List_. In größeren Produktivumgebungen sollten Sie eine verwenden, um kompromittierten Schlüsseln schnell das Vertrauen entziehen zu können!
-//SP: Was meint "verzichtet darauf"? Nur auf die Beschreibung einer Zertifikatssperrliste oder auch auf deren Einsatz? 
-* Auch in Testumgebungen gilt, dass starke Passwörter verwendet und private Schlüssel gut gesichert werden müssen, denn mit dem verwendeten CA-Schlüssel können Zertifikate für beliebige Domains erstellt werden.
-Systeme, die dem Zertifikat eines "verlorenen" Schlüssels vertrauen, sind damit anfällig für Woman-in-the-Middle-Angriffe!
-//SP: Trotz meiner Begeisterung für diesen Versuch der Geschlechter-Gleichstellung: Unter dem Begriff Woman-in-the-middle findet man im Internet keine Erklärung.
-// TK: Ich find diesen Stolperstein trotzdem gut :-)
-// MFS: Ich habe das nur reingenommen, um zu sehen, ob Ihr konzentriert lest!
+Um selbst Zertifikate zu signieren, haben Sie wenigstens einen privaten Schlüssel (hier `intermediate.key.pem`) und das dazugehörige Intermediate-Zertifikat `intermediate.pem` erhalten.
+Falls Sie zudem über eine Konfigurationsdatei verfügen, ist der Pfad zu dieser mit dem Parameter `--config` anzugeben.
 
-[#cakey]
-==== Schlüssel für die CA und Root-Zertifikat erstellen
-
-Carla nutzt aus Sicherheitsgründen ein Notebook ohne Internetverbindung, um den Root-Schlüssel der CA zu erzeugen und Zwischenzertifikate zu signieren.
-// TK: Warum Notebook ohne Internetverbindung? Könnte das was mit Sicherheit zu tun haben?
-// MFS: Ergänzt.
-// MA: Warum ist es sicherer, wenn sie keine Internetverbindung hat? Klingt etwas, wie, wenn ich meiner Mutter erkläre, dass sie ihre verdammten Sicherheitsupdates immer einspielen soll, weil es sonst unsicher ist. Sie ignoriert es meistens, weil sie keine Vorstellung davon hat, was passiert/passieren kann, wenn sie nicht auf mich hört.
-Zunächst erstellt sie unter `/home/carla/ca` die Verzeichnisstruktur für die Zertifizierungsstelle:
+Die Signatur auf Basis der CSR-Datei `checkmk.mydomain.com.csr`, Extensiondatei `checkmk.mydomain.com.ext` und der Ausgabedatei `checkmk.mydomain.com.crt` erledigen Sie dann mit dem Befehl:
 
 [{shell}]
 ----
-carla@nb:~$ *for d in certs newcerts crl private ; do mkdir -p ~/ca/$d ; done*
-carla@nb:~$ *for f in index.txt serial ; do touch ~/ca/$f ; done*
+bob@pc:~$ openssl x509 -CAcreateserial -req \
+    -in checkmk.mydomain.com.csr \
+    -CA intermediate.pem -CAkey intermediate.key.pem \
+    -out checkmk.mydomain.com.crt -days 365 \
+    -sha256 -extfile checkmk.mydomain.com.ext
 ----
 
-Im Ordner `~/ca/`  legt sie eine Datei `ca.cnf` ab, von der wir ein Beispiel vorbereitet und am xref:appendix[Ende dieses Artikels angehängt] haben.
-Anschließend erstellt sie den privaten Schlüssel der CA, der AES256-verschlüsselt abgelegt und mit einer langen Passphrase versehen wird:
+Neben dem Zertifikat müssen Sie Ihr CA-Zertifikat `intermediate.pem` und gegebenenfalls (Sie sind nicht Root-CA) auch das Root-Zertifikat weitergeben.
 
-[{shell}]
-----
-carla@nb:~$ *cd ca*
-carla@nb:~/ca$ *openssl genrsa -aes256 -out private/ca.key.pem 4096*
-Generating RSA private key, 4096 bit long modulus (2 primes)
-.............pass:q[++++]
-..........pass:q[++++]
-e is 65537 (0x010001)
-Enter pass phrase for private/ca.key.pem:
-Verifying - Enter pass phrase for private/ca.key.pem:
-----
-
-Es folgt das Root-Zertifikat, hier mit einer Gültigkeit von zwölf Jahren und zwei Wochen – mehr zur Wahl der xref:timerange[Gültigkeitszeiträume weiter unten].
-Die relevanten Parameter für Ort und Unternehmen werden aus der Konfigurationsdatei `ca.cnf` übernommen. _Common Name_ und _Email Address_ sind auf sinnvolle Werte zu setzen:
-
-[{shell}]
-----
-carla@nb:~/ca$ *openssl req -config ca.cnf  -new \
-    -key private/ca.key.pem -x509 -days 4398 \
-    -sha256 -extensions v3_ca -out certs/ca.cert.pem*
-Enter pass phrase for private/ca.key.pem:
-You are about to be asked to enter information that will be incorporated
-into your certificate request.
-What you are about to enter is what is called a Distinguished Name or a DN.
-There are quite a few fields but you can leave some blank
-For some fields there will be a default value,
-If you enter '.', the field will be left blank.
----
-Country Name (2 letter code) [DE]:
-State or Province Name [Bavaria]:
-Locality Name [Munich]:
-Organization Name [Stark Industries Ltd.]:
-Organizational Unit Name []:
-Common Name []: *Stark Industries Root Certificate*
-Email Address []: *carla@starkindustries.test*
-----
-
-Anschließend prüft Carla das Root-Zertifikat mit dem Befehl:
-
-[{shell}]
-----
-carla@nb:~/ca$ *openssl x509 -noout -text -in certs/ca.cert.pem*
-Certificate:
-    Data:
-        Version: 3 (0x2)
-        Serial Number:
-            25:a0:77:02:e7:29:07:f7:b5:d5:ba:b5:a3:4e:2b:eb:b3:e7:a6:c0
-        Signature Algorithm: sha256WithRSAEncryption
-        Issuer: C = DE, ST = Bavaria, L = Munich, O = Stark Industries Ltd., CN = Stark Industries Root Certificate, emailAddress = carla@starkindustries.test
-        Validity
-            Not Before: Feb 15 14:52:12 2022 GMT
-            Not After : Mar 2 14:52:12 2034 GMT
-        Subject: C = DE, ST = Bavaria, L = Munich, O = Stark Industries Ltd., CN = Stark Industries Root Certificate, emailAddress = carla@starkindustries.test
-        Subject Public Key Info:
-            Public Key Algorithm: rsaEncryption
-                RSA Public-Key: (4096 bit)
-                Modulus:
-                    00:d7:a9:89:94:dd:02:66:bf:fd:8e:c2:70:4b:d0:
-[...]
-----
-
-Carla kopiert die Konfigurationsdatei `ca.cnf` und stellt sie dem Kollegen Bob zur Verfügung, damit er eine Vorlage hat, die passende Parameter sowie Unternehmensnamen und -standort in korrekter Schreibweise enthält.
-
-
-==== Das Intermediate-Zertifikat
-
-Bob ist derjenige, der die tägliche Arbeit mit Zertifikaten für das lokale Netzwerk durchführt.
-Seine Aufgabe ist es, mit einem Intermediate-Zertifikat die Server-Schlüssel zu signieren, die Administratorinnen und Administratoren an ihn herantragen.
-// TK: Jetzt wird mit einem Zertifikat ein Schlüssel signiert?
-Auch er erstellt zunächst eine Verzeichnisstruktur und verwendet dafür den Ordner `im` in seinem Heimatverzeichnis:
-
-
-[{shell}]
-----
-bob@pc:~$ *for d in certs newcerts crl private ; do mkdir -p ~/im/$d ; done*
-bob@pc:~$ *for f in index.txt serial ; do touch ~/im/$f ; done*
-----
-
-Im Ordner `im` legt er die von Carla erhaltene Konfigurationsdatei als `im.cnf` ab und passt darin die Standardpfade auf sein Heimatverzeichnis und seine Rolle an.
-Anschließend erstellt auch er einen Private Key, mit dem er die nächsten Jahre arbeiten wird:
-
-[{shell}]
-----
-bob@pc:~$ *cd im*
-bob@pc:~/im$ *openssl genrsa -aes256 -out private/im.key.pem 4096*
-----
-
-Im nächsten Schritt erstellt er das Certificate Signing Request für diesen Schlüssel:
-
-[{shell}]
-----
-bob@pc:~/im$ *openssl req -config im.cnf -new -sha256 \
-    -key private/im.key.pem -out certs/imbob.csr*
-[...]
-Country Name (2 letter code) [DE]:
-State or Province Name [Bavaria]:
-Locality Name [Munich]:
-Organization Name [Stark Industries Ltd.]:
-Organizational Unit Name []:
-Common Name []: *Bobs Intermediate Certificate*
-Email Address []: *bob@starkindustries.test*
-----
-
-Mit der Datei `imbob.csr` geht Bob auf einen Kaffee zu Carla ins Büro.
-Diese holt das Notebook mit der CA aus dem Tresor, kopiert Bobs CSR in ihren Ordner `certs` und signiert Bobs CSR – hier mit einer Laufzeit von vier Jahren und zwei Wochen:
-// TK: ... und macht durch die Signatur aus dem CSR ein Zertifikat?
-
-[{shell}]
-----
-carla@nb:~$ *cd ca*
-carla@nb:~/ca$ *openssl ca -config ca.cnf \
-    -extensions v3_intermediate_ca \
-    -days 1476 -rand_serial -notext -md sha256 \
-    -in certs/imbob.csr -out certs/imbob.pem*
-----
-
-// TK: Wenn schon keine Kommandoausgabe, dann zumindest, was abgefragt wird: Passphrase für ca.key.pem, Anzeige des Zertifikats und Bestätigung der Signatur 
-// MFS: Ergänzt.
-
-Nun wird die Passphrase des Schlüssels abgefragt, der Inhalt des _Certificate Signing Requests_ angezeigt und nach Bestätigung das Intermediate Certificate erstellt.
-Carla gibt Bob nun die beiden PEM-Dateien `ca.cert.pem` (das Zertifikat der _Certificate Authority_) und `imbob.pem` (das _Intermediate Certificate_) mit, fährt das Notebook wieder herunter und packt es in den Tresor.
-Zurück an seinem Rechner packt Bob beide Dateien in den Ordner `~/im/certs`. 
-
-
-==== Schlüssel für die {CMK}-Instanz erstellen
-// TK: Erste? Mehr kommen doch nicht.
-// MFS: Entfernt.
-
-Alice ist Administratorin der {CMK}-Server bei _Stark Industries Ltd_.
-Für die Absicherung eines neuen {CMK}-Servers erstellt sie zunächst den Server-Schlüssel.
-Hier ist es pragmatisch, keine Passphrase zu verwenden, also auf `-des3` oder `-aes256` zu verzichten.
-Sonst müsste diese Passphrase bei jedem Start des Servers eingegeben werden.
-Als Dateiname ist der Host-Name des Servers sinnvoll.
-
-[{shell}]
-----
-alice@pc:~$ *openssl genrsa -out checkmk.starkindustries.test.key 2048*
-Generating RSA private key, 2048 bit long modulus (2 primes)
-.................................pass:q[++++]
-.......pass:q[++++]
-e is 65537 (0x010001)
-----
-
-Es folgt die Erstellung des CSR.
-Wieder müssen die Fragen nach Firma und Abteilung beantwortet werden.
-Wichtig ist hier der _Common Name_, welcher dem Host-Namen des Servers entsprechen muss.
-Eine Konfigurationsdatei ist für Alice optional:
-
-[{shell}]
-----
-alice@pc:~$ *openssl req -new -key checkmk.starkindustries.test.key \
-    -out checkmk.starkindustries.test.csr*
-[...]
-Country Name (2 letter code) [DE]:
-State or Province Name [Bavaria]:
-Locality Name [Munich]:
-Organization Name [Stark Industries Ltd.]:
-Organizational Unit Name []:
-Common Name (e.g. server FQDN or YOUR name) []: *checkmk.starkindustries.test*
-Email Address []: *alice@starkindustries.test*
-
-Please enter the following 'extra' attributes
-to be sent with your certificate request
-A challenge password []:          
-An optional company name []:
-----
-
-Das Challenge-Passwort darf leer bleiben.
-Da der {CMK}-Server unter verschiedenen Host-Namen erreichbar ist, erstellt Alice eine `X509 V3 certificate extension` Konfigurationsdatei `checkmk.starkindustries.test.ext`:
-
-./home/alice/checkmk.starkindustries.test.ext
-[source]
-----
-authorityKeyIdentifier=keyid,issuer
-basicConstraints=CA:FALSE
-keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = checkmk.starkindustries.test
-DNS.2 = monitoring.starkindustries.test
-----
-// TK: Wie wirkt sich denn diese Konfigdatei im folgenden aus?
-
-
-==== Signieren eines Zertifikates
-// TK: Warum Plural? Es wird doch nur das Zertifikat für den Server signiert? Oder Plural, weil 2 Host-Namen in der Konfigdatei stecken?
-// MFS: Da es hier zunächst um eines geht: angepasst.
-
-Mit den beiden Dateien `checkmk.starkindustries.test.csr` und `checkmk.starkindustries.test.ext` im Gepäck lädt sich Alice bei Bob auf einen Becher grünen Tee in dessen Büro ein.
-// TK: Zur Abwechslung auf einen Becher Tee?
-// MFS: Dann aber grünen Tee.
-Bob signiert nun mit seinem Intermediate-Zertifikat das mitgebrachte CSR mit einem Jahr Gültigkeit:
-
-[{shell}]
-----
-bob@pc:~$ *cd im*
-bob@pc:~/im$ *openssl x509 -CAcreateserial -req \
-    -in certs/checkmk.starkindustries.test.csr \
-    -CA certs/imbob.pem -CAkey private/im.key.pem \
-    -out certs/checkmk.starkindustries.test.crt -days 365 \
-    -sha256 -extfile certs/checkmk.starkindustries.test.ext*
-----
-
-Alice erhält von Bob drei Dateien: `ca.cert.pem` und `imbob.pem` stellen die Zertifikatskette dar und `checkmk.starkindustries.test.crt` ist das zum Serverschlüssel `checkmk.starkindustries.test.key` gehörende Zertifikat.
-// TK: Aber ca.cert.pem braucht sie doch gar nicht? Jedenfalls wird das Root-Zertifikat nicht in die Konfigdatei geschrieben.
-// MFS: Jetzt kommen wir in den Bereich wissenschaftlicher Diskussionen in Fußnoten. Es gibt zwei Möglichkeiten: Hosts, die den Zertifikaten vertrauen sollen, importieren das IM Certificate und tauschen das regelmäßig aus oder sie importieren das länger gültige CA Zertifikat und der Server liefert neben dem eigenen Zertifikat das IM Zertifikat aus. Damit ist die Kette bestätigt:
-// MFS: CA -> IM -> Serverzertifikat (-> steht hier für "bürgt für") 
-Diese Dateien kann sie bereits xref:configsample[auf dem Server ausrollen].
 
 
 ==== Importieren der CA
@@ -850,23 +381,6 @@ Dies ist beispielsweise nötig, wenn Sie einen Microsoft-Browser verwenden wolle
 Das genaue Vorgehen können Sie im link:https://docs.microsoft.com/de-de/troubleshoot/windows-server/windows-security/import-third-party-ca-to-enterprise-ntauth-store#method-1---import-a-certificate-by-using-the-pki-health-tool[Microsofts Knowledge Base Artikel PKI^] nachlesen.
 Alternativ können Sie Zertifikate per link:https://docs.microsoft.com/de-de/mem/intune/protect/certificates-configure[Intune^] verteilen.
 
-
-[#timerange]
-==== Zertifikatslaufzeit und -kaskaden
-
-Die gesamte Zertifikatskaskade funktioniert nur, während alle Zertifikate gültig sind.
-Daher sollte über Laufzeiten Buch geführt und an jeder Stelle der Kette rechtzeitig ein neues Zertifikat erstellt werden.
-Wenn die Laufzeit von Carlas Root-Zertifikat zwölf Jahre beträgt und sie damit maximal vier Jahre gültige Intermediate-Zertifikate für Bob ausstellt, muss sie sich rechtzeitig vor Ablauf von acht Jahren ein neues Root-Zertifikat ausstellen und künftig dieses zum Signieren benutzen.
-Bob wiederum, der maximal zwei Jahre gültige Zertifikate ausstellt, muss alle zwei Jahre auf einen Kaffee bei Carla vorbeischauen, um ein neues, vier Jahre gültiges Zertifikat zu erhalten. 
-
-Alice weiss, dass Bob nur zwei Jahre gültige Server-Zertifikate ausstellen kann.
-Sollte Alice im Zuge der Expansion von Stark Industries sehr viele Server-Zertifikate benötigen, kann Bob als Inhaber eines Intermediate-Zertifikats für Alice ein weiteres Intermediate-Zertifikat mit zwei Jahren Gültigkeit erstellen.
-So kann Alice dann in die Rolle einer ihm untergeordneten CA schlüpfen, die Zertifikate mit einem Jahr Gültigkeit ausstellt.
-// TK: Frage am Rande: Nennt man auch den Aussteller eines Intermediate-Zertifikats eine CA? Oder ist die CA der ganze Laden, der das Root-Zertifikat ausstellt?
-In diesem Fall muss sie jährlich bei Bob vorbeischauen.
-
-Im unten beschriebenen xref:configsample[Konfigurationsbeispiel] muss dann nicht Bobs Intermediate-Zertifikat auf dem Server platziert werden, sondern eine Konkatenation aus Bobs und Alice' Intermediate-Zertifikaten.
-
 [#configsample]
 == Konfiguration der HTTPS-Verbindung für eine Instanz
 // TK: Hier den Zusammenhang zu den 3 Optionen von oben deutlicher machen, d.h. z.B. im Fall becomeca muss ich die folgenden Einträge machen...
@@ -875,14 +389,12 @@ Im unten beschriebenen xref:configsample[Konfigurationsbeispiel] muss dann nicht
 
 // New
 Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und Intermediate-Zertifikat angeben. Die Konfigurationsdatei ist in der Regel `/etc/apache2/sites-enabled/default-ssl.conf`, der Pfad kann jedoch bei älteren Distributionen abweichen.
-//SP: Was ist ein IM-Zertifikat?
-// MFS: Wird weiter oben verwendet: Intermediate Certificate, nun ausgeschrieben, für alle, die direkt hier hin springen
-// MA: Was ist mit RHEL/CentOS?
 
-=== Zertifikat wurde von kommerzieller Zertifizierungsstelle ausgestellt
-// Die Anleitung hier unterscheidet sich nur im Detail von den anderen. Hauptsächlich darin, wo die Zertifikate liegen. Kann man das nicht zusammenfassen?
+Im Beispiel bezeichnet das `SSLCertificateKeyFile` den eingangs erzeugten privaten Schlüssel für diesen Server.
+`SSLCertificateChainFile`  enthält das Intermediate Certificate oder gegebenenfalls aneinandergereihte Intermediate Certificates.
+Lediglich bei einer internen CA, wo direkt mit dem CA-Schlüssel signiert wird, fällt dieses weg.
 
-Falls Sie Zertifikate von einem kommerziellen Anbieter signieren lassen haben, hat Ihnen dieser auch mitgeteilt, ob ein `SSLCertificateChainFile` benötigt wird und dieses gegebenenfalls mitgeschickt. Im oben gezeigten Beispiel mit ZeroSSL sähe die Konfiguration wie folgt aus:
+Viele kommerzielle Anbieter verwenden eher generische Dateinamen, wenn Sie diese übernehmen, mag die Konfiguration wie folgt aussehen:
 
 ./etc/apache2/sites-enabled/default-ssl.conf
 [source,apache]
@@ -893,11 +405,7 @@ SSLCertificateChainFile /etc/certs/ca_bundle.crt
 SSLCertificateFile /etc/certs/certificate.crt
 ----
 
-=== Zertifikat wurde mithilfe von Letsencrypt generiert
-
-Der Letsencrypt-Certbot legt Zertifikate und automatisch erzeugte Schlüssel in `/etc/letsencrypt` ab:
-// TK: nicht nur Zertifikate, sondern auch Schlüssel
-// MFS: Hinzugefügt.
+Wenn Sie Letsencrypt verwendet haben, um Zertifikate zu generieren, aber Certbot die Konfiguration nicht aktualisieren haben lassen, finden Sie die Pfade unterhalb `/etc/letsencrypt/live` heraus und tragen Sie diese ein:
 
 ./etc/apache2/sites-enabled/default-ssl.conf
 [source,apache]
@@ -907,19 +415,6 @@ SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.starkindustries.test/privkey
 SSLCertificateChainFile /etc/letsencrypt/live/checkmk.starkindustries.test/chain.pem
 SSLCertificateFile /etc/letsencrypt/live/checkmk.starkindustries.test/cert.pem
 ----
-
-=== Zertifikat wurden mit eigener CA ausgestellt
-
-// TK: Im nächsten Kapitel steht: "Unter Debian/Ubuntu ist das standardmäßig die Datei `default-ssl.conf`". Heisst das, dass diese Datei in anderen Distributionen anders heissen kann? Dann sollte das schon hier erwähnt werden.
-./etc/apache2/sites-enabled/default-ssl.conf
-[source,apache]
-----
-SSLEngine on
-SSLCertificateKeyFile /etc/certs/checkmk.starkindustries.test.key
-SSLCertificateChainFile /etc/certs/imbob.pem
-SSLCertificateFile /etc/certs/checkmk.starkindustries.test.crt
-----
-// End new
 
 [#apachedefaultconfig]
 === Konfiguration der Apache Default Site 
@@ -935,7 +430,8 @@ Die `VirtualHost`-Konfiguration befindet sich -- je nach eingesetzter Distributi
 |SLES |/etc/apache2/httpd.conf
 |===
 
-Ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
+Das folgende Beispiel geht davon aus, dass Sie eine einzige Konfigurationsdatei füt unverschlüsselte Verbindungen auf Port 80 und verschlüsselte Verbindungen auf 443 nutzen.
+In diesem Fall ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
 // TK: Umstellen: Zuerst beschreiben, dass die Datei in den Distros unterschiedlich ist und dann das Bsp. für Debian/Ubuntu
 // Lines and comments added.
 // MFS: Done.
@@ -947,8 +443,9 @@ Ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
 [source,apache]
 ----
 RewriteEngine On
-# No forwarding for .well-known when using LetsEncrypt
+# Never forward request for .well-known (important when using LetsEncrypt)
 RewriteCond %{REQUEST_URI} !^/.well-known
+# Next 2 lines: Force redirection if incoming request is not on 443
 RewriteCond %{SERVER_PORT} !^443$
 RewriteRule (.*) https://%{HTTP_HOST}$1 [L]
 # This section passes the system Apaches connection mode to the 
@@ -960,21 +457,16 @@ RewriteRule (.*) https://%{HTTP_HOST}$1 [L]
 </IfModule>
 ----
 
-Nach der Konfigurationsänderung muss der Webserver neu gestartet werden.
-Je nach eingesetzter Distribution sind die Befehle dafür unterschiedlich:
+Nach der Konfigurationsänderung muss der Webserver neu gestartet werden:
 
 [{shell}]
 ----
-{c-root} systemctl restart apache2 # Debian/Ubuntu, systemd
-{c-root} systemctl restart httpd # RHEL and derivatives, systemd
-{c-root} service apache2 restart # Ubuntu, upstart
-{c-root} /etc/init.d/apache2 restart # Debian/Ubuntu, SysV init 
-{c-root} /etc/init.d/httpd restart # RHEL and derivatives, SysV init
+{c-root} systemctl restart apache2
 ----
 
-// TK: Welcher Befehl für welche Distribution?
-// MFS: Hinzufügen? Wenn Sie unsicher sind:  Probieren Sie die Befehle der Reihe nach durch.
-// Ich würde es wieder sehr einfach halten. Die momentan gängisten Befehl und die Ausnahme für RHEL im Fließtext. Oder zur Not ein zweiter Prompt für RHEL 
+Erneut gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
+Passen Sie in diesem Fall den Befehl an.
+
 
 == Zusätzliche Optionen
 
@@ -1034,151 +526,3 @@ pass:q[*Server*]: Apache
 pass:q[*Strict-Transport-Security*]: max-age=3600
 ----
 
-[#appendix]
-== Appendix 
-// (Blinddarm)
-
-Die Konfigurationsdatei `/home/carla/ca/ca.cnf` kopiert (und überschreibt damit) viele Abschnitte der systemweiten `openssl.cnf`.
-Kopieren Sie diese Datei als Basis für die eigene CA-Konfiguration (xref:cakey[zurück zur Schlüsselerzeugung]).
-Passen Sie dann zunächst die Verzeichnisse (im Abschnitt `[ CA_default ]`) und die Firmendaten (im Abschnitt `[ req_distinguished_name ]`) an.
-// TK: Hier erwähnen, dass man erstmal nur eine Zeile (dir) anpassen muss.
-// MFS: Done.
-
-./home/carla/ca/ca.cnf
-[source]
-----
-# OpenSSL root CA configuration file.
-# Copy to `/home/username/ca/ca.cnf`.
-
-[ ca ]
-# `man ca`
-default_ca = CA_default
-
-[ CA_default ]
-# Directory and file locations.
-dir               = /home/carla/ca
-certs             = $dir/certs
-crl_dir           = $dir/crl
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-RANDFILE          = $dir/private/.rand
-
-# The root key and root certificate.
-private_key       = $dir/private/ca.key.pem
-certificate       = $dir/certs/ca.cert.pem
-
-# For certificate revocation lists.
-crlnumber         = $dir/crlnumber
-crl               = $dir/crl/ca.crl.pem
-crl_extensions    = crl_ext
-default_crl_days  = 30
-
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md        = sha256
-
-name_opt          = ca_default
-cert_opt          = ca_default
-default_days      = 375
-preserve          = no
-policy            = policy_strict
-
-[ policy_strict ]
-# The root CA should only sign intermediate certificates that match.
-# See the POLICY FORMAT section of `man ca`.
-countryName             = match
-stateOrProvinceName     = match
-organizationName        = match
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ policy_loose ]
-# Allow the intermediate CA to sign a more diverse range of certificates.
-# See the POLICY FORMAT section of the `ca` man page.
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ req ]
-# Options for the `req` tool (`man req`).
-default_bits        = 2048
-distinguished_name  = req_distinguished_name
-string_mask         = utf8only
-
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md          = sha256
-
-# Extension to add when the -x509 option is used.
-x509_extensions     = v3_ca
-
-[ req_distinguished_name ]
-# See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
-countryName                     = Country Name (2 letter code)
-stateOrProvinceName             = State or Province Name
-localityName                    = Locality Name
-0.organizationName              = Organization Name
-organizationalUnitName          = Organizational Unit Name
-commonName                      = Common Name
-emailAddress                    = Email Address
-
-# Optionally, specify some defaults.
-countryName_default             = DE
-stateOrProvinceName_default     = Bavaria
-localityName_default            = Munich
-0.organizationName_default      = Stark Industries Ltd.
-organizationalUnitName_default  =
-emailAddress_default            =
-
-[ v3_ca ]
-# Extensions for a typical CA (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
-basicConstraints = critical, CA:true
-keyUsage = critical, digitalSignature, cRLSign, keyCertSign
-
-[ v3_intermediate_ca ]
-# Extensions for a typical intermediate CA (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
-basicConstraints = critical, CA:true, pathlen:0
-keyUsage = critical, digitalSignature, cRLSign, keyCertSign
-
-[ usr_cert ]
-# Extensions for client certificates (`man x509v3_config`).
-basicConstraints = CA:FALSE
-nsCertType = client, email
-nsComment = "OpenSSL Generated Client Certificate"
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer
-keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
-extendedKeyUsage = clientAuth, emailProtection
-
-[ server_cert ]
-# Extensions for server certificates (`man x509v3_config`).
-basicConstraints = CA:FALSE
-nsCertType = server
-nsComment = "OpenSSL Generated Server Certificate"
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer:always
-keyUsage = critical, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
-
-[ crl_ext ]
-# Extension for CRLs (`man x509v3_config`).
-authorityKeyIdentifier=keyid:always
-
-[ ocsp ]
-# Extension for OCSP signing certificates (`man ocsp`).
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer
-keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, OCSPSigning
-----
-
-xref:cakey[zurück zur Schlüsselerzeugung]
