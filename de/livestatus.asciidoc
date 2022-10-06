@@ -1032,38 +1032,27 @@ Den Zugriff über TCP aktivieren Sie bei abgeschalteter Site mit dem
 {c-omd} omd config set LIVESTATUS_TCP on
 ----
 
-Standardmäßig wird {CMK} dabei den verwendeten TCP-Port auf 6557
-setzen. Sie können das natürlich ebenso anpassen:
+Nach dem Start der Instanz ist Livestatus per TCP in der Regel auf dem xref:ports#[Standardport 6557] aktiv.
+Bei {CMK}-Servern mit mehreren Sites, die Livestatus per TCP nutzen, wird der nächsthöhere freie Port gewählt.
 
-[{shell}]
-----
-{c-omd} omd config set LIVESTATUS_TCP_PORT 6558
-----
-
-Des Weiteren können Sie auch den Zugriff über den `omd`-Befehl auf bestimmte IP-Adressen einschränken:
-
-[{shell}]
-----
-{c-omd} omd config set LIVESTATUS_TCP_ONLY_FROM '127.0.0.1 192.168.30.42'
-----
-
-In {CMK} {v21} ist SSL-Verschlüsselung der Livestatus-Kommunikation standardmäßig aktiviert.
-Diese und weitere Einstellungen können Sie im Setup vornehmen:
+Alle Einstellungen wie Port und berechtigte IP-Adressen können Sie per `omd config` vornehmen.
+Alternativ sind diese Einstellungen im Setup möglich.
+In {CMK} {v21} ist SSL-Verschlüsselung der Livestatus-Kommunikation standardmäßig aktiviert:
 
 .Livestatus-Einstellungen im Setup
 image::livestatus_setup.png[alt="Livestatus-Einstellungen im Setup."]
 
 ==== Lokaler Test der SSL-Verbindung
 
-Livestatus nutzt ein selbst signiertes Zertifikat, welches beim Erstellen der Site generiert wird.
-Es liegt in `~/etc/ssl/sites/sitename.pem`.
-Damit per Kommando `openssl s_client` eine Verbindung zustande kommen kann, muss dieses Zertifikat als "CA Zertifikat" bekannt gemacht werden.
-Wegen der Zugriffsrechte auf die Zertifikatsdatei empfehlen wir, den ersten Test als Site-User vorzunehmen.
-Die Ausgabe haben wir hier stark gekürzt, `[...]` zeigt die Auslassungen an:
+Livestatus nutzt ein Zertifikat, welches beim Erstellen der Site automatisch generiert wird.
+Dieses befindet sich mit allen anderen CA-Zertifikaten, denen die Site vertraut in der Datei `var/ssl/ca-certificates.crt`.
+Damit das Kommandozeilentool `openssl s_client` das vom Livestatus-Server genutzte Zertifikat validieren kann, muss diese Datei als _Certificate Authority File_ bekannt gemacht werden.
+
+Die Ausgabe des Kommandozeilenaufrufs haben wir hier stark gekürzt, `[...]` zeigt die Auslassungen an:
 
 [{shell}]
 ----
-{c-omd} *openssl s_client -CAfile etc/ssl/sites/mysite.pem -connect localhost:6557*
+{c-omd} openssl s_client -CAfile var/ssl/ca-certificates.crt -connect localhost:6557
 CONNECTED(00000003)
 Can't use SSL_get_servername
 depth=1 CN = Site 'mysite' local CA
@@ -1088,13 +1077,13 @@ Server certificate
 read R BLOCK
 ----
 
-Die mit `read` beginnende Zeile zeigt an, dass Sie nun LQL-Kommandos absetzen können.
-Klappt dies, können Sie Livestatus-Abfragen per Pipeline übergeben:
+Erfolgt keine weitere Ausgabe mehr, können Sie interaktiv LQL-Kommandos absetzen, welche Sie mit einer Leerzeile (zweimal Return-Taste) abschließen.
+Klappt dies, können Sie Livestatus-Abfragen auch per Pipeline übergeben:
 
 [{shell}]
 ----
 {c-omd} echo -e "GET hosts\nColumns: name\n\n" | \
-    openssl s_client -quiet  -CAfile ./etc/ssl/sites/mysite.pem -connect localhost:6557
+    openssl s_client -quiet  -CAfile var/ssl/ca-certificates.crt -connect localhost:6557
 Can't use SSL_get_servername
 depth=1 CN = Site 'mysite' local CA
 verify return:1
@@ -1106,34 +1095,35 @@ myserver123
 myserver124
 ----
 
-Die Ausgabe vor den vier Hostnamen schreibt `openssl` auf STDERR, Sie können diese Ausgabe durch anhängen von `2>/dev/null` unterdrücken.
+Die Ausgabe vor den vier Hostnamen schreibt `openssl` auf STDERR, Sie können diese durch anhängen von `2>/dev/null` unterdrücken.
 
 ==== Remote-Zugriff auf Livestatus
 
-Wenn Sie von einem entfernten Rechner aus auf Livestatus zugreifen wollen, müssen Sie diesem das Zertifikat bekannt machen.
-Aus Sicherheitsgründen sollten Sie jedoch nicht die komplette PEM-Datei zum Remote-System kopieren.
-Denn diese enthält neben dem Zertifikat auch den privaten Schlüssel, mit dem Livestatus die SSL-Verbindung absichert.
-Kopieren Sie die Datei `etc/ssl/sites/sitename.pem` in eine temporäre Datei und entfernen Sie dort mit dem Editor den kompletten Block, der mit `BEGIN PRIVATE KEY` eingeleitet und mit `END PRIVATE KEY` abgeschlossen wird.
-Geben Sie dann diese Datei weiter.
+Wenn Sie von entfernten Rechnern auf Livestatus zugreifen, sollten Sie auf diesen nicht die gesamte Liste der von der {CMK}-Site vertrauten Zertifikate verwenden.
+Lesen Sie stattdessen alleine das Zertifikat der Site-CA aus dem Setup aus.
 
-Wenn der entfernte Host nun für den Livestatus-Zugriff freigeschaltet wurde, sind Livestatus-Abfragen per Skript möglich:
+Begeben Sie sich hierfür in die [.guihint]#Global Settings#.
+Unter [.guihint]#Trusted certificate authorities for SSL# können Sie das verwendete Zertifikat der Site-CA per Copy and Paste übernehmen.
+Kopieren Sie den kompletten Text des ersten Zertifikats unter [.guihint]#Content of CRT/PEM file# in eine Datei, im Beispiel verwenden wir `/tmp/mysite_ca.pem`.
+Wenn der entfernte Host nun für den Livestatus-Zugriff freigeschaltet wurde, sind mit dieser Zertifikatsdatei Livestatus-Abfragen per Skript möglich:
 
 [{shell}]
 ----
 {c-user} echo -e "GET hosts\nColumns: name\n\n" | \
-    openssl s_client -quiet  -CAfile /tmp/cert.pem -connect cmkserver:6557
+    openssl s_client -quiet  -CAfile /tmp/mysite_ca.pem -connect cmkserver:6557
 ----
 
-Beachten Sie, dass die Zertifikatsdatei hier keinen Zugriffsschutz bietet, sie dient lediglich der Bestätigung der Transportverschlüsselung.
-Ein Angreifer, dessen Host Zugriff hat, kann die Zertifikatsprüfung abschalten und beliebige LQL-Kommandos absetzen.
+Beachten Sie, dass die Zertifikatsdatei hier keinen Zugriffsschutz bietet, sie dient lediglich der Validierung der Transportverschlüsselung.
+Ein Angreifer, dessen Host Zugriff hat, kann die Zertifikatsprüfung abschalten und so auch ohne Zertifikatsdatei beliebige LQL-Kommandos absetzen.
+
 
 
 === Verbindung über SSH
 
-Wenn Sie sich aus Ihrem lokalen Netzwerk herausbewegen, mag der Zugriffsschutz per IP-Adressen-Beschränkung angesichts dynamischer Client-IP-Adressen nicht mehr praktikabel sein.
-Der einfachste Weg, Zugriff zu erlangen, ist hier die Verwendung der _Secure Shell_.
+Wenn Zugriff auf Livestatus von außerhalb Ihres lokalen Netzwerkes erforderlich ist, mag Zugriffsschutz alleine auf Basis von IP-Adressen nicht mehr praktikabel sein.
+Der einfachste Weg, Authentifizierung vorzunehmen und Zugriff zu erlangen, ist hier die Verwendung der _Secure Shell_.
 
-Hier haben Sie die Möglichkeit, ein Kommando zu übergeben, welches auf dem entfernten Server ausgeführt wird:
+Mit SSH haben Sie die Möglichkeit, ein Kommando zu übergeben, welches auf dem entfernten Server ausgeführt wird:
 
 [{shell}]
 ----
