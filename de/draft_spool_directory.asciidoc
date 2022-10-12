@@ -2,7 +2,7 @@
 include::global_attr.adoc[]
 = Das Spool-Verzeichnis
 :revdate: draft
-:title: Den Status von Cronjobs mit dem Spool-Verzeichnis überwachen
+:title: Cronjobs mit dem Spool-Verzeichnis überwachen
 :description: Das Spool Directory ist ein Verzeichnis, in dem regelmäßig laufende Programme Informationen zu ihrem Zustand ablegen können, diese wird dann zusammen mit dem Agenten-Output übertragen.
 
 {related-start}
@@ -14,15 +14,26 @@ xref:agent_windows#[Windows überwachen]
 
 == Einleitung
 
-Regelmäßig oder länger laufende Prozesse haben eine Möglichkeit, ihren Zustand direkt in eine Datei zu schreiben.
-Der Agent selbst hängt den Inhalt dieser Dateien mit an die Agentenausgabe an.
-Realisiert wird dies über das Spool-Verzeichnis, in das Prozesse Ihre Ausgabe im {CMK}-Agentenformat schreiben können.
-Um dieses Feature reibungslos nutzen zu können, sind einige Dinge zu beachten.
+Die Überwachung regelmäßig oder bei Bedarf abgearbeiteter Aufgaben, sowie dauerhaft laufender Prozesse kann beispielsweise durch die Analyse von Log- oder Statusdateien erfolgen.
+Dies ist jedoch häufig mit Aufwand verbunden: Oft ist es erforderlich, große Datenmengen zu lesen, um wenig Information herauszuziehen.
 
-== Pfade
+Um diesen Aufwand zu reduzieren, bietet {CMK} die Möglichkeit, dass ein Programm Ausgaben direkt im {CMK}-Agentenformat in eine Datei schreibt.
+Im sogenannten Spool-Verzeichnis abgelegt, sammelt der Agent diese Dateien und integriert ihren Inhalt in die Agentenausgabe.
+Der Weg über das Spool-Verzeichnis bietet sich beispielsweise an bei …
 
-Der Standardpfad des Spool-Verzeichnisses ist unter Linux und anderen Unix-Systemen `/var/lib/check_mk_agent/spool`, unter Windows `C:\...`.
-Sie können den Pfad des Verzeichnisses darüber mit der Regel [.guihint]#Agent rules > Installation paths for agent files (Linux, UNIX)# und der dort vorhandenen Einstellung [.guihint]#Base directory for variable data (caches, state files)# anpassen.
+- … regelmäßiger Analyse von Logdateien
+- … der Überwachung automatischer Backups
+- … der Erstellung und Prüfung von Nutzungsstatistiken aus einer Datenbank
+// - … Checks, deren Laufzeit extrem variiert
+- … der Kontrolle von Cronjobs allgemein
+
+Damit Sie dieses Feature reibungslos nutzen zu können, sind einige Dinge zu beachten.
+
+[#paths]
+== Verzeichnispfade
+
+Der Standardpfad des Spool-Verzeichnisses ist unter Linux und anderen Unix-Systemen `/var/lib/check_mk_agent/spool`, unter Windows `C:\ProgramData\checkmk\agent\spool`.
+Sie können den Pfad des übergeordneten Verzeichnisses mit der Regel [.guihint]#Agent rules > Installation paths for agent files (Linux, UNIX)# und der dort vorhandenen Einstellung [.guihint]#Base directory for variable data (caches, state files)# anpassen.
 
 Wenn Sie auf einem Host im Monitoring arbeiten, können Sie das dort konfigurierte Spool-Verzeichnis aus der Agentenausgabe herausfiltern:
 
@@ -33,13 +44,15 @@ SpoolDirectory: /var/lib/check_mk_agent/spool
 ----
 
 {CMK} nutzt ein einziges Spool-Verzeichnis, welches in den Standardeinstellungen `root` gehört.
-Multiple Verzeichnisse mit unterschiedlichen Eigentümern sind nicht möglich.
-Selbstverständlich können Sie hier Dateien anlegen und einen anderen Nutzer zum Eigentümer machen, der den Inhalt dieser Datei dann überschreiben kann.
+Multiple Verzeichnisse mit unterschiedlichen Eigentümern sind nicht vorgesehen.
+Selbstverständlich können Sie im Spool-Verzeichnis (zunächst leere) Dateien anlegen und einen anderen Nutzer zum Eigentümer machen, der den Inhalt dieser Datei dann überschreiben kann.
 
-== Dateiinhalt
+[#content]
+== Dateinamen und -inhalt
 
 Spool-Dateien können beliebige Textausgaben in den von {CMK} verarbeiteten Formaten beinhalten.
 Sie werden in der im Spool-Verzeichnis vorhandenen Reihenfolge aneinander gehängt.
+// MFS: Sollte, oder besser muss?
 Um Durcheinander zu vermeiden, sollte…
 
 - …jede Spool-Datei den mit spitzen Klammern `<<<` beginnenden Block am Anfang enthalten – auch wenn Sie nur das Format xref:localchecks#[lokaler Checks] verwenden 
@@ -69,21 +82,15 @@ pond 15212
 pool 123732
 ----
 
+[#piggyback]
 === Terminierung von Piggyback-Sektionen
 
 Wenn Sie xref:piggyback#[Piggyback]-Sektionen verwenden, schließen Sie jede Datei mit `<<<<>>>>` ab.
 Nur so ist sichergestellt, dass bei einer möglichen Änderung der Auslesereihenfolge nach der Piggyback-Ausgabe folgende Plugin-Ausgaben wieder dem Host selbst zugeordnet werden.
 
-[#locking]
-=== Locking
-
-Beim Schreiben längerer Programme, die mehrere Statuszeilen in eine Spool-Datei schreiben, ist die Versuchung groß, die Ausgabedatei beim Start des Programmes schreibend zu öffnen.
-Die Datei bleibt in diesem Fall komplett leer, bis der Puffer das erste Mal geflusht wird und sie wird unvollständig sein, bis das schreibende Programm die Datei geschlossen hat.
-
-Aus diesem Grund sollten Sie entweder die Ausgabedatei erst schreibend öffnen, wenn der gesamte zu schreibende Inhalt vorliegt, oder in eine temporäre Datei schreiben, die Sie dann ins Spool-Verzeichnis kopieren – respektive den Inhalt einer temporären Datei mit `cat` in eine vorhandene im Spool-Verzeichnis übertragen.
-
 [#agecheck]
 == Altersprüfung vorgefundener Dateien
+// Age check of files
 
 Wenn ein Programm korrekt in seine Ausgabedatei schreiben kann, ob es erfolgreich durchgelaufen ist, oder nicht, ist alles prima.
 Doch was, wenn ein Programm vor dem Schreiben auf Festplatte abbricht oder ein Fehler am Dateisystem verhindert, dass neue Dateien geschrieben werden?
@@ -91,14 +98,35 @@ Doch was, wenn ein Programm vor dem Schreiben auf Festplatte abbricht oder ein F
 Für diesen Fall haben Sie die Möglichkeit, dem Dateinamen eine Ganzzahl vorne anzustellen, beispielsweise `600MyCronjob`.
 Die Zahl wird in diesem Fall als Maximalalter der Datei in Sekunden interpretiert.
 Ist die Datei älter, wird sie ignoriert und der zugehörige Dienst wechselt den Zustand nach {UNKNOWN}.
-Im Falle einer Datei `3900_hourly_cleaner.txt` ist die Zahl demnach korrekt für einen stündlich laufenden Cronjob gewählt, der sicher unter fünf Minuten benötigt. 
+Im Falle einer Datei `3900_hourly_cleaner.txt` ist die Zahl demnach passend gewählt für einen stündlich laufenden Cronjob, bei dem eine Ausführungszeit von unter fünf Minuten erwartet wird. 
 
-== Softlinks und Named Pipes
+[#pitfalls]
+== Zu beachtende Feinheiten
 
+Das Lesen von Dateien hält andere Fallstricke bereit, als das Starten von Prozessen.
+Beachten Sie die folgenden Punkte für einen reibungslosen Betrieb.
+
+[#softlinks]
+=== Softlinks und Named Pipes
+
+// MFS: Named Pipes, denen man nur sehr langsam Daten liefert, sind ein zuverlässiger Weg, den Agenten zu DoSen.
+// MFS: Named Pipes, die man richtig füttert, ein richtig smarter Weg, Daten nach Checkmk zu bringen. 
 Im Prinzip können Dateien im Spool-Verzeichnis auch Softlinks oder Named Pipes sein.
 Zu beachten ist, dass hier die Altersprüfung nicht funktioniert, weil das Alter des Softlinks oder der Named Pipe selbst ausgewertet wird.
-Bei Named Pipes müssen Sie zudem sicherstellen, dass der schreibende Prozess immer Daten nachliefert.
+Bei Named Pipes müssen Sie zudem sicherstellen, dass der in die Pipe schreibende Prozess immer Daten nachliefert.
 Werden keine Daten geliefert, wartet der {CMK}-Agent ewig und wird schließlich mit Timeout abgebrochen.
 
 Falls Sie unpriviligierten Nutzern die Möglichkeit geben müssen, in Spool-Dateien zu schreiben, legen Sie für diese leere Dateien an, deren Eigentümerschaft Sie entsprechend setzen.
 Diese Nutzer können dann von sich aus einen Softlink setzen oder direkt in die Spool-Datei schreiben.
+
+[#locking]
+=== Sperren und Puffer
+// Locking and Buffering
+
+Beim Schreiben längerer Programme, die mehrere Statuszeilen in eine Spool-Datei schreiben, ist die Versuchung groß, die Ausgabedatei beim Start des Programmes schreibend zu öffnen.
+Die Datei bleibt in diesem Fall komplett leer, bis der Schreibpuffer das erste Mal geflusht wird und sie wird unvollständig sein, bis das schreibende Programm die Datei geschlossen hat.
+Ähnlich sieht es aus, wenn eine Datei für die Dauer eines längeren Schreibvorgangs exklusiv gesperrt ist.
+
+// MFS: Kennt wer ein schöneres Wort für "geflusht"?
+Aus diesem Grund sollten Sie entweder die Ausgabedatei erst schreibend öffnen, wenn der gesamte zu schreibende Inhalt vorliegt, oder in eine temporäre Datei schreiben, die Sie dann ins Spool-Verzeichnis kopieren – respektive den Inhalt einer temporären Datei mit `cat` in eine vorhandene im Spool-Verzeichnis übertragen.
+
