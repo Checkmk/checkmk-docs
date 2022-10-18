@@ -1,108 +1,474 @@
+//encoding: utf-8
 include::global_attr.adoc[]
 = Weboberfläche mit HTTPS absichern
-:revdate: 2021-07-13
+:revdate: draft
 :title: Weboberfläche mit HTTPS absichern
-:description: Es gibt viele Gründe, Weboberflächen nur über HTTPS zu betreiben. In diesem Artikel erfahren Sie, wie Sie die Verschlüsselung für eine {CMK}-Instanz aktivieren.
+:description: Aus Sicherheitsgründen sollten Weboberflächen nur über HTTPS betrieben werden. Hier erfahren Sie, wie Sie die Verschlüsselung für eine {CMK}-Instanz aktivieren.
 
 {related-start}
-link:web_api.html[Konfiguration via HTTP-API]
-link:kerberos.html[Single Sign-On mit Kerberos]
-link:ldap.html[Benutzerverwaltung mit LDAP/Active Directory]
+xref:kerberos#[Single Sign-On mit Kerberos]
+xref:ldap#[Benutzerverwaltung mit LDAP/Active Directory]
 {related-end}
 
 
-== Voraussetzungen
+== Einleitung
 
-Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann
-müssen Sie auf Ihrem Monitoring-Server -- unabhängig von Ihren Instanzen --
-folgende Voraussetzungen schaffen:
+Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann müssen Sie auf Ihrem Monitoring-Server -- unabhängig von Ihren Instanzen -- folgende Voraussetzungen schaffen:
 
-* Sie besitzen ein gültiges Serverzertifikat.
-* Das Apache-Modul mod_ssl ist installiert und aktiviert.
+* Das Apache-Modul `mod_ssl` ist installiert und aktiviert.
+* Die Apache-Module `mod_rewrite` und `mod_headers` sind vorhanden und ebenfalls aktiviert.
+* Sie besitzen ein gültiges Server-Zertifikat.
 * Der Server ist über HTTPS erreichbar.
-* Das Rewrite- und das Header-Modul für den Webserver ist vorhanden und geladen.
+// MA: Stichpunkte umgestellt, damit sie mit der Reihenfolge der nachfolgenden Überschriften zusammenpassen.
+
+Was dafür zu tun ist, erklärt dieser Artikel.
+
+
+== Apache-Module aktivieren
+
+Die HTTPS-Absicherung der {CMK}-Oberfläche benötigt das Apache-Modul `mod_ssl`.
+Wir gehen im weiteren Verlauf der Einrichtung zudem davon aus, dass eine auf dem unverschlüsselten Port 80 eingehende Verbindung auf den SSL verschlüsselten Port 443 weitergeleitet werden soll.
+Dafür ist das Modul `mod_rewrite` nötig.
+Schließlich wird noch `mod_headers` benötigt, damit der als link:https://httpd.apache.org/docs/2.4/howto/reverse_proxy.html[Reverse Proxy^] konfigurierte extern erreichbare Apache dem xref:ports#loopback[Site Apache] die Request Header weiterleitet.
+
+Die geladenen Apache-Module können Sie sich mit dem Kommando `apachectl` anzeigen lassen (alte CentOS- und RHEL-Versionen benötigen möglicherweise stattdessen `httpd`).
+Mit `grep` prüfen Sie gleich, ob alle drei benötigten Module vorhanden sind:
+
+[{shell}]
+----
+{c-root} *apachectl -M | grep -E 'headers|rewrite|ssl'*
+ headers_module (shared)
+ rewrite_module (shared)
+----
+
+Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem Skript `a2enmod`.
+Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an.
+Die Datei mit der Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, und die Datei `.conf` enthält die eigentliche Konfiguration des Moduls:
+
+[{shell}]
+----
+{c-root} *a2enmod ssl*
+Enabling module ssl.
+To activate the new configuration, you need to run:
+  systemctl restart apache2
+----
+
+// MFS: Getestet mit CentOS 7, alles davor solle irrelevant sein, globale /etc/httpd/conf/httpd.conf nur nach Update früherer Versionen
+Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl` ein eigenes Paket, das Sie separat installieren müssen:
+
+[{shell}]
+----
+{c-root} *yum install -y httpd mod_ssl*
+----
+
+Ist das Kommando `a2enmod` nicht vorhanden, arbeiten Sie mit einer Distribution, welche die Apache-Konfiguration statt auf Verzeichnisse und viele Einzeldateien aufzuteilen in einer einzigen Konfigurationsdatei vorhält.
+In solch einem Fall muss in der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit werden.
+Analog ist für die beiden anderen Module vorzugehen.
+
+Ob der Apache-Webserver bereits jetzt oder erst später neu gestartet werden kann, entscheidet sich an der Frage, ob bei der Installation von Apache einfache, selbst signierte Zertifikate automatisch erzeugt wurden.
+
+Dies erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Dateien existieren (bei RHEL ist als Startverzeichnis der Suche `/etc/httpd` anzugeben):
+
+[{shell}]
+----
+{c-root} *find /etc/apache2/ -type f -exec grep -Hn '^\s*SSLCertificate.*File' {} \;*
+/etc/apache2/sites-available/default-ssl.conf:32: SSLCertificateFile	/etc/ssl/certs/ssl-cert-snakeoil.pem
+/etc/apache2/sites-available/default-ssl.conf:33: SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
+----
+
+Prüfen Sie, ob die in der Konfigurationsdatei angegebenen Dateien existieren.
+Falls kein automatisch erstelltes Zertifikat vorhanden ist, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben – sonst schlägt der Neustart fehl.
+
+Sind Zertifikat und Schlüssel vorhanden, starten Sie den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` mit folgendem Befehl:
+
+[{shell}]
+----
+{c-root} *systemctl restart apache2*
+----
+
+Wieder gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
+Passen Sie in diesem Fall den Befehl an.
 
 *Hinweis:* In der {CMK}-Appliance aktivieren Sie xref:appliance_usage#ssl[HTTPS über die Weboberfläche!]
 
-== Konfiguration der HTTPS-Verbindung für eine Instanz
 
-Ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
+== Zertifikate erhalten
+
+Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat zu gelangen:
+
+* Sie greifen auf einen externen Dienstleister für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_) zurück, dessen Root-Zertifikat von Browser- und Betriebssystemherstellern vertraut wird.
+Mit diesem Verfahren können Zertifikate nicht nur auf link:https://en.wikipedia.org/wiki/Public_key_certificate#Validation_levels[Ebene] einer Domain validiert werden, sondern auch auf Organisationsebene (Organization Validation) und höher (Extended Validation), wie es in einigen Branchen aus regulatorischen Gründen verpflichtend ist.
+
+* Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Let's Encrypt_.]
+Dieses Verfahren erlaubt nur eine Validierung auf Domain-Ebene.
+Um Zertifikate anfordern zu können, muss der abzusichernde Server von außen erreichbar sein oder Sie müssen die Möglichkeit haben, (automatisiert) Einträge im öffentlichen DNS der verwendeten Domain anzulegen.
+
+* Sie werden Ihre xref:becomeca[eigene _Certificate Authority_ (CA)] und erzeugen Zertifikate selbst.
+Das Root-Zertifikat der eigenen CA muss auf allen Rechnern vorhanden sein, die mit Servern kommunizieren, die mit dem CA-Schlüssel signierte Zertifikate verwenden.
+Im Umgang mit der eigenen CA sollten hohe Sicherheitsstandards eingehalten werden, da mit dieser CA Zertifikate für beliebige Domains ausgestellt werden können.
+
+
+[#oldschoolcsr]
+=== Externe CA verwenden
+
+Zertifikate bei einer kommerziellen Certificate Authority signieren zu lassen, war lange Zeit der einzige Weg, von allen Browsern und Betriebssystemen akzeptierte Zertifikate zu erhalten. 
+Dieses Verfahren ist heute insbesondere dann noch üblich, wenn lange Gültigkeitszeiträume erwünscht sind.
+
+Die Abfolge ist, dass Sie zunächst den privaten Server-Schlüssel erzeugen und dann für diesen ein _Certificate Signing Request_ (CSR) erstellen, welches Sie an den ausgewählten Anbieter übertragen.
+Dieser prüft dann die Inhaberschaft der Domain, bestätigt das CSR mit seinem Schlüssel und schickt Ihnen das resultierende Server-Zertifikat.
+
+Beachten Sie -- ungeachtet der nachfolgenden Beispiele -- unbedingt auch die Vorgaben Ihrer Certificate Authority und ändern Sie die Kommandos gegebenenfalls entsprechend ab.
+
+
+[#createcsr]
+==== Schlüssel und CSR erzeugen
+
+Zunächst erzeugen Sie den privaten Server-Schlüssel.
+Diesen Schritt können Sie direkt auf dem Server durchführen, auf dem die abzusichernde {CMK}-Instanz läuft.
+
+Der verwendete Ordner `/etc/certs` entspricht dem Standard vieler Distributionen.
+Sie können aber jeden beliebigen Ordner verwenden, auf den der Apache-Prozess lesend zugreifen kann.
+Den Schlüssel nach dem primären Domain-Namen zu benennen, für den er verwendet wird (hier `checkmk.mydomain.com`), dient hier der besseren Übersicht.
+Insbesondere wenn später weitere Server-Namen hinzukommen sollten, für die eigene Schlüssel/Zertifikate verwendet werden, erleichtert dieses Namensschema die Zuordnung.
+
+Der private Schlüssel dient später der Verschlüsselung des Datenverkehrs und sollte entsprechend umsichtig behandelt werden (beispielsweise hinsichtlich der Zugriffsrechte).
+Um einen Neustart des Apache-Servers auch automatisiert durchführen zu können, vergeben die meisten Administratoren keine Passphrase.
+
+[{shell}]
+----
+{c-root} *openssl genrsa -out /etc/certs/checkmk.mydomain.com.key 2048*
+Generating RSA private key, 2048 bit long modulus (2 primes)
+.....+++++
+...............................................................+++++
+e is 65537 (0x010001)
+----
+
+Im nächsten Schritt erstellen Sie das Certificate Signing Request (CSR) – einen digitalen Antrag auf Erstellung eines Identitäts-Zertifikates (hier: Public-Key-Zertifikat):
+
+[{shell}]
+----
+{c-root} *openssl req -new -key checkmk.mydomain.com.key -out checkmk.mydomain.com.csr*
+You are about to be asked to enter information that will be incorporated
+into your certificate request.
+What you are about to enter is what is called a Distinguished Name or a DN.
+There are quite a few fields but you can leave some blank
+For some fields there will be a default value,
+If you enter '.', the field will be left blank.
+---
+Country Name (2 letter code) [AU]: *DE*
+State or Province Name (full name) [Some-State]: *Bavaria*
+Locality Name (eg, city) []: *Munich*
+Organization Name (eg, company) [Internet Widgits Pty Ltd]: *Yoyodyne Inc.*
+Organizational Unit Name (eg, section) []:
+Common Name (e.g. server FQDN or YOUR name) []: *checkmk.mydomain.com*
+Email Address []: *webmaster@mydomain.com*
+
+Please enter the following 'extra' attributes
+to be sent with your certificate request
+A challenge password []:
+An optional company name []:
+----
+
+Achten Sie darauf, die Angaben zum Unternehmen korrekt anzugeben und als `Common Name` den Server-Namen einzutragen.
+Die `Email Address` sollte in derselben Domain liegen und zu einem existierenden und gelesenen Postfach gehören.
+
+
+==== Extension-Datei erstellen
+
+Moderne Browser erfordern Zertifikate, welche die Erweiterung für _alternative Host-Namen_ nutzen, selbst wenn die Zertifikate nur für einen Host-Namen ausgestellt werden.
+Dies erfordert eine Extension-Datei, welche manche Anbieter automatisch erstellen und integrieren.
+Ist das nicht der Fall oder Sie sind unsicher, erstellen Sie eine solche Datei.
+Soll ein Zertifikat für mehrere Host-Namen gültig sein, folgen unter `[alt_names]` weitere Zeilen `DNS.2 =` und so weiter:
+
+./tmp/checkmk.mydomain.com.ext
+[{file}]
+----
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = checkmk.mydomain.com
+----
+
+
+==== Unterlagen einreichen
+
+Je nach angestrebter Validierungsebene kann es erforderlich sein, weitere Unterlagen wie Handelsregisterauszüge oder Bankdaten zusammenzustellen.
+Da die angeforderten Unterlagen, die Wege der Einreichung und die Wege der Bestätigung von Anbieter zu Anbieter verschieden sind, kann hier keine allgemein gültige Anleitung gegeben werden.
+So kann Extended Validation beispielsweise auch bedeuten, dass per Einschreiben ein Code an Geschäftsführer oder Prokurist verschickt wird, der über ein Webformular eingegeben werden muss.
+
+Im einfachsten Fall einer Validierung nur auf Domain-Ebene wird die CSR-Datei und gegebenenfalls die EXT-Datei über eine Weboberfläche hochgeladen.
+Sie erhalten dann die Möglichkeit, eine E-Mail-Adresse auszuwählen: aus den für Admin-C (Inhaber) oder Tech-C (technisch Verantwortlicher) der Domain hinterlegten oder einer generischen E-Mail-Adresse wie `webmaster@domain.com`.
+An diese Adresse wird dann ein Bestätigungslink verschickt.
+
+
+==== Zertifikat erhalten
+
+Der Prüfungsvorgang selbst dauert bei Validierung auf Domain-Ebene in der Regel maximal einige Minuten, bei Extended Validation manchmal mehrere Tage.
+Sobald dieser abgeschlossen ist, erhalten Sie das zu Ihrem Schlüssel gehörende Zertifikat per E-Mail oder Download.
+Neben dem Zertifikat erhalten Sie auch einen Downloadlink zur _Zertifikatskette_ (_Certificate Chain File_).
+Speichern Sie diese unbedingt mit ab. 
+
+
+[#letsencrypt]
+=== Let's Encrypt
+
+Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Name-Server, so können Sie automatisiert Zertifikate über den zu der Electronic Frontier Foundation (EFF) gehörenden Non-Profit-Dienstleister link:https://letsencrypt.org/#[Let's Encrypt^] erstellen lassen.
+Es entstehen keine Kosten.
+Per DNS validierte Zertifikate erfordern alle 90 Tage wenige Minuten Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden.
+
+Für Let's Encrypt-Zertifikate stellt die EFF das Python-Programm _Certbot_ in vielen verschiedenen Paketformaten bereit.
+Der Certbot übernimmt die Erstellung des Schlüssels, den Versand der CSR, die Prüfung der Inhaberschaft von Server oder Domain und lädt schließlich das Zertifikat herunter.
+Er kommuniziert hierfür über das Protokoll link:https://en.wikipedia.org/wiki/Automatic_Certificate_Management_Environment#[Automatic Certificate Management Environment (ACME)^] mit den Servern der EFF.
+
+==== Installation des Certbot-Skripts
+
+Es existieren drei Möglichkeiten, Certbot zu installieren.
+Welche Sie wählen, dürfte vor allem vom Alter der eingesetzten Distribution und den Richtlinien in Ihrem Unternehmen zur Installation aus fremden Paketquellen abhängen:
+
+* Wenn das Paketmanagement Ihrer Linux-Distribution Certbot-Version 1.10 oder höher bereitstellt, kann diese Certbot-Version verwendet werden.
+
+* Certbot ist über das Python-Paketinstallationstool `pip3` aus dem link:https://pypi.org/project/certbot/#[Python Package Index^] installierbar.
+Der Befehl `pip3 install certbot` installiert auch alle abhängig benötigten Python-Module. 
+
+* Die EFF bevorzugt auf ihrer link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite^] die Installation aus einem Snap-Image.
+Es gelten die bekannten Vor- und Nachteile des Snap-Paketformates.
+
+
+==== Vollautomatische Konfiguration
+
+Falls der {CMK}-Server aus dem Internet erreichbar ist und Sie an der Konfiguration des systemweiten Apache-Webservers seit der Installation von {CMK} keine Änderung vorgenommen haben, können Sie den "Apache-Automatismus" von Certbot verwenden.
+Mit diesem können Sie Schlüssel erzeugen, Zertifikate anfordern, die Apache-Konfiguration automatisch anpassen und schließlich einen Cronjob einrichten, um regelmäßig die 90 Tage laufenden Zertifikate zu erneuern.
+
+[{shell}]
+----
+{c-root} *certbot --apache*
+----
+
+Das Skript fragt nun interaktiv einige Informationen zu Kontaktdaten (E-Mail-Kontakt für zusätzliche Informationen wie notwendige Zertifikatsrückrufe) und Installationspfaden ab.
+Am Ende steht die funktionsfähige SSL-Konfiguration.
+Eine Anpassung der Konfigurationsdatei für `mod_ssl` ist nicht nötig, dies hat der Certbot bereits erledigt.
+
+==== Teilautomatische Konfiguration
+
+Falls Sie, wie im vorherigen Abschnitt beschrieben, Zertifikate anfordern, aber die Apache-Konfiguration selbst anpassen wollen, verwenden Sie den Befehl:
+
+[{shell}]
+----
+{c-root} *certbot certonly --apache*
+----
+
+Die Konfiguration schließen Sie dann xref:configsample[wie unten beschrieben] in der Konfigurationsdatei für `mod_ssl` ab.
+
+
+==== Weitere Möglichkeiten
+
+Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine _DNS-Challenge_ vornehmen.
+Hier wird die Inhaberschaft einer Domain nicht darüber geprüft, Dateien auf dem Webserver ablegen zu können, sondern darüber, dass Sie Einträge im DNS hinzufügen können.
+Dabei kommen keine Einträge zur Anwendung, die einen Host-Namen zu einer IP-Adresse auflösen, sondern sogenannte TXT-Einträge, die beliebige Zeichenketten enthalten können.
+TXT-Einträge werden beispielsweise auch verwendet, um anzugeben, welche Server E-Mails für eine Domain versenden dürfen.
+
+DNS-Challenges können manuell durchgeführt werden, was bei 90 Tagen Gültigkeit meist nur für einzelne Testsysteme praktikabel ist.
+Verfügt Ihr DNS-Anbieter über ein von Let's Encrypt unterstütztes API, kann auch eine automatische Erneuerung durchgeführt werden.
+Lesen Sie hierfür die link:https://letsencrypt.org/de/docs/challenge-types/[Übersicht der Challenge Typen^] bei Let's Encrypt.
+
+
+[#becomeca]
+=== Interne CA verwenden
+
+Sie können sich selbst in die Rolle einer Certificate Authority (CA) versetzen und Zertifikate für beliebige Domains (Ihre Domains, fremde Domains und Phantasie-Domains) ausstellen.
+Der Weg über die eigene CA ist vor allem für Testumgebungen oder abgeschottete {CMK}-Server mit überschaubarer Nutzerzahl sinnvoll.
+Dies ist zudem die einzige Möglichkeit, Zertifikate zu erhalten, wenn Sie intern eine der fünf reservierten Top-Level-Domains (TLD) `.example`, `.invalid`, `.local`, `.localhost` oder `.test` verwenden.
+Für diese Domains gibt es keine Registrare, folglich kann keine Inhaberschaft bestätigt werden.
+
+Dieses Kapitel erklärt die Ausstellung von Zertifikaten mit solch einer internen CA.
+Als Voraussetzungen werden angenommen, dass Sie bereits über den privaten CA-Root- oder CA-Intermediate-Schlüssel verfügen und diesen nun verwenden sollen, um Zertifikate zur Absicherung eines {CMK}-Servers auszustellen. 
+Die Erstellung der CA-Schlüssel, des CA-Zertifikats und der dazugehörigen Konfigurationsdatei ist nicht Bestandteil dieser Anleitung.
+
+
+==== Schlüssel und CSR erzeugen
+
+Gehen Sie für die Erstellung von Server-Schlüssel, Certificate Signing Request (CSR) und Extension-Datei so vor, wie es im Abschnitt zur xref:createcsr[Zertifikatsausstellung über eine kommerzielle CA] beschrieben ist.
+Die Vorgehensweise und die benötigten Dateien sind identisch.
+
+
+[#signyourself]
+==== CSR signieren
+
+Um selbst Zertifikate zu signieren, benötigen Sie wenigstens einen privaten Schlüssel (hier `intermediate.key.pem`) und das dazugehörige Intermediate-Zertifikat `intermediate.pem`.
+Falls Sie zudem über eine Konfigurationsdatei verfügen, ist der Pfad zu dieser mit dem Parameter `--config` anzugeben.
+
+Die Signatur auf Basis der CSR-Datei `checkmk.mydomain.com.csr`, Extension-Datei `checkmk.mydomain.com.ext` und der Ausgabedatei `checkmk.mydomain.com.crt` erledigen Sie dann mit folgendem Befehl:
+
+[{shell}]
+----
+{c-user} openssl x509 -CAcreateserial -req \
+    -in checkmk.mydomain.com.csr \
+    -CA intermediate.pem -CAkey intermediate.key.pem \
+    -out checkmk.mydomain.com.crt -days 365 \
+    -sha256 -extfile checkmk.mydomain.com.ext
+----
+
+Neben dem hier erstellten Server-Zertifikat `checkmk.mydomain.com.crt` müssen Sie Ihr CA-Zertifikat `intermediate.pem` weitergeben.
+Falls Sie nicht Root-CA sind, müssen Sie zusätzlich auch das Root-Zertifikat (im weiteren Text als `ca_certificate_intern.pem` referenziert) weitergeben.
+
+
+==== Zertifikat importieren
+
+Die Wege, ein CA-Zertifikat als vertrauenswürdig zu importieren, unterscheiden sich von Browser zu Browser.
+Meist genügt es, das Zertifikat `ca_certificate_intern.pem` unter [.guihint]#Einstellungen > Datenschutz# und [.guihint]#Sicherheit > Zertifikate > Importieren# hinzuzufügen. 
+
+Damit die Zertifikatsverwaltung kein Stolperstein beim automatischen Agenten-Update in den {CEE} darstellt, haben wir in der xref:glossar#agent_bakery[Agentenbäckerei] die Möglichkeit vorgesehen, ein xref:agent_deployment#certificates_for_https[eigenes CA-Zertifikat] zu übergeben, das nur für Agenten-Updates benutzt wird.
+Die Systemzertifikate werden hierbei nicht angetastet, und Agenten-Updates sind dennoch möglich.
+// MA: Es ist sogar noch restriktiver. Agenten-Updates sind nur möglich, wenn die Full-Chain in der config des Updaters hinterlegt wurde. Der ignoriert nämlich alle Zertifikate, außer dem, das er gesagt bekommen hat.
+
+Alternativ zur Verteilung per Agenten-Update können Sie das Root-Zertifikat in der lokalen CA-Datenbank des Hosts integrieren.
+Kopieren Sie dafür die Datei `ca_certificate_intern.pem` nach `/usr/local/share/ca-certificates/`.
+Anschließend generieren Sie den Cache neu:
+// MA: Das sollte eigentlich nicht funktionieren. Aus den oben genannten Gründen.
+
+[{shell}]
+----
+{c-root} *update-ca-certificates*
+----
+
+Unter Windows ist es möglich, die Systemzertifikate über das MMC-Snap-In "Certificates" zu verwalten.
+Dies ist beispielsweise nötig, wenn Sie einen Microsoft-Browser verwenden wollen, um auf ein mit eigener CA abgesichertes {CMK} zuzugreifen.
+Das genaue Vorgehen können Sie im link:https://docs.microsoft.com/de-de/troubleshoot/windows-server/windows-security/import-third-party-ca-to-enterprise-ntauth-store#method-1---import-a-certificate-by-using-the-pki-health-tool[Microsoft Knowledge Base Artikel PKI^] nachlesen.
+Alternativ können Sie Zertifikate per link:https://docs.microsoft.com/de-de/mem/intune/protect/certificates-configure[Intune^] verteilen.
+
+
+[#configsample]
+== HTTPS-Verbindung für eine Instanz konfigurieren
+
+Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und Intermediate-Zertifikat angeben. Beachten Sie, dass es sich hier um Konfigurationen für den Webserver `apache2` handelt und diese nicht spezifisch für {CMK} sind. Daher ist die verwendete Konfigurationsdatei unter debian-basierten Systemen in der Regel der Standard `/etc/apache2/sites-enabled/default-ssl.conf`. Der Pfad kann jedoch bei älteren Distributionen abweichen.
+
+Im Beispiel unten bezeichnet das `SSLCertificateKeyFile` den eingangs erzeugten privaten Schlüssel für diesen Server.
+`SSLCertificateChainFile` enthält das Intermediate Certificate oder gegebenenfalls aneinandergereihte Intermediate Certificates.
+Lediglich bei einer internen CA, wo direkt mit dem CA-Schlüssel signiert wird, fällt dieses weg.
+
+Viele kommerzielle Anbieter verwenden eher generische Dateinamen, wenn Sie diese übernehmen, wird die Konfiguration ähnlich zu der Folgenden aussehen:
+
+./etc/apache2/sites-enabled/default-ssl.conf
+[source,apache]
+----
+SSLEngine on
+SSLCertificateKeyFile /etc/certs/checkmk.mydomain.com.key
+SSLCertificateChainFile /etc/certs/ca_bundle.crt
+SSLCertificateFile /etc/certs/certificate.crt
+----
+
+Wenn Sie Let's Encrypt verwendet haben, um Zertifikate zu generieren, aber die Konfiguration manuell aktualisieren wollen, finden Sie die Pfade unterhalb `/etc/letsencrypt/live` heraus und tragen Sie diese ein:
+
+./etc/apache2/sites-enabled/default-ssl.conf
+[source,apache]
+----
+SSLEngine on
+SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
+SSLCertificateChainFile /etc/letsencrypt/live/checkmk.mydomain.com/chain.pem
+SSLCertificateFile /etc/letsencrypt/live/checkmk.mydomain.com/cert.pem
+----
+
+[#httpsredirect]
+=== HTTPS-Weiterleitung hinzufügen
+
+Apache arbeitet mit virtuellen Hosts, um unter einer IP-Adresse verschiedene Inhalte bereitstellen zu können.
+Wird im Apache-Kontext der Begriff "Site" verwendet, ist solch ein virtueller Host, keine {CMK}-Site gemeint.
+Auf einem reinen {CMK}-Server wird in der Regel nur ein virtueller Host mit einem Servernamen verwendet, unter dem dann alle {CMK}-Sites erreichbar sind.
+Die `VirtualHost`-Konfiguration befindet sich – je nach eingesetzter Distribution – in einer dieser Dateien:
+
+[cols="25,~"]
+|===
+|Debian, Ubuntu |`/etc/apache2/sites-enabled/000-default`(`.conf`)
+|RHEL, CentOS |`/etc/httpd/conf.d/ssl.conf`
+|SLES |`/etc/apache2/httpd.conf`
+|===
+
+Das folgende Beispiel geht davon aus, dass Sie eine einzige Konfigurationsdatei für unverschlüsselte Verbindungen auf Port 80 und verschlüsselte Verbindungen auf 443 nutzen.
+In diesem Fall ergänzen Sie im Abschnitt für den `VirtualHost` folgende Zeilen:
+// MFS: Siehe auch: https://forum.checkmk.com/t/include-apache-config-for-x-forwarded-proto/29869
 
 ./etc/apache2/sites-enabled/000-default
 [source,apache]
 ----
 RewriteEngine On
+# Never forward request for .well-known (important when using Let's Encrypt)
+RewriteCond %{REQUEST_URI} !^/.well-known
+# Next 2 lines: Force redirection if incoming request is not on 443
 RewriteCond %{SERVER_PORT} !^443$
 RewriteRule (.*) https://%{HTTP_HOST}$1 [L]
-RequestHeader set X-Forwarded-Proto "https"
+# This section passes the system Apaches connection mode to the 
+# instance Apache. Make sure mod_headers is enabled, otherwise it
+# will be ignored and "Analyze configuration" will issue "WARN".
+<IfModule headers_module>
+    RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}
+    RequestHeader set X-Forwarded-SSL expr=%{HTTPS}
+</IfModule>
 ----
 
-Die `VirtualHost`-Konfiguration befindet sich -- je nach
-eingesetzter Distribution -- in diesen Dateien:
+Die beiden Zeilen `RequestHeader set X-Forwarded...` stellen hier sicher, dass dem xref:ports#loopback[Site-Apache auf Port 5000]  mitgeteilt wird, dass ein Aufruf über SSL erfolgte, Sicherheitsregeln also eingehalten wurden.
 
-[cols=2]
-|===
-
-|Debian, Ubuntu |/etc/apache2/sites-enabled/000-default(.conf)
-|RHEL, CentOS |/etc/httpd/conf.d/ssl.conf
-|SLES |/etc/apache2/httpd.conf
-|===
-
-Nach der Konfigurationsänderung muss der Webserver durchgestartet werden.
-Je nach eingesetzter Distribution sind die Befehle dafür unterschiedlich:
+Nach der Konfigurationsänderung muss der Webserver neu gestartet werden:
 
 [{shell}]
 ----
-{c-root} service httpd restart
-{c-root} service apache2 restart
-{c-root} systemctl restart httpd
-{c-root} systemctl restart apache2
+{c-root} *systemctl restart apache2*
 ----
+
+Erneut gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
+Passen Sie in diesem Fall den Befehl an.
 
 
 == Zusätzliche Optionen
 
-
 === HSTS einrichten
 
-Den {CMK}-Server nur noch mittels HTTPS erreichbar zu machen, ist der erste und wichtigste Schritt, um Verbindungen zum Monitoring abzusichern. Erhöhen kann man die Sicherheit aber mit zusätzlichen, optionalen Einstellungen.
+Den {CMK}-Server nur noch mittels HTTPS erreichbar zu machen, ist der erste und wichtigste Schritt, um Verbindungen zum Monitoring abzusichern.
+Erhöhen kann man die Sicherheit aber mit zusätzlichen, optionalen Einstellungen.
 So kann der Webserver dem Browser mitteilen, dass er in Zukunft bitte nur noch über HTTPS angesprochen werden soll und eine ungesicherte Verbindung über HTTP immer abgelehnt wird.
 
-Diese Technik nennt sich `HTTP Strict Transport Security` (HSTS) und wird für einen bestimmten Zeitraum in Sekunden gesetzt.
+Diese Technik nennt sich HTTP Strict Transport Security (HSTS) und wird für einen bestimmten Zeitraum in Sekunden gesetzt.
 Ist dieser Zeitraum abgelaufen, prüft der Browser erneut, ob die Limitierung über HSTS weiterhin gültig ist.
+
+[#hsts_specifics]
+==== Besonderheiten
+
+Die Einrichtung von HSTS bietet den Vorteil, dass nur sichere Verbindungen genutzt werden.
+Der Einsatz bringt auch bestimmte Besonderheiten mit sich, derer man sich _vor_ der Umstellung bewusst sein muss:
+
+* Ist der Eintrag zu HSTS einmal vom Browser des Benutzers angelegt, kann er -- zumindest vor Ablauf der Zeit -- nur mit entsprechendem Detailwissen zu dem jeweiligen Browser entfernt werden. Beachten Sie, dass viele Benutzer dieses Wissen nicht haben.
+
+* Die Verbindung wird u.a. dann abgelehnt, wenn das Zertifikat abgelaufen ist oder durch ein selbst-signiertes ausgetauscht wurde.
+Solche Seiten können auch nicht mit einer Ausnahme zum temporären Vertrauen eines Zertifikats aufgerufen werden.
+
+* HSTS wird umgekehrt nur dann berücksichtigt, wenn dem Zertifikat beim ersten Verbindungsaufbau *vertraut* wird.
+Ansonsten legt der Browser keinen Eintrag zu HSTS an, so dass der zusätzliche Schutzmechanismus nicht benutzt wird.
+
+
+==== Konfiguration des Apache-Webservers
+
 Um die Option zu setzen, fügen Sie den folgenden Eintrag der HTTPS-Konfiguration hinzu.
 Unter Debian/Ubuntu ist das standardmäßig die Datei `default-ssl.conf`:
 
 ./etc/apache2/sites-enabled/default-ssl.conf
 [source,apache]
 ----
-Header always set Strict-Transport-Security "max-age=31536000"
+Header always set Strict-Transport-Security "max-age=43200"
 ----
 
-*Wichtig*: Setzen Sie zunächst einen kurzen Zeitraum -- z.B. 3600 Sekunden --, um die Einstellung zu testen, da es sein kann, dass ansonsten die Verbindung im Fehlerfall dauerhaft abgelehnt wird!
+*Wichtig*: Setzen Sie zunächst einen kurzen Zeitraum -- z.B. 600 Sekunden --, um die Einstellung zu testen, da es sein kann, dass ansonsten die Verbindung im Fehlerfall für einen sehr langen Zeitraum abgelehnt wird!
 Mehr dazu auch bei den xref:hsts_specifics[Besonderheiten].
 
-Um zu sehen, ob die neue Einstellung funktioniert, können sie mit Hilfe des Programms `curl` den Server abrufen.
+Um zu sehen, ob die neue Einstellung funktioniert, können Sie mit Hilfe des Programms `curl` den Server abrufen.
 Hier in der Ausgabe nur die ersten 4 Zeilen:
 
-[{shell-raw}]
+[{shell}]
 ----
-{c-root} curl -I https://myHost/mySite/check_mk/login.py
+{c-root} *curl -I \https://mycmkserver/mysite/check_mk/login.py*
 HTTP/1.1 200 OK
 pass:q[*Date*]: Tue, 01 Jun 2021 09:30:20 GMT
 pass:q[*Server*]: Apache
 pass:q[*Strict-Transport-Security*]: max-age=3600
 ----
-
-
-[#hsts_specifics]
-==== Besonderheiten
-
-Die Einrichtung von HSTS hat nicht nur den Vorteil der Sicherstellung, dass nur sichere Verbindungen genutzt werden.
-Der Einsatz bringt auch bestimmte Besonderheiten mit sich, derer man sich _vor_ der Umstellung bewusst sein muss:
-
-* Ist der Eintrag zu dem HSTS einmal vom Browser des Benutzers angelegt, kann er -- zumindest vor Ablauf der Zeit -- nur mit entsprechendem Detailwissen zu dem jeweiligen Browser entfernt werden. Beachten Sie, dass das auf viele Benutzer nicht zutrifft.
-* Die Verbindung wird u.a. dann abgelehnt, wenn das Zertifikat abgelaufen ist oder durch ein selbst-signiertes ausgetauscht wurde.
-Solche Seiten können auch nicht mit einer Ausnahme umgangen werden.
-* HSTS wird umgekehrt nur dann berücksichtigt, wenn dem Zertifikat beim ersten Verbindungsaufbau *vertraut* wird.
-Ansonsten legt der Browser keinen Eintrag zum HSTS an, so dass der zusätzliche Schutzmechanismus nicht benutzt wird.
