@@ -132,6 +132,53 @@ Ist die Datei älter, wird sie vom Agenten ignoriert und der zugehörige Service
 // MFS: Zusammenspiel besser erläutert.
 Im Falle einer Datei `3900_hourly_cleaner.txt` ist die Zahl demnach passend gewählt für einen stündlich laufenden Cronjob, bei dem eine Ausführungszeit von unter fünf Minuten erwartet wird. 
 
+[#example]
+== Ein Praxisbeispiel
+
+Nehmen wir an, Sie betreiben einen Dienst, an dem sich Nutzer an- und abmelden.
+In den Logdateien des Dienstes finden Sie Zeilen der folgenden drei Arten vor:
+
+./var/log/dummyapp.log
+[{file}]
+----
+21/Oct/2022:12:42:09 User harrihirsch logged in from 12.34.56.78
+21/Oct/2022:12:42:23 User zoezhang logged out after 10 min idle
+21/Oct/2022:13:00:00 Current user count: 739
+----
+
+Die Zeile _Current user count: …_ schreibt der Prozess dabei nicht nach jedem Login/Logout, sondern in festen Zeitabständen.
+Ist die Zahl der Zeilen in der Logdatei klein genug, um sie schnell einzulesen, können Sie einen xref:localchecks#[lokalen Check] programmieren.
+Dieser liest jedes Mal die ganze Logdatei Zeile für Zeile und setzt immer beim Vorkommen der Zeile _Current user count: …_ die Nutzerzahl auf den angezeigten Wert. 
+Bei Vorkommen der Zeilen _logged in_ und _logged out_ inkrementiert oder dekrementiert er die Nutzerzahl.
+Am Ende gibt Ihr Check eine Zeile ähnlich der folgenden aus:
+
+.Beispiel-Output
+[{file}]
+----
+1 "Frobolator User Count" count=1023 Watch out! Limit nearly used up.
+----
+
+Mit steigender Beliebtheit Ihres Dienstes läuft der lokale Check immer länger, so dass irgendwann auch die Ausführung als asynchrones Agenten-Plugin nicht mehr praktikabel ist.
+
+An dieser Stelle kommt das Spool-Verzeichnis ins Spiel.
+Ändern Sie Ihr Programm so ab, dass es am Ende der Datei angekommen, sich nicht mit einer Ausgabe beendet, sondern zunächst eine Spool-Datei schreibt:
+
+./var/lib/check_mk_agent/spool/1800_frobolator.txt
+[{file}]
+----
+<<<local>>>
+2 "Frobolator User Count" count=1200 Maximum number of users reached!
+----
+
+Ihr Programm wartet dann eine gewisse Zeitspanne – ob wenige Sekunden oder mehrere Minuten, sollten Sie von der Frequenz neu hinzukommender Log-Einträge abhängig machen.
+Es wertet dann nur die neu hinzugekommenen Zeilen aus, berechnet den Zustand neu und schreibt die Spool-Datei frisch, wenn geänderte Zahlen vorliegen.
+Um abzufangen, dass dieses Programm auch abstürzen kann, sollten Sie die Logdatei entsprechend benennen, beispielsweise `1800_frobolator.txt`, wenn 30 Minuten ohne Login/Logout auf Probleme des Dienstes oder des auswertenden Programmes hindeuten.
+
+Anstatt über das Plugin-Verzeichnis des Agenten starten Sie das Programm jetzt als _Daemon_ oder _Hintergrundprogramm_ mit den Mitteln Ihres Betriebssystems.
+Achten Sie hierbei auf automatischen Neustart, wenn das Programm abstürzt oder terminiert wird.
+Viele Serverapplikationen bieten zudem die Möglichkeit, statt oder zusätzlich zum Schreiben normaler Logdateien, einem anderen Programm Log-Ausgaben per Pipe zu übergeben.
+Diesen Mechanismus für ein Auswertungsskript zu nutzen, das Spool-Dateien schreibt, bietet sich ebenfalls an.
+
 [#pitfalls]
 == Zu beachtende Feinheiten
 
