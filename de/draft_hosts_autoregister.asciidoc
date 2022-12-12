@@ -1,0 +1,287 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= Hosts automatisch erstellen lassen
+:revdate: draft
+:title: Hosts automatisch erstellen lassen
+:description: {CMK}-Instanz und -Agent können so vorbereitet werden, dass Hosts automatisch erstellt werden. Die Einrichtung beschreibt dieser Artikel.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:agent_linux#[Linux überwachen]
+xref:agent_windows#[Windows überwachen]
+{related-end}
+
+
+////
+- ToDo: Bilder mit hilite
+////
+
+
+[#autoregister]
+== Die Autoregistrierung
+
+{cpe-only}
+Cloud-Systeme wie xref:monitoring_aws#[Amazon Web Services (AWS)], xref:monitoring_azure#[Microsoft Azure] oder xref:draft_monitoring_gcp[ Google Cloud Platform (GCP)] erzeugen und löschen selbständig Objekte, 
+die in {CMK} xref:glossar#host[Hosts] entsprechen.
+Damit diese Cloud-Objekte nach ihrer Entstehung ohne Verzögerung als Hosts ins Monitoring von {CMK} aufgenommen werden können, ist eine Lösung ohne manuelles Eingreifen gefragt.
+Mit der _Autoregistrierung_ gibt {CMK} die Antwort -- und kann Hosts automatisch erstellen lassen.
+Da die automatische Host-Erstellung vor allem für die Cloud-Umgebungen benötigt wird, ist die Autoregistrierung nur in der {CPE} verfügbar.
+
+Die Autoregistrierung erfolgt durch Kommunikation zwischen dem xref:wato_monitoringagents#agents[{CMK}-Agenten] und dem {CMK}-Server.
+Der Agent Controller des Agenten stellt eine Anfrage zur Registrierung an den Agent Receiver des Servers und übermittelt dabei die zur Erstellung des Hosts notwendigen Daten.
+Wenn der Agent Receiver die Anfrage akzeptiert, wird die Registrierung durchgeführt und eine TLS-verschlüsselte Verbindung aufgebaut.
+Der Host wird erstellt, eine xref:glossar#service_discovery[Service-Erkennung] durchgeführt und die Änderungen aktiviert,
+so dass der Host in die xref:glossar#monitoring_environment[Monitoring-Umgebung] aufgenommen wird -- alles vollautomatisch.
+
+Damit dieser Automatismus funktioniert, ist natürlich eine entsprechende Vorbereitung notwendig.
+Los geht es mit der {CMK}-Instanz: mit der Erstellung eines Benutzers, der die Berechtigung zur Autoregistrierung besitzt, eines Ordners, in dem die Hosts erstellt werden sollen, 
+und einer Regel, mit der der Agent Receiver Registrierungsanfragen ohne manuellen Eingriff abarbeiten kann.
+Bei der Konfiguration des Ordners können Sie übrigens festlegen, ob die Agenten der dort zu erstellenden Hosts im xref:glossar#pull_mode[Pull-Modus] oder im xref:glossar#push_mode[Push-Modus] der {PE} arbeiten sollen.
+
+Dann folgt der {CMK}-Agent: Hier werden per Agentenregel die Informationen für eine Registrierungsanfrage festgelegt und dann mit der Agentenbäckerei in ein Agentenpaket verpackt.
+Dieses für die Autoregistrierung konfigurierte Agentenpaket wird abschließend auf den Hosts installiert, die eine Autoregistrierung durchführen können sollen.
+// TK: Wie kommt das Agentenpaket auf die Ziel-Hosts? oder anders: Wenn ich die Hosts schon kenne, wofür braucht es dann die Autoregistrierung?
+
+Wie das alles genau abläuft, wird den folgenden Kapiteln erklärt.
+
+
+[#setup_autoregister]
+== Autoregistrierung einrichten
+
+[#new_user]
+=== Benutzer für die Autoregistrierung anlegen
+
+Die Berechtigung, die zur Registrierung von Hosts benötigt wird, ist in der xref:wato_user#roles[Rolle] [.guihint]#Agent registration user# enthalten -- und zwar nur diese eine Berechtigung und keine andere.
+Dadurch können Sie gezielt einen Benutzer erstellen, der nichts anderes darf, als neue Hosts zu registrieren.
+
+Starten Sie die Erstellung eines xref:glossar#automation_user[Automationsbenutzers] mit [.guihint]#Setup > Users > Users > Add user,# 
+so wie es im Artikel zur xref:wato_user#user_config[Benutzerverwaltung] beschrieben ist.
+Geben Sie zuerst im Kasten [.guihint]#Identity#  den Benutzernamen und den vollständigen Namen ein.
+Wichtig hier sind zwei Optionen im Kasten [.guihint]#Security:#
+Wählen Sie [.guihint]#Automation secret for machine accounts# und geben das Automationspasswort ein oder lassen Sie es auswürfeln.
+Weisen Sie dem Benutzer unter [.guihint]#Roles# ausschließlich die Rolle [.guihint]#Agent registration user# zu.
+Diese Rolle ist nur in der {PE} verfügbar.
+
+.Mit Automationspasswort und Rolle wird der neue Benutzer für die Autoregistrierung erstellt
+image::hosts_autoregister_new_user.png[alt="Dialog zur Erstellung eines neuen Benutzers mit der Rolle 'Agent registration user'."]
+
+Durch Festlegung der genannten Optionen stellen Sie sicher, dass der neue Benutzer nur für die Autoregistrierung verwendet werden kann.
+Sichern Sie Ihre Eingaben mit [.guihint]#Save.#
+
+
+[#new_folder]
+=== Ordner für die neuen Hosts einrichten
+
+Die automatisch erstellten Hosts sollen in einem neuen Ordner angelegt werden.
+Sie können alternativ auch einen bestehenden Ordner verwenden, wenn Sie ihn so konfigurieren, wie es im Folgenden beschrieben ist.
+
+Starten Sie die Erstellung eines Ordners mit [.guihint]#Setup > Hosts > Hosts > Add folder.# 
+Geben Sie dem Ordner im Kasten [.guihint]#Basic settings# einen Namen.
+
+Im Kasten [.guihint]#Network address# geht es um die Option [.guihint]#IP address family.#
+Sollen die {CMK}-Agenten der zu erstellenden Hosts den xref:glossar#pull_mode[Pull-Modus] verwenden, können Sie den Standardwert [.guihint]#IPv4 only# unverändert lassen.
+Für den xref:glossar#push_mode[Push-Modus] wählen Sie den Wert [.guihint]#No IP# aus.
+// TK: Begründung fehlt, warum für Push No IP braucht.
+
+Im folgenden Kasten [.guihint]#Monitoring agents# setzen Sie zwei wichtige Optionen für die Autoregistrierung.
+Mit [.guihint]#Checkmk agent connection mode# entscheiden Sie, ob der {CMK}-Agent im Pull-Modus oder (wie im folgenden Bild) im Push-Modus arbeiten soll.
+Diese Option gibt es nur in der {PE}.
+Aktivieren Sie schließlich bei [.guihint]#Bake agent packages# die Checkbox [.guihint]#Bake a generic agent package for this folder.#
+Damit nutzen Sie die Möglichkeit der xref:glossar#agent_bakery[Agentenbäckerei], 
+eine generische Konfiguration für einen Ordner und alle darin enthaltenen *und* hinzukommenden Hosts zu erstellen.
+// TK: Ggf. Link zur Agentenbäckerei ersetzen, wenn das Werk #14647 dort beschrieben ist
+
+.Die Konfiguration eines Ordners für den Push-Modus
+image::hosts_autoregister_new_folder.png[alt="Dialog zur Erstellung eines neuen Ordners für die Autoregistrierung."]
+
+Schließen Sie auch die Erstellung des Ordners mit [.guihint]#Save# ab.
+
+
+[#rule_autoregister_site]
+=== Regel für die {CMK}-Instanz erstellen
+
+Die Entscheidung darüber, welche Hosts sich automatisch registrieren dürfen, welche Namen sie erhalten und was sonst noch nach der Registrierung mit ihnen geschieht, 
+wird in {CMK} -- wenig überraschend -- mit Regeln getroffen.
+Dabei spielen die Labels, mit denen sich der Agent des Hosts bei der Registrierung meldet, eine entscheidende Rolle.
+Doch der Reihe nach.
+
+Den Regelsatz [.guihint]#Agent registration# gibt es nur in der {PE}.
+Sie finden ihn unter [.guihint]#Setup > Agents# und starten mit [.guihint]#Add rule# die Erstellung einer neuen Regel. 
+Im ersten Kasten [.guihint]#Properties# vergeben Sie, wie bei {CMK} gewohnt, zuerst eine ID und einen Titel.
+
+Im folgenden Kasten [.guihint]#Matching criteria# bestimmen Sie, welche Labels akzeptiert werden, wenn der {CMK}-Server eine Anfrage zur Registrierung von einem Agenten erhält.
+Diese _Agenten-Labels_ werden ausschließlich für die Autoregistrierung verwendet und sind andere als die xref:glossar#label[Labels], die sonst in {CMK} zur Kennzeichnung von Hosts und Services verwendet werden.
+Zwei Agenten-Labels werden vom {CMK}-Agenten geliefert und können in der Liste ausgewählt werden:
+`cmk/hostname-simple` enthält den Host-Namen ohne Domain-Anteil (daher `simple`) und ist für die Bestimmung eines eindeutigen Host-Namens in {CMK} gedacht.
+`cmk/os-family` liefert das Betriebssystem des Hosts und kann z.B. für die Ablage der Hosts in unterschiedlichen Ordnern verwendet werden.
+Sie können mit [.guihint]#Custom label# aber auch Ihre eigenen Labels eintragen. 
+
+Dabei wird das durch Doppelpunkt getrennte Schlüssel-Wert-Paar, aus dem sich ein Label zusammensetzt (z.B. `cmk/os-family:linux`) separat ausgewertet.
+So können Sie gezielt festlegen, dass ein Schlüssel (z.B. `cmk/os-family`) vorhanden sein muss ([.guihint]#Exists#), nicht vorhanden sein darf ([.guihint]#Does not exist#) oder nur mit einem vorgegebenen Wert ([.guihint]#Equals#) akzeptiert wird.
+Als Wert können Sie auch einen xref:regexes#[regulären Ausdruck] ([.guihint]#Regex#) eingeben.
+Wenn Sie mehrere Agenten-Labels festlegen, werden diese logisch mit UND verknüpft.
+
+.Hier wird nur überprüft, ob das Label mit dem Schlüssel `cmk/hostname-simple` existiert
+image::hosts_autoregister_rule_matching_criteria.png[alt="Regel zur Autoregistrierung mit Festlegung der zulässigen Labels."]
+// TK: Im Beispiel zusätzlich ein Custom label eintragen, dass in der folgenden Bakery Regel wiederaufgenommen wird?
+
+*Hinweis*: Jeder Host, der erfolgreich automatisch registriert wurde, erhält von {CMK} das Host-Label `cmk/agent_auto_registered:yes` angehängt.
+Dieses Label können Sie aber hier nicht verwenden, da es kein Agenten-Label ist und erst _nach_ der Registrierung vergeben wird.
+
+Im nächsten Kasten [.guihint]#Action# bestimmen Sie, was passieren soll, wenn die Auswertung der Labels _matcht_: Den Host erstellen oder eben nicht.
+Bei Auswahl von [.guihint]#Stop and do create hosts# ist die Regelauswertung abgeschlossen und die beiden folgenden Kästen werden nicht mehr betrachtet.
+In unserem Beispiel sollen aber Hosts erstellt werden:
+
+.Die Standardaktion ist die Erstellung der Hosts
+image::hosts_autoregister_rule_action.png[alt="Regel zur Autoregistrierung mit Festlegung der durchzuführenden Aktion."]
+// TK: Screenshot drinlassen oder weg wg. trivial?
+
+Im Kasten [.guihint]#Hostname computation# legen Sie nun fest, welchen Namen der Host erhalten soll.
+Im Feld [.guihint]#Hostname template# geben Sie die Vorlage ein.
+Hier können Sie per Makro auf die Werte derjenigen Agenten-Labels zugreifen, die Sie im obigen Kasten [.guihint]#Matching criteria# ausgewählt haben, 
+z.{nbsp}B. mit `$cmk/hostname-simple$` auf den vom {CMK}-Agenten gelieferten einfachen Host-Namen.
+Die Vorlage können Sie dann, wenn gewünscht, verändern durch Umwandlung in Klein- oder Großbuchstaben sowie Ersetzungen mit regulären Ausdrücken und mit expliziten Host-Namen.
+Dies sind übrigens die gleichen Optionen, die es bei der xref:piggyback.html#renamehosts[Anpassung der Namen von Piggyback Hosts] gibt.
+Mehr Informationen finden Sie auch in der xref:user_interface#inline_help[Inline-Hilfe.]
+
+.Übernahme des einfachen Host-Namens, ergänzt um den Prefix `push-`
+image::hosts_autoregister_rule_hostname_computation.png[alt="Regel zur Autoregistrierung mit Festlegung des Host-Namens."]
+
+Zum Schluss wählen Sie dann noch im Kasten [.guihint]#Host creation# den xref:new_folder[vorbereiteten Ordner] aus, in dem die neuen Hosts landen sollen.
+Zusätzlich können Sie noch Attribute bestimmen, die dem Host mitgegeben werden sollen.
+Mehr zu diesen Attributen erfahren Sie im Artikel zur xref:hosts_setup#create_hosts[Verwaltung der Hosts.]
+
+.Die neuen Hosts sollen im vorbereiteten Ordner `Autoregistered` erstellt werden
+image::hosts_autoregister_rule_host_creation.png[alt="Regel zur Autoregistrierung mit Festlegung des Zielordners und der Host-Attribute."]
+
+Nach dem Sichern der Regel, kehren Sie zur Seite [.guihint]#Agent registration# zurück.
+Hier finden Sie den [.guihint]#Agent labels simulator#.
+Wenn Sie viele Regeln definiert haben, hilft Ihnen der Simulator dabei, den Überblick zu behalten.
+Sie können Agenten-Labels eingeben und mit [.guihint]#Try out# simulieren, ob und welche Regel bei der Übermittlung eines Agenten-Labels greift. 
+Im Ergebnis sehen Sie dann die farbigen Ampelsymbole, die im Artikel zu den xref:wato_rules.html#analyse_traffic_light[Regeln] beschrieben sind.
+
+
+[#rule_autoregister_bakery]
+=== Regel für die Agentenbäckerei erstellen
+
+Nachdem im vorherigen Abschnitt die {CMK}-Instanz konfiguriert wurde, geht es jetzt um den Agent Controller des {CMK}-Agenten.
+Hierfür nutzen Sie den Regelsatz [.guihint]#Agent controller auto-registration# der Agentenbäckerei, der nur in der {PE} vorhanden ist.
+Sie finden den Regelsatz in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent > Agent rules.#
+Erstellen Sie eine neue Regel.
+
+In Kasten [.guihint]#Agent controller auto-registration# geben Sie dem Agent Controller alle Informationen mit, 
+die dieser für eine Registrierungsanfrage beim Agent Receiver benötigt:
+den {CMK}-Server ([.guihint]#Monitoring server address#), 
+gegebenenfalls mit der Portnummer des Agent Receivers ([.guihint]#Agent receiver port#),
+die {CMK}-Instanz ([.guihint]#Site to register with#) und 
+den xref:new_user[vorbereiteten Automationsbenutzer] für die Autoregistrierung.
+
+Sie können auch hier eigene Labels definieren.
+Damit die Autoregistrierung funktioniert, müssen diese Labels zu denen passen, 
+die Sie in der xref:rule_autoregister_site[Regel für die {CMK}-Instanz] als [.guihint]#Custom label# eingetragen haben.
+Mit der letzten Option [.guihint]#Keep vanished connections# bestimmen Sie, 
+ob der Agent Controller bereits existierende Verbindungen zu einem {CMK}-Server löschen ([.guihint]#no#) oder behalten soll ([.guihint]#yes#).
+
+.Die Werte für die Agentenbäckerei müssen zu denen der {CMK}-Instanz passen
+image::hosts_autoregister_rule_agent_bakery.png[alt="Regel zur Autoregistrierung für die Agentenbäckerei."]
+
+*Wichtig:* Im letzten Kasten [.guihint]#Conditions# dieser Regel wählen Sie als [.guihint]#Folder# erneut den vorbereiteten Ordner aus.
+
+
+[#bake]
+=== Agentenpaket backen
+
+Nun geht es weiter in der Agentenbäckerei mit [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX.#
+Klicken Sie auf icon:button_bake_agents[alt="Symbol zum Backen der Agenten."] und backen Sie sich einen neuen Agenten.
+Als Ergebnis erhalten Sie zusätzlich zur Konfiguration [.guihint]#Vanilla# eine neue Zeile für die Konfiguration, in der die im vorherigen Abschnitt erstellte Regel eingebacken ist:
+
+.Die Spalte [.guihint]#Agent type# zeigt, dass die neue Konfiguration spezifisch für den konfigurierten Ordner ist
+image::hosts_autoregister_baked_agent.png[alt="Liste mit der neuen Konfiguration der Agenten für die Autoregistrierung."]
+// TK: Mieser Screenshot, wird aber schwierig den richtig hinzutrimmen.
+
+
+[#install]
+=== Agentenpaket herunterladen und installieren
+
+Das Agentenpaket muss nun auf jedem Host installiert werden, der eine Autoregistrierung starten soll.
+Laden Sie das für das Betriebssystem des Hosts passende Agentenpaket herunter und installieren Sie es auf dem Host.
+Das Vorgehen ist genauso, wie in der Agentenbäckerei üblich.
+Mehr dazu finden Sie in den Artikeln zu den xref:wato_monitoringagents#bakery_download[Monitoring-Agenten], 
+dem xref:agent_linux#install[Linux-Agenten] und dem xref:agent_windows#install[Windows-Agenten.]
+// TK: Das sind alles suboptimale Link-Ziele
+
+
+[#success]
+=== Erfolgskontrolle
+
+Nach der Installation des Agentenpakets setzt der Agent Controller den Befehl zur Registrierung ab.
+// TK: Nach oder Während der Installation? Wann genau? Und ist das überhaupt wichtig?
+Wenn der Agent Receiver akzeptiert, wird die Verbindung eingerichtet und der Host in der {CMK}-Instanz erstellt.
+
+.Der automatisch erstellte Host im Setup
+image::hosts_autoregister_setup_new_host.png[alt="Inhalt des Ordners für die Autoregistrierung mit dem automatisch erstellten Host."]
+
+Anschließend wird die xref:glossar#service_discovery[Service-Erkennung] durchgeführt und die xref:glossar#activate_changes[Änderungen aktiviert],
+damit der Host auch im Monitoring sichtbar ist.
+Beachten Sie, dass bei der automatischen Aktivierung alle anderen gesammelten Änderungen -- auch von anderen Benutzern -- mit aktiviert werden.
+
+Die einzelnen Schritte können Sie in [.guihint]#Setup > General > Audit log# nachverfolgen.
+// TK: Auch Setup > Maintenance > Background jobs erwähnen? Ich kann da keine nützliche Information erkennen.
+
+Auf dem Host können Sie sich den Verbindungsstatus des Agent Controllers per Kommando ausgeben lassen,
+der nach einer erfolgreichen Registrierung im Push-Modus etwa so aussieht:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl status
+Version: 2022.12.06
+Agent socket: operational
+IP allowlist: any
+
+
+Connection: myhost/mysite
+	UUID: c821fa92-f6da-4517-abbc-611c39060736
+	Local:
+		Connection type: push-agent
+		Connecting to receiver port: 8000
+		Certificate issuer: Site 'mysite' local CA
+		Certificate validity: Tue, 06 Dec 2022 16:33:01 +0000 - Sun, 08 Apr 3021 16:33:01 +0000
+	Remote:
+		Connection type: push-agent
+		Registration state: operational
+		Host name: push-myhost
+----
+
+
+// [#test]
+// == Test und Fehlerdiagnose
+// TK: Momentan noch auskommentiert. Ich bin nicht sicher, ob wir das brauchen. Evtl. reicht auch Dateien und Verzeichnisse. 
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Pfade auf dem überwachten Host
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+// |`/var/lib/check_mk_agent` |Basisverzeichnis für Daten des Agenten.
+|`/var/lib/cmk-agent/registered_connections.json` |Enthält eine Liste der mit dem Agent Controller registrierten Verbindungen.
+// TK: registered_connections.json muss eigentlich nicht gelistet werden, da die Verbindungen komplett mit Kommandozeile (cmk-agent-ctl) oder per Agentenbäckerei administriert werden.
+|`/var/lib/cmk-agent/pre_configured_connections.json` |
+// TK: Enthält Registrierungsanfragen?
+// |`/etc/check_mk` |Ablage von Konfigurationsdateien für den Agenten.
+|===
+
+
+=== Pfade auf dem {CMK}-Server
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`~/var/agent-receiver/received-outputs` |Enthält für jede Verbindung deren UUID als Softlink, der auf den Ordner mit der Agentenausgabe zeigt.
+|`~/var/log/agent-registration.log` |Log-Datei für die Agentenregistrierung.
+// TK: Ist bei mir leer, obwohl zumindest eine Registrierung durchgeführt wurde....
+|`~/var/log/agent-receiver/` |Enthält die Log-Dateien des Agent Receivers.
+|===
