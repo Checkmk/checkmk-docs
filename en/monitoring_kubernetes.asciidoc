@@ -1,8 +1,8 @@
 include::global_attr.adoc[]
 = Monitoring Kubernetes
-:revdate: draft
+:revdate: 2023-01-04
 :title: Monitoring Kubernetes
-:description: With {CMK} you can also monitor the container orchestration software Kubernetes. Read details about the agentless facility here.
+:description: With {CMK} you can also monitor the Kubernetes container orchestration software. Read details on this agentless facility here.
 
 {related-start}
 xref:wato_monitoringagents#[Monitoring agents]
@@ -11,33 +11,15 @@ link:https://checkmk.com/integrations[Catalog of Check Plug-ins^]
 {related-end}
 
 
-== Foreword
-
-There may still be changes to both this description and the new Kubernetes monitoring feature in {CMK} version {v21} itself.
-Please see the link:https://github.com/tribe29/checkmk-docs/commits/master/de/monitoring_kubernetes.asciidoc[Changes to this article on GitHub^] or our link:https://checkmk.com/de/werks?search=kubernetes&product=cmk&cmk_version%5B%5D=2.1[Werks regarding changes to the feature^] itself.
-
-Since the Kubernetes integration with {CMK} is natively built into Kubernetes itself, we also use the _README_ files directly in the GitHub repositories.
-In particular, the link:https://github.com/tribe29/checkmk_kube_agent/tree/main/deploy/charts/checkmk[Instructions for installing the agent^] is the direct source for reading up on the currently recommended installation procedures.
-
-
-=== Getting started with the Kubernetes monitoring
-
-For an introduction to the new monitoring of Kubernetes, we recommend the two videos link:https://www.youtube.com/watch?v=H9AlO98afUE[Kubernetes Monitoring with {CMK}^] and link:https://www.youtube.com/watch?v=2H-cLhyfYbc[Detecting issues and configuring alerts for Kubernetes clusters^].
-
-
-=== Differences from the previous Kubernetes monitoring
-
-Kubernetes monitoring in {CMK} has been rewritten from scratch.
-The volume of data that can be monitored has significantly increased.
-Since the technical basis of Kubernetes monitoring is fundamentally different in {CMK} {v21}, it is not possible to adopt or even rewrite previous monitoring data for your Kubernetes objects.
-
-
 == Introduction
 
-Kubernetes has been the most widely used tool for container orchestration for quite some time.
-{CMK} helps you monitor your Kubernetes environments.
+[{image-left}]
+image::kubernetes_logo.jpg[width=140]
 
-Starting with version {v21}, you can use {CMK} to monitor the following Kubernetes objects:
+Kubernetes has been the most widely used tool for container orchestration for quite some time.
+{CMK} supports you in monitoring your Kubernetes environments.
+
+As of version {v21}, you can use {CMK} to monitor the following Kubernetes objects:
 
 * Clusters
 * Nodes
@@ -46,49 +28,149 @@ Starting with version {v21}, you can use {CMK} to monitor the following Kubernet
 * DaemonSets
 * StatefulSets
 
-For a complete listing of all of the check plug-ins available for Kubernetes monitoring, see our link:https://checkmk.com/integrations?tags=kubernetes[Catalog of Check Plug-ins^].
+For a complete listing of all of the check plug-ins available for monitoring Kubernetes, please see our link:https://checkmk.com/integrations?tags=kubernetes[Catalog of Check Plug-ins.^]
 
 
-== Prerequisites in the cluster
+=== Getting started with Kubernetes monitoring
+
+For an introduction to the new monitoring of Kubernetes, we recommend our two videos link:https://www.youtube.com/watch?v=H9AlO98afUE[Kubernetes Monitoring with {CMK}^] and link:https://www.youtube.com/watch?v=2H-cLhyfYbc[Detecting issues and configuring alerts for Kubernetes clusters^].
+
+
+=== Structure of the monitoring environment
+
+Since Kubernetes clusters can quickly undergo major changes in terms of the number and location of individual components, we recommend creating a separate site for monitoring your Kubernetes environment.
+You can then connect this site to your central site as usual via xref:distributed_monitoring#[distributed monitoring].
+
+
+=== The process of monitoring Kubernetes in {CMK}
+
+{CMK} monitors your Kubernetes clusters in two ways:
+
+image::monitoring_kubernetes_architecture.png[]
+
+The Kubernetes xref:glossar#special_agent[special agent] simply retrieves basic information via your cluster's API server.
+This can already be used to retrieve the states of nodes and containers. Most of the metadata of your pods and deployments are also obtained in this way.
+
+For a comprehensive monitoring, however, something is still missing up to this point.
+Questions such as how much load a particular deployment generates on the CPU, or how much memory a DaemonSet is currently using cannot be answered in this way.
+
+This is where our {CMK} Node Collector and our {CMK} Cluster Collector come into play.
+These are an indispensable part of Kubernetes monitoring within {CMK}.
+A not insignificant part of what follows in this article is thus also about installing and setting these up.
+In addition, the use of the xref:dashboards[Kubernetes dashboards] in the {CEE} only makes sense if the Node and Cluster Collectors can provide data on the loads for this.
+
+
+=== Differences compared to other monitoring in {CMK}
+
+When monitoring pods and replicas in your Kubernetes clusters, status changes or delays sometimes occur much more frequently.
+To account for this, the checks for certain states of these objects only change their status in {CMK} after 10 minutes.
+
+
+=== Differences compared to existing Kubernetes monitoring
+
+Kubernetes monitoring in {CMK} has been rewritten from scratch.
+The scope of the data that can be monitored has grown considerably.
+Since the technical basis for Kubernetes monitoring in {CMK} {v21} is fundamentally different, it is not possible to transfer or even rewrite previous monitoring data from your Kubernetes objects.
+
+
+== Creating prerequisites in the cluster
 
 To be able to monitor your Kubernetes cluster in {CMK}, first create the prerequisites in your cluster.
 First and foremost, tell the cluster which pods/containers to deploy and how to configure them.
 
 
+[#setup_helm_repo]
 === Setting up the Helm repository
 
-We currently recommend installing Kubernetes monitoring using the `helm` tool, as it is also suitable for less experienced users and standardizes the management of configurations.
-Helm is a kind of a package manager for Kubernetes.
-You can use it to include _repositories_ as sources and easily add the Helm charts they contain like packages to your cluster.
-To do this, first of all make the repository known.
-In the following example,
-we use the name `tribe29` to make it easier to access the repository later.
-However, you can of course use any other name of your choice:
+The installation of Kubernetes monitoring is done with the help of the `helm` tool.
+Helm is also suitable for less experienced users and standardizes the management of configurations.
+Helm is a kind of package manager for Kubernetes.
+If you are not yet using Helm, you can usually get it from your Linux distribution's package manager or from the link:https://helm.sh/docs/intro/install/[Helm project^] website.
+
+You can use Helm to include _repositories_ as sources and easily add the _Helm charts_ that these contain to your cluster in the same way as packages.
+First of all, identify the repository.
+In the following example, we use the name `tribe29` to make it easier to access the repository later.
+You can, of course, also use any other name of your choice:
+
+[{shell-raw}]
+----
+{c-user} helm repo add tribe29 https://tribe29.github.io/checkmk_kube_agent
+----
+
+We update our Helm charts whenever new developments in Kubernetes require it.
+It is therefore worth checking from time to time whether new versions are available in the repository.
+If you have named your local copy of our repository `tribe29`, as in the previous command, you can use the following command to display all versions of the charts available in the repository:
+
+[{shell}]
+----
+{c-user} helm search repo tribe29 --versions
+NAME           	CHART VERSION   APP VERSION   DESCRIPTION
+tribe29/checkmk	1.2.0        	  1.2.0         Helm chart for Checkmk - Your complete IT monit...
+tribe29/checkmk	1.1.0        	  1.1.0         Helm chart for Checkmk - Your complete IT monit...
+tribe29/checkmk	1.0.1        	  1.0.1       	Helm chart for Checkmk - Your complete IT monit...
+tribe29/checkmk	1.0.0        	  1.0.0       	Helm chart for Checkmk - Your complete IT monit...
+----
+
+If a newer version is available you can update with `helm repo update`.
 
 
-=== Customizing the configuration
+=== Customizing the configuration to your environment
 
-Using Helm, you create the necessary configuration files completely independently.
-In order to be able to determine certain parameters over all configurations, you specify a control file, the so-called `values.yaml`.
-As a starting point we recommend the link:https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/charts/checkmk/values.yaml[template^] provided by us.
-Copy it and adapt it to your own environment.
+Since we cannot know in advance how your Kubernetes cluster is structured, we have chosen the safest variant for how the Cluster Collectors are started:
+By default, you do not provide any ports that can be accessed remotely.
+In order to be able to access the collectors later, you will need to adapt these settings to your particular cluster.
 
-Since we cannot know in advance how your Kubernetes cluster is set up, we have chosen the safest option for how the {CMK} collectors are started:
-By default, they do not expose any ports to be reached from the outside.
-To allow you to access the collectors later, adjust these settings accordingly.
-
-For simplicity, let's take our template as a starting point.
 We support two communication paths by default: the query via _Ingress_ and the query via _NodePort_.
-Depending on which variant you support in your cluster, the configuration will vary.
+The configuration of these will vary depending on which variant you support in your cluster.
+
+In order to be able to determine certain parameters yourself across all configurations, you include a control file, the so-called `values.yaml`.
+
+There are two ways to create such a `values.yaml`.
+You can either extract the file supplied by us in the Helm charts and edit it, or you can simply create a minimal version yourself.
+
+Whenever you want to deploy changes to this file in your cluster, you can again use the Helm chart xref:install_helm_charts[installation] command that we will cover later in this article.
+
+
+==== Creating your own basic values.yaml
+
+You can create a `values.yaml` in which you only enter the values that you want to modify.
+In our Helm chart, for example, the Cluster Collector's service type is set to `ClusterIP` by default.
+If you now only want to change this service type to `NodePort` and the port to 30035, it is sufficient to simply create a `values.yaml` as follows:
+
+
+[{shell}]
+----
+{c-user} echo 'clusterCollector: {service: {type: NodePort, nodePort: 30035}}' > values.yaml
+----
+
+An activation of _Ingress_ could look like this:
+
+[{shell}]
+----
+{c-user} echo 'clusterCollector: {ingress: { enabled: true }}' > values.yaml
+----
+
+
+==== Extracting values.yaml from Helm charts
+
+The complete `values.yaml` supplied by us can be easily extracted with the following command:
+
+[{shell}]
+----
+{c-user} helm show values tribe29/checkmk > values.yaml
+----
+
+You can now adapt the file created in this way to suit your needs and pass it to `helm` with the `-f values.yaml` parameter during the xref:install_helm_charts[installation], or during a later upgrade.
 
 
 ==== Providing communication via Ingress
 
-If you use link:https://kubernetes.io/docs/concepts/services-networking/ingress/[Ingress^] to control access to your services, adapt the already prepared parts in `values.yaml` accordingly.
-For a better overview only the relevant part is shown in the following example.
-Set the value `enabled` to `true`.
-You adjust the remaining values according to your environment:
+If you use link:https://kubernetes.io/docs/concepts/services-networking/ingress/[Ingress^] to control access to your services, edit the already prepared parts in `values.yaml` accordingly.
+For a better overview, only the relevant part is shown in the following abbreviated example.
+Set the parameter `enabled` to `true`.
+Adapt the remaining parameters according to your environment:
 
+.values.yaml
 [{yaml}]
 ----
   ingress:
@@ -107,13 +189,15 @@ You adjust the remaining values according to your environment:
     #      - chart-example.local
 ----
 
+
 ==== Providing communication via NodePort
 
-You can also provide access to the services directly through a port.
+You can also provide access to the services directly via a port.
 This is necessary if you do not use Ingress.
-Also in the following example only the relevant section is shown.
+In the following example, only the relevant section is shown.
 You set the value `type` to `NodePort` and remove the comment for the value `nodePort`:
 
+.values.yaml
 [{yaml}]
 ----
   service:
@@ -124,179 +208,271 @@ You set the value `type` to `NodePort` and remove the comment for the value `nod
 ----
 
 
-=== Creating the configuration files
+==== Configuring the Cluster Collector for HTTPS
 
-After customizing `values.yaml` or creating your own files, use the following command to create all of the necessary configuration files to set up your Kubernetes cluster for monitoring in {CMK}:
+If you want to switch the communication with and between the Cluster Collectors to HTTPS, you must also make changes in the `values.yaml` file.
+
+Below is the section in our supplied `values.yaml` that you need to edit to enable HTTPS:
+
+.values.yaml
+[{yaml}]
+----
+tlsCommunication:
+  enabled: false
+  verifySsl: false
+  # clusterCollectorKey: |-
+  #   -----BEGIN EC PRIVATE KEY-----
+  #   XYZ
+  #   -----END EC PRIVATE KEY-----
+  # clusterCollectorCert: |-
+  #   -----BEGIN CERTIFICATE-----
+  #   XYZ
+  #   -----END CERTIFICATE-----
+  # checkmkCaCert: |-
+  #   -----BEGIN CERTIFICATE-----
+  #   XYZ
+  #   -----END CERTIFICATE-----
+----
+
+In the lines beginning with `enabled` or `verifySsl`, you must replace `false` with `true`.
+Next, remove the hash marks before the three sections `clusterCollectorKey`, `clusterCollectorCert` and `checkmkCaCert` and insert the corresponding data following these.
+Your organization should determine whether to use self-signed certificates or to obtain certificates from a Certificate Authority (CA).
+
+Please note that the certificates must fulfill the following requirements:
+
+* The CA certificate must contain the host name or the name of the Ingress as FQDN.
+* For the server certificate, the FQDN must correspond to the following pattern: `<service_name>.<namespace>.cluster.local`.
+* In the `[ v3_ext ]` section of the configuration file for generating your Certificate Signing Request, the `subjectAltName` must match the following pattern:
+`subjectAltName: DNS:<service_name>.<namespace>.cluster.local, IP:<service ip>`
+
+
+==== Using your own service account
+
+Using our Helm charts, a service account would be created in your cluster by default.
+If you already have a suitable service account, it is sufficient to add it into the `values.yaml` and suppress the creation of a new account.
+
+.values.yaml
+[{yaml}]
+----
+serviceAccount:
+  create: false
+  name: "myserviceaccount"
+----
+
+
+==== Pod Security Policies and Network Policies
+
+The _PodSecurityPolicy_ (PSP for short) and _NetworkPolicy_ policies are included in our Helm chart primarily for compatibility reasons.
+The PSP is activated here by default -- because it does no harm even if it is not used.
+However, if you are still using the PSP in your cluster, it is imperative that this option remains enabled in `values.yaml`.
+
+The corresponding section looks like this:
+
+.values.yaml
+[{yaml}]
+----
+rbac:
+  pspEnabled: true
+----
+
+Since PSPs are currently going the way of the Dodo, this setting will be removed from our chart sooner or later.
+
+The same applies to the _NetworkPolicy_.
+If you use this in your cluster, you will need to change the location in `values.yaml` from `enabled: false` to `enabled: true`.
+In this situation, please refer to the following documentation within `values.yaml` to configure the _NetworkPolicy_ correctly.
+
+.values.yaml
+[{yaml}]
+----
+## ref: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+networkPolicy:
+  # keep in mind: your cluster network plugin has to support NetworkPolicies, otherwise they won't have any effect
+  enabled: false
+
+  # specify ipBlock cidrs here to allow ingress to the cluster-collector
+  # this is required for the checkmk servers to be able to scrape data from checkmk, so include the resprective ip range(s) here
+  allowIngressFromCIDRs: []
+  # - 127.0.0.1/32 # e.g. Checkmk Server
+  # - 127.0.0.1/24 # e.g. Metallb speakers
+
+  # the cluster-collector needs to be able to contact the kube-apiserver
+  # you have three options here to choose from, depending on your cluster setup:
+  # 1) if your apiserver resides outside the cluster, resp. you have a kubernetes endpoint available (check via "kubectl -n default get ep kubernetes")
+  #    we can make use of helm lookup to automatically inject the endpoińt (cidr + port) here.
+  #    This is the most comfortable one, just note that helm lookup won't work on a "helm template" or "helm diff" command.
+  #    (see also: https://helm.sh/docs/chart_template_guide/functions_and_pipelines/#using-the-lookup-function)
+  # 2) similar to 1) you can also specify the "ipBlockCidr" directly. Make sure to disable "enableCidrLookup", and also fill the "port".
+  # 3) if the apiserver resides inside the cluster, disable "enableCidrLookup", unset "ipBlockCidr", and fill the "labelSelectors" section
+  #    with the name of the namespace where the kube-apiserver is availabe, and the label key and label value that defines your kube-apiserver pod.
+  egressKubeApiserver:
+    enableCidrLookup: true
+    # ipBlockCidr: 172.31.0.3/32
+    # port: 6443
+    # labelSelectors:
+    #   namespace: kube-system
+    #   key: app
+    #   value: kube-apiserver
+----
+
+
+[#install_helm_charts]
+=== Installing Helm charts
+
+After customizing `values.yaml` or creating your own, use the following command to install all of the necessary components into your cluster to be able to monitor it in {CMK}:
 
 [{shell}]
 ----
-{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring checkmk tribe29/checkmk -f values.yaml
+{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring myrelease tribe29/checkmk -f values.yaml
 ----
 
-Since the command is not self-explanatory, we will provide an explanation of each option below:
+Since this command is not self-explanatory, we provide an explanation of the individual options below:
 
 [cols="25,~",options="header"]
 |===
-|Command parameter |Function
-|`helm upgrade --install` |This parameter is the basic command to send the configuration to the Kubernetes cluster.
-|`--create-namespace` |In Kubernetes you always specify to which _namespace_ the configuration should be added. You need this option if the namespace does not already exist. Helm will create it in this case.
-|`-n checkmk-monitoring` |This option specifies the namespace to which the configuration should be added. `checkmk-monitoring` is just an example of what it could be called.
-|`checkmk` |`checkmk` is an example for the name of the Helm chart. Ideally, you should leave this name as it is, because only then will you automatically benefit from the fact that Kubernetes objects get short names.
-|`tribe29/checkmk` |The first part of this option describes the repository you created with the previous command. The second part -- after the slash -- is the _package_ where the necessary information is located to be able to create the configuration of your Kubernetes monitoring.
-|`-f values.yaml` |Finally, specify the configuration file that you created or customized earlier. It contains all of the customizations to be included in the configuration files created with `helm`.
+|Command element |Description
+|`helm upgrade --install` |This part is the basic command to send the configuration to the Kubernetes cluster.
+
+|`--create-namespace` |In Kubernetes, you always specify to which _namespace_ the configuration should be added. You need this option if the namespace does not yet exist. Helm will create it in this case.
+
+|`-n checkmk-monitoring` |This option specifies the namespace to which the configuration should be added. `checkmk-monitoring` is just an example of what it might be called.
+
+|`myrelease` |Here, `myrelease` denotes the release. Each instance of a Helm chart running in your Kubernetes cluster is called a release. You can choose this name freely.
+
+|`tribe29/checkmk` |The first part of this option describes the repository you xref:setup_helm_repo[previously] created. The second part -- after the slash -- is the _package_ that contains the information necessary to create the configuration for your Kubernetes monitoring.
+
+|`-f values.yaml` |Finally, enter the configuration file that you created or adapted earlier. It contains all of the customizations to be included in the configuration files created with `helm`.
 |===
 
-After you run the command, your Kubernetes cluster will be ready to be monitored with {CMK}.
-The cluster will now take care of itself to ensure that the necessary pods and the containers within them are running and accessible.
+Once you have executed the command, your Kubernetes cluster is prepared for monitoring with {CMK}.
+The cluster will now take care of itself to ensure that the necessary pods and the containers they contain are running and accessible.
 
 
-=== Alternative: Setting up via manifest
+[#helm_output]
+==== Helm chart output
 
-It does not normally make sense for you to customize the manifests (configuration files) yourself.
-On the one hand, because you need detailed knowledge of the architecture of the _{CMK} Kubernetes Collectors_ for this and, on the other hand, because manual customization is much more error-prone.
-For example, in `helm` you set up communication over TLS once only, instead of needing to add it to all relevant places in each actual individual manifest.
+So the next thing to do is to set it up in {CMK}.
+To make this setup as easy as possible, we have equipped the output from our Helm charts with a whole series of commands.
+This output also automatically conforms to the values you specified in the `values.yaml` file.
+If you use the NodePort, you will get the commands to display the NodePort's IP and port, among other things.
+If instead you use Ingress, the output will be adapted accordingly.
+In the following we show the -- slightly abbreviated -- output following a successful installation when using the NodePort:
 
-However, if you don`t use `helm`, or want to have control over all the setup details, you can still go this manual route.
+[{shell},highlight=12..14;18..19;22]
+----
+{c-user} helm upgrade --install --create-namespace -n checkmk-monitoring myrelease tribe29/checkmk -f values.yaml
+Release "myrelease" has been upgraded. Happy Helming!
+NAME: myrelease
+LAST DEPLOYED: Sat Dec 16 19:00:11 2022
+NAMESPACE: checkmk-monitoring
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+You can access the checkmk `cluster-collector` via:
+NodePort:
+  export NODE_PORT=$(kubectl get --namespace checkmk-monitoring -o jsonpath="{.spec.ports[0].nodePort}" services myrelease-checkmk-cluster-collector);
+  export NODE_IP=$(kubectl get nodes --namespace checkmk-monitoring -o jsonpath="{.items[0].status.addresses[0].address}");
+  echo \http://$NODE_IP:$NODE_PORT
+  # Cluster-internal DNS of `cluster-collector`: myrelease-checkmk-cluster-collector.checkmk-monitoring
+With the token of the service account named `myrelease-checkmk-checkmk` in the namespace `checkmk-monitoring` you can now issue queries against the `cluster-collector`.
+Run the following to fetch its token and the ca-certificate of the cluster:
+  export TOKEN=$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode);
+  export CA_CRT="$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode)";
+  # Note: Quote the variable when echo'ing to preserve proper line breaks: `echo "$CA_CRT"`
+To test access you can run:
+  curl -H "Authorization: Bearer $TOKEN" \http://$NODE_IP:$NODE_PORT/metadata | jq
+----
 
-To do so, first download the manifests we have pre-built from our corresponding link:https://github.com/tribe29/checkmk_kube_agent/tree/main/deploy/kubernetes[repository at GitHub^].
-We have split the whole configuration into several files to facilitate their maintenance and to provide more concise files for clearly defined purposes.
+From this output, simply copy the *colored* lines and execute the commands.
 
-You need at least the following five files:
+The first block shows you information about the NodePort:
 
-[cols="25,~",options="header"]
-|===
-|Filename |Function
-|`00_namespace.yaml` |Create a namespace named checkmk-monitoring
-|`checkmk-serviceaccount.yaml` |Create service a account named checkmk, and a cluster role named checkmk-metrics-reader in the checkmk-monitoring namespace
-|`cluster-collector.yaml` |Here we create the cluster collector we have named. Among other things, a service account named cluster-collector is created in the checkmk-monitoring namespace, and the service accounts are then assigned roles within the cluster. In addition, the deployment named cluster-collector will be defined.
-|`node-collector.yaml` |Analogous to `cluster-collector.yaml` for the nodes
-|`service.yaml` | Create q service named cluster-collector in the checkmk-monitoring namespace. Create a service named cluster-collector-nodeport in the checkmk-monitoring namespace. The port for the NodePort is also specified here.
-|===
-
-If you don't want to clone the whole repository right away -- which you are free to do, of course -- you can use the following command to explicitly download the five files you need:
-
+[#token_ca_crt]
 [{shell-raw}]
 ----
-{c-user} URL='https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in 00_namespace checkmk-serviceaccount cluster-collector node-collector service; do wget "${URL}${i}.yaml"; done
+{c-user} export NODE_PORT=$(kubectl get --namespace checkmk-monitoring -o jsonpath="{.spec.ports[0].nodePort}" services myrelease-checkmk-cluster-collector);
+{c-user} export NODE_IP=$(kubectl get nodes --namespace checkmk-monitoring -o jsonpath="{.items[0].status.addresses[0].address}");
+{c-user} echo \http://$NODE_IP:$NODE_PORT
+http://10.184.38.103:30035
 ----
 
-If you also want to set up a network policy and a pod security policy, you will also need the following two files:
+This is exactly the address you need to enter in {CMK} later in the Kubernetes rule in the [.guihint]#Collector NodePort / Ingress endpoint# field.
 
- network-policy.yaml
- pod-security-policy.yaml
-
-[{shell-raw}]
-----
-{c-user} URL='https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/'; for i in network-policy pod-security-policy; do wget "${URL}${i}.yaml"; done
-----
-
-In the `cluster-collector.yaml` and `node-collector.yaml` files you must fill the four placeholders with concrete content.
-In both files you will find places where `main_<YYY.MM.DD>` is written.
-Replace these placeholders with tags from our link:https://hub.docker.com/r/checkmk/kubernetes-collector/tags[Kubernetes collector on Docker Hub^].
-For example, you could use the following command to replace all occurrences of `main_<YYY.MM.DD>` with the March 1, 2022 build tag of our container.
+With the commands from the next block you get both the token and the certificate for the service account.
+The data is thus stored in the `TOKEN` and `CA_CRT` environment variables.
+When outputting the `CA_CRT` variable, be sure to enclose it in inverted commas, otherwise the important line breaks in the certificate will be lost.
 
 [{shell}]
 ----
-{c-user} sed -i 's/main_<YYYY.MM.DD>/main_2022.03.01/g' node-collector.yaml cluster-collector.yaml
+{c-user} export TOKEN=$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode);
+{c-user} export CA_CRT="$(kubectl get secret $(kubectl get serviceaccount myrelease-checkmk-checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode)";
+{c-user} echo $TOKEN
+eyJhbGciOiJSUzI1NiIsImtpZCI6InR6VXhGSU ...
+{c-user} echo "$CA_CRT"
+-----BEGIN CERTIFICATE-----
+MIIBdjCCAR2gAwIBAgIBADAKBggqhkjOPQQDAjAjMSEwHwYDVQQDDBhrM3Mtc2Vy
+dmVyLWNhQDE2NjIxNDc5NTMwHhcNMjIwOTAyMTk0NTUzWhcNMzIwODMwMTk0NTUz
+...
+-----END CERTIFICATE-----
 ----
 
-For the external communication a service of the type NodePort is needed.
-This allows communication from outside and is also permanently set to TCP port 30035 in the `service.yaml` file.
-If this port is already assigned in your cluster, change the port accordingly.
+When setting up in {CMK}, you must store both xref:token[the token] and the xref:certimport[the certificate].
+Leave the shell open with this information or copy the token and certificate to a location you can access during the following setup in {CMK}.
 
-Once you have made these settings, you can apply these manifest files collectively to your cluster.
-To do this, run the following command from the manifest location:
+If you have executed the previous two export commands, you can use the last command to verify that the setup was successful:
 
 [{shell}]
 ----
-{c-user} kubectl apply -f .
-namespace/checkmk-monitoring created
-serviceaccount/checkmk created
-clusterrole.rbac.authorization.k8s.io/checkmk-metrics-reader created
-clusterrolebinding.rbac.authorization.k8s.io/checkmk-metrics-reader-binding created
-serviceaccount/cluster-collector created
-clusterrolebinding.rbac.authorization.k8s.io/checkmk-cluster-collector created
-clusterrolebinding.rbac.authorization.k8s.io/checkmk-token-review created
-deployment.apps/cluster-collector created
-serviceaccount/node-collector-machine-sections created
-serviceaccount/node-collector-container-metrics created
-clusterrole.rbac.authorization.k8s.io/node-collector-container-metrics-clusterrole created
-podsecuritypolicy.policy/node-collector-container-metrics-podsecuritypolicy created
-clusterrolebinding.rbac.authorization.k8s.io/node-collector-container-metrics-cluterrolebinding created
-daemonset.apps/node-collector-container-metrics created
-daemonset.apps/node-collector-machine-sections created
-service/cluster-collector created
-service/cluster-collector-nodeport created
+curl -H "Authorization: Bearer $TOKEN" \http://$NODE_IP:$NODE_PORT/metadata | jq
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100  1815  100  1815    0     0   126k      0 --:--:-- --:--:-- --:--:--  126k
+{
+  "cluster_collector_metadata": {
+    "node": "mynode",
+    "host_name": "myrelease-checkmk-cluster-collector-58f97df9c9-mdhsw",
+    "container_platform": {
+      "os_name": "alpine",
+      "os_version": "3.15.4",
+      "python_version": "3.10.4",
+      "python_compiler": "GCC 10.3.1 20211027"
+    },
+    "checkmk_kube_agent": {
+      "project_version": "1.0.1"
+    }
+  }
+  ...
 ----
 
-You can also use `kubectl` to check whether the manifests have been applied correctly.
-To do this, use the following command to display all of the pods in the `checkmk-monitoring` namespace:
-
-[{shell}]
-----
-{c-user} kubectl get pods -n checkmk-monitoring
-----
-
-Furthermore, you can also check all services within the namespace as follows:
-
-[{shell}]
-----
-{c-user} kubectl get svc -n checkmk-monitoring
-----
+At the beginning of the highly abbreviated output, for example, you can see the Cluster Collector's version.
+Further down, metadata for all of the nodes in this cluster would follow.
 
 
+[#setupincheckmk]
 == Setting up the monitoring in {CMK}
 
-Next, in {CMK}'s GUI, we move on to setting up the xref:glossar#special_agent[special agent] and a rule to automatically create hosts for your Kubernetes objects.
-However, to set up the special agent, there are a few prerequisites that need first to be met:
+Next, in {CMK}'s GUI, we move on to setting up the xref:glossar#special_agent[special agent] and a rule for automatically creating hosts for your Kubernetes objects.
+To set up the special agent, however, a few prerequisites must first be met:
 
 
 [#token]
-=== Storing password (token) in {CMK}
+=== Storing the password (token) in {CMK}
 
-The best way to store the password (token) for the service account is to store it in {CMK}'s password store.
-This is the most secure variant, because you can separate the storage and use of the password organizationally.
-Alternatively, enter it directly in plain text when creating the rule (see below).
-
-If you have kept the default `checkmk-monitoring` as the namespace for monitoring your Kuberentes cluster, the following command line will cut the password directly from the output from `kubectl get secrets`:
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode
-eyJhbGciOiJSUzI1NiIsImtpZCI6IiJ9.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJjaGVjay1tayIsI
-mt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJjaGVjay1tay10b2tlbi16OWhicCIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5
-hbWUiOiJjaGVjay1tayIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjIxODE3OWEzLTFlZTctMTFlOS1iZjQzLTA4MDAyN2E1ZjE0MSIsInN1YiI6I
-nN5c3RlbTpzZXJ2aWNlYWNjb3VudDpjaGVjay1tazpjaGVjay1tayJ9.gcLEH8jjUloTeaAj-U_kRAmRVIiETTk89ujViriGtllnv2iKF12p0L9ybT1fO-1Vx7XyU8jneQRO9lZw8JbhVmaPjrkEc8
-kAcUdpGERUHmVFG-yj3KhOwMMUSyfg6wAeBLvj-y1-_pMJEVkVbylYCP6xoLh_rpf75JkAicZTDmhkBNOtSf9ZMjxEmL6kzNYvPwz76szLJUg_ZC636OA2Z47qREUtdNVLyutls7ZVLzuluS2rnfoP
-JEVp_hN3PXTRei0F5rNeA01wmgWtDfo0xALZ-GfvEQ-O6GjNwHDlsqYmgtz5rC23cWLAf6MtETfyeEJjRqwituhqUJ9Jp7ZHgQ%
-----
-
-The password really _is_ that long.
-If you work directly under Linux, you can add a `| xsel --clipboard` at the end.
-The password will then not be printed at all, but copied directly to the clipboard (as if you had copied it with the mouse):
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode | xsel --clipboard
-----
-
-Add the password to the {CMK} password store with [.guihint]#Setup > General > Passwords > Add password#, for example, under the ID and title `kubernetes`:
+It is best to store the password (token) for the service account in the {CMK} password store.
+This is the safest option, as you can separate the storage and use of the password organizationally.
+Alternatively, enter the password directly in plain text when creating the rule (see below).
+For information on how to display the required password, see the xref:helm_output[Helm chart output].
+Add the password to the {CMK} password store with [.guihint]#Setup > General > Passwords > Add password# e.g. under the ID and the title `My Kubernetes Token`:
 
 image::kubernetes_password.png[]
 
 
 [#certimport]
-=== Importing the CA for the service account into {CMK}
+=== Importing a service account's CA certificate into {CMK}.
 
-In order for {CMK} to trust the Certificate Authority (CA) of the service account, you must store the CA certificate in {CMK}.
-You can read out the certificate -- provided you have kept `checkmk-monitoring` as the namespace -- with the following command:
-
-[{shell}]
-----
-{c-user} kubectl get secret $(kubectl get serviceaccount checkmk -o=jsonpath='{.secrets[*].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode
-----
-
-Copy everything here including the lines `BEGIN CERTIFICATE` and `END CERTIFIACTE` and add the certificate in the Setup menu under [.guihint]#Setup > General > Global settings > Site management > Trusted certificate authorities for SSL#.
+In order for {CMK} to trust the service account's Certificate Authority (CA), you must store the CA certificate in {CMK}.
+How to display the required certificate is also in the xref:helm_output[Helm chart output].
+Copy everything here including the lines `BEGIN CERTIFICATE` and `END CERTIFICATE` and add the certificate in the Setup menu under [.guihint]#Setup > General > Global settings > Site management > Trusted certificate authorities for SSL#:
 
 image::kubernetes_ca.png[]
 
@@ -304,63 +480,81 @@ image::kubernetes_ca.png[]
 [#source-host]
 === Creating a Piggyback source host
 
-Create a new host in Checkmk in the usual way and name it `mykubernetesclusterhost`, for example.
-As the title and host name suggest, this host is used to collect the Piggyback data and also to map all services and metrics at the cluster level.
-Since this host only receives data via the special agent, set the [.guihint]#IP address family# option to [.guihint]#No IP#.
+Create a new host in {CMK} in the usual way and name it `mykubernetesclusterhost` for example.
+As the title and host name suggest, this host is used to collect the xref:glossar#piggyback[piggyback data] and also to map all services and metrics at the cluster level.
+Since this host only receives data via the special agent, be sure to set the [.guihint]#IP address family# option to [.guihint]#No IP# in the host's properties.
+
+image::monitoring_kubernetes_no_ip.png[alt="Example setup of a cluster host with the important 'No IP' setting."]
 
 
-=== Setting up the dynamic host configuration
+=== Setting up dynamic host configuration
 
-To ensure separation between the numerous Kubernetes objects and the rest of your monitoring environment, it is a good idea to first create a folder via [.guihint]#Setup > Hosts > Add folder# in which the xref:dcd#[dynamic host configuration] can automatically create all required hosts.
-Creating or using such a folder is not required, but is a very practical option.
+{cee-only}
+To ensure separation between the objects of different Kubernetes clusters, it can be useful to create a folder per cluster via [.guihint]#Setup > Hosts > Add folder#, in which the xref:dcd#[dynamic host configuration] can automatically create all hosts of a cluster.
+However, creating or using such a folder is optional.
 
-However, it _is_ absolutely necessary to set up a connection for the piggyback data.
-Via [.guihint]#Setup > Hosts > Dynamic host management > Add connection# you get to the page for the corresponding setup.
-First enter a title and then click [.guihint]#show more# under [.guihint]#Connection Properties#.
+Next, set up a connector in the {CEE} for the incoming piggyback data:
+with [.guihint]#Setup > Hosts > Dynamic host management > Add connection.#
+First enter a title and then click on [.guihint]#show more# under [.guihint]#Connection Properties#.
 
-Next, click [.guihint]#Add new element# and under [.guihint]#Create hosts in# select the folder you created earlier.
+Next, click [.guihint]#Add new element# and select the previously created folder under [.guihint]#Create hosts in#.
 
-In a Kubernetes environment, where monitorable and monitored objects naturally come and go, it is also recommended to enable the [.guihint]#Automatically delete hosts without piggyback data# option.
-What exactly this option does and under what circumstances hosts are then actually deleted is explained in the section xref:dcd#_automatically_delete_hosts[Automatically deleting hosts] in the article on dynamic host configuration.
+In a Kubernetes environment where monitorable and monitored objects come and go continuously, it is also recommended to activate the option [.guihint]#Automatically delete hosts without piggyback data#.
+What exactly this option does and under which circumstances hosts are then actually deleted is explained in the chapter xref:dcd#automatic_deletion_of_hosts[Automatic deletion of hosts] in the article on dynamic host configuration.
 
-Now enter the previously created xref:source-host[Piggyback source host] under [.guihint]#Restrict source hosts# and enable the [.guihint]#Discover services during creation# option.
+Now enter the previously created xref:source-host[Piggyback source host] under [.guihint]#Restrict source hosts# and activate the option [.guihint]#Discover services during creation#.
 
-Once configured, the [.guihint]#Connection Properties# section of this new connector might look like the following:
+The [.guihint]#Connection Properties# section of this new connector could then look like this:
 
-image::monitoring_kubernetes_connection_properties.png[alt="Sample dynamic host configuration settings."]
+image::monitoring_kubernetes_connection_properties.png[alt="Example settings for a dynamic host configuration."]
+
+
+=== Processing piggyback data in the {RE}
+
+In the {RE} of {CMK} you will need to create the hosts for the accumulating piggyback data xref:piggyback#piggyback_in_practice[manually].
+Because a large number of piggyback hosts are likely to arise here in a Kubernetes cluster, we recommend using our xref:piggyback#orphaned_piggyback_data[`find_piggy_orphans`] script in your {CMK} site's `~/share/doc/check_mk/treasures/` directory.
+
+=== Customizing the periodic service discovery
+
+By default, {CMK} performs a service discovery every two hours and displays the result from this discovery in the [.guihint]#Check_MK Discovery# service.
+You can find this setting in the [.guihint]#Periodic service discovery# rule set.
+In the context of Kubernetes, we recommend creating a rule for all hosts with the label `cmk/kubernetes:yes`.
+This label is automatically given by {CMK} to every host that represents Kubernetes objects.
+You should select a shorter interval for the service discovery here, and also activate the [.guihint]#Automatically update service configuration# option.
+The settings in the following screenshot are only examples.
+You will need to decide what makes sense for your clusters on a case-by-case basis.
+
+image::monitoring_kubernetes_periodic_service_discovery.png[alt=""Example setup of periodic service discovery for Kubernetes objects."]
+
+To restrict this rule to all of your cluster's hosts, it is sufficient to enter `cmk/kubernetes:yes` in the [.guihint]#Conditions# under [.guihint]#Host labels#.
+However, if you want to create individual rules for multiple clusters, simply use the respective cluster-specific label here.
+These labels always have the form `cmk/kubernetes/cluster:mycluster`.
+
+image::monitoring_kubernetes_periodic_service_discovery_conditions.png[alt="Example of restriction to hosts with a cluster-specific label."]
 
 
 [#rule]
 === Setting up the special agent
 
-Now that all the prerequisites are in place in the cluster and in {CMK}, you can turn your attention to configuring the special agent.
-This can be found via [.guihint]#Setup > Agents > VM, Cloud, Container > Kubernetes#.
+Now that all the prerequisites have been created in the cluster and in {CMK}, you can turn your attention to the configuration of the special agent.
+You can find this via [.guihint]#Setup > Agents > VM, Cloud, Container > Kubernetes#.
+Create a new rule with [.guihint]#Add rule#.
 
-First of all, you need to assign a name for the cluster you want to monitor.
+First of all, you must assign a name for the cluster to be monitored.
 You can choose this name freely.
-It is used to give a unique name to all objects that originate from exactly this cluster.
-For example, if you enter `mycluster` here, the names of the hosts of all pods from this cluster will later start with `pod_mycluster`.
+It is used to give a unique name to all objects that come from this particular cluster.
+For example, if you enter `mycluster` here, the names of the hosts of all pods from this cluster will later begin with `pod_mycluster`.
 The next part of the host name will then always be the namespace in which this Kubernetes object exists.
+The host name of a pod could then be `pod_mycluster_kube-system_svclb-traefik-8bgw7`, for example.
 
-Under [.guihint]#Token#, now select the xref:token[previously created entry] from the password store of {CMK}.
+Under [.guihint]#Token#, now select the xref:token[previously created entry] from the {CMK} password store.
 
-Under [.guihint]#API server connection > Endpoint# {CMK} now requires the entry of the URL (or IP address) via which your Kubernetes API server can be reached.
-The port must also be specified here if the service was not provided via a virtual host.
-The easiest way to find out this IP address -- if you don't already have it handy -- depends on your Kubernetes environment.
-The following command will give you the endpoint of the API server as IP address and port, which you will find as the last entry under `server` in the shortened output:
+image::monitoring_kubernetes_cluster_name_and_token.png[alt="Example of cluster name and token selection."]
 
-[{shell-raw}]
-----
-{c-user} kubectl config view
-apiVersion: v1
-clusters:
-  - cluster:
-    certificate-authority-data: DATA+OMITTED
-    server: https://10.73.42.21:6443
-    name: my-kubernetes
-----
-
-If the server is provided via a DNS record, the output will look more like this instead:
+Under [.guihint]#API server connection > Endpoint#, {CMK} now asks you to enter the URL (or IP address) through which your Kubernetes API server can be accessed.
+You only need to enter the port if the service is not provided via a virtual host.
+The easiest way to find out this address -- if you don't already have it at hand -- will depend on your Kubernetes environment.
+The following command will give you the API server's endpoint in the `server` line:
 
 [{shell-raw}]
 ----
@@ -373,90 +567,215 @@ clusters:
     name: xyz:aws:eks:eu-central-1:150143619628:cluster/my-kubernetes
 ----
 
-If you have stored the CA of your cluster -- xref:certimport[as described above] -- in {CMK}, you can select [.guihint]#Verify the certificate# under [.guihint]#SSL certificate verification#.
+However, the actual output of `kubectl config view` varies greatly.
+If a port is also specified here in the `server` line, be sure to include it in the rule as well.
 
-If your Kubernetes API server is only accessible via a proxy or special timeouts are required for the connection, you can enter these under [.guihint]#HTTP proxy# and [.guihint]#TCP timeouts#.
+If you have so far followed these instructions step by step and have deposited your cluster's CA certificate -- xref:certimport[as described above] -- in {CMK}, select under [.guihint]#SSL certificate verification# the [.guihint]#Verify the certificate# entry.
 
-Next, you have the option to enrich the monitoring of your Kubernetes cluster with usage data collected by the {CMK} cluster collector.
-To do this, you need to specify the protocol, URL, and port of the cluster collector under [.guihint]#Collector NodePort/Ingress endpoint#.
-If you set it up using our templates, the port here is `30035` by default.
-If you have customized the port in the `service.yaml` file, change the port here accordingly.
-You should be able to find out the URL or IP address of the nodeport from the description of the `cluster-collector` pod.
-Just run the following command and look in the output in the line starting with `Node:`:
+image::monitoring_kubernetes_rule_api_server_connection.png[alt=" Example of an API server connection."]
 
-[{shell}]
-----
-{c-user} kubectl describe pod $(kubectl get pods --no-headers -o custom-columns=":metadata.name") | grep -A5 Name:.*cluster-collector
-Name:         cluster-collector-5b7c8468cf-5t5hj
-Namespace:    checkmk-monitoring
-Priority:     0
-Node:         minikube/[green]#172.16.23.2#
-Start Time:   Wed, 03 Mar 2022 20:54:45 +0100
-Labels:       app=cluster-collector
-----
+Next, you have the opportunity to enrich the monitoring of your Kubernetes cluster with usage data collected by the {CMK} Cluster Collector.
+We repeat it once more here to emphasize the importance:
+*The setup of the Cluster Collector is absolutely essential for a fully comprehensive monitoring of your clusters.*
+This is the only way to obtain important data such as CPU and memory utilization and to receive information on the file systems used by the individual components.
 
-With the options [.guihint]#Collect information about...# you can now finally select which objects within your cluster should be monitored.
+So activate the [.guihint]#Enrich with usage data from Checkmk Cluster Collector# option and specify the endpoint of the NodePort or Ingress.
+How to re-display this endpoint is in the xref:helm_output[Helm chart output].
+
+image::monitoring_kubernetes_rule_enrich.png[alt=" Example for the specification of a Cluster Collector connection."]
+
+With the [.guihint]#Collect information about...# options, you can now select which objects within your cluster are to be monitored.
 Our preselection covers the most relevant objects.
-If you decide to monitor the [.guihint]#Pods of CronJobs# as well, please refer to the xref:user_interface#inline_help[inline help] for this point.
+If you decide to also monitor the [.guihint]#Pods of CronJobs#, please refer to the xref:user_interface#inline_help[inline help] on this point.
 
-Last but not least, you can choose whether you want to monitor only certain namespaces within your clusters or whether explicit namespaces should be excluded from monitoring.
-You specify this using the [.guihint]#Monitor namespaces# option.
+image::monitoring_kubernetes_rule_collect_info_about.png[alt=" Example for a selection of Kubernetes objects that can be monitored."]
 
-Your rule might now look like the following:
+With the next two options, you can further limit the objects to be monitored.
+If you are only interested in objects from certain namespaces, set this accordingly under [.guihint]#Monitor namespaces#.
+Here you can either enter individual namespaces to be monitored or explicitly exclude individual namespaces from monitoring.
 
-image::monitoring_kubernetes_rule.png[alt="Example of a completed rule for a Kubernetes special agent."]
+With the [.guihint]#Cluster resource aggregation# option, you can specify nodes that do not provide resources for the workload of your cluster.
+These nodes should be excluded from the calculation of available resources, otherwise there is a risk that capacity bottlenecks will not be detected.
+By default, we therefore exclude the `control-plane` and `infra` nodes from the evaluation.
 
-*Important:* Under [.guihint]#Conditions > Explicit hosts# you must now re-enter the xref:source-host[previously created host]:
+image::monitoring_kubernetes_namespaces_and_resource_aggregation.png[alt="Example configuration for a namespaces and resource aggregation"]
+
+As a final option, you can import the so-called _annotations_ from Kubernetes.
+In {CMK}, these _annotations_ become xref:glossar#label[host labels] and can thus be used as conditions in rules.
+You can specify which _annotations_ are to be imported using regular expressions.
+Again, consult the detailed inline help at this point.
+
+*Note:* The [.guihint]#Import all valid annotations# option is provided here only for completeness.
+We do not recommend blindly importing all _annotations_, as this can create a very large mountain of useless labels in {CMK}.
+
+// Now that you have everything set up, your rule might look like this:
+
+*Important:* Under [.guihint]#Conditions > Explicit hosts# you *must* now enter the xref:source-host[previously-created host]:
 
 image::monitoring_kubernetes_explicit_hosts.png[alt="Rules for special agents must always be set to explicit hosts, as seen here."]
 
-Next, store the rule and perform a service discovery on this host.
-You will see the first cluster-level services right here:
+Then save the rule and perform a service discovery on this host.
+You will immediately see the first cluster-level services here:
 
-image::monitoring_kubernetes_service_discovery.png[alt="An example image of the first service discovery after the configuration is complete."]
+image::monitoring_kubernetes_service_discovery.png[alt="An example of a view from the first service discovery once a configuration has been completed."]
 
-Afterwards, activate all the changes you made and let the dynamic host configuration do the work from now on.
-It will generate all hosts for your Kubernetes objects after a short time.
+Now activate all of the changes you have made and let the dynamic host configuration do the work for you.
+This will create all hosts for your Kubernetes objects within a short space of time.
 
 
 == Labels for Kubernetes objects
 
-{CMK} automatically generates labels for Kubernetes objects such as clusters, deployments, or namespaces during a service discovery.
-All labels for Kubernetes objects that {CMK} automatically generates start with `cmk/kubernetes/`.
-For example, a pod always gets a label of the node (`cmk/kubernetes/node:mynode`), a label that just shows that this object is a pod (`cmk/kubernetes/object:pod`) and a label for the namespace (`cmk/kubernetes/namespace:mynamespace`).
+{CMK} automatically generates labels for Kubernetes objects such as clusters, deployments or namespaces during a service discovery.
+All of the labels for Kubernetes objects that {CMK} automatically generates start with `cmk/kubernetes/`.
+For example, a pod always receives a label for the node (`cmk/kubernetes/node:mynode`), a label that shows that this object is a pod (`cmk/kubernetes/object:pod`) and a label for the namespace (`cmk/kubernetes/namespace:mynamespace`).
 This makes it very easy to create filters and rules for all objects of the same type or in the same namespace.
 
 
-== Hardware/Software Inventory
-
-Kubernetes monitoring by {CMK} also supports xref:inventory#[HW/SW Inventory].
-
-image::kubernetes_monitoring_hw_sw_inventory.png[alt="An example image of hardware and software inventory of a pod."]
+== Dashboards and views
 
 
-== Removing {CMK}
+[#dashboards]
+=== Kubernetes dashboards
 
-If you have deployed {CMK} to your cluster via our templates, you can remove created accounts, services and so on just as easily as with setting them up.
-To do this, go back to the directory where the YAML files are located and run the following command:
+{CEE-only}
+The {CMK} {EE} are supplied with six built-in dashboards for Kubernetes.
+In order to use these dashboards in a practical way, it is necessary to install and configure our Cluster Collector.
+Specifically, these six dashboards are called:
+
+* Kubernetes
+* Kubernetes Cluster
+* Kubernetes DaemonSet
+* Kubernetes Deployment
+* Kubernetes Namespace
+* Kubernetes StatefulSet
+
+The entry point is always the [.guihint]#Kubernetes# dashboard, which you can access via [.guihint]#Monitor > Applications > Kubernetes#:
+
+image::monitoring_kubernetes_kubernetes_dashboard.png[alt="An example of a view of the overview dashboard."]
+
+In the [.guihint]#Kubernetes# dashboard, all of your Kubernetes clusters being monitored will be listed on the left-hand side.
+This listing of clusters is also your entry point to drill deeper into Kubernetes dashboards.
+Clicking on the name of a cluster will take you to the selected cluster's [.guihint]#Kubernetes Cluster# dashboard.
+In the [.guihint]#Kubernetes Cluster# dashboard, clicking on the respective name then takes you to the other context-dependent dashboards:
+
+image::monitoring_kubernetes_cluster_dashboard.png[alt="Section of the cluster dashboard with links to the other dashboards."]
+
+
+=== The Hardware/Software inventory
+
+The {CMK} Kubernetes monitoring also supports the xref:inventory#[HW/SW inventory].
+For example, if you click on the cluster's primary name (here: [.guihint]#mycluster#) in the above cluster dashboard, you will jump to the cluster's inventory.
+
+In the same way, i.e. via the boxes with the primary names of the objects, you will also get to the inventory for the respective object in the other dashboards.
+The following example shows the HW/SW inventory from a pod:
+
+image::kubernetes_monitoring_hw_sw_inventory.png[width=88% alt="An example of a view of the hardware and software inventory for a pod"]
+
+
+== Checking the installation
+
+In the xref:helm_output[Helm chart output] section, you have already learned the first method for checking that the components for a comprehensive monitoring of Kubernetes have been successfully installed.
+In the {CMK} GUI you can also check the successful installation and configuration in a number of places.
+
+The most important services here are definitely [.guihint]#Kubernetes API# and [.guihint]#Cluster Collector#.
+These must be present on the cluster host you have created and should also display certain information.
+
+image::monitoring_kubernetes_check_installation.png[alt="The most important services to check for a correct installation"]
+
+The [.guihint]#Kubernetes API# service should normally report [.guihint]#Live, Ready# under [.guihint]#Summary#.
+The service [.guihint]#Cluster Collector# must show the version number of the installed Cluster Collector.
+If this is not the case for one or the other of these, you must check the installation of the Helm charts and the configuration of the special agent.
+
+Further possibilities for checking are provided in the {CEE} cluster dashboards.
+
+In the [.guihint]#Kubernetes# dashboard, you can see very early on whether the Cluster Collector is running in a cluster and collecting data.
+If the columns [.guihint]#CPU resources# and [.guihint]#Memory resources# do not contain any data, this is already a strong indicator that the Cluster Collector is not running properly.
+If set up correctly, the [.guihint]#Kubernetes# dashboard should look something like this:
+
+image::kubernetes_monitoring_validation_dashboard.png[alt="Kubernetes dashboard with data for CPU resources and Memory resources"]
+
+If you now click on the name of the cluster in this window, you will land in the [.guihint]#Kubernetes Cluster# in the respective cluster's dashboard.
+Here the three boxes [.guihint]#Primary datasource#, [.guihint]#Cluster collector# and [.guihint]#API health# should be green and show [.guihint]#OK#.
+
+image::monitoring_kubernetes_cluster_state.png[alt="A correctly-functioning cluster monitoring."]
+
+
+[#rancher]
+== Kubernetes in Rancher installations
+
+=== Creating a service account
+
+With Rancher, setting up a monitoring in {CMK} is very similar to the variant described above.
+Here, too, you need the service account so that {CMK} can access the cluster.
+You create the account directly in the Rancher web interface, where you can also find its token and certificate, which you import into {CMK}.
+
+In Rancher, first navigate to [.guihint]#Global > Security > Roles > Clusters# to create a new role, `checkmk`:
+
+[{image-border}]
+image::rancher_roles.png[]
+
+For simplicity, first clone the [.guihint]#Cluster Owner# role:
+
+[{image-border}]
+image::rancher_roles_clone.png[]
+
+Remove the [.guihint]#Create,# [.guihint]#Delete,# [.guihint]#Patch# and [.guihint]#Update# rights from the cloned role under [.guihint]#Grant Resources#:
+
+[{image-border}]
+image::rancher_roles_clone_rights.png[]
+
+Now create the new `checkmk` Rancher user under [.guihint]#Global > Users > Add User#.
+At [.guihint]#Global Permissions# select the option [.guihint]#User-Base# to grant the user only the most necessary read permissions:
+
+[{image-border}]
+image::rancher_adduser.png[]
+
+
+=== Assigning a cluster role
+
+Now switch to your cluster and click on [.guihint]#Edit# at the top right of the cluster menu.
+Here you can add the just created user [.guihint]#checkmk# with the corresponding role [.guihint]#checkmk# to the cluster via [.guihint]#Add Member#:
+
+[{image-border}]
+image::rancher_addmember.png[]
+
+
+=== Further actions
+
+Log in to Rancher with this new user, call up the cluster and click on [.guihint]#Kubeconfig File#.
+Here you will find the three specifications you need for monitoring in {CMK}:
+
+* `clusters` > `cluster` > `server`: URL/path specification for the xref:rule[{CMK} rule].
+* `clusters` > `cluster` > `certificate-authority-data`: the base64-encoded certificate
+* `users` > `user` > `token`: Access password in the form of a bearer token
+
+image::rancher_kubeconfig.png[]
+
+You will still need to decode the certificate, on the command line for example with `base64 --decode` or with one of the many online services.
+
+From here on, the setup in {CMK} corresponds to the procedure for pure Kubernetes use from the xref:setupincheckmk[Setting up the monitoring in {CMK}] section.
+
+
+== Removing monitoring components from a cluster
+
+If you have deployed {CMK} to your cluster using our Helm charts, you can remove the created accounts, services, pods and node ports just as easily as you set them up.
+To do this, simply uninstall the release that was xref:install_helm_charts[installed] using our charts.
+
+If you are unsure of the name of the release, first display all Helm releases in all namespaces:
 
 [{shell}]
 ----
-{c-user} kubectl delete -f .
-namespace "checkmk-monitoring" deleted
-serviceaccount "checkmk" deleted
-clusterrole.rbac.authorization.k8s.io "checkmk-metrics-reader" deleted
-clusterrolebinding.rbac.authorization.k8s.io "checkmk-metrics-reader-binding" deleted
-serviceaccount "cluster-collector" deleted
-clusterrolebinding.rbac.authorization.k8s.io "checkmk-cluster-collector" deleted
-clusterrolebinding.rbac.authorization.k8s.io "checkmk-token-review" deleted
-deployment.apps "cluster-collector" deleted
-serviceaccount "node-collector-machine-sections" deleted
-serviceaccount "node-collector-container-metrics" deleted
-clusterrole.rbac.authorization.k8s.io "node-collector-container-metrics-clusterrole" deleted
-podsecuritypolicy.policy "node-collector-container-metrics-podsecuritypolicy" deleted
-clusterrolebinding.rbac.authorization.k8s.io "node-collector-container-metrics-cluterrolebinding" deleted
-daemonset.apps "node-collector-container-metrics" deleted
-daemonset.apps "node-collector-machine-sections" deleted
-service "cluster-collector" deleted
-service "cluster-collector-nodeport" deleted
+{c-user} helm list --all-namespaces
+NAME        NAMESPACE           REVISION  UPDATED                                   STATUS    CHART          APP VERSION
+myrelease   checkmk-monitoring  1         2022-08-15 19:00:42.318666784 +0200 CEST  deployed  checkmk-1.0.1  1.0.1
+----
+
+As in the example output above, you should find a release here that contains a reference to {CMK} in the `CHART` column.
+
+Remove this release with the following command, specifying the correct namespace:
+
+[{shell}]
+----
+{c-user} helm uninstall myrelease -n checkmk-monitoring
+release "myrelease" uninstalled
 ----
