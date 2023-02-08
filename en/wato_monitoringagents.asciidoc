@@ -1,6 +1,6 @@
 include::global_attr.adoc[]
 = Monitoring agents
-:revdate: 2022-07-21
+:revdate: draft
 :title: Monitoring agents - Monitoring with {CMK} devices in a network
 :description: Here you will get a quick overview of how to monitor servers, switches, and other devices – and how the agent works.
 
@@ -19,8 +19,9 @@ An agent collects data relevant to monitoring from a host at specified intervals
 
 For servers and workstations, {CMK} provides its own agents, these are known as _{CMK} agents_.
 {CMK} agents are available for a wide variety of operating systems -- from the commonplace such as Windows and Linux to exotics such as OpenVMS.
-The agents are passive and listen on TCP port 6556.
+The agents are passive in xref:glossar#pull_mode[pull mode] and listen on TCP port 6556.
 Only on receiving a {CMK} server query will these agents be activated and respond with the required data.
+In xref:glossar#push_mode[push mode], on the other hand, the {CMK} agent periodically sends the monitoring data to the {CMK} server on its own.
 
 All of the {CMK} agents can be found via the web interface in the [.guihint]#Setup# menu.
 From there you can download the agents and install them on the target system.
@@ -33,9 +34,9 @@ All manageable network devices and appliances have a built-in xref:snmp#[SNMP ag
 
 Some systems however allow neither an agent installation, nor do they support SNMP in a usable form.
 Instead of these they offer application programming interfaces for management, so-called _APIs_, based on Telnet, SSH or HTTP/XML.
-{CMK} queries such interfaces via these so-called xref:datasource_programs#specialagents[special agents] running on the {CMK} server.
+{CMK} queries such interfaces via these so-called xref:glossar#special_agent[special agents] running on the {CMK} server.
 
-Finally, a special scenario is the monitoring of network services such as HTTP, SMTP or IMAP.
+Finally, monitoring network services such as HTTP, SMTP or IMAP is a case in itself.
 In the case of a network service the obvious procedure is to query and to monitor the service over the network.
 For this {CMK} sometimes uses its own, sometimes existing plug-ins originally developed for Nagios. 
 These are also called xref:active_checks#[active checks].
@@ -50,6 +51,78 @@ image::monitoringagents_agent_access.png[alt="Illustration of the ways {CMK} acc
 Until now we have only discussed _active_ monitoring -- {CMK}’s showpiece discipline.
 There is also the reverse method: namely that by which the target system itself sends messages to the monitoring, for example, via syslog or SNMP traps. 
 For these functions {CMK} has its _Event Console_ which is described in its xref:ec#[own article].
+
+
+// This block replaces the following section "The {CMK} agent"
+// start translation
+////
+
+[#agents]
+== Der {CMK}-Agent
+
+Sie benötigen für die Überwachung eines Servers oder einer Workstation ein kleines Programm, das auf dem Host installiert werden muss: den {CMK}-Agenten.
+
+Der Agent ist ein simples Shellskript, das minimalistisch, sicher und leicht erweiterbar ist.
+In der {CMK}-Version {v21} wurde diesem *Agentenskript* mit dem *Agent Controller* eine neue Komponente zur Seite gestellt.
+Der Agent Controller ist dem Agentenskript vorgeschaltet, fragt dieses ab und kommuniziert an dessen Stelle mit dem {CMK}-Server.
+Dazu registriert er sich am *Agent Receiver*, der auf dem {CMK}-Server läuft.
+
+.Zusammenspiel der Software-Komponenten
+[{image-border}]
+image::monitoringagents_communication_flow.png[alt="Illustration der Kommunikation zwischen Agent und Instanz."]
+
+Diese Architektur ist beim xref:agent_linux#agent_architecture[Linux-Agenten] und beim xref:agent_windows#agent_architecture[Windows-Agenten] identisch.
+Nur die technische Realisierung ist spezifisch für die Betriebssysteme.
+
+Das *Agentenskript* ist zuständig für die Sammlung der Monitoring-Daten und stellt diese dem Agent Controller zur Verfügung.
+Es ist:
+
+* minimalistisch, denn es begnügt sich mit minimalen Ressourcen an RAM, CPU, Plattenplatz und Netzwerk.
+* sicher, denn es erlaubt keinerlei Zugriffe aus dem Netzwerk.
+* leicht erweiterbar, denn Sie können Plugins in einer beliebigen Programmier- oder Skriptsprache schreiben und vom Agentenskript ausführen lassen.
+
+Der *Agent Controller* ist die Komponente des Agenten, die für den Transport der vom Agentenskript gesammelten Daten zuständig ist.
+Im Pull-Modus lauscht er am TCP-Port 6556 auf eingehende Verbindungen der {CMK}-Instanz und fragt das Agentenskript ab.
+
+Die Software-Architektur des Agenten mit dem Agent Controller ist die Voraussetzung dafür, neue Funktionen anzubieten, 
+die mit dem minimalistischen Design des Agentenskripts nicht umsetzbar waren, 
+wie beispielsweise die Verschlüsselung der Kommunikation per Transport Layer Security (TLS), Datenkomprimierung 
+und die Umkehrung der Kommunikationsrichtung vom xref:glossar#pull_mode[Pull-Modus] zum xref:glossar#push_mode[Push-Modus.]
+
+Im Pull-Modus initiiert der {CMK}-Server die Kommunikation und fragt die Daten vom Agenten ab.
+Im Push-Modus geht die Initiative vom Agenten aus.
+Der Push-Modus ist für eine Cloud-basierte Konfiguration und in einigen abgeschotteten Netzwerken erforderlich.
+In beiden Fällen kann der {CMK}-Server nicht auf das Netzwerk zugreifen, in dem sich die zu überwachenden Hosts befinden.
+Daher sendet der Agent von sich aus regelmäßig die Daten an den {CMK}-Server.
+Der Push-Modus ist nur in der {CCE} verfügbar.
+
+Der *Agent Receiver* ist die Komponente des {CMK}-Servers, die als genereller Endpunkt für die Kommunikation des Agent Controllers dient,
+z.B. für die Registrierung der Verbindung und für den Empfang der im Push-Modus vom Agent Controller gesendeten Daten.
+Im Push-Modus werden die empfangenen Daten vom Agent Receiver im Dateisystem abgelegt und so den Fetchern der Instanz zur Verfügung gestellt, 
+in den {EE} sind das die xref:cmc_differences.html#fetcher_checker[{CMK}-Fetcher.]
+Dagegen erfolgt im Pull-Modus der Datenaustausch ohne Agent Receiver direkt zwischen den Fetchern der Instanz und dem Agent Controller.
+
+TLS-Verschlüsselung und Datenkomprimierung werden über den Agent Controller und den Agent Receiver realisiert, d.h. {CMK}-Server und Agent müssen mindestens Version {v21} haben.
+Dabei ist nach der Installation der erste Schritt die Registrierung des Agent Controller beim Agent Receiver der {CMK}-Instanz, mit der ein Vertrauensverhältnis hergestellt wird.
+Bei der Registrierung wird bereits die TLS-Verschlüsselung der Kommunikation eingerichtet.
+Für den Push-Modus der {CE} müssen {CMK}-Server und Agent mindestens Version {v22} haben.
+
+Die folgende Tabelle stellt die verschiedenen Funktionen des {CMK}-Agenten zusammen und zeigt, in welchen {CMK}-Editionen diese Funktionen verfügbar sind:
+
+[cols="25,50,25",options="header"]
+|===
+|Funktion |Beschreibung |Verfügbarkeit
+|Registrierung |Das Vertrauensverhältnis zwischen dem Agent Controller des Hosts und dem Agent Receiver der {CMK}-Instanz wird hergestellt. |alle Editionen ab Version {v21}
+|TLS-Verschlüsselung |Die Daten werden mit TLS verschlüsselt ausgetauscht. |alle Editionen ab Version {v21}
+|Komprimierung |Die Daten werden komprimiert ausgetauscht. |alle Editionen ab Version {v21}
+|Pull-Modus |Der Agent versendet die Daten auf Anforderung der {CMK}-Instanz. |alle Editionen
+|Push-Modus |Der Agent versendet die Daten von sich aus an die {CMK}-Instanz. |{CE} ab Version {v22}
+|Individuelle Agentenkonfiguration |Per xref:glossar#agent_bakery[Agentenbäckerei] können Agenten für einzelne oder Gruppen von Hosts individuell konfiguriert und die Agentenpakete für die Installation erstellt werden. |{EE} und {CE}
+|xref:agent_deployment#[Automatische Agenten-Updates] |Das Paket aus der Agentenbäckerei wird zuerst manuell oder per Skript installiert und wird von da an automatisch aktualisiert. |{EE} und {CE}
+|xref:hosts_autoregister#[Automatische Erstellung von Hosts] |Die Registrierung des Agenten bei der {CMK}-Instanz und die Erstellung des Hosts erfolgt automatisch. |{CE} ab Version {v22}
+|===
+////
+// end translation
 
 
 [#agents]
@@ -98,6 +171,14 @@ The first step after an installation is the registration of the Agent Controller
 The TLS encryption of the communication process will be set up during this registration.
 
 
+
+
+
+
+
+
+
+
 [#download_page]
 == Downloading the agent from the download page
 
@@ -126,7 +207,7 @@ For operating systems on which the agent must be set up in the legacy mode (i.e.
 === Introduction
 
 {cee-only}
-If you use one of the {CEE} you can package personalized agents with the _Agent Bakery_.
+If you use one of the {EE} or the {CE} you can package personalized agents with the _Agent Bakery_.
 In this way, alongside the existing agents, you can also create (or ‘bake‘) agent packages that contain custom configurations and additional or optional plug-ins. 
 You can install these packages with a single command. 
 Such packages are ideal for automatic distribution and installation.
@@ -171,7 +252,7 @@ Baked packages for Linux and Windows are installed in the same way as the packag
 
 === Configuration using rules
 
-The agent’s configuration can be altered -- as is so often the case in {CMK} -- via xref:wato_rules#[rules].
+The agent’s configuration can be altered -- as is so often the case in {CMK} -- via xref:glossar#rule[rules].
 These offer you the possibility of equipping different hosts with differing settings or plug-ins.
 The [.guihint]#Agent rules# button takes you to a page which lists all of the rule sets that affect the agents:
 
@@ -207,7 +288,7 @@ For space reasons this list may not be complete.
 Agent packages are created specifically for a folder if the attribute [.guihint]#Bake agent packages# is set to [.guihint]#Bake a generic agent package for this folder# in the [.guihint]#Folder properties#.
 This attribute applies only to the folder and is not inherited. +
 This entry is useful for creating agents for hosts that do not yet exist in {CMK}.
-The folder can even be empty.
+The folder can even be empty to xref:hosts_autoregister#[create hosts automatically there later].
 By default, agent packages are only created for the [.guihint]#Main# (or [.guihint]#root folder#).
 |[.guihint]#Hosts# |The agent packages contain *all* of the agent rules that apply to the hosts in the the list.
 |===
@@ -314,6 +395,7 @@ It contains general information about the agent such as e.g., its version number
 
 If the host is already being monitored you can also fetch the data with the `cmk -d` xref:cmk_commandline#dump_agent[command]. 
 This uses the IP address configured in the [.guihint]#Setup#, allows for a possibly reconfigured port number, and also for any special agent that may be present:
+With the options `--debug -v` you can additionally get some debugging information.
 
 [{shell-raw}]
 ----
