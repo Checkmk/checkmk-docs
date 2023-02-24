@@ -6,7 +6,7 @@ include::global_attr.adoc[]
 :description: Mit {CMK} können Sie auch die OpenShift Container Platform überwachen. Lesen Sie hier die Details zur Einrichtung.
 
 // SK: Kubernetes-Begriffe
-// IGNORE DaemonSets Namespaces NetworkPolicy NodePort NodePorts PSP PodSecurityPolicy StatefulSets mycluster namespaces Kubeconfig
+// IGNORE DaemonSets Namespaces NetworkPolicy NodePort NodePorts PSP PodSecurityPolicy StatefulSets mycluster namespaces Kubeconfig RoleBinding ServiceAccount ServiceAccounts oc
 
 // SK: Eigennamen
 // IGNORE OpenShift
@@ -25,13 +25,18 @@ link:https://checkmk.com/de/integrations[Katalog der Check-Plugins^]
 
 ##EARLY DRAFT##
 
+== Vorwort
+
+Für die Einrichtung der Überwachung von Kubernetes und diversen Geschmacksrichtungen davon gibt es bereits einen xref:monitoring_kubernetes#[eigenen Artikel].
+Da OpenShift im Allgemeinen und die Einrichtung im Speziellen allerdings etwas anders funktionieren, haben wir uns für die Beschreibung der Einrichtung der Überwachung von OpenShift beziehungsweise der darin betriebenen Kubernetes-Cluster für einen eigenen Artikel entschieden.
+Im weiteren Verlauf dieses Artikels werden eben diese Cluster aus Gründen der Lesbarkeit und der Einfachheit halber OpenShift-Cluster nennen.
+
 == Einleitung
 
 [{image-left}]
 image::kubernetes_logo.jpg[width=140]
 
-Kubernetes ist seit geraumer Zeit das am meisten verwendete Werkzeug für die Orchestrierung von Containern.
-{CMK} unterstützt Sie bei der Überwachung Ihrer Kubernetes-Umgebungen.
+{CMK} unterstützt Sie bei der Überwachung Ihrer OpenShift-Cluster.
 
 Ab Version {v22} können Sie mit {CMK} die folgenden Kubernetes-Objekte überwachen:
 
@@ -47,13 +52,13 @@ Eine vollständige Auflistung aller verfügbaren Check-Plugins für die Überwac
 
 === Aufbau der Monitoring-Umgebung
 
-Da es in Kubernetes-Clustern sehr schnell auch zu größeren Veränderungen kommen kann, was die Anzahl und Verortung der einzelnen Komponenten angeht, empfehlen wir für das Monitoring Ihrer Kubernetes-Umgebung eine eigene Instanz zu erstellen.
+Da es in OpenShift-Clustern sehr schnell auch zu größeren Veränderungen kommen kann, was die Anzahl und Verortung der einzelnen Komponenten angeht, empfehlen wir für das Monitoring Ihrer OpenShift-Umgebung eine eigene Instanz zu erstellen.
 Diese können Sie dann wie üblich über das xref:distributed_monitoring#[verteilte Monitoring] an Ihre Zentralinstanz anbinden.
 
 
-=== Ablauf des Kubernetes-Monitorings in {CMK}
+=== Ablauf des OpenShift-Monitorings in {CMK}
 
-{CMK} überwacht Ihre Kubernetes-Cluster auf zwei Wegen:
+{CMK} überwacht Ihre OpenShift-Cluster auf zwei Wegen:
 
 image::monitoring_kubernetes_architecture.png[]
 
@@ -63,10 +68,9 @@ Hierüber lassen sich bereits die Zustände von Nodes und Containern abrufen. Au
 Für ein umfängliches Monitoring fehlt bis zum diesem Punkt allerdings noch etwas.
 Die Fragen, wie viel Last beispielsweise ein bestimmtes Deployment auf der CPU erzeugt, oder wie viel Arbeitsspeicher ein DaemonSet gerade bindet, lassen sich so nicht beantworten.
 
-An dieser Stelle kommen unser {CMK} Node Collector und unser {CMK} Cluster Collector ins Spiel.
-Diese sind ein unerlässlicher Teil des Kubernetes-Monitorings in {CMK}.
-Ein nicht unerheblicher Teil der folgenden Ausführungen drehen sich dann auch darum, diese zu installieren und einzurichten.
-Auch ist die Verwendung der xref:dashboards[Kubernetes-Dashboards] in den {CEE} nur dann sinnvoll, wenn Node und Cluster Collector hierfür Daten zur Auslastung liefern können.
+Da in OpenShift-Clustern standardmäßig bereits Prometheus installiert ist, kann der Kubernetes-Spezialagent inzwischen genau diese Prometheus-Instanz innerhalb Ihrer OpenShift-Umgebung abfragen und die so gewonnenen Daten für Sie in gewohnter {CMK}-Manier aufbereiten.
+Für ein vollumfängliches Monitoring Ihrer OpenShift-Umgebung empfehlen wir unbedingt diese Anbindung einzurichten.
+Auch ist die Verwendung der xref:dashboards[Kubernetes-Dashboards] in der {CCE} nur dann sinnvoll, wenn die entsprechenden Daten zur Auslastung vorliegen.
 
 
 === Unterschiede zum übrigen Monitoring in {CMK}
@@ -74,7 +78,7 @@ Auch ist die Verwendung der xref:dashboards[Kubernetes-Dashboards] in den {CEE} 
 // TK: Ja, ist etwas kurz. Ist mir auch nicht ganz klar: Was ist der Unterschied, ob ich einen Snapshot der Zustände jede Minute oder alle 10 Minuten bekomme? Das Ergebnis ist doch dann genauso "zweifelhaft", bleibt aber für 10 Minuten statt für 1 Minute stehen.
 // TK: Folgefrage: kann man die 10min verändern? Sollte man das tun? Und wenn nicht, warum?
 // SK: Diese 10 Minuten beziehen sich tatsächlich nur auf kube_pod_status und kube_replicas. Das muss ich noch mal genauer rausarbeiten. Jetzt füge ich erstmal diese beiden Begriffe hinzu.
-// SK: neuer Kommentar 2023: Es geht ja nniemand behauptet, dass nur alle 10 Minuten Daten geholt werden. Nur der Status der Services ändert sich erst wenn bspw. ein Überschreiten von Schwellwerten 10 Minuten bestand hat.
+// SK: neuer Kommentar 2023: Es geht ja niemand behauptet, dass nur alle 10 Minuten Daten geholt werden. Nur der Status der Services ändert sich erst wenn bspw. ein Überschreiten von Schwellwerten 10 Minuten bestand hat.
 Beim Monitoring von Pods und Replicas in Ihren Kubernetes-Clustern kommt es mitunter wesentlich häufiger zu Statusänderungen bzw. zu Verzögerungen.
 Um dem Rechnung zu tragen, ändern die Checks bei bestimmten Zuständen dieser Objekte erst nach 10 Minuten ihren Status in {CMK}.
 
@@ -82,90 +86,130 @@ Um dem Rechnung zu tragen, ändern die Checks bei bestimmten Zuständen dieser O
 
 == Voraussetzungen im Cluster schaffen
 
-Um Ihr Kubernetes-Cluster in {CMK} überwachen zu können, schaffen Sie zuerst die Voraussetzungen in Ihrem Cluster.
+Um Ihre OpenShift-Umgebung in {CMK} überwachen zu können, schaffen Sie zuerst die Voraussetzungen in Ihrem Cluster.
 
-=== Per OpenShift CLI
+=== Per OpenShift CLI (oc)
 
-==== Namespace erzeugen
+Zuerst müssen Sie in Ihrem OpenShift-Cluster einen Namespace und einen Service-Account für {CMK} einrichten.
+Am schnellsten lässt sich das über die OpenShift CLI (kurz: oc) bewerkstelligen.
+
+Im folgenden Beispiel nennen wir diesen Namespace `checkmk-monitoring`.
+Sollten Sie einen anderen Namen wählen wollen oder müssen, dann müssen Sie diese Änderung auch in bei der Erzeugung des Service-Account vornehmen.
 
 [{shell}]
 ----
 {c-user} oc create namespace checkmk-monitoring
+namespace/checkmk-monitoring created
 ----
 
-==== Service-Account anlegen
+Den Service-Account mit der zugehörigen Rolle und der sogenannten RoleBinding, können Sie durch die Angabe einer von uns vorgefertigten und link:https://github.com/tribe29/checkmk_kube_agent/blob/main/deploy/kubernetes/checkmk-serviceaccount.yaml[auf GitHub veröffentlichten Datei] vornehmen.
+Prüfen Sie deren Inhalt und führen Sie anschließend den folgenden Befehl aus:
 
 [{shell}]
 ----
 {c-user} oc apply -f https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/checkmk-serviceaccount.yaml
+serviceaccount/checkmk created
+clusterrole.rbac.authorization.k8s.io/checkmk-metrics-reader created
+clusterrolebinding.rbac.authorization.k8s.io/checkmk-metrics-reader-binding created
 ----
+
+Alternativ können Sie diese YAML-Datei natürlich zuerst herunterladen, nach Ihren Bedürfnissen anpassen und anschließend `oc apply -f` auf Ihre lokale Kopie anwenden.
 
 === Per Web console
 
+Sie können den Namespace und den Service-Account auch über die grafische Benutzeroberfläche von OpenShift einrichten.
+Da sich solche Oberflächen erfahrungsgemäß regelmäßig ändern, geben wir im folgenden nur Hinweise, wo sie diese Einstellungen finden *könnten*.
+
 ==== Namespace erzeugen
+
+Wenn Sie als Administrator in der GUI unterwegs sind, sollten Sie in der Navigation auf der linken Seite den Punkt [.guihint]#Administration# finden.
+Öffnen Sie diesen und wählen Sie als nächstes [.guihint]#Namespaces#.
+Rechts oben sollte jetzt wiederum das Kommando [.guihint]#Create Namespace# auftauchen.
+Klicken Sie darauf, geben Sie in der nun geöffneten Maske einen geeigneten Namen ein (bspw. `checkmk-monitoring`) und bestätigen Sie den Vorgang mit einem Klick auf [.guihint]#Create#.
+
+[{image-border}]
+image::monitoring_openshift_gui_create_namespace.png[alt="Eingabemaske zur Erzeugung eines Namespace in OpenShift." width=75%]
 
 ==== Service-Account anlegen
 
-=== API-Endpunkte, Token etc besorgen
+Der Service-Account und benötigte Role und RoleBinding müssen über die GUI in drei Schritten erstellt werden.
 
+Erzeugen Sie zuerst den Service-Accounts über [.guihint]#User Management > ServiceAccounts > Create ServiceAccount#.
+Kopieren Sie das folgende Listing in die Eingabemaske und bestätigen Sie das Ganze mit einem Klick auf [.guihint]#Create#.
 
-
-
-////
-==== Kommunikation per Ingress bereitstellen
-
-Falls Sie link:https://kubernetes.io/docs/concepts/services-networking/ingress/[Ingress^] verwenden, um die Zugriffe zu Ihren Diensten zu steuern, passen Sie entsprechend die bereits vorbereiteten Teile in der `values.yaml` an.
-// TK: Den Link würde ich weiter oben setzen, wo Du Ingress das 1. Mal erwähnst. Zu NodePort gibt es wohl keine Erklärung? Vielleicht: https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport
-// SK: Bei der ersten Erwähung von Ingress in der Einleitung wäre mir das eine zu große Ablenkung. Da will ich keinen Link haben. An der zweiten Stelle ist Ingress zu nebensächlich. Da könnte der Link untergehen.
-Zur besseren Übersicht ist in dem folgenden Beispiel nur der relevante Ausschnitt gezeigt.
-Den Parameter `enabled` setzen Sie auf `true`.
-Die restlichen Parameter passen Sie entsprechend Ihrer Umgebung an:
-
-.values.yaml
-[{yaml}]
+[{file}]
 ----
-  ingress:
-    enabled: true
-    className: ""
-    annotations:
-      nginx.ingress.kubernetes.io/rewrite-target: /
-    hosts:
-      - host: checkmk-cluster-collector.local
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
-    #  - secretName: chart-example-tls
-    #    hosts:
-    #      - chart-example.local
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: checkmk
+  namespace: checkmk-monitoring
+----
+
+Weiter geht es unter [.guihint]#User Management > Roles > Create Role#.
+
+
+=== API-Endpunkte, Token und Zertifikat besorgen
+
+==== Kubernetes-API-Endpunkt auslesen
+
+
+[{shell}]
+----
+{c-user} oc cluster-info
+Kubernetes control plane is running at https://api.myopenshift.example.com:6443
+----
+
+
+////
+[{shell}]
+----
+{c-user} oc status
+In project default on server https://api.tribe29-okd.teamk8ingress-tribe29.com:6443
+...
+----
+
+[{shell}]
+----
+{c-user} oc config view
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: DATA+OMITTED
+    server: https://api.tribe29-okd.teamk8ingress-tribe29.com:6443
+  name: tribe29-okd
+contexts:
+- context:
+    cluster: tribe29-okd
+    user: admin
+  name: admin
+current-context: admin
+kind: Config
+preferences: {}
+users:
+- name: admin
+  user:
+    client-certificate-data: REDACTED
+    client-key-data: REDACTED
 ----
 ////
 
-////
-==== Kommunikation per NodePort bereitstellen
+==== Token auslesen
 
-Sie können den Zugriff auf die Dienste auch direkt über einen Port bereitstellen.
-Das ist dann notwendig, wenn Sie kein Ingress verwenden.
-Auch in dem nachfolgenden Beispiel wird nur der relevante Ausschnitt gezeigt.
-Sie setzen dabei den Wert `type` auf `NodePort` und entfernen die Auskommentierung zu dem Wert `nodePort`:
-
-.values.yaml
-[{yaml}]
+[{shell}]
 ----
-  service:
-    # if required specify "NodePort" here to expose the cluster-collector via the "nodePort" specified below
-    type: NodePort
-    port: 8080
-    nodePort: 30035
+{c-user}
+export TOKEN=$(oc get secret $(oc get serviceaccount checkmk -o=jsonpath='{.secrets[1].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode);
 ----
-////
 
-////
-==== Eigenen Service-Account verwenden
+==== Zertifikat auslesen
 
-Mithilfe unserer Helm-Charts würde standardmäßig ein Service-Account in Ihrem Cluster erstellt.
-Wenn Sie bereits über einen passenden Service-Account verfügen, genügt es, wenn Sie diesen in der `values.yaml` hinzufügen und die Erstellung eines neuen Accounts unterbinden.
-////
+[{shell}]
+----
+{c-user}
+export CA_CRT=$(oc get secret $(oc get serviceaccount checkmk -o=jsonpath='{.secrets[1].name}' -n checkmk-monitoring) -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode);
+----
+
 
 ##EARLY DRAFT##
 
@@ -396,7 +440,7 @@ image::kubernetes_monitoring_hw_sw_inventory.png[width=88% alt="Exemplarische An
 
 == Prüfung der Installation
 
-Im Abschnitt xref:helm_output[Ausgabe der Helm-Charts] haben Sie bereits die erste Möglichkeit kennengelernt, um die erfolgreiche Installation der Komponenten für das vollständige Monitoring von Kubernetes zu prüfen.
+//Im Abschnitt xref:helm_output[Ausgabe der Helm-Charts] haben Sie bereits die erste Möglichkeit kennengelernt, um die erfolgreiche Installation der Komponenten für das vollständige Monitoring von Kubernetes zu prüfen.
 In der GUI von {CMK} können Sie ebenfalls an einigen Stellen die erfolgreiche Installation und Konfiguration prüfen.
 
 Die wichtigsten Services sind hier sicherlich [.guihint]#Kubernetes API# und [.guihint]#Cluster Collector#.
@@ -425,28 +469,39 @@ image::monitoring_kubernetes_cluster_state.png[alt="Funktionierendes Cluster-Mon
 
 === Service-Account Löschen
 
+Wenn Sie zur Erzeugung des SA unsere vorgegebene YAML verwendet haben, können Sie diesen wie folgt auch wieder entfernen:
+
+[{shell}]
+----
+{c-user} oc delete -f https://raw.githubusercontent.com/tribe29/checkmk_kube_agent/main/deploy/kubernetes/checkmk-serviceaccount.yaml
+serviceaccount "checkmk" deleted
+clusterrole.rbac.authorization.k8s.io "checkmk-metrics-reader" deleted
+clusterrolebinding.rbac.authorization.k8s.io "checkmk-metrics-reader-binding" deleted
+----
+
+
 === Namespace entfernen, wenn gewünscht
 
+[{shell}]
+----
+{c-user} oc delete namespace checkmk-monitoring
+namespace "checkmk-monitoring" deleted
+----
+
+//SK: In unserer yaml zur Erzeugung des SA wird davon ausgegangen, dass der Namespace checkmk-monitoring heißt. Das folgende kann erstmal draußen bleiben.
 ////
-Wenn Sie {CMK} über unsere Helm-Charts in Ihrem Cluster bereitgestellt haben, können Sie die erstellten Accounts, Services, Pods und Node Ports genauso leicht wieder entfernen, wie Sie sie eingerichtet haben.
-Deinstallieren Sie dafür einfach das Release, welches Sie mithilfe unserer Charts xref:install_helm_charts[installiert] haben.
-
-Sollten Sie sich beim Namen des Releases unsicher sein, lassen Sie sich zuerst alle Helm-Releases in allen Namespaces anzeigen:
+Sollten Sie sich beim Namen des Namespace unsicher sein, können Sie sich zuerst Namespaces anzeigen lassen:
 
 [{shell}]
 ----
-{c-user} helm list --all-namespaces
-NAME        NAMESPACE           REVISION  UPDATED                                   STATUS    CHART          APP VERSION
-myrelease   checkmk-monitoring  1         2022-08-15 19:00:42.318666784 +0200 CEST  deployed  checkmk-1.0.1  1.0.1
-----
-
-Wie in der obigen Beispielausgabe sollten Sie hier ein Release finden, welches in der Spalte `CHART` einen Hinweis auf {CMK} enthält.
-
-Entfernen Sie dieses Release anschließend - unter Angabe des korrekten Namespaces - mit folgendem Befehl:
-
-[{shell}]
-----
-{c-user} helm uninstall myrelease -n checkmk-monitoring
-release "myrelease" uninstalled
+{c-user} oc get namespace
+NAME                                               STATUS   AGE
+checkmk-monitoring                                 Active   3m23s
+default                                            Active   4h8m
+kube-node-lease                                    Active   4h8m
+kube-public                                        Active   4h8m
+kube-system                                        Active   4h8m
+openshift                                          Active   4h
+...
 ----
 ////
