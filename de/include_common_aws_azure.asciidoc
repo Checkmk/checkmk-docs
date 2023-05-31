@@ -1,0 +1,138 @@
+// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+
+== Login auf der virtuellen Maschine
+
+Das Root-Login ist auf den AWS-/Azure-Images deaktiviert.
+Stattdessen kommt der Nutzer `ubuntu` zum Einsatz, der über die Berechtigung verfügt, `sudo` mit beliebigen Kommandos ohne Passwortabfrage auszuführen.
+Da Sie je nach Setup möglicherweise einen von Ihrem Default Key abweichenden SSH-Schlüssel angeben mussten, ist das _Identity File_ entsprechend anzugeben.
+Die IP-Adresse ist natürlich entsprechend anzupassen:
+
+[{shell}]
+----
+{c-user} ssh -i /path/to/id_file.priv ubuntu@12.34.56.78
+----
+
+== Site aufsetzen
+
+Eine {CMK} Site muss eindeutig benannt sein und sollte darüber hinaus eine leichte Identifikation ermöglichen.
+Für den Site-Namen gelten die selben Einschränkungen wie für Linux-Nutzer (ein solcher wird für jede Site erstellt):
+Das erste Zeichen muss ein Buchstabe sein, alle weiteren Zeichen dürfen Buchstaben, Zahlen, sowie Punkt, Minuszeichen und Underscore sein.
+Leerzeichen oder das `@` sind nicht zulässig und die Länge darf maximal 30 Zeichen betragen.
+Hier – und an den meisten anderen Stellen dieses Handbuches – verwenden wir _mysite_, wenn dies spezifisch genug ist.
+
+[{shell}]
+----
+{c-ubuntu} sudo omd create mysite
+Adding /opt/omd/sites/mysite/tmp to /etc/fstab.
+Creating temporary filesystem /omd/sites/mysite/tmp...[green]#OK#
+Updating core configuration...
+Generating configuration for core (type cmc)...
+
+Starting full compilation for all hosts Creating global helper config...[green]#OK#
+ Creating cmc protobuf configuration...[green]#OK#
+Executing post-create script "01_create-sample-config.py"...[green]#OK#
+Restarting Apache...[green]#OK#
+Created new site mysite with version 2.2.0p1.cce.
+
+  The site can be started with omd start mysite.
+  The default web UI is available at \http://cloud/mysite/
+
+  The admin user for the web applications is cmkadmin with password: UbWeec9QuazIf
+  For command line administration of the site, log in with 'omd su mysite'.
+  After logging in, you can change the password for cmkadmin with 'cmk-passwd cmkadmin'.
+----
+
+Starten Sie jetzt die neu angelegte Site mit
+
+[{shell}]
+----
+{c-ubuntu} sudo omd create mysite
+----
+
+Die angezeigte URL verwendet den intern genutzten Hostnamen Ihrer AWS- oder Azure-VM.
+Da dieser in der Regel nicht extern aufgelöst wird, ist sie von eingeschränktem Nutzen.
+In der Regel wollen Sie zunächst über die IP-Adresse oder einen im eigenen DNS-Server hinterlegten Hostnamen zugreifen.
+
+== Zertifikate hinterlegen
+
+Damit der System-Apache überhaupt am HTTPS-Port 443 lauschen kann, benötigt er gültige Zertifikate.
+Beim ersten Start der virtuellen Maschine werden hierfür die häufig gesehenen _Snakeoil Inc._ Zertifikate generiert.
+Wir raten dringend zum baldigen Austausch gegen xref:omd_https#[eigene Zertifikate], bei denen die komplette Zertifikatskette leicht verifiziert werden kann.
+
+Die Apache-Konfiguration hält sich dabei eng an die Ubuntu-Standards, geänderte Zertifikatspfade müssen in der Datei `/etc/apache2/sites-enabled/000-default.conf` eingetragen werden.
+
+== Firewall einrichten
+
+Standardmäßig öffnet {CMK} Ports nur sparsam und nach expliziter Aktivierung benötigter Komponenten.
+Dennoch kann es sinnvoll sein, die verwendeten Ports weiter – zum Beispiel auf bestimmte IP-Adressen – einzuschränken.
+
+In einem Single Site Setup, in dem Hosts im Monitoring auch per Push Monitoringdaten zur {CMK} Site schicken, müssen die folgenden Ports des {CMK} Servers erreichbar sein:
+
+* Von den Hosts im Monitoring aus: Port 80/443 (HTTP/HTTPS, während der Agentenregistrierung) und Port 8000 (Agent Receiver, dauerhaft)
+* Für die Verwaltung per Browser und REST-API: Port 80/443 (HTTP/HTTPS)
+
+Benutzen Sie unsere Übersicht xref:ports#[aller verwendeten Ports], falls Sie ein verteiltes Monitoring aufsetzen oder beispielsweise Statusabfragen über die xref:glossar#livestatus[Livestatus-Schnittstelle] vornehmen wollen.
+
+== Mailsystem einrichten
+
+Da die Wege der xref:intro_notifications#[Benachrichtigungen] in {CMK} vielfältig sind und variieren können, ist kein E-Mail-System vorbereitet.
+Im Regelfall werden Sie einen link:https://manpages.ubuntu.com/manpages/jammy/man7/nullmailer.7.html[Nullmailer] einrichten wollen, seltener ein vollständiges Mailsystem.
+Auch der vollständige Verzicht auf ein lokales Mailsystem ist möglich, falls Sie ausschließlich xref:notifications#syncsmtp[nachvollziehbare Zustellung von HTML-E-Mails per SMTP] aktivieren wollen.
+
+== Host(s) ins Monitoring aufnehmen
+
+In den allermeisten Fällen dürfte der {CMK} Server selbst der erste Host sein, den Sie xref:intro_setup_monitor#linux[ins Monitoring aufnehmen].
+Wenn Ihnen Download des Agentenpaketes über das Webinterface und anschließender Transfer per `scp` zu umständlich erscheint, können Sie den Vanilla-Agenten direkt aus dem Dateisystem installieren:
+
+[{shell}]
+----
+{c-ubuntu} sudo apt install $(sudo find /opt/omd/versions/ -name 'check-mk-agent_*.deb' | tail -n1)
+----
+
+Unmittelbar nach der Installation lauscht der {CMK} Agent im unverschlüsselten Legacy Mode auf Port 6556.
+Führen Sie daher zeitnah xref:intro_setup_monitor#register[die Registrierung] durch, damit keine unbefugten Dritten auf die Agentenausgabe zugreifen können:
+
+[{shell}]
+----
+{c-ubuntu} sudo cmk-agent-ctl register --hostname localhost --server localhost --site mysite --user cmkadmin
+----
+
+== Checkmk aktualisieren
+
+Prüfen Sie die link:https://checkmk.com/de/download?method=cmk&edition=cce&version=2.2.0&platform=ubuntu&os=jammy&type=cmk[Downloadseite] regelmäßig auf Updates und laden sie das aktualisierte Paket mit dem dort angezeigten `wget` Kommando herunter.
+Die xref:update#[Installation eines Updates] erfolgt in zwei Schritten, was darin begründet liegt, dass mit `omd` verschiedene Sites mit verschiedenen Versionen von {CMK} auf einem Server laufen können.
+
+Der erste Schritt ist die Installation des Paketes:
+
+[{shell}]
+----
+{c-ubuntu} sudo apt install ./check-mk-cloud-2.2.0p2_0.jammy_amd64.deb
+----
+
+Der nächste Schritt ist das Update Ihrer Site(s):
+
+[{shell}]
+----
+{c-ubuntu} sudo omd stop mysite
+{c-ubuntu} sudo omd update mysite
+{c-ubuntu} sudo omd start mysite
+----
+
+Falls Sie mehrere Sites auf dem Server nutzen (beispielsweise eine produktiv genutzte und eine für den Test von Erweiterungen), stellen Sie sicher, dass alle aktualisiert sind:
+
+[{shell}]
+----
+{c-ubuntu} omd sites
+SITE         VERSION       COMMENTS
+mysite       2.2.0p2.cce   default version
+mytestsite   2.2.0p2.cce   default version
+----
+
+Nicht mehr genutzte {CMK} Versionen können Sie dann über das Ubuntu-Paketmanagement deinstallieren:
+
+[{shell}]
+----
+{c-ubuntu} sudo apt purge check-mk-cloud-2.2.0p1
+----
+
