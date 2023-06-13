@@ -1,0 +1,305 @@
+// -*- coding: utf-8 -*-
+// IGNORE lt
+include::global_attr.adoc[]
+= Installation als Docker-Container
+:revdate: 2023-05-17
+:title: Installation als Docker-Container
+:description: Die Installation von {CMK} in einem Docker-Container ist mit dem offiziellen Image sehr einfach. Die sinnvollen Optionen dabei werden hier näher beschrieben.
+
+{related-start}
+xref:intro_setup#[{CMK} aufsetzen]
+xref:managing_docker#[{CMK}-Server im Docker-Container]
+{related-end}
+
+
+== Grundsätzliches
+
+Es gibt viele Gründe, weshalb Anwender Software in einem Docker-Container betreiben möchten.
+Auch {CMK} kann man in einer Docker-Umgebung einsetzen.
+Ein Anwendungsfall kann sein, eine dynamisch erstellte Containergruppe zu überwachen und {CMK} zu einem Teil dieser Gruppe zu machen.
+Wird die Containergruppe nicht mehr benötigt, kann auch die Instanz von {CMK} wieder entfernt werden.
+
+*Wichtig:* Auch wenn es möglich und sehr einfach ist, {CMK} in eine containerisierte Umgebung zu integrieren, ist das nicht immer der sinnvollste
+Weg.
+Da jegliche Virtualisierung zum einen eine verringerte Performance mit sich bringt und zum anderen das Monitoring prinzipiell möglichst wenige physische Abhängigkeiten haben sollte,
+eignen sich {CMK}-Container zum Beispiel nicht, um damit die gesamte Infrastruktur zu überwachen.
+In einem in sich abgeschlossenen Container-Cluster kann es aber durchaus zielführend sein, in dieses einen {CMK}-Container zu integrieren, um es direkt von innen heraus zu überwachen.
+Prüfen Sie also auch und besonders hier, ob das Werkzeug Docker/Container für Ihre konkrete Anforderung das richtige ist.
+
+// TK: In 2.2.0: Ubuntu 22.04 (Jammy Jellyfish)
+Um Ihnen die Nutzung als Container so einfach wie möglich zu machen, stellen wir für jede xref:intro_setup#editions[{CMK}-Edition] eigene Images zur Verfügung, welche neben {CMK} das Linux-Betriebssystem Ubuntu enthalten:
+
+[cols="25,~"]
+|===
+|{CRE} |link:https://hub.docker.com/r/checkmk/check-mk-raw/[Docker Hub^] oder link:https://checkmk.com/de/download?method=docker&edition=cre&version=stable[{CMK}-Download-Seite^]
+|{CEE} |link:https://checkmk.com/de/download?method=docker&edition=cce&version=stable[{CMK}-Download-Seite^] (für die {CE}), link:https://portal.checkmk.com/de/[{CMK}-Kundenportal^]
+|===
+
+*Hinweis:* Die Bereitstellung im Docker Hub ermöglicht den Download und die Installation in einem Kommando, wie wir im xref:install_cre[Kapitel zur Installation der {RE}] zeigen werden.
+
+In diesem Artikel führen wir Sie durch die Einrichtung von {CMK} in Docker und zeigen Ihnen einige Tricks, die das Leben mit {CMK} in Docker einfacher machen.
+Weitere Informationen finden Sie im Artikel xref:managing_docker#[{CMK}-Server im Docker-Container.]
+
+
+[#prerequisites]
+== Voraussetzungen
+
+Zur Ausführung der in diesem Artikel vorgestellten Kommandos benötigen Sie eine funktionierende Installation der link:https://docs.docker.com/engine/install/[Docker Engine^] und Grundkenntnisse in deren Nutzung.
+
+
+[#install_cre]
+== Installation der {RE}
+
+{cre-only}
+Der Start mit Docker mit der {CRE} ist einfach.
+Ein passendes Image steht Ihnen direkt über Docker Hub zur Verfügung.
+Das Ganze geht mit einem einzigen Kommando auf der Linux-Konsole.
+Dabei wird nicht nur ein Docker-Container mit {CMK} erzeugt, sondern auch gleich eine Monitoring-Instanz mit dem Namen `cmk` eingerichtet und gestartet.
+Diese ist sofort bereit zur Anmeldung mit dem Benutzer `cmkadmin`.
+
+[#docker-run]
+=== Manueller Start
+
+[{shell}]
+----
+{c-root} docker container run -dit -p 8080:5000 -p 8000:8000 --tmpfs /opt/omd/sites/cmk/tmp:uid=1000,gid=1000 -v monitoring:/omd/sites --name monitoring -v /etc/localtime:/etc/localtime:ro --restart always checkmk/check-mk-raw:2.2.0-latest
+Unable to find image 'checkmk/check-mk-raw:2.2.0-latest' locally
+2.2.0-latest: Pulling from checkmk/check-mk-raw
+6552179c3509: Pull complete
+5a25c1702974: Pull complete
+1c5c13e7b7c2: Pull complete
+665c930705aa: Pull complete
+597c556025e7: Pull complete
+fe710cb5a7c0: Pull complete
+Digest: sha256:21be9d9ded25c498834009bcb890ef678fbcdabbc5b31a168f56ab4051b9a813
+Status: Downloaded newer image for checkmk/check-mk-raw:2.2.0-latest
+b75e2e7d8039e73cc6e57ff09d28b4e6bccc91dbc7a85e55a3062e5fd14f596a
+----
+
+Nähere Informationen zu den benutzten Optionen:
+
+[cols="40,~",options="header"]
+|===
+|Option |Beschreibung
+
+|`-p 8080:5000` |Der Webserver des Containers lauscht standardmäßig auf Port 5000.
+In diesem Beispiel wird der Port 8080 des Docker-Nodes an den Port des Containers gebunden, damit dieser von außen erreichbar ist.
+Wenn Sie keinen anderen Container oder Prozess haben, welcher den Standard-HTTP-Port 80 benutzt, können Sie den Container auch daran binden.
+In diesem Fall würde die Option so aussehen: `-p 80:5000`.
+Die Nutzung von HTTPS wird im Artikel xref:managing_docker#[{CMK}-Server im Docker-Container] erläutert.
+
+|`-p 8000:8000` |Seit {CMK} {v21} müssen Sie zusätzlich noch den Port des Agent Receivers veröffentlichen, um die xref:agent_linux#registration[Registrierung des Agent Controllers] durchführen zu können.
+
+|`--tmpfs /opt/omd/sites/cmk/tmp:uid=1000,gid=1000` |Für eine optimale Performance können Sie ein temporäres Dateisystem direkt im RAM des Docker-Nodes nutzen.
+Mit dieser Option geben Sie den Pfad zu diesem Dateisystem an.
+Wenn Sie die ID der Instanz ändern, so muss auch dieser Pfad entsprechend angepasst werden.
+
+|`-v monitoring:/omd/sites` |Diese Option bindet die Daten der Instanz in diesem Container an eine persistente Stelle im Dateisystem des Docker-Nodes.
+Sie gehen daher nicht verloren, wenn der Container wieder entfernt wird.
+Der Teil vor dem Doppelpunkt bestimmt hierbei den Namen.
+So können Sie später den Speicherpunkt eindeutig identifizieren, zum Beispiel mit dem Befehl `docker volume ls`.
+
+|`--name monitoring` |Hiermit wird der Name des Containers definiert.
+Dieser Name muss eindeutig sein und darf auf dem Docker-Node kein zweites Mal verwendet werden.
+
+|`-v /etc/localtime:/etc/localtime:ro` |Mit dieser Option nutzen Sie in dem Container dieselbe Zeitzone wie im Docker-Node. Gleichzeitig wird die Datei nur lesend (`ro`) eingebunden.
+
+|`--restart always` |Normalerweise startet ein Container nicht neu, wenn er gestoppt wurde.
+Mit dieser Option sorgen Sie dafür, dass er eben doch automatisch neu startet.
+Wenn Sie allerdings einen Container manuell stoppen, wird er nur neu gestartet, wenn der Docker-Daemon neu startet oder der Container selbst manuell neu gestartet wird.
+
+|`checkmk/check-mk-raw:2.2.0-latest` |Bezeichnung des {CMK} Images im Format `<Repository>:<Tag>`.
+Die Bezeichnungen können Sie über den Befehl `docker images` auslesen.
+|===
+
+[#login]
+Nachdem alle benötigten Dateien geladen wurden und der Container gestartet ist, sollten Sie die GUI von {CMK} über `\http://localhost:8080/cmk/check_mk/` erreichen:
+
+image::login.png[alt="{CMK}-Anmeldedialog.",width=60%]
+
+Sie können sich nun erstmals xref:intro_gui#[einloggen und {CMK} ausprobieren.]
+Das initiale Passwort für den Benutzer `cmkadmin` finden Sie in den Logs, die für diesen Container geschrieben werden (hier auf die wesentlichen Informationen gekürzt):
+
+[{shell}]
+----
+{c-root} docker container logs monitoring
+Created new site cmk with version 2.2.0p1.cre.
+
+  The site can be started with *omd start cmk*.
+  The default web UI is available at *http://73a86e310b60/cmk/*
+
+  The admin user for the web applications is *cmkadmin* with password: *2JLysBmv*
+  For command line administration of the site, log in with *'omd su cmk'*.
+  After logging in, you can change the password for cmkadmin with *'cmk-passwd cmkadmin'*.
+----
+
+*Hinweis:* Die im Log angezeigte URL zum Zugriff auf die Weboberfläche mit der ID des Containers ist nur innerhalb des Containers bekannt und für den Zugriff von außen im Webbrowser nicht geeignet.
+[#docker-compose]
+=== Nutzung von Docker Compose
+
+Sie können den Container auch mit Hilfe des Tools `docker-compose` starten. Das erleichtert u.a. die Angabe der Parameter und ermöglicht zudem den einfachen Start von weiteren Containern. In vorliegenden Fall braucht wird erst einmal nur der grundlegende Start mit [.guihint]#Docker Compose# gezeigt. Legen Sie dafür in in einem Testverzeichnis, die Datei `docker-compose.yml` an und wechseln Sie danach in genau dieses Verzeichnis:
+
+[{shell}]
+----
+{c-root} mkdir my-compose-test && cd my-compose-test
+----
+
+Beachten Sie, dass es immer nur _eine_ Datei mit dem Namen `docker-compose.yml` pro Verzeichnis geben kann. Legen Sie nun diese Datei an und beschreiben Sie, wie Checkmk als Container gestartet werden soll. Der Einfachheit halber sehen Sie in dem nachfolgenden Beispiel dieselben Optionen, wie aus dem manuellen Start:
+
+[{yaml}]
+----
+---
+version: "3.0"
+services:
+
+  checkmk:
+    image: "checkmk/check-mk-raw:2.2.0-latest"
+    container_name: monitoring
+    volumes:
+      - monitoring:/omd/sites
+      - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/opt/omd/sites/cmk/tmp:uid=1000,gid=1000"
+    ports:
+      - 8080:5000
+      - 8000:8000
+    restart: always
+
+volumes:
+  monitoring:
+----
+
+Dieses Beispiel können Sie als funktionierende Ausgangsbasis nutzen, um Checkmk in Ihre eigene Docker-Compose-Umgebung einzubinden. Für einen ersten Test starten Sie den Container mit dem Befehl `docker-compose`. Sie sehen in diesem Fall automatisch die Logs in der Ausgabe und haben damit auch das Passwort direkt wie oben zu sehen verfügbar. Aus Übersichtsgründen ist die Ausgabe weggelassen:
+
+[{shell}]
+----
+{c-root} docker-compose up
+----
+
+[#short-lived_containers]
+=== Kurzlebige Container
+
+Wenn Sie sich sicher sind, dass die Daten in der {CMK}-Container-Instanz nur in diesem speziellen Container verfügbar sein sollen,
+können Sie entweder darauf verzichten, dem Container einen persistenten Datenspeicher zuzuordnen oder diesen Speicher automatisch beim Stoppen des Containers entfernen.
+
+Um den persistenten Speicher wegzulassen, lassen Sie schlicht die Option `-v monitoring:/omd/sites` weg:
+
+[{shell}]
+----
+{c-root} docker container run -dit -p 8080:5000 -p 8000:8000 --tmpfs /opt/omd/sites/cmk/tmp:uid=1000,gid=1000 --name monitoring -v /etc/localtime:/etc/localtime:ro --restart always checkmk/check-mk-raw:2.2.0-latest
+----
+
+Um einen persistenten Speicher anzulegen und beim Stoppen automatisch zu entfernen, verwenden Sie den folgenden Befehl:
+
+[{shell}]
+----
+{c-root} docker container run --rm -dit -p 8080:5000 -p 8000:8000 --tmpfs /opt/omd/sites/cmk/tmp:uid=1000,gid=1000 -v /omd/sites --name monitoring -v /etc/localtime:/etc/localtime:ro checkmk/check-mk-raw:2.2.0-latest
+----
+
+Dieser Befehl hat -- im Gegensatz zu dem vorherigen -- lediglich zwei andere Optionen:
+
+* Mit `--rm` übergeben Sie direkt zum Start den Befehl, dass auch der Datenspeicher für den Container beim Stoppen entfernt werden soll. Auf diese Weise sparen Sie sich das manuelle Aufräumen, wenn Sie viele kurzlebige {CMK}-Container haben.
++
+*Wichtig:* Beim Stoppen wird auch der Container selbst komplett entfernt!
+
+* Die Option `-v /omd/sites` ist im Vergleich zu oben angepasst. Sie beinhaltet keinen selbst vergebenen Namen mehr, da der Datenspeicher sonst nicht korrekt gelöscht wird.
+
+
+[#install_cee]
+== Installation der {EE}
+
+{cee-only}
+Auch die {EE} können Sie in einem Docker-Container betreiben.
+Die Images der {EE} sind nicht frei über Docker Hub verfügbar.
+Laden Sie sich die gewünschte Edition und Version entweder manuell von der link:https://checkmk.com/de/download?method=docker&edition=cce&version=stable[{CMK}-Download-Seite^] (für die {CE}) oder im link:https://portal.checkmk.com/de/[{CMK}-Kundenportal^] herunter. Alternativ können Sie auch die 'registry' nutzen, um das Image mit den entsprechenden Login-Daten automatisch herunterzuladen.
+
+
+=== Manuelle Installation des Image
+Laden Sie das Image aus der heruntergeladenen tar-Archivdatei in Docker:
+
+[{shell}]
+----
+{c-root} docker load -i check-mk-enterprise-docker-2.2.0p1.tar.gz
+9e77dbc9fb80: Loading layer [==================================================>]  2.048kB/2.048kB
+333c8e825260: Loading layer [==================================================>]  305.6MB/305.6MB
+23a76a052da6: Loading layer [==================================================>]  175.7MB/175.7MB
+f8583c4a8a97: Loading layer [==================================================>]  758.4MB/758.4MB
+789d4e45d714: Loading layer [==================================================>]  6.656kB/6.656kB
+Loaded image: checkmk/check-mk-enterprise:2.2.0p1
+----
+
+=== Automatische Installation des Image
+
+Loggen Sie sich zunächst auf dem Server ein, unter dem Docker die Images direkt von Checkmk herunterladen kann:
+
+[{shell}]
+----
+{c-root} docker login registry.checkmk.com --username MYUSERNAME
+Password:
+
+Login Succeeded
+----
+
+Da sich der Login hauptsächlich zu Testzwecken eignet, nutzen Sie für eine langfristige Nutzung zum Beispiel den link:https://docs.docker.com/engine/reference/commandline/login/#credentials-store[Credential store] von Docker.
+
+Nachdem Sie eingeloggt sind, kann ein Container fast wie gewohnt installiert werden. Um den Ort des Images festzulegen, geben Sie aber statt `checkmk/check-mk-enterprise:2.2.0-latest` nun die volle Adresse an. Die Ausgabe ist dann sehr ähnlich wie bei der manuellen Installation und wurde daher in dem nachfolgenden Beispiel weggelassen:
+
+[{shell}]
+----
+{c-root} docker pull registry.checkmk.com/enterprise/check-mk-enterprise:2.2.0-latest
+----
+
+=== Starten eines Containers
+
+Sobald das Image geladen ist, können Sie den Container mit einem sehr ähnlichen Befehl wie in der Raw-Edition starten.
+Achten Sie nur darauf, dass Sie den Namen des geladenen Images (`Loaded image`) aus der vorherigen Kommandoausgabe im folgenden Startkommando verwenden, also nach den obigen Bespielen entweder `checkmk/check-mk-enterprise:2.2.0p1` oder `registry.checkmk.com/enterprise/check-mk-enterprise:2.2.0-latest`. In dem Beispiel wird die zweite Variante benutzt:
+
+[{shell}]
+----
+{c-root} docker container run -dit -p 8080:5000 -p 8000:8000 --tmpfs /opt/omd/sites/cmk/tmp:uid=1000,gid=1000 -v monitoring:/omd/sites --name monitoring -v /etc/localtime:/etc/localtime:ro --restart always registry.checkmk.com/enterprise/check-mk-enterprise:2.2.0p-latest
+f00d10fcb16313d3539065933b90c4dec9f81745f3d7283d794160f4f9b28df1
+----
+
+Nach dem Start des Containers können Sie sich an der {CMK}-Weboberfläche anmelden, wie es bei der xref:login[Installation der {RE}] beschrieben ist.
+
+*Hinweis:* Auf ganz ähnliche Weise gehen Sie vor, wenn Sie einen Container mit der {CCE} starten möchten. Ersetzen Sie in den Beispielen dazu `enterprise` durch `cloud`.
+
+
+[#update]
+== Update
+
+Wie Sie {CMK} im Docker-Container aktualisieren können, ist im Artikel xref:update#updatedocker[Updates und Upgrades] beschrieben.
+
+
+[#uninstall]
+== Deinstallation
+
+Bei der Deinstallation entfernen Sie den Docker-Container und optional die beim Erstellen des Containers erzeugten Daten.
+
+Lassen Sie sich die Docker-Container auflisten:
+
+[{shell}]
+----
+{c-root} docker container ls -a
+CONTAINER ID   IMAGE                                 COMMAND                  CREATED          STATUS                    PORTS                              NAMES
+9a82ddbabc6e   checkmk/check-mk-enterprise:2.2.0p1   "/docker-entrypoint.…"   57 minutes ago   Up 53 minutes (healthy)   6557/tcp, 0.0.0.0:8080->5000/tcp   monitoring
+----
+
+Übernehmen Sie aus der Kommandoausgabe die angezeigte `CONTAINER ID` für die nächsten Kommandos.
+
+Stoppen Sie zuerst den Container und entfernen Sie ihn anschließend:
+
+[{shell}]
+----
+{c-root} docker container stop 9a82ddbabc6e
+9a82ddbabc6e
+{c-root} docker container rm 9a82ddbabc6e
+9a82ddbabc6e
+----
+
+Falls Sie den Container mit der Option `-v monitoring:/omd/sites` erstellt haben, können Sie auch das dadurch erstellte Docker-Volume entfernen:
+`docker volume ls` zeigt die Volumes an und `docker volume rm <VOLUME NAME>` löscht das Volume.
+
+Auf ähnliche Weise können Sie abschließend auch das Image entfernen:
+Mit `docker images` erhalten Sie die Liste der Images und `docker rmi <IMAGE ID>` entfernt das ausgewählte Image.
+
