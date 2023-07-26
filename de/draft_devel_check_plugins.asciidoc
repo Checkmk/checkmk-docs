@@ -8,18 +8,18 @@ include::global_attr.adoc[]
 
 {related-start}
 xref:localchecks#[Lokale Checks]
+xref:wato_monitoringagents#[Monitoring-Agenten]
 xref:agent_linux#[Linux überwachen]
 xref:agent_windows#[Windows überwachen]
+xref:snmp#[Überwachen via SNMP]
+xref:wato_services#[Services verstehen und konfigurieren]
 xref:cmk_commandline#[{CMK} auf der Kommandozeile]
 xref:mkps#[{CMK}-Erweiterungspakete (MKPs)]
 xref:simulation_mode#[Der Simulationsmodus]
-xref:snmp#[Überwachen via SNMP]
-xref:wato_monitoringagents#[Monitoring-Agenten]
-xref:wato_services#[Services verstehen und konfigurieren]
 {related-end}
 
 
-
+[#tools]
 == Die Werkzeuge für die Programmierung
 // TK: Das Kapitel ist für mich
 
@@ -41,7 +41,10 @@ Dabei haben Sie zuerst einmal vier Möglichkeiten:
 
 [cols=4,options="header"]
 |===
-|Methode |So geht's |Vorteile |Nachteile
+|Methode 
+|So geht's 
+|Vorteile 
+|Nachteile
 
 |xref:glossar#local_check[Lokaler Check] 
 |{CMK}-Agent um ein einfaches Skript erweitern. 
@@ -51,7 +54,7 @@ Dabei haben Sie zuerst einmal vier Möglichkeiten:
 |Legacy Nagios Check-Plugin
 |Plugin per _MRPE_ vom xref:agent_windows.html#mrpe[Windows-] oder xref:agent_linux#mrpe[Linux-]Agenten aufrufen lassen. 
 |Zugriff auf alle vorhandenen Nagios-Plugins und freie Wahl der Programmiersprache.
-|Konfiguration der Schwellwerte nur beim Agenten selbst, keine xref:snmp#[SNMP]-Unterstützung durch {CMK} und keine Service-Erkennung möglich.
+|Konfiguration der Schwellwerte nur beim Agenten selbst, keine SNMP-Unterstützung durch {CMK} und keine Service-Erkennung möglich.
 
 |Auswertung von Log-Meldungen 
 |Meldungen überwachen mit der xref:glossar#ec[Event Console]. 
@@ -67,26 +70,58 @@ Unterstützt werden SNMP und die xref:inventory#[HW/SW-Inventur].
 |===
 
 Dieser Artikel zeigt Ihnen, wie Sie echte {CMK} Check-Plugins entwickeln können -- mit allem was dazugehört.
-Dabei zeigen wir Ihnen, wie Sie die in Version {v20} von {CMK} *neu entwickelte API* für die
-Plugin-Programmierung nutzen.
+Check-Plugins sind in Python geschriebene Software-Module, die auf der {CMK}-xref:glossar#site[Instanz] ausgeführt werden und die xref:glossar#service[Services] eines xref:glossar#host[Hosts] erstellen und auswerten.
+Für die Programmierung der Check-Plugins gibt es seit der {CMK}-Version {v20} eine neu entwickelte *Check-API.*
+Wir zeigen Ihnen, wie Sie diese Check-API für die Plugin-Programmierung nutzen können.
 
+
+[#check_api_doc]
+=== Die Check-API-Dokumentation
+
+Über die {CMK}-Benutzeroberfläche haben Sie jederzeit Zugriff auf die Dokumentation der Check-API: mit [.guihint]#Help > Developer resources > Check plugin API reference.#
+Wählen Sie im neuen Browserfenster in der linken Navigationsleiste [.guihint]#BASE > Agent based API ("Check API")# aus:
+
+[{image-border}]
+image::devel_cpi_checkapi_doc.png[alt="Seite zum Einstieg in die Check-API-Dokumentation."]
+
+*Hinweis:* Falls Sie bereits Check-Plugins entwickelt haben mit der alten API, die bis zur Version {v16} gültig war, und die Plugins noch nicht auf die neue Check-API migriert haben,
+so finden Sie im xref:check_api_old[Anhang] Informationen zu den Unterschieden zwischen alter und neuer Check-API.
 
 
 === Verschiedene Arten von Agenten
 
-Check-Plugins werten die Daten der {CMK}-Agenten aus. Bevor wir uns ins Geschehen stürzen, sollten wir uns deshalb zunächst einen Überblick
-darüber verschaffen, welche Arten von Agenten {CMK} eigentlich kennt:
+Check-Plugins werten die Daten aus, die die xref:glossar#agent[Monitoring-Agenten] bereitstellen.
+Bevor wir uns ins Geschehen stürzen, zeigen wir deshalb zunächst, welche Arten von Agenten {CMK} eigentlich kennt.
 
+[cols="20,~",options="header"]
+|===
+|Agent |Beschreibung
+
+|{CMK}-Agent 
+|Hier werten das Check-Plugin Daten aus, die der {CMK}-Agent für Linux, Windows oder andere Betriebssysteme sendet.
+Damit werden Betriebssystemparameter und Anwendungen überwacht und teilweise auch Server-Hardware.
+Jedes neue Check-Plugin erfordert eine Erweiterung des Agenten in Form eines xref:glossar#agent_plugin[Agentenplugins,] damit der Agent auch die Daten bereitstellt, die die Checks benötigen.
+
+|SNMP-Agent 
+|Bei der Überwachung via xref:snmp#[SNMP] benötigen Sie keine Erweiterung eines Agenten.
+Stattdessen werten das Check-Plugin Daten aus, die {CMK} von dem zu überwachenden Gerät per SNMP abruft, und die der auf dem Gerät vorinstallierte SNMP-Agent standardmäßig bereitstellt.
+{CMK} unterstützt Sie dabei und übernimmt sämtliche Details und Sonderheiten des SNMP-Protokolls.
+//  Eigentlich gibt es auch hier einen Agenten: nämlich den auf dem überwachten System vorinstallierten SNMP-Agenten.
+
+|Spezialagent / API-Integration |
+Einen xref:glossar#special_agent[Spezialagenten] benötigen Sie, wenn Sie weder mit dem normalen {CMK}-Agenten noch per SNMP an die Daten kommen, welche für das Monitoring relevant sind.
+Der häufigste Fall ist das Abfragen von HTTP-basierten APIs.
+Beispiele sind die Überwachung von xref:monitoring_aws#[AWS], xref:monitoring_azure#[Azure] oder xref:monitoring_vmware#[VMware].
+Hier schreiben Sie ein Skript, welches direkt auf dem {CMK}-Server läuft, sich mit der API verbindet, und Daten im gleichen Format ausgibt, wie dies ein Agentenplugin tun würde.
+
+|Aktiver Check 
+|Dieser „Agent“ passt nicht so ganz in die Reihe und hat eine Sonderrolle.
+Ein aktiver Check ist ein Nagios-kompatibles Plugin, welches für die Ausführung _auf dem {CMK}-Server_ bestimmt ist und von dort aus mit einem Netzwerkprotokoll direkt einen Dienst auf dem Zielgerät abfragt.
+Der aktive Check kümmert sich nicht nur um die Auswertung der Daten, sondern auch um deren Erhebung -- und passt so gesehen doch wieder in die Reihe, weil er das tut, was sonst die Aufgabe des Agenten ist: Daten liefern. +
+Das prominenteste Beispiel ist das Plugin `check_http`, mit welchem Sie Webserver und Webseiten überwachen können.
+Dieses Plugin können Sie dann so in {CMK} integrieren, dass man es wie gewohnt per Regeln einrichten kann.
+|===
 // COMMENT[Artikel zu Spezialagent und Aktiven Check muss geschrieben werden.]
-
-[cols="20,~"]
-|===
-
-|{CMK}-Agent |Hier werten die Plugins Daten aus, welcher der {CMK}-Agent für Linux, Windows oder andere Betriebssysteme sendet. Damit werden Betriebssystemparameter und Anwendungen überwacht und teilweise auch Serverhardware. Jedes neue Check-Plugin erfordert eine Erweiterung des Agenten in Form eines Agentenplugins, damit dieser die nötigen Daten bereitstellt.
-|Spezialagent / API-Integration |Einen Spezialagenten benötigen Sie, wenn Sie weder mit dem normalen {CMK}-Agenten noch per xref:snmp#[SNMP] an die Daten kommen, welche für das Monitoring relevant sind. Der häufigste Fall ist das Abfragen von HTTP-basierten APIs. Beispiele sind die Überwachung von xref:monitoring_aws#[AWS], xref:monitoring_azure#[Azure] oder xref:monitoring_vmware#[VMware]. Hier schreiben Sie ein Skript, welches direkt auf dem {CMK}-Server läuft, sich mit der API verbindet, und Daten im gleichen Format ausgibt, wie dies ein Agentenplugin tun würde.
-|SNMP |Bei der Überwachung via xref:snmp#[SNMP] benötigen Sie keine Erweiterung eines Agenten sondern werten Daten aus, welche {CMK} von dem zu überwachenden Gerät per SNMP abruft, welche dieses standardmäßig bereitstellt. {CMK} unterstützt Sie dabei und übernimmt sämtliche Details und Sonderheiten des SNMP-Protokolls. Eigentlich gibt es auch hier einen Agenten: nämlich den auf dem überwachten System vorinstallierten SNMP-Agenten.
-|Aktiver Check |Dieser Check-Typ bildet eine Sonderrolle. Hier schreiben Sie zunächst ein klassisches Nagios-kompatibles Plugin, welches für die Ausführung _auf dem {CMK}-Server_ bestimmt ist und von dort aus mit einem Netzwerkprotokoll direkt einen Dienst auf dem Zielgerät abfragt. Das prominenteste Beispiel ist das Plugin `check_http`, mit welchem Sie Webserver und Webseiten überwachen können. Dieses Plugin können Sie dann so in {CMK} integrieren, dass man es wie gewohnt per Regeln einrichten kann.
-|===
 
 
 === Voraussetzungen
@@ -98,6 +133,8 @@ benötigen Sie folgendes:
 * Erfahrung mit {CMK}, vor allem was das Thema Agenten und Checks betrifft
 * etwas Übung mit Linux auf der Kommandozeile
 
+// TK: Die Artikelliste schreckt eher ab (sie ist eh unter Related Articles verfügbar). Stattdessen die Artikel dort verlinken, wo's gerade nötig ist.
+////
 Als Vorbereitung sind außerdem folgende Artikel gut:
 
 - xref:wato_services#[Services verstehen und konfigurieren]
@@ -108,7 +145,7 @@ Als Vorbereitung sind außerdem folgende Artikel gut:
 - xref:cmk_commandline#[{CMK} auf der Kommandozeile]
 - xref:mkps#[{CMK}-Erweiterungspakete (MKPs)]
 - xref:simulation_mode#[Der Simulationsmodus]
-
+////
 
 
 
@@ -1034,9 +1071,6 @@ Hier beschreiben wir in Zukunft noch:
 == Das Check-Plugin erweitern
 
 === Service-Erkennung
-// TK: kein alter Inhalt
-
-=== Mehrere Services pro Host
 // TK: alter Inhalt aus: 3. Checks mit mehr als einem Service pro Host (Items)
 
 ////
@@ -2645,6 +2679,8 @@ den richtigen Status und einen passenden Standardtext dazu.
 
 
 == Anhang
+
+[#check_api_old]
 === Die alte Check-API
 // TK: alter Inhalt aus: 1.2. Was hat sich seit der alten API geändert?
 
