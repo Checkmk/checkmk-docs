@@ -14,15 +14,14 @@ xref:omd_https#[Weboberfläche mit HTTPS absichern]
 
 == Einleitung
 
-Ein Single Sign-On auf die GUI von {CMK} mit Kerberos wird von {CMK} zwar nicht offiziell unterstützt, aber Sie können das recht einfach selbst einrichten.
-Wie das geht, zeigt Ihnen diese Anleitung.
+Ein Single Sign-On auf die GUI von {CMK} mit Kerberos wird von {CMK} zwar nicht offiziell unterstützt, aber Sie können es sich selbst einrichten, sofern Sie grundsätzliches Wissen rund um Kerberos mitbringen. Was auf der Seite von Checkmk benötigen, zeigt Ihnen diese Anleitung.
 
 Folgende Voraussetzungen müssen erfüllt sein, um die Konfiguration in {CMK} nachträglich auf SSO (Single Sign-On) mit Kerberos umzustellen:
 
 * Die Apache-Version ist 2.4 oder neuer.
 * Auf dem {CMK}-Server ist das Modul `libapache-mod-auth-kerb` installiert (bzw. `mod_auth_kerb` unter RHEL/CentOS oder `apache2-mod_auth_kerb` unter SUSE).
 * Der Kerberos-Client ist auf dem {CMK}-Server installiert und konfiguriert.
-* Eine Keytab wurde -- z.B. unter `/etc/krb5.keytab` -- erstellt und darf von dem Instanzbenutzer gelesen werden.
+* Eine Keytab wurde -- z.B. in der {CMK}-Instanz unter `~/etc/apache/cmk_http.keytab` -- erstellt und darf nur von dem Instanzbenutzer gelesen werden.
 * Der {CMK}-Server wurde als _Service Principal_ eingerichtet.
 * Der Browser der Clients ist für den Zugriff mittels Kerberos konfiguriert.
 * Für die {CMK}-Instanz ist Cookie-Authentifizierung eingeschaltet (zu überprüfen mit `omd config show` > Web GUI > `MULTISITE_COOKIE_AUTH: on`).
@@ -51,36 +50,52 @@ Passen Sie diese daher entsprechend Ihrer Umgebung an:
 ----
 Define SITE My{CMK}Site
 Define REALM MyRealm.org
+Define SERVICENAME myservice.mydomain.tld@${REALM}
 
 <IfModule !mod_auth_kerb.c>
   LoadModule auth_kerb_module /usr/lib/apache2/modules/mod_auth_kerb.so
 </IfModule>
 
 <Location /${SITE}>
+  <If "! %{HTTP_COOKIE} =~ /^(.*;)?auth_${SITE}/ && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+    ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+    ! %{REQUEST_URI} = '/${SITE}check_mk/ajax_graph_images.py' && \
+    ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+    ! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
   Order allow,deny
   Allow from all
+  Require valid-user
 
   AuthType Kerberos
   AuthName "{CMK} Kerberos Login"
-  KrbServiceName HTTP
+
   KrbMethodNegotiate on
   KrbMethodK5Passwd off
   KrbLocalUserMapping on
-  KrbSaveCredentials on
 
-  # Use Kerberos auth only in case there is no {CMK} authentication
-  # cookie provided by the user
-  Require expr %{HTTP_COOKIE} =~ /auth_/
-  Require expr %{REQUEST_URI} = "/${SITE}/check_mk/register_agent.py"
-  Require expr %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/
-  Require valid-user
 
-  # Environment specific: Path to the keytab and the realm
-  Krb5Keytab /etc/krb5.keytab
+  # Environment specific: Path to the Keytab, Realm and ServicePrincipal
   KrbAuthRealm ${REALM}
+  KrbServiceName HTTP/${SERVICENAME}
+  Krb5Keytab /omd/sites/${SITE}/etc/apache/cmk_http.keytab
 
   # When Kerberos auth fails, show the login page to the user
-  ErrorDocument 401 /${SITE}/check_mk/login.py
+  ErrorDocument 401 '<html> \
+      <head> \
+        <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+      </head> \
+      <body> \
+        Kerberos authentication failed, redirecting to login page. \
+        <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+      </body> \
+    </html>'
+
+	</If>
 </Location>
 
 # These files are accessible unauthenticated (login page and needed ressources)
@@ -95,20 +110,13 @@ Define REALM MyRealm.org
 [#cookie]
 == Auf Cookies basierende Logins
 
-Wenn Sie nur noch Logins über SSO zulassen möchten, deaktivieren Sie die Cookie-Authentifizierung.
-Achten Sie darauf, dass Sie diesen Wert nur ändern können, wenn die Instanz gestoppt ist:
-
-[{shell}]
-----
-{c-omd} omd config set MULTISITE_COOKIE_AUTH off
-----
-
-Sie können dann entsprechend auch in der `auth.conf` die folgende Zeile weglassen oder auskommentieren:
+Wenn Sie zusätzlich zu dem Logins über SSO auch reguläre zulassen möchten, aktivieren Sie die Cookie-Authentifizierung.
+Ändern Sie dazu entsprechend in der `auth.conf` der folgende Zeile den Wert auf `on`:
 
 .~/etc/apache/conf.d/auth.conf
 [{file}]
 ----
-#  Require expr %{HTTP_COOKIE} =~ /auth_/
+  KrbMethodK5Passwd on
 ----
 
 
@@ -118,7 +126,7 @@ Mit den folgenden Kommandos können Sie prüfen, ob das Kerberos-Setup an sich f
 
 [{shell}]
 ----
-{c-root} kinit -p username
+{c-root} kinit username
 {c-root} klist
 ----
 
