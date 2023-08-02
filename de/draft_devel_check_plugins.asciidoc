@@ -508,6 +508,7 @@ def discover_linux_usbstick(section):
     yield Service()
 ----
 
+[#check_function]
 === Die Check-Funktion schreiben
 
 Somit können wir nun zur eigentlichen Check-Funktion kommen, welche anhand
@@ -604,10 +605,127 @@ ls /dev/disk/by-id/ | grep -v -- -part
 
 
 
-
+[#extend]
 == Das Check-Plugin erweitern
 
+=== Vorbereitungen
+
+Das gerade frisch fertiggestellte erste Check-Plugin soll nun schrittweise erweitert werden.
+Bisher hat das Agentenplugin nur die Informationen über die Namen und die Mitglieder der Host-Gruppen geliefert.
+Um etwa die Zustände der Hosts und der auf ihnen laufenden Services auswerten zu können, brauchen wir mehr Daten.
+
+Wir werden zunächst das Agentenplugin _einmal_ erweitern, um all die Informationen einzusammeln, die für die Erweiterung des Check-Plugins in den nächsten Abschnitten benötigt werden.
+
+Um herauszubekommen, welche Informationen {CMK} denn für Host-Gruppen so bietet, 
+können Sie alle verfügbaren Spalten der Host-Gruppentabelle mit dem xref:livestatus#columns[folgenden Kommando] als Instanzbenutzer abfragen:
+
+[{shell}]
+----
+{c-omd} lq "GET columns\nFilter: table = hostgroups\nColumns: name"
+action_url
+alias
+members
+members_with_state
+name
+notes
+notes_url
+num_hosts
+...
+----
+
+Die Ausgabe geht noch weiter.
+Fast 30 Spalten bietet die Tabelle -- und unter den meisten Spaltennamen kann man sich sogar etwas vorstellen.
+Uns interessieren die folgenden:
+Anzahl der Hosts pro Gruppe (Spalte `num_hosts`), Anzahl der Services aller Hosts in der Gruppe (`num_services`) und Anzahl der Services im Zustand {OK} (`num_services_ok`).
+
+Jetzt müssen diese neuen Spalten nur noch vom Agenten geliefert werden.
+Das erreichen wir durch Erweiterung des im vorherigen Kapitel erstellten xref:includecommand[Agentenplugins.]
+
+Editieren Sie als root-Benutzer das Skript des Agentenplugins.
+Da das Skript die konfigurierbaren Werte bereits in Variablen gesteckt hat, reicht es aus, nur die mit `COLUMNS` beginnende Zeile zu ändern und dort die zusätzlichen Spalten einzutragen:
+
+./usr/lib/check_mk_agent/plugins/my_hostgroups
+[{file},highlight=3]
+----
+#!/bin/bash
+
+COLUMNS="name members num_hosts num_services num_services_ok"
+SITE="mysite"
+
+echo "<<<my_hostgroups:sep(59)>>>"
+echo -e "GET hostgroups\nColumns: $COLUMNS" | /omd/sites/$SITE/bin/unixcat /omd/sites/$SITE/tmp/run/live
+----
+
+
+Führen Sie zur Kontrolle das Skript aus:
+
+[{shell-raw}]
+----
+{c-root} /usr/lib/check_mk_agent/plugins/my_hostgroups
+<<<my_hostgroups:sep(59)>>>
+check_mk;localhost;1;61;52
+Munich;checkmk.com;1;1;1
+Oberammergau;internet,microcontroller;2;5;2
+----
+
+Am Ende jeder Zeile stehen nun, durch Semikolon abgetrennt, die drei neuen Werte.
+
+Mit dieser Änderung liefert das Agentenplugin nun andere Daten als vorher.
+An dieser Stelle ist es wichtig, sich zu vergewissern, dass die xref:check_function[Check-Funktion] des Check-Plugins auch mit den geänderten Daten immer noch das tut, was sie soll.
+
+Die vorgenommene Erweiterung ist aber unkritisch, denn die Daten werden in der gleichen Struktur geliefert wie vorher.
+Es werden nur zusätzliche Spalten bereitgestellt, die in der Check-Funktion (noch) gar nicht ausgewertet werden.
+
+Nachdem das Agentenplugin aktualisert ist, können Sie sich wieder als Instanzbenutzer anmelden.
+Alles weitere wird durch Änderung des Check-Plugins erledigt.
+
+
+[#discovery]
 === Service-Erkennung
+
+In unserem Beispiel haben wir einen sehr einfachen Check gebaut, der auf einem Host einen Service erzeugt.
+Ein sehr üblicher Fall ist aber natürlich auch, dass es von einem Check mehrere Services auf einem Host geben kann.
+
+Das häufigste Beispiel dafür sind die Dateisysteme eines Hosts.
+Das Check-Plugin mit dem Namen `df` legt pro Dateisystem auf dem Host einen Service an.
+Um diese Services zu unterscheiden, wird der Mount-Punkt des Dateisystems (z.B. `/var`) bzw. der Laufwerksbuchstabe (z.B. `C:`) in den Namen des Services eingebaut.
+Das ergibt dann als Service-Name dann z.B. `Filesystem /var` oder `Filesystem C:`.
+Das Wort `/var` bzw. `C:` wird hier als _Item_ bezeichnet.
+Wir sprechen also auch von einem _Check mit Items._
+
+Wenn Sie einen Check mit Items bauen möchten, müssen Sie folgende Dinge umsetzen:
+
+* Die Discovery-Funktion muss für jedes der Items, die auf dem Host sinnvollerweise überwacht werden sollen, einen Service generieren.
+
+* Im Service-Namen müssen Sie das Item mithilfe des Platzhalters `%s` einbauen (also z.B. `"Filesystem %s"`).
+
+* Die Check-Funktion wird pro Item einmal separat aufgerufen und bekommt dieses als Argument.
+Sie muss dann aus den Agentendaten die für dieses Item relevanten Daten herausfischen.
+
+Um das ganze praktisch auszuprobieren, werden wir für jede existierende Host-Gruppe einen eigenen Service erzeugen.
+
+Zur Erinnerung:
+{CMK} zerlegt die Zeilen der vom Agentenplugin gelieferten Sektion anhand des Trennzeichens (im Beispiel `;`) in eine Liste von Zeilen, die ihrerseits wiederum Listen von Worten sind.
+
+Die vom Agenten gelieferten Beispieldaten:
+
+[{python}]
+----
+check_mk;localhost;1;61;52
+Munich;checkmk.com;1;1;1
+Oberammergau;internet,microcontroller;2;5;2
+----
+
+sehen in {CMK} dann so aus:
+
+[{python}]
+----
+[['check_mk', 'localhost', '1', '61', '52'], ['Munich', 'checkmk.com', '1', '1', '1'], ['Oberammergau', 'internet', 'microcontroller', '2', '5', '2']]
+----
+
+
+
+
 // TK: alter Inhalt aus: 3. Checks mit mehr als einem Service pro Host (Items)
 // Single vs. Multi-Items (Prio 1)
 
