@@ -374,6 +374,8 @@ gemacht!
 
 Alles was nun folgt, geschieht nur noch auf dem {CMK}-Server: Dort schreiben Sie das eigentliche Check-Plugin.
 
+
+[#declare_section]
 === Die Sektion deklarieren
 
 Das Vorbereiten des Agenten ist zwar der komplizierteste Teil, aber nur die
@@ -428,6 +430,7 @@ Wenn Sie eine Parse-Funktion implementieren möchten (wozu Ihnen professionelle
 Entwickler immer raten würden), finden Sie im xref:devel_check_plugins#parsefunction[Abschnitt über Parse-Funktionen]
 mehr Informationen.
 
+[#register_check_plug-in]
 === Den Check deklarieren
 
 Damit {CMK} weiß, dass es den neuen Check gibt, muss dieser
@@ -612,6 +615,9 @@ Das gerade frisch fertiggestellte erste Check-Plugin soll nun schrittweise erwei
 Bisher hat das Agentenplugin nur die Informationen über die Namen und die Mitglieder der Host-Gruppen geliefert.
 Um etwa die Zustände der Hosts und der auf ihnen laufenden Services auswerten zu können, brauchen wir mehr Daten.
 
+
+==== Agentenplugin erweitern
+
 Wir werden zunächst das Agentenplugin _einmal_ erweitern, um all die Informationen einzusammeln, die für die Erweiterung des Check-Plugins in den nächsten Abschnitten benötigt werden.
 
 Um herauszubekommen, welche Informationen {CMK} denn für Host-Gruppen so bietet, 
@@ -634,55 +640,84 @@ num_hosts
 Die Ausgabe geht noch weiter.
 Fast 30 Spalten bietet die Tabelle -- und unter den meisten Spaltennamen kann man sich sogar etwas vorstellen.
 Uns interessieren die folgenden:
-Anzahl der Hosts pro Gruppe (Spalte `num_hosts`), Anzahl der Services aller Hosts in der Gruppe (`num_services`) und Anzahl der Services im Zustand {OK} (`num_services_ok`).
+Anzahl der Hosts pro Gruppe (Spalte `num_hosts`), Anzahl der Hosts im Zustand {UP} (`num_hosts_up`), Anzahl der Services aller Hosts in der Gruppe (`num_services`) und Anzahl der Services im Zustand {OK} (`num_services_ok`).
 
 Jetzt müssen diese neuen Spalten nur noch vom Agenten geliefert werden.
 Das erreichen wir durch Erweiterung des im vorherigen Kapitel erstellten xref:includecommand[Agentenplugins.]
 
 Editieren Sie als root-Benutzer das Skript des Agentenplugins.
-Da das Skript die konfigurierbaren Werte bereits in Variablen gesteckt hat, reicht es aus, nur die mit `COLUMNS` beginnende Zeile zu ändern und dort die zusätzlichen Spalten einzutragen:
+Da das Skript die konfigurierbaren Werte bereits in Variablen gesteckt hat, reicht es aus, nur die mit `COLUMNS` beginnende Zeile zu ändern und dort die zusätzlichen vier Spalten einzutragen:
 
 ./usr/lib/check_mk_agent/plugins/myhostgroups
 [{file},highlight=3]
 ----
 #!/bin/bash
 
-COLUMNS="name members num_hosts num_services num_services_ok"
+COLUMNS="name members num_hosts num_hosts_up num_services num_services_ok"
 SITE="mysite"
 
 echo "<<<my_hostgroups:sep(59)>>>"
 echo -e "GET hostgroups\nColumns: $COLUMNS" | /omd/sites/$SITE/bin/unixcat /omd/sites/$SITE/tmp/run/live
 ----
 
-
 Führen Sie zur Kontrolle das Skript aus:
 
 [{shell-raw}]
 ----
-{c-root} /usr/lib/check_mk_agent/plugins/my_hostgroups
+{c-root} /usr/lib/check_mk_agent/plugins/myhostgroups
 <<<my_hostgroups:sep(59)>>>
-check_mk;localhost;1;61;52
-Munich;checkmk.com;1;1;1
-Oberammergau;internet,microcontroller;2;5;2
+check_mk;localhost;1;1;60;48
+Munich;checkmk.com;1;1;1;1
+Oberammergau;internet,microcontroller;2;2;5;2
 ----
 
-Am Ende jeder Zeile stehen nun, durch Semikolon abgetrennt, die drei neuen Werte.
+Am Ende jeder Zeile stehen nun, durch Semikolon abgetrennt, die vier neuen Werte.
 
 Mit dieser Änderung liefert das Agentenplugin nun andere Daten als vorher.
-An dieser Stelle ist es wichtig, sich zu vergewissern, dass die xref:check_function[Check-Funktion] des Check-Plugins auch mit den geänderten Daten immer noch das tut, was sie soll.
+An dieser Stelle ist es wichtig, sich zu vergewissern, dass das Check-Plugin auch mit den geänderten Daten immer noch das tut, was es soll.
 
-Die vorgenommene Erweiterung ist aber unkritisch, denn die Daten werden in der gleichen Struktur geliefert wie vorher.
+
+==== Parse-Funktion erweitern
+
+Im Check-Plugin ist die Parse-Funktion für die Umwandlung der vom Agentenplugin gelieferten Daten verantwortlich.
+Beim xref:declare_section[Erstellen der Parse-Funktion] haben wir nur zwei Spalten der Host-Gruppentabelle berücksichtigt.
+Nun werden sechs statt zwei Spalten geliefert.
+Die Parse-Funktion muss also fit gemacht werden, um auch die zusätzlichen vier Spalten zu verarbeiten.
+
+Ändern Sie als Instanzbenutzer die Parse-Funktion in der Datei `myhostgroups.py`, die das Check-Plugin enthält:
+
+.~/local/lib/check_mk/base/plugins/agent_based/myhostgroups.py
+[{file},highlight=4;10-11]
+----
+def parse_myhostgroups(string_table):
+    parsed = {}
+    for line in string_table:
+        column_names = (
+            "hosts",
+            "num_hosts",
+            "num_hosts_up",
+            "num_services",
+            "num_services_ok",
+        )
+        parsed[line[0]] = dict(zip(column_names, line[1:6]))
+    return parsed
+----
+
+Die markierten Zeilen zeigen, was in der neuen Parse-Funktion verändert wird.
+In der `for`-Schleife werden zunächst die zu verarbeitenden Spalten unter ihrem Namen als Variable `column_names` definiert.
+Anschließend wird aus der aktuellen Zeile ein Dictionary mit der Python-Funktion `zip` aufgebaut, die im Reißverschlussverfahren aus Spaltennamen und ausgelesenem Wert die Schlüssel-Wert-Paare erzeugt.
+
+Für die existierende xref:check_function[Check-Funktion] ist diese Erweiterung unkritisch, denn die Datenstruktur für die ersten beiden Spalten bleibt unverändert.
 Es werden nur zusätzliche Spalten bereitgestellt, die in der Check-Funktion (noch) gar nicht ausgewertet werden.
 
-Nachdem das Agentenplugin aktualisiert ist, können Sie sich wieder als Instanzbenutzer anmelden.
-Alles weitere wird durch Änderung des Check-Plugins erledigt.
+Nun, da die neuen Daten verarbeitet werden können, werden wir sie auch nutzen.
 
 
 [#discovery]
 === Service-Erkennung
 
 In unserem Beispiel haben wir einen sehr einfachen Check gebaut, der auf einem Host einen Service erzeugt.
-Ein sehr üblicher Fall ist aber natürlich auch, dass es von einem Check mehrere Services auf einem Host geben kann.
+Ein sehr üblicher Fall ist aber auch, dass es von einem Check mehrere Services auf einem Host geben kann.
 
 Das häufigste Beispiel dafür sind die Dateisysteme eines Hosts.
 Das Check-Plugin mit dem Namen `df` legt pro Dateisystem auf dem Host einen Service an.
@@ -702,25 +737,40 @@ Sie muss dann aus den Agentendaten die für dieses Item relevanten Daten herausf
 
 Um das ganze praktisch auszuprobieren, werden wir für jede existierende Host-Gruppe einen eigenen Service erzeugen.
 
-Zur Erinnerung:
-{CMK} zerlegt die Zeilen der vom Agentenplugin gelieferten Sektion anhand des Trennzeichens (im Beispiel `;`) in eine Liste von Zeilen, die ihrerseits wiederum Listen von Worten sind.
+Da das im xref:agentbased[vorherigen Kapitel] erstellte Check-Plugin zur Überprüfung der Standardgruppe `check_mk` weiterhin funktionieren soll, bleibt dieses Check-Plugin so, wie es ist.
+Für die Erweiterung erstellen wir in der Datei `myhostgroups.py` ein neues Check-Plugin -- im ersten Schritt so wie xref:register_check_plug-in[zuvor] durch die Registrierung des Plugins:
 
-Die vom Agenten gelieferten Beispieldaten:
+.~/local/lib/check_mk/base/plugins/agent_based/myhostgroups.py
+[{python}]
+----
+register.check_plugin(
+    name="myhostgroups_advanced",
+    sections=["myhostgroups"],
+    service_name="Hostgroup %s",
+    discovery_function=discover_myhostgroups_advanced,
+    check_function=check_myhostgroups_advanced,
+)
+----
+
+Damit man das neue vom alten Check-Plugin unterscheiden kann, erhält es mit `myhostgroups_advanced` einen eindeutigen Namen.
+Mit `sections=["myhostgroups"]` wird festgelegt, dass das neue Check-Plugin die gleichen Daten nutzt wie das alte: die durch die Parse-Funktion aufbereitete Sektion des Agentenplugins.
+Der Service-Name enthält jetzt den Platzhalter `%s`.
+An dieser Stelle wird später dann von {CMK} der Name des Items eingesetzt.
+In den letzten beiden Zeilen werden schließlich die Namen für die neue Discovery-Funktion und die neue Check-Funktion festgelegt, die beide noch geschrieben werden wollen.
+
+Zuerst zur Discovery-Funktion:
 
 [{python}]
 ----
-check_mk;localhost;1;61;52
-Munich;checkmk.com;1;1;1
-Oberammergau;internet,microcontroller;2;5;2
+def discover_myhostgroups_advanced(section):
+    for group in section:
+        if group != "check_mk":
+            yield Service(item=group)
+)
 ----
 
-sehen in {CMK} dann so aus:
-
-[{python}]
-----
-[['check_mk', 'localhost', '1', '61', '52'], ['Munich', 'checkmk.com', '1', '1', '1'], ['Oberammergau', 'internet', 'microcontroller', '2', '5', '2']]
-----
-
+Die Discovery-Funktion hat jetzt die Aufgabe, die zu überwachenden Items zu ermitteln.
+Wie zuvor bekommt sie das Argument `section`.
 
 
 
