@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # pylint: disable=missing-function-docstring
+
 from .agent_based_api.v1 import register, Result, Service, State
 
 
@@ -59,10 +60,10 @@ def check_myhostgroups_advanced(item, section):
     # {"check_mk": {"members": "myhost1,myhost2,myhost3,myhost4", "num_hosts": "4", "num_hosts_up": "3", "num_services": "87", "num_services_ok": "56"},
     #  "foo": {"members": "myhost11,myhost22,myhost33,myhost44", "num_hosts": "4", "num_hosts_up": "4", "num_services": "87", "num_services_ok": "56"}}
     attr = section.get(item)
-    if attr:
-        yield Result(state=State.OK, summary=f"Hosts in this group: {attr['members']}")
-    else:
+    if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
+    else:
+        yield Result(state=State.OK, summary=f"Hosts in this group: {attr['members']}")
 
 
 register.check_plugin(
