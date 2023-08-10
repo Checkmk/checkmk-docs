@@ -738,19 +738,19 @@ Die Parse-Funktion muss also fit gemacht werden, um auch die zusätzlichen vier 
 Ändern Sie als Instanzbenutzer die Parse-Funktion in der Datei `myhostgroups.py`, die das Check-Plugin enthält:
 
 .~/local/lib/check_mk/base/plugins/agent_based/myhostgroups.py
-[{file},highlight=4;10-11]
+[{python},highlight=4;10-11]
 ----
 def parse_myhostgroups(string_table):
     parsed = {}
     for line in string_table:
         column_names = (
-            "hosts",
+            "members",
             "num_hosts",
             "num_hosts_up",
             "num_services",
             "num_services_ok",
         )
-        parsed[line[0]] = dict(zip(column_names, line[1:6]))
+        parsed[line[0]] = dict(zip(column_names, line[1:]))
     return parsed
 ----
 
@@ -825,9 +825,10 @@ Mit einer Schleife werden die einzelnen Host-Gruppen durchlaufen.
 Uns interessieren alle Host-Gruppen -- mit Ausnahme von `check_mk`, denn um diese spezielle Host-Gruppe kümmert sich bereits das existierende Check-Plugin `myhostgroups`.
 Immer, wenn wir ein Item gefunden haben, geben wir das mit `yield` zurück, wobei ein Objekt vom Typ `Service` erzeugt wird, das den Host-Gruppennamen als Item bekommt.
 
+
 Wenn später der Host überwacht wird, dann wird die Check-Funktion für jeden Service -- und damit für jedes Item -- separat aufgerufen.
 Womit wir bereits bei der Definition der Check-Funktion für das neue Check-Plugin `myhostgroups_advanced` angekommen sind.
-Die Check-Funktion bekommt zusätzlich zur Sektion das Argument `item` mit dem jeweils gesuchten Item.
+Die Check-Funktion bekommt zusätzlich zur Sektion das Argument `item`.
 Die erste Zeile der Funktion sieht dann so aus:
 
 [{python}]
@@ -837,11 +838,40 @@ def check_myhostgroups_advanced(item, section):
 
 Der Algorithmus für die Check-Funktion ist einfach:
 Wenn die Host-Gruppe existiert, wird der Service auf {OK} gesetzt und alle Hosts der Host-Gruppe aufgelistet.
-In allen anderen Fällen, d.h., wenn eine Host-Gruppe leer ist oder nicht (mehr) existiert, soll der Service {CRIT} anzeigen.
-// TK: leer?
 Die komplette Funktion dazu:
 
 [{python}]
+----
+def check_myhostgroups_advanced(item, section):
+    attr = section.get(item)
+    if attr:
+        yield Result(state=State.OK, summary=f"Hosts in this group: {attr['members']}")
+----
+
+Das Check-Ergebnis wird geliefert, indem wir ein Objekt vom Typ `Result` per `yield` zurückgeben.
+Dieses benötigt die Parameter `state` und `summary`.
+`state` legt den Zustand des Services fest (im Beispiel `OK`) und `summary` den Text, der in der [.guihint]#Summary# des Services angezeigt wird.
+Er ist rein informell und wird von {CMK} nicht weiter ausgewertet.
+Mehr dazu erfahren Sie in xref:summary_details[einem] der nächsten Abschnitte.
+
+So weit, so gut.
+Was passiert aber, wenn das gesuchte Item nicht gefunden wird?
+Das kann passieren, wenn in der Vergangenheit ein Service für eine Host-Gruppe bereits erzeugt wurde, diese Host-Gruppe aber nun verschwunden ist
+-- entweder weil die Host-Gruppe in {CMK} noch existiert, aber keinen Host mehr enthält, oder weil sie gleich ganz gelöscht wurde.
+In beiden Fällen ist diese Host-Gruppe in der Agentenausgabe nicht (mehr) präsent.
+
+Die gute Nachricht:
+{CMK} kümmert sich darum!
+Wird ein gesuchtes Item nicht gefunden, so erzeugt {CMK} _automatisch_ für den Service das Resultat `UNKNOWN - Item not found in monitoring data`.
+Das ist so gewollt und gut so.
+Wenn ein gesuchtes Item nicht gefunden wird, so können Sie Python einfach aus der Funktion herauslaufen und {CMK} seine Arbeit erledigen lassen.
+
+{CMK} weiß nur, dass das Item, das vorher da war, nun weg ist -- und genau das steht in der Meldung.
+Den Grund dafür kennt {CMK} nicht -- aber wir.
+Darum ist es legitim, unser Wissen nicht für uns zu behalten und diesen Fall in der Check-Funktion abzufangen und dabei eine hilfreiche Meldung ausgeben zu lassen.
+Dazu erweitern wir die `if`-Abfrage um den `else`-Zweig:
+
+[{python},highlight=5-6]
 ----
 def check_myhostgroups_advanced(item, section):
     attr = section.get(item)
@@ -851,82 +881,20 @@ def check_myhostgroups_advanced(item, section):
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
 ----
 
-Das Check-Ergebnis wird geliefert, indem wir ein Objekt vom Typ `Result` per `yield` zurückgeben.
-Dieses benötigt die Parameter `state` und `summary`.
-`state` legt den Zustand des Services fest (im Beispiel `OK` oder `CRIT`) und `summary` den Text, der in der [.guihint]#Summary# des Services angezeigt wird.
-Er ist rein informell und wird von {CMK} nicht weiter ausgewertet.
+So haben nunmehr wir in der Check-Funktion den Fall der verschwundenen Host-Gruppen übernommen.
+Statt {UNKNOWN} wird der zugehörige Service nun {CRIT} sein mit der Information über die Ursache des kritischen Zustands.
 
-// plus Link zum Testen!
-
-
-
-
-
-// TK: alter Inhalt aus: 3. Checks mit mehr als einem Service pro Host (Items)
-// Single vs. Multi-Items (Prio 1)
+Damit ist das neue Check-Plugin als Erweiterung des alten fertiggestellt.
+Auch die erweiterte Datei finden Sie wieder auf
+link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups.py[GitHub.^]
+Sie enthält das einfache Check-Plugin `myhostgroups` aus dem xref:first_check_plugin[vorherigen Kapitel], die erweiterte Parse-Funktion und die Komponenten des neuen Check-Plugins `myhostgroups_advanced` mit der Registrierung, der Discovery-Funktion und der Check-Funktion.
+Beachten Sie, dass die Funktionen immer vor dem Registrieren definiert werden müssen, damit es keine Fehler wegen nicht definierter Funktionsnamen gibt.
 
 
+// TK: Nicht verwendeter Inhalt aus:
+// TK: 3. Checks mit mehr als einem Service pro Host (Items)
+// TK: Single vs. Multi-Items (Prio 1)
 ////
-== Checks mit mehr als einem Service pro Host (Items)
-
-=== Grundprinzip
-
-In unserem Beispiel haben wir einen sehr einfachen Check gebaut, der auf
-einem Host einen Service erzeugt -- oder eben nicht. Ein sehr üblicher Fall
-ist aber natürlich auch, dass es von einem Check mehrere Services auf einem
-Host geben kann.
-
-Das häufigste Beispiel dafür sind die Dateisysteme eines Hosts. Das Plugin
-mit dem Namen `df` legt pro Dateisystem auf dem Host einen Service
-an. Um diese Services zu unterscheiden, wird der Mount-Punkt des Dateisystems
-(z.B. `/var`) bzw. der Laufwerksbuchstabe (z.B. `C:`)
-in den Namen des Services eingebaut.  Das ergibt dann als Servicename
-z.B. `Filesystem /var` oder `Filesystem C:`. Das Wort
-`/var` bzw. `C:` wird hier als _Item_ bezeichnet. Wir
-sprechen also auch von einem Check _mit Items_.
-
-Wenn Sie einen Check mit Items bauen möchten, müssen Sie folgende
-Dinge umsetzen:
-
-* Die Discovery-Funktion muss jedes der Items, die auf dem Host sinnvollerweise überwacht werden sollen, einen Service generieren.
-* Im Servicenamen müssen Sie das Item mithilfe des Platzhalters `%s` einbauen (also z.B. `"Filesystem %s"`).
-* Die Check-Funktion wird pro Item einmal separat aufgerufen und bekommt dieses als Argument. Sie muss dann aus den Agentendaten die für dieses Item relevanten Daten herausfischen.
-
-=== Ein einfaches Beispiel
-
-Um das ganze praktisch ausprobieren zu können, bauen wir uns einfach
-eine weitere Agentensektion, die nur Spieldaten ausgibt. Dazu genügt ein
-kleines Shell-Skript. Die Sektion soll hier im Beispiel `foobar` heißen:
-
-./usr/lib/check_mk_agent/plugins/foobar
-[{file}]
-----
-#!/bin/sh
-echo "<<<foobar>>>"
-echo "West 100 100"
-echo "East 197 200"
-echo "North 0 50"
-----
-
-Von _foobar_ gibt es hier drei Sektoren: `West`, `East`
-und `North` (was immer auch das bedeuten mag). In jedem Sektor gibt
-es eine Anzahl von _Plätzen_ von denen einige belegt sind (z.B. sind
-in `West` 100 von 100 Plätzen belegt).
-
-Nun legen wir dazu ein passendes Check-Plugin an. Die Registrierung ist wie
-gehabt, allerdings mit dem wichtigen Unterschied, dass der Servicename jetzt
-genau einmal ein `%s` enthält. An dieser Stelle wird später dann von
-{CMK} der Name des Items eingesetzt:
-
-[{python}]
-----
-register.check_plugin(
-    name = "foobar",
-    service_name = "Foobar Sector %s",
-    discovery_function = discover_foobar,
-    check_function = check_foobar,
-)
-----
 
 Die Discovery-Funktion hat jetzt die Aufgabe, die zu überwachenden Items zu
 ermitteln. Wie gehabt bekommt sie das Argument `section`.  Und auch hier
@@ -947,10 +915,8 @@ for sector, _used, _slots in section:
     ...
 ----
 
-In jeder Zeile ist das erste Wort -- hier der Sektor -- unser Item.  Immer wenn
-wir ein Item gefunden haben, geben wir das mit `yield` zurück, wobei
-wir ein Objekt vom Typ `Service` erzeugen, welches den Sektornamen als
-Item bekommt. Der Unterstrich zeigt an, dass uns die beiden andere Spalten
+...
+Der Unterstrich zeigt an, dass uns die beiden andere Spalten
 in der Ausgabe erst einmal egal sind, denn bei der Discovery ist es schließlich
 unerheblich, wie viele Slots belegt sind. Insgesamt sieht das dann so aus:
 
@@ -966,10 +932,8 @@ Zeilen auszulassen. Vielleicht gibt es ja Sektoren, welche die Größe 0 haben
 und die man grundsätzlich nie überwachen möchte? Lassen Sie solche Zeilen
 einfach aus und „yielden“ Sie dafür kein Item.
 
-Wenn dann später der Host überwacht wird, dann wird die Check-Funktion
-für jeden Service -- und damit für jedes Item -- separat aufgerufen. Sie
-bekommt deswegen zusätzlich zur Sektion das Argument `item` mit dem
-jeweils gesuchten Item. Jetzt gehen wir wieder alle Zeilen der Reihe nach
+...
+Jetzt gehen wir wieder alle Zeilen der Reihe nach
 durch. Dabei suchen wir diejenige Zeile heraus, die zum gewünschten Item gehört:
 
 [{python}]
@@ -1018,8 +982,6 @@ def check_foobar(item, section):
 Dazu noch folgende Hinweise:
 
 . Der Befehl `return` sorgt dafür, dass die Check-Funktion nach dem Bearbeiten des gefundenen Items sofort abgebrochen wird. Es gibt schließlich auch nichts mehr weiter zu tun.
-. Wird die Schleife durchlaufen, ohne das gesuchte Item zu finden, so erzeugt {CMK} _automatisch_ das Resultat `UNKNOWN - Item not found in monitoring data`. Das ist so gewollt und gut so. Behandeln Sie diesen Fall nicht selbst. Wenn sie ein gesuchtes Item nicht finden, so lassen sie Python einfach aus der Funktion rauslaufen und {CMK} seine Arbeit erledigen.
-. Mit dem Argument `summary` definieren Sie den Text, den der Service als Statusausgabe produziert. Er ist rein informell und wird von {CMK} nicht weiter ausgewertet.
 
 Übrigens gibt es für den häufigen Fall, dass Sie eine einfache Metrik auf Schwellwerte prüfen wollen, die Hilfsfunktion `check_levels`.
 Diese Hilfsfunktion wird in der Check-API-Dokumentation erläutert, die Sie in {CMK} über [.guihint]#Help > Check plugin API reference > Agent based API ("Check API")# aufrufen können.
@@ -1046,96 +1008,41 @@ Foobar Sector East   [yellow]#WARN - used 197 out of 200 slots#
 Foobar Sector North  [green]#OK - used 0 out of 50 slots#
 Foobar Sector West   [red]#CRIT - used 100 out of 100 slots#
 ----
-
-
-=== Beispiel komplett
-
-Und hier nochmal das ganze Beispiel komplett. Damit es keine Fehler wegen nicht definierter Funktionsnamen gibt,
-müssen die Funktionen immer vor dem Registrieren definiert werden.
-
-
-.~/local/lib/check_mk/base/plugins/agent_based/foobar.py
-[{python}]
-----
-from .agent_based_api.v1 import *
-import pprint
-
-
-def discover_foobar(section):
-    for sector, used, slots in section:
-        yield Service(item=sector)
-
-
-def check_foobar(item, section):
-    for sector, used, slots in section:
-        if sector == item:
-            used = int(used)    # convert string to int
-            slots = int(slots)  # convert string to int
-            if used == slots:
-                s = State.CRIT
-            elif slots - used <= 10:
-                s = State.WARN
-            else:
-                s = State.OK
-            yield Result(
-                state = s,
-                summary = f"used {used} out of {slots} slots")
-            return
-
-
-register.check_plugin(
-    name = "foobar",
-    service_name = "Foobar Sector %s",
-    discovery_function = discover_foobar,
-    check_function = check_foobar,
-)
-----
 ////
 
 
-
-
-
-
+[#summary_details]
 === Summary und Details
-// TK: alter Inhalt aus: 6. Summary und Details
 
-////
-== Summary und Details
+Im Monitoring von {CMK} hat jeder Service neben dem Status -- {OK}, {WARN}, usw. -- auch eine Zeile Text.
+Diese steht in der Spalte [.guihint]#Summary,# hat also die Aufgabe einer knappen Zusammenfassung des Zustands.
+Die Idee ist, dass dieser Text eine Länge von 60 Zeichen nicht überschreitet.
+Das sorgt dann immer für eine übersichtliche Tabellendarstellung ohne störende Zeilenumbrüche.
+Daneben gibt es noch das Feld [.guihint]#Details,# in dem alle Details zum Zustand angezeigt werden, wobei die Idee ist, dass alle Informationen des Summary auch in den Details enthalten sind.
 
-Im Monitoring von {CMK} hat jeder Service neben dem Status {OK},
-{WARN}, usw. auch eine Zeile Text. Diese hieß bis zur Version {v16}
-[.guihint]#Output of check plugin#. Ab {v20} heißt diese [.guihint]#Summary# --
-hat also die Aufgabe einer knappen Zusammenfassung des Zustandes. Die Idee
-ist, dass dieser Text eine Länge von 60 Zeichen nicht überschreitet.
-Das sorgt dann immer für eine übersichtliche Tabellendarstellung ohne
-störende Zeilenumbrüche.
+Im Monitoring wird in der Service-Übersicht, auf der Seite [.guihint]#Services of Host,# nur die Summary angezeigt:
 
-Daneben gibt es noch das Feld [.guihint]#Details#, welches früher
-[.guihint]#Long output of check plugin (multiline)# hieß. Hier werden alle Details des Zustandes
-angezeigt, wobei die Idee ist, dass alle Informationen des Summary hier auch
-enthalten sind.
+image::devel_cpi_service_summary.png[alt="Die Summary in der Service-Übersicht."]
 
-Beim Aufruf von `yield Result(...)` können Sie bestimmen, welche
-Informationen so wichtig sind, dass sie in der Summary angezeigt werden
-sollen und bei welchen es genügt, dass diese in den Details erscheinen.
-Dabei gilt die Regel, dass Teilergebnisse, die zu einem {WARN}/{CRIT}
-führen, _immer_ in der Summary sichtbar werden.
+Nach Anklicken des Services wird die Service-Seite geöffnet, in der neben vielen anderen auch die beiden Felder [.guihint]#Summary# und [.guihint]#Details# zu sehen sind.
 
-In unseren Beispielen bisher haben wir immer folgenden Aufruf
-verwendet:
+Beim Aufruf von `yield Result(...)` können Sie bestimmen, welche Informationen so wichtig sind, dass sie in der Summary angezeigt werden sollen und bei welchen es genügt, dass diese in den Details erscheinen.
+// Dabei gilt die Regel, dass Teilergebnisse, die zu einem {WARN}/{CRIT} führen, _immer_ in der Summary sichtbar werden.
+
+In unserem Beispiel haben wir bisher immer einen Aufruf der folgenden Art verwendet:
 
 [{python}]
 ----
-    yield Result(state=State.OK, summary="some important text")
+        yield Result(state=State.OK, summary=f"Hosts in this group: {attr['members']}")
 ----
 
-Dieser führt dazu, dass `some important text` immer in der [.guihint]#Summary#
-erscheint -- und zusätzlich auch in den [.guihint]#Details#. Dies sollten sie
-also nur für wichtige Informationen verwenden. Ist ein Teilergebnis eher
-untergeordnet, so ersetzen Sie `summary` durch `notice` und
-der Text erscheint -- falls der Service {OK} ist _nur_ in den Details.
+Dieser führt dazu, dass `Hosts in this group:` gefolgt von der Liste der in der Host-Gruppe enthaltenen Hosts immer in der [.guihint]#Summary# erscheint -- und zusätzlich auch in den [.guihint]#Details#.
+Dies sollten sie also nur für wichtige Informationen verwenden.
+Ist ein Teilergebnis eher untergeordnet, so ersetzen Sie `summary` durch `notice` und der Text erscheint -- falls der Service {OK} ist _nur_ in den Details.
 
+// TK: Nicht verwendeter Inhalt aus:
+// TK: 6. Summary und Details
+////
 [{python}]
 ----
     yield Result(state=State.OK, notice="some additional text")
