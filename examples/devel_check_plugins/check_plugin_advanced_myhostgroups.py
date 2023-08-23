@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from .agent_based_api.v1 import check_levels, register, Result, State, Service
+from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
 
 
 def parse_myhostgroups(string_table):
