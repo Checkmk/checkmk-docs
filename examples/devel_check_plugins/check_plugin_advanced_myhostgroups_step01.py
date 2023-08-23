@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+!/usr/bin/env python3
 
-from .agent_based_api.v1 import check_levels, register, Result, State, Service
+from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
 
 
 def parse_myhostgroups(string_table):
@@ -66,28 +66,7 @@ def check_myhostgroups_advanced(item, section):
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
 
-    members = attr["members"]
-    num_hosts = int(attr["num_hosts"])
-    num_hosts_up = int(attr["num_hosts_up"])
-    num_services = int(attr["num_services"])
-    num_services_ok = int(attr["num_services_ok"])
-
-    yield Result(
-        state=State.OK,
-        summary=f"{num_hosts} hosts in this group",
-        details=f"{num_hosts} hosts in this group: {members}"
-    )
-
-    hosts_up_perc = num_hosts_up / num_hosts * 100
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
-
-    services_ok_perc = num_services_ok / num_services * 100
-    yield from check_levels(services_ok_perc, levels_lower=(90, 80), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
-
-    yield Metric(name="num_hosts", value=num_hosts)
-    yield Metric(name="num_hosts_up", value=num_hosts_up)
-    yield Metric(name="num_services", value=num_services)
-    yield Metric(name="num_services_ok", value=num_services_ok)
+    yield Result(state=State.OK, summary=f"{attr['num_hosts']} hosts in this group: {attr['members']}") 
 
 
 register.check_plugin(
