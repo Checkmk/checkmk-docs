@@ -1,5 +1,7 @@
 // -*- coding: utf-8 -*-
-// IGNORE % Benachrichtigungs greppen lq →
+// IGNORE % 1000er 1024er Benachrichtigungs check_mk lt →
+// TK: Die nächste Zeile muss noch in die Hunspell Dicts
+// IGNORE C64 Gibibyte IEC Kibibyte Kibibytes Mebibyte Netzwerker Oktette Reißverschlussverfahren Tebibyte ValueSpec aufmultiplizieren gettext herauslaufen zurückgibt
 include::global_attr.adoc[]
 = Eigene Check-Plugins schreiben
 :revdate: draft
@@ -1243,48 +1245,339 @@ Die vier neuen Zeilen komplettieren die Erweiterung der Check-Funktion für Metr
 Das erhöht schon einmal die Zahl der Graphen pro Service, bietet Ihnen aber zum Beispiel auch die Möglichkeit, mehrere Metriken in einem Graphen zu kombinieren.
 Wir zeigen diese und andere Möglichkeiten im Abschnitt xref:metrics_advanced[Angepasste Darstellung von Metriken] weiter unten.
 
-// In der Beispieldatei auf
-// link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups.py[GitHub^]
-// finden Sie wieder die gesamte Check-Funktion.
-
-
-
+In der Beispieldatei auf
+link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups_step02.py[GitHub^]
+finden Sie wieder die gesamte Check-Funktion.
 
 
 [#rule_set]
 === Check-Parameter für Regelsätze
-// TK: alter Inhalt aus: 10. Schwellwerte und Check-Parameter
+// TK: In dem (alten) Kapitel wird fast nur von Check geschrieben und nicht von Check-Plugin.
+// TK: Ist Check die Abkürzung für Check-Funktion? („Falls Ihr Check kein Item hat...“) oder Check-Plugin oder mal so, mal so oder doch ganz anders?
+// TK: Bitte sorgfältig den Code reviewen und auch die verwendeten Namen für Variablen & Co - die sind evtl. nicht so passend, wie sie sein sollten.
+// TK: Nach Fertigstellung hab ich gesehen, dass es ja auch noch eine ValueSpec für Prozentsätze gibt. Muss das Beispiel wohl nochmal umgeschrieben werden?
+
+Im erweiterten Check-Plugin `myhostgroups_advanced` haben wir den Zustand {WARN} erzeugt, wenn nur 90{nbsp}% der Hosts {UP} sind, und {CRIT} bei 80{nbsp}%.
+Dabei sind die Zahlen `90` und `80` direkt in der Check-Funktion fest einprogrammiert oder, wie Programmierer sagen würden, _hart codiert._
+In {CMK} ist man allerdings als Benutzer gewohnt, dass man solche Schwellwerte und andere Check-Parameter per xref:glossar#rule[Regel] konfigurieren kann.
+Denn hat zum Beispiel eine Host-Gruppe nur vier Mitglieder, dann passen die beiden Schwellwerte von 90 und 80{nbsp}% nicht wirklich gut,
+da bereits beim Ausfall des ersten Hosts der Prozentsatz auf 75{nbsp}% sinkt und der Zustand -- ohne Umweg über {WARN} -- direkt auf {CRIT} geht.
+
+Daher soll das Check-Plugin nun so verbessert werden, dass es über die Setup-Oberfläche konfigurierbar ist.
+Dazu benötigen wir einen xref:glossar#rule_set[Regelsatz.]
+Falls es in {CMK} bereits einen passenden Regelsatz gibt, dann können Sie diesen verwenden.
+Da Check-Funktion und Regelsatz zusammenpassen müssen, wird dies in aller Regel nicht der Fall sein.
+Weiter unten finden Sie mehr Informationen zu xref:existing_rule_set[vorhandenen Regelsätzen.]
+
+
+==== Neuen Regelsatz definieren
+
+Um einen neuen Regelsatz zu erstellen, legen wir eine neue Datei im Verzeichnis `~/local/share/check_mk/web/plugins/wato` an.
+Der Name der Datei sollte sich an dem des Check-Plugins orientieren und er muss wie alle Plugin-Dateien die Endung `.py` haben.
+Für unser Beispiel passt der Dateiname `myhostgroups_advanced_parameters.py`.
+
+// wichtig: nur Konstanten - z.b. keine f-Strings verwenden!
+// TK: Hmmm, wo denn genau? Das steht nicht im Altkommentar...
+Sehen wir uns den Aufbau so einer Datei Schritt für Schritt an.
+Zunächst kommen einige Importbefehle.
+
+Falls die Texte in Ihrer Datei, die auf der {CMK}-GUI angezeigt werden, in andere Sprachen übersetzbar sein sollen, importieren Sie `_` (Unterstrich):
+
+.~/local/share/check_mk/web/plugins/wato/myhostgroups_advanced_parameters.py
+[{python}]
+----
+from cmk.gui.i18n import _
+----
+
+Dies ist eine Funktion und fungiert als Markierung für alle übersetzbaren Texte.
+Im Weiteren schreiben Sie dann z. B. anstelle von `"Threshold for Warning"` ein `pass:[_]("Threshold for Warning")` für den Funktionsaufruf.
+Das Übersetzungssystem von {CMK}, welches auf link:https://docs.python.org/3/library/gettext.html#module-gettext[gettext^] basiert,
+findet solche Texte und übernimmt sie in die Liste der zu übersetzenden Texte auf.
+// TK: Das macht CMK für *mein* Plugin? Und wo stehen die Texte dann?
+Falls Sie den Check nur für sich selbst bauen, können Sie darauf auch verzichten und brauchen diesen Importbefehl nicht.
+
+Als nächstes importieren Sie sogenannte _ValueSpecs._
+// TK: Sind ValueSpecs eigentlich ein CMK-Ding?
+Ein ValueSpec ist ein sehr praktisches und universelles Werkzeug, das {CMK} an vielen Stellen verwendet.
+Es dient dem Generieren von angepassten Eingabeformularen, der Darstellung und Validierung der eingegebenen Werte und der Umwandlung in Python-Datenstrukturen.
+
+[{python}]
+----
+from cmk.gui.valuespec import (
+    Dictionary,
+    Integer,
+    TextInput,
+    Tuple,
+)
+----
+
+Das `Dictionary` benötigen Sie auf jeden Fall, denn seit {CMK}-Version {v20} müssen Check-Parameter Python-Dictionaries sein.
+// TK: Wohl präziser: mit der neuen Check-API statt {CMK}-Version {v20}
+`Integer` ist für die Eingabe einer Zahl ohne Kommastellen verantwortlich, `TextInput` für einen Unicode-Text und `Tuple` für eine geordnete, eindimensionale Menge von Objekten.
+
+Als nächstes werden noch Symbole importiert, die beim Registrieren benötigt werden:
+// TK: Symbole? Ist das ein Python-Spezialding? Ich dachte, man kann nur Klassen und Funktionen importieren?
+
+[{python}]
+----
+from cmk.gui.plugins.wato.utils import (
+    CheckParameterRulespecWithItem,
+    rulespec_registry,
+    RulespecGroupCheckParametersApplications,
+)
+----
+
+Da unser Check-Plugin `myhostgroups_advanced` mehrere Services erzeugt, importieren wir `CheckParameterRulespecWithItem`.
+Falls Ihr Check keinen Service erzeugt, mit anderen Worten kein Item hat, importieren Sie stattdessen `CheckParameterRulespecWithoutItem`.
+Zur `RulespecGroup` gibt es am Ende dieses Abschnitts noch Informationen.
+
+Nun kommen die eigentlichen Definitionen.
+Zunächst deklarieren wir ein Eingabefeld, mit dem der Benutzer das _Item_ des Checks angeben kann.
+Dieses Feld wird in der Bedingung der Regel angezeigt und erlaubt es den Benutzern, die Regel auf bestimmte Services einzuschränken.
+Es ist auch für das manuelle Anlegen von Checks notwendig, welche ohne Discovery funktionieren sollen.
+// TK: Versteh kein Wort. Warum soll ich Items/Services auswählen, wenn es keine Discovery gibt?
+Das Feld erstellen wir mit `TextInput`.
+Es bekommt per `title` einen Titel zugewiesen, welcher dann in der Regel als Überschrift für das Eingabefeld angezeigt wird.
+Wenn Sie ein Herz für Ihre Benutzer haben, geben Sie ihnen auch noch einen hilfreichen Text für die Inline-Hilfe mit:
+
+[{python}]
+----
+def _item_valuespec_myhostgroups_advanced():
+    return TextInput(title="Host group name", help="You can restrict this rule to certain services of the specified hosts.")
+----
+
+Den Namen der Funktion, welche dieses ValueSpec zurückgibt, können Sie frei wählen, er wird nur bei der Registrierung weiter unten benötigt.
+Damit die Funktion nicht über die Modulgrenze hinaus sichtbar wird, sollte der Name mit einem Unterstrich beginnen.
+
+Als nächstes kommt das ValueSpec für die Eingabe der eigentlichen Check-Parameter.
+Auch hierfür legen wir eine Funktion an, welche das ValueSpec erzeugt.
+Der Benutzer soll die beiden Schwellwerte für {WARN} und {CRIT} festlegen können und zwar getrennt für die Anzahl der Hosts im Zustand {UP} und der Services im Zustand {OK}:
+
+[{python}]
+----
+def _parameter_valuespec_myhostgroups_advanced():
+    return Dictionary(
+        elements=[
+            ("hosts_up_lower", Tuple(
+                title=_("Lower percentage threshold for host in UP status"),
+                elements=[Integer(title=_("Warning")), Integer(title=_("Critical"))],
+                )
+            ),
+            ("services_ok_lower", Tuple(
+                title=_("Lower percentage threshold for services in OK status"),
+                elements=[Integer(title=_("Warning")), Integer(title=_("Critical"))],
+                )
+            ),
+        ],
+    )
+----
 
 ////
-[#parameters]
-== Schwellwerte und Check-Parameter
+TK: Ursprünglich wollte ich zuerst einfach loslegen und für hosts_up zwei unterschiedliche Werte definieren (und erst anschließend das Tupel einführen), etwa so:
+        elements=[
+            ("hosts_up_lower_warn", Integer(title=_("Warning if this percentage of hosts is UP"))),
+            ("hosts_up_lower_crit", Integer(title=_("Critical if this percentage of hosts is UP"))),
+        ],
+Aber das hätte das eh schon sehr lange Kapitel noch länger gemacht...
+////
 
-=== Ein Regelsatz für das Setup
+Das `return Dictionary()` ist vorgeschrieben.
+Innerhalb dessen legen Sie mit `elements=[]` die Liste der Parameter an, im Beispiel `hosts_up_lower` und `services_ok_lower`.
+Beide Parameter werden jeweils durch ein _Tupel_ von zwei Werten für die {CRIT} und {WARN} Schwellwerte definiert.
+Alle Schwellwerte sollen Ganzzahlen sein, also verwenden wir hier `Integer`.
 
-In einem unserer bisherigen Beispiele haben wir den Zustand {WARN}
-erzeugt, falls nur noch 10 oder weniger Slots frei waren. Dabei war die
-Zahl `10` direkt in der Check-Funktion fest einprogrammiert - hart codiert,
-wie Programmierer sagen würden. In {CMK} ist man allerdings als Anwender
-eher gewohnt, dass man solche Schwellwerte und Parameter per _Regel_
-konfigurieren kann. Deswegen wollen wir uns als nächstes ansehen, wie
-auch Sie Ihren Check so verbessern können, dass er über die Setup-Oberfläche
-konfigurierbar ist.
+Zu guter Letzt registrieren wir jetzt mithilfe der importierten und selbst definierten Dinge den neuen Regelsatz.
+Dazu gibt es die Funktion `rulespec_registry.register()`:
 
-Dazu müssen wir zwei Fälle unterscheiden:
+[{python}]
+----
+rulespec_registry.register(
+    CheckParameterRulespecWithItem(
+        check_group_name="myhostgroups_advanced",
+        group=RulespecGroupCheckParametersApplications,
+        match_type="dict",
+        item_spec=_item_valuespec_myhostgroups_advanced,
+        parameter_valuespec=_parameter_valuespec_myhostgroups_advanced,
+        title=lambda: _("Host group status"),
+    )
+)
+----
 
-. Es gibt bereits einen passenden Regelsatz. Das kann eigentlich nur dann der Fall sein, wenn Ihr neuer Check etwas prüft, für das {CMK} in gleicher Form bereits Check-Plugins hat, z.B. das Überwachen einer Temperatur. Dafür gibt es bereits einen Regelsatz, den Sie direkt verwenden können.
-. Es gibt keinen passenden Regelsatz. Dann müssen Sie einen neuen anlegen.
+Dazu die folgenden Erklärungen:
+
+* Falls Ihr Check kein Item verwendet, lautet die innere Funktion `CheckParameterRulespecWithoutItem`.
+Die Zeile `item_spec` entfällt dann.
+
+* Der `check_group_name` stellt die Verbindung zu den Check-Plugins her, welche diesen Regelsatz verwenden wollen.
+// TK: Ich bin unsicher: check_group_name legt hier doch zuerst einmal den Namen des Regelsatzes fest, oder?
+// TK: Ein Check-Plugin, das diesen Regelsatz verwenden will, muss beim Registrieren diesen Namen als check_ruleset_name verwenden. Richtig?
+Er darf auf keinen Fall identisch sein mit einem bereits existierenden Regelsatz, weil dieser damit überschrieben würde.
+// TK: Ja super. Und wie find ich das wieder raus?
+
+* Die `group` legt fest, wo im Setup der Regelsatz auftauchen soll.
+Mit dem im Beispiel gewählten Wert finden Sie ihn unter [.guihint]#Setup > Services > Service monitoring rules# im ersten Kasten [.guihint]#Applications, Processes & Services.#
+Die meisten dieser Gruppen sind in der Datei `~/lib/check_mk/gui/plugins/wato/utils/pass:[__init__].py` definiert.
+Dort finden Sie auch Beispiele, wie Sie eine eigene neue Gruppe anlegen können.
+// TK: Es scheint nur für Gruppen zu funktionieren, die CheckParameters im Namen haben. Wollte das Ding eigentlich im letzten Kasten Various parken, ist mir aber nicht gelungen.
+
+* Der `match_type` ist immer `"dict"`.
+// In älteren {CMK}-Versionen gab es auch Parameterregeln mit anderen Typen.
+
+* Als `item_spec` und `parameter_valuespec` geben Sie die Namen der beiden zuvor erstellten Funktionen ein.
+
+* `title` legt den Titel des Regelsatzes fest, so wie er auch in der {CMK}-GUI erscheint.
+Der Titel wird aber nicht direkt als Text, sondern als ausführbare Funktion angegeben, welche den Text zurückliefert (deswegen das `lambda:`).
 
 
-=== Verwenden von vorhandenen Regelsätzen
+==== Regelsatz testen
 
-Die ausgelieferten Regelsätze für Parameter von Checks finden Sie
-im Verzeichnis `lib/check_mk/gui/plugins/wato/check_parameters/`.
-Nehmen wir als Beispiel die Datei `memory_simple.py`. Diese
-deklariert einen Regelsatz mit folgendem Abschnitt:
+Wenn Sie die Datei für den Regelsatz angelegt haben, sollten Sie erstmal ausprobieren, ob alles soweit funktioniert -- noch ohne Verbindung zum Check-Plugin.
+Dazu müssen Sie erstmal den Apache der Instanz neu starten, damit die neue Datei gelesen wird.
+Das macht der Befehl:
+
+[{shell}]
+----
+{c-omd} omd restart apache
+----
+
+Danach sollte der Regelsatz im Setup auf der oben genannten Seite zu finden sein.
+Mit der Suchfunktion im Setup-Menü finden Sie den Regelsatz auch -- aber erst nach einem Neustart von Redis:
+
+[{shell}]
+----
+{c-omd} omd restart redis
+----
+// TK: Kann man eigentlich mit omd 2 Services in einem Befehl starten?
+
+Der soeben definierte Regelsatz sieht in der GUI so aus:
+
+image::devel_cpi_ruleset.png[alt="Der neu erstellte Regelsatz im Setup."]
+
+In der Bedingung finden Sie das definierte Feld [.guihint]#Host group name# mit der Inline-Hilfe:
+
+image::devel_cpi_ruleset_condition.png[alt="Das Feld zur Service-Auswahl in der Regelbedingung."]
+
+Die Texte zum Umgang mit den regulären Ausrücken hat übrigens {CMK} Ihrem Regelsatz spendiert.
+
+Legen Sie eine Regel an und probieren Sie verschiedene Werte aus, wie im obigen Screenshot gezeigt.
+Wenn das ohne Fehler geht, können Sie die Check-Parameter jetzt in der Check-Funktion verwenden.
+
+
+==== Regelsatz im Check-Plugin benutzen
+
+Damit die Regel zum Greifen kommt, müssen wir dem Check-Plugin erlauben, Check-Parameter entgegenzunehmen und ihm sagen, welche Regel benutzt werden soll.
+Dazu fügen wir zwei neue Zeilen in die Registrierungsfunktion ein:
+
+[{python},highlight=7-8]
+register.check_plugin(
+    name="myhostgroups_advanced",
+    sections=["myhostgroups"],
+    service_name="Host group %s",
+    discovery_function=discover_myhostgroups_advanced,
+    check_function=check_myhostgroups_advanced,
+    check_default_parameters = {},
+    check_ruleset_name="myhostgroups_advanced",
+)
+
+Mit dem Eintrag `check_default_parameters` können Sie die Standardwerte setzen, die gelten, solange noch keine Regel angelegt ist.
+Bei der Registrierung muss diese Zeile unbedingt vorhanden sein.
+Im einfachsten Fall übergeben wir ein leeres Dictionary `{}`.
+
+Als zweites übergeben wir der Registrierungsfunktion noch den `check_ruleset_name`, also den Namen, den wir oben mittels `check_group_name` an den Regelsatz vergeben haben.
+So weiß {CMK} aus welchem Regelsatz die Parameter bestimmt werden sollen.
+
+Nun wird {CMK} versuchen, der Check-Funktion Parameter zu übergeben.
+Damit das klappen kann, müssen wir die Check-Funktion so erweitern, dass sie das Argument `params` erwartet, welches sich zwischen `item` und `section` schiebt:
+
+[{python}]
+----
+def check_myhostgroups_advanced(item, params, section):
+----
+
+Falls Sie einen Check ohne Item bauen, entfällt das `item` und `params` steht am Anfang.
+
+Es ist sehr empfehlenswert, sich jetzt als ersten Test den Inhalt der Variable `params` mit einem `print` ausgeben zu lassen:
+
+[{python}]
+----
+def check_myhostgroups_advanced(item, params, section):
+    print(params)
+----
+
+Bei der Ausführung des Check-Plugins sehen die beiden ausgedruckten Zeilen (für jeden Service eine) dann etwa so aus:
+
+[{shell}]
+----
+{c-omd} cmk --detect-plugins=myhostgroups_advanced -v localhost
+Parameters({'hosts_up_lower': (70, 60), 'services_ok_lower': (75, 65)})
+Parameters({'hosts_up_lower': (70, 60), 'services_ok_lower': (75, 65)})
+----
+
+*Wichtig:* Wenn alles fertig ist und funktioniert, entfernen Sie unbedingt die `print`-Befehle wieder.
+Diese können die interne Kommunikation von {CMK} durcheinanderbringen.
+
+Nun passen wir unsere Check-Funktion weiter an, so dass die übergebenen Parameter ihre Wirkung entfalten können.
+Wir holen uns die beiden Tupel mit dem in der Regel gewählten Namen aus den Parametern:
+
+[{python}]
+----
+def check_myhostgroups_advanced(item, params, section):
+    hosts_up_lower = params["hosts_up_lower"]
+    services_ok_lower = params["services_ok_lower"]
+----
+
+Weiter unten in der Check-Funktion werden dann die bisher hart kodierten Schwellwerte `(90, 80)` durch die Variablen `hosts_up_lower` und `services_ok_lower` ersetzt:
+
+[{python}]
+----
+    hosts_up_perc = num_hosts_up / num_hosts * 100
+    yield from check_levels(hosts_up_perc, levels_lower=(hosts_up_lower), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
+
+    services_ok_perc = num_services_ok / num_services * 100
+    yield from check_levels(services_ok_perc, levels_lower=(services_ok_lower), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
+----
+
+Falls eine Regel konfiguriert ist, können wir nun die Host-Gruppen unseres Beispiels mit den über die GUI gesetzten Schwellwerten überwachen.
+Wenn allerdings keine Regel definiert ist, wird diese Check-Funktion abstürzen:
+Da die Default-Parameter des Check-Plugins nicht befüllt sind, wird das Plugin bei Abwesenheit einer Regel einen `KeyError` erzeugen.
+
+Dieses Problem kann aber behoben werden, wenn bei der Registrierung die Standardwerte gesetzt sind:
+
+[{python},highlight=6]
+----
+register.check_plugin(
+    name = "foobar",
+    service_name = "Foobar Sector %s",
+    discovery_function = discover_foobar,
+    check_function = check_foobar,
+    check_default_parameters = {"hosts_up_lower": (90, 80), "services_ok_lower": (90, 80)},
+    check_ruleset_name = "foobar",
+)
+----
+
+Sie sollten Standardwerte immer auf diese Weise übergeben (und den Fall fehlender Parameter nicht im Check-Plugin abfangen), da diese Standardwerte auch in der Setup-Oberfläche angezeigt werden können.
+Dazu gibt es z. B. bei der Service-Erkennung eines Hosts, auf der Seite [.guihint]#Services of host#, im Menü [.guihint]#Display# den Eintrag [.guihint]#Show check parameters.#
+
+*Hinweis:* Auf GitHub finden Sie sowohl die Datei mit dem
+link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups_parameters.py[Regelsatz^]
+als auch das um den Regelsatz erweiterte
+link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups.py[Check-Plugin.^]
+
+
+[#existing_rule_set]
+==== Vorhandenen Regelsatz verwenden
+
+Unwahrscheinlich, doch nicht ausgeschlossen ist es, dass ein mit {CMK} ausgelieferter Regelsatz zu Ihrer Check-Funktion passt.
+Das kann eigentlich nur dann der Fall sein, wenn der Check etwas prüft, für das {CMK} in gleicher Form bereits Check-Plugins hat, z. B. das Überwachen einer Temperatur oder anderer mit Sensoren gemessener Werte.
+Wenn aber so ein Regelsatz zu Ihrem Check-Plugin passt, dann können Sie sich die Erstellung eines eigenen Regelsatzes sparen.
+
+Die ausgelieferten Regelsätze für Parameter von Checks finden Sie im Verzeichnis `~/lib/check_mk/gui/plugins/wato/check_parameters/`.
+
+Nehmen wir als Beispiel die Datei `memory_simple.py`.
+Diese deklariert einen Regelsatz mit folgendem Abschnitt:
 
 .~/lib/check_mk/gui/plugins/wato/check_parameters/memory_simple.py
-[{python}]
+[{python},highlight=3]
 ----
 rulespec_registry.register(
     CheckParameterRulespecWithItem(
@@ -1294,19 +1587,19 @@ rulespec_registry.register(
         match_type="dict",
         parameter_valuespec=_parameter_valuespec_memory_simple,
         title=lambda: _("Main memory usage of simple devices"),
-    ))
+    )
+)
 ----
 
-Entscheidend für Sie ist dabei das Schlüsselwort `check_group_name`,
-welches hier auf `"memory_simple"` gesetzt ist. Damit wird die Verbindung
-zum Check-Plugin hergestellt. Das machen Sie beim Registrieren des Checks
-mit dem Schlüsselwort `check_ruleset_name`, zum Beispiel:
+Entscheidend ist dabei, wie beim selbst geschriebenen Regelsatz, das Schlüsselwort `check_group_name`, welches hier auf `"memory_simple"` gesetzt ist.
+Damit wird die Verbindung zum Check-Plugin hergestellt.
+Das machen Sie beim Registrieren des Check-Plugins mit dem Schlüsselwort `check_ruleset_name`, zum Beispiel so:
 
-[{python}]
+[{python},highlight=6]
 ----
 register.check_plugin(
     name = "foobar",
-    service_name = "Foobar Sector %s",
+    service_name = "Foobar %s",
     discovery_function = discover_foobar,
     check_function = check_foobar,
     check_ruleset_name="memory_simple",
@@ -1314,302 +1607,10 @@ register.check_plugin(
 )
 ----
 
-Zwingend notwendig ist dabei auch die Definition von Standardparametern
-über das Schlüsselwort `check_default_parameters`. Diese Parameter
-gelten für Ihren Check dann, wenn der Benutzer noch keine Regel angelegt
-hat. Falls es keine verpflichtenden Parameter gibt, können Sie einfach
-das leere Dictionary `{}` als Wert nehmen.
-
-Wie der jeweils vom Benutzer konfigurierte Wert dann bei der Check-Funktion
-ankommt, werden wir dann weiter unten sehen.
+Notwendig ist auch hier die Definition von Standardwerten über das Schlüsselwort `check_default_parameters`.
 
 
-=== Einen eigenen Regelsatz definieren
-
-Falls es keinen passenden Regelsatz gibt (was wohl eher der Normalfall
-ist), müssen wir uns selbst einen neuen erzeugen. Dazu legen wir
-eine Datei im Verzeichnis `~/local/share/check_mk/web/plugins/wato`
-an. Der Name der Datei sollte sich an dem des Checks orientieren und
-er muss wie alle Plugin-Dateien die Endung `.py` haben.
-
-// wichtig: nur Konstanten - z.b. keine f-Strings verwenden!
-Sehen wir uns den Aufbau so einer Datei Schritt für Schritt an.
-Zunächst kommen einige Importbefehle. Falls die Texte in Ihrer
-Datei in andere Sprachen übersetzbar sein sollen, importieren
-Sie `+_+` (Unterstrich). Dies ist eine Funktion und fungiert als Markierung
-für alle übersetzbaren
-Texte. Im Weiteren schreiben Sie dann z.B. anstelle
-von `"Threshold for warn"` ein `+_("Threshold for warn")+` für den Funktionsaufruf.
-
-Das Übersetzungssystem von {CMK}, welches auf
-link:https://docs.python.org/3/library/gettext.html#module-gettext[gettext^]
-basiert, findet
-solche Texte und übernimmt sie in die Liste der zu übersetzenden Texte
-auf. Falls Sie den Check nur für sich selbst bauen, können Sie darauf
-auch verzichten und brauchen den folgenden Importbefehl nicht:
-
-.~/local/share/check_mk/web/plugins/wato/foobar_parameters.py
-[{python}]
-----
-from cmk.gui.i18n import _
-----
-
-Als nächstes importieren wir sogenannte _ValueSpecs_. Ein ValueSpec
-ist ein sehr praktisches und universelles Werkzeug, das {CMK} an vielen
-Stellen verwendet. Es dient dem Generieren von angepassten Eingabemasken,
-der Darstellung und Validierung der eingegebenen Werte und der Umwandlung
-in Python-Datenstrukturen. In folgendem Beispiel werden `Dictionary`,
-`Integer` und `TextInput` importiert.
-
-[{python}]
-----
-from cmk.gui.valuespec import (
-    Dictionary,
-    Integer,
-    TextInput,
-)
-----
-
-Das `Dictionary` benötigen Sie auf jeden Fall. Denn seit Version
-{v20} von {CMK} ist es zwingend vorgeschrieben, dass Check-Parameter
-Python-Dictionaries sein müssen. Früher konnte es z.B. auch ein Paar (Tupel
-aus zwei Zahlen) sein (z.B. Warn/Crit).
-
-`Integer` ist für die Eingabe einer Zahl ohne Kommastellen
-verantwortlich und `TextInput` für einen Unicode-Text.
-
-Als nächstes werden noch Symbole importiert, die beim Registrieren
-benötigt werden:
-
-[{python}]
-----
-from cmk.gui.plugins.wato.utils import (
-    CheckParameterRulespecWithItem,
-    rulespec_registry,
-    RulespecGroupCheckParametersOperatingSystem,
-)
-----
-
-Falls Ihr Check kein Item hat, importieren Sie stattdessen
-`CheckParameterRulespecWithoutItem`. Zur `RulespecGroup`....
-schreiben wir weiter unten noch etwas.
-
-Nun kommen die eigentlichen Definitionen. Zunächst deklarieren wir
-ein Eingabefeld, mit dem der Benutzer das _Item_ des Checks angeben
-kann. Dies ist für die Regelbedingung notwendig, und auch für das manuelle
-Anlegen von Checks, welche ohne Discovery funktionieren sollen. Das erledigen
-wir mit `TextInput`. Dieses bekommt per `title` einen Titel
-zugewiesen, welcher dann in der Regel als Überschrift für das Eingabefeld
-angezeigt wird:
-
-[{python}]
-----
-def _item_valuespec_foobar():
-    return TextInput(title="fitting item name", help="inline help text")
-----
-
-Den Namen der Funktion, welche diese ValueSpec zurückgibt, können
-Sie frei wählen, er wird nur an der Stelle weiter unten benötigt.
-Damit er nicht über die Modulgrenze hinaus sichtbar wird, sollte er
-mit einem Unterstrich beginnen.
-
-Als nächstes kommt das ValueSpec für die Eingabe des eigentlichen
-Check-Parameters. Auch hierfür legen wir eine Funktion an, welche
-dieses erzeugt. Das `return Dictionary(...)` ist vorgeschrieben.
-Innerhalb dessen legen Sie mit `elements=[...]` die Liste
-der Unterparameter für diesen Check an. In unserem Beispiel gibt
-es nur einen: die Warnschwelle für die freien Slots. Dies soll
-eine Ganzzahl sein, also verwenden wir hier ein `Integer`.
-
-[{python}]
-----
-def _parameter_valuespec_foobar():
-    return Dictionary(
-        elements=[
-            ("warning_lower", Integer(title=_("Warning below free slots"))),
-        ],
-    )
-----
-
-Zu guter Letzt registrieren wir jetzt mithilfe der importierten und
-selbstdefinierten Dinge einen neuen Regelsatz. Dazu gibt es die
-Funktion `rulespec_registry.register()`:
-
-[{python}]
-----
-rulespec_registry.register(
-    CheckParameterRulespecWithItem(
-        check_group_name="foobar",
-        group=RulespecGroupCheckParametersOperatingSystem,
-        match_type="dict",
-        item_spec=_item_valuespec_foobar,
-        parameter_valuespec=_parameter_valuespec_foobar,
-        title=lambda: _("Free slots for Foobar sectors"),
-    ))
-----
-
-Dazu noch einige Hinweise:
-
-* Falls Ihr Check kein Item verwendet, lautet die innere Funktion `CheckParameterRulespecWithoutItem`. Die Zeile `item_spec` entfällt dann.
-* Wie oben erwähnt stellt der `check_group_name` die Verbindung zu den Checks her, welche diese Regel verwenden sollen. Er darf auf keinen Fall identisch sein mit einer bereits existierenden Regel, weil diese damit überschrieben würde.
-* Die `group` legt fest, in welcher Kategorie im Setup der Regelsatz auftauchen soll. Die meisten dieser Gruppen sind in der Datei `~/lib/check_mk/gui/plugins/wato/utils/pass:[__init__].py` definiert. Dort finden Sie auch Beispiele, wie Sie eine eigene neue Gruppe anlegen können.
-* Der `match_type` ist immer `"dict"`. In älteren {CMK}-Versionen gab es auch Parameterregeln mit anderen Typen.
-* `title` legt den Titel des Regelsatzes fest, wird aber nicht direkt als Text, sondern als ausführbare Funktion angegeben, welche den Text zurückliefert (deswegen das `lambda:`).
-
-
-==== Test
-
-Wenn Sie diese Datei angelegt haben, sollten Sie erstmal ausprobieren, ob alles soweit
-funktioniert und nicht gleich mit der Check-Funktion weiterarbeiten. Dazu müssen
-Sie erstmal den Apache der Instanz neu starten, damit die neue Datei gelesen wird.
-Das macht der Befehl:
-
-[{shell}]
-----
-{c-omd} omd restart apache
-----
-
-Danach sollte der Regelsatz im Setup zu finden sein. Legen Sie eine Regel
-in dieser Kette an und probieren Sie verschiedene Werte aus. Wenn
-das ohne Fehler geht, können Sie die Check-Parameter jetzt in der Check-Funktion
-verwenden.
-
-
-=== Die Regel im Check-Plugin benutzen
-
-Damit die Regel zum Greifen kommt, müssen wir dem Check-Plugin erlauben,
-Check-Parameter entgegenzunehmen und ihm sagen, welche Regel benutzt
-werden soll. Dazu muss bei der Registrierung der Eintrag `check_default_parameters`
-unbedingt vorhanden sein. Im einfachsten Fall übergeben wir ein leeres Dictionary.
-
-Als zweites übergeben wir der Registrierungsfunktion noch den
-`check_ruleset_name`, also den Namen, den wir oben mittels
-`check_group_name` an den Regelsatz vergeben haben. So weiß {CMK}
-aus welchem Regelsatz die Parameter bestimmt werden sollen.
-
-Das Ganze sieht dann z.B. so aus:
-
-[{python}]
-----
-register.check_plugin(
-    name = "foobar",
-    service_name = "Foobar Sector %s",
-    discovery_function = discover_foobar,
-    check_function = check_foobar,
-    check_default_parameters={},
-    check_ruleset_name="foobar",
-)
-----
-
-Nun wird {CMK} versuchen, der Check-Funktion Parameter zu übergeben. Damit
-das klappen kann, müssen wir die Check-Funktion so erweitern, dass sie als
-zweites das Argument `params` erwartet. Diese schiebt sich zwischen
-`item` und `section` (Falls Sie einen Check ohne Item bauen,
-entfällt das `item` natürlich und `params` steht am Anfang):
-
-[{python}]
-----
-def check_foobar(item, params, section):
-----
-
-Es ist sehr empfehlenswert, sich jetzt als ersten Test den
-Inhalt der Variable `params` mit einem `print`
-ausgeben zu lassen (oder `pprint`, wenn Sie es etwas
-komfortabler haben wollen). Legen Sie verschiedene Regeln an, probieren
-Sie, welche Werte bei `params` ankommen:
-
-[{python}]
-----
-def check_foobar(item, params, section):
-    print(params)
-    for sector, used, slots in ...
-----
-
-Und ganz wichtig: Wenn alles fertig ist, entfernen Sie unbedingt die
-`print`-Befehle wieder! Diese können die interne Kommunikation
-von {CMK} durcheinanderbringen.
-
-
-Nun passen wir unsere Check-Funktion an, so dass der übergebene Parameter
-seine Wirkung entfalten kann. Wir holen uns den Wert mit dem in der Regel
-gewählten Key (hier `"warning_lower"`) aus den Parametern:
-
-[{python}]
-----
-def check_foobar(item, params, section):
-    warn = params["warning_lower"]
-    for sector, used, slots in section:
-        if sector == item:
-            used = int(used)    # convert string to int
-            slots = int(slots)  # convert string to int
-            if used == slots:
-                s = State.CRIT
-            elif slots - used <= warn:
-                s = State.WARN
-            else:
-                s = State.OK
-            yield Result(
-                state = s,
-                summary = f"used {used} out of {slots} slots")
-            return
-----
-
-Falls eine Regel konfiguriert ist, können wir nun die „freien Slots“ in
-unserem Beispiel überwachen. Wenn allerdings keine Regel definiert ist,
-wird diese Check-Funktion abstürzen: Da die Default-Parameter des Plugins nicht
-befüllt sind, wird das Plugin bei Abwesenheit einer Regel einen `KeyError`
-erzeugen.
-
-Dieses Problem können wir beheben, indem wir bei der Registrierung einen
-passenden Parameter einfügen:
-
-[{python}]
-----
-register.check_plugin(
-    name = "foobar",
-    service_name = "Foobar Sector %s",
-    discovery_function = discover_foobar,
-    check_function = check_foobar,
-    check_default_parameters = {"warning_lower": 10},
-    check_ruleset_name = "foobar",
-)
-----
-
-Sie sollten Defaultwerte immer auf diese Weise übergeben (und den Fall
-fehlender Parameter nicht im Check-Plugin abfangen), da diese Standardparameter
-auch in der Setup-Oberfläche angezeigt werden können. Dazu gibt es z.B.
-auf der Servicekonfigurationsseite eines Hosts im Menu [.guihint]#Display# den Eintrag [.guihint]#Show Check parameters#.
-
-Ein einzelner Wert als Schwellwert ist in {CMK} übrigens sehr unüblich. Da
-Services in den Zuständen {OK}, {WARN}, {CRIT} sein können, ist es
-naheliegend die Parameter immer als `Tuple` mit zwei Einträgen zu
-definieren, also als Paar von Schwellen für {WARN} und {CRIT}. Dazu passen
-wir den Regelsatz wie folgt an:
-
-[{python}]
-----
-def _parameter_valuespec_foobar():
-    return Dictionary(
-        elements=[
-            ("warning_lower", Tuple(
-                title=_("Levels on free slots"),
-                elements=[
-                    Integer(title=_("Warning below")),
-                    Integer(title=_("Critical below")),
-                ],
-            )),
-        ],
-    )
-----
-
-Beachten Sie, dass eine solche Änderung des Datentyps eine inkompatible
-Änderung darstellt: Existierende Regeln können jetzt nicht mehr von der
-Oberfläche geladen werden. Und auch die Check-Funktion kann auf Probleme
-stoßen, wenn anstelle eines erwarteten Paar von zwei Zahlen eine einzelne
-Zahl in `params` steht. Sie können solche Regeln einfach editieren.
-Beim erneuten Speichern wird dann das neue Format verwendet.
-
-
+////
 === Weitere ValueSpecs
 
 In {CMK} gibt es zahlreiche ValueSpecs für alle möglichen Situationen.
@@ -2334,14 +2335,20 @@ Immerhin ist diese dann für den Benutzer einheitlich.
 Und zukünftige Versionen von {CMK} können die Darstellung möglicherweise ändern oder sogar konfigurierbar für den Benutzer machen.
 Davon wird dann Ihr Check-Plugin auch profitieren.
 
-// Nach der ausführlichen Beschreibung aller Darstellungsfunktionen (Render-Funktionen) finden Sie eine xref:numbers_summary[Zusammenfassung] in Form einer übersichtlichen Tabelle.
-Nach der ausführlichen Beschreibung aller Darstellungsfunktionen (Render-Funktionen) finden Sie eine Zusammenfassung in Form einer übersichtlichen Tabelle.
+Bevor Sie die `render`-Funktion in Ihrem Check-Plugin nutzen können, müssen Sie sie zusätzlich importieren:
+
+[{python}]
+----
+from .agent_based_api.v1 import check_levels, Metric, register, render, Result, Service, State
+----
+
+Nach der ausführlichen Beschreibung aller Darstellungsfunktionen (Render-Funktionen) finden Sie eine xref:numbers_summary[Zusammenfassung] in Form einer übersichtlichen Tabelle.
 
 
 === Zeiten, Zeitspannen, Frequenzen
 
 Absolute Zeitangaben (Zeitstempel) werden mit `render.date()` oder `render.datetime()` formatiert.
-Die Angaben erfolgen immer in _Sekunden ab dem 1. Januar 1970, 00:00:00 UTC_ -- der sogenannten _Epochenzeit._
+Die Angaben erfolgen immer _Unix-Zeit_, also in Sekunden ab dem 1. Januar 1970, 00:00:00 UTC -- dem Beginn der _Unix-Epoche._
 Dies ist auch das Format, mit dem die Python-Funktion `time.time()` arbeitet.
 
 Vorteil an dieser Darstellung ist, dass sich damit sehr einfach rechnen lässt, also z. B. den Zeitraum, wenn Start- und Endzeit bekannt sind.
@@ -2357,9 +2364,8 @@ Beispiele:
 |Aufruf |Ausgabe 
 |`render.date(0)` |`Jan 01 1970`
 |`render.datetime(0)` |`Jan 01 1970 01:00:00`
-// TK: oder render.date_and_time(0)?
 |`render.date(1700000000)` |`Nov 14 2023`
-|`render.date_and_time(1700000000)` |`Nov 14 2023 23:13:20`
+|`render.datetime(1700000000)` |`Nov 14 2023 23:13:20`
 |===
 
 Wundern Sie sich jetzt nicht, dass `render.date(0)` als Uhrzeit nicht `00:00`, sondern `01:00` ausgibt.
@@ -2390,177 +2396,143 @@ Einsatzgebiet ist z. B. die Taktrate einer CPU:
 |===
 
 
-////
-
-== Formatierung von Zahlen
-
-=== Grundlegendes
-
 === Bytes
 
 Überall wo es um Arbeitsspeicher, Dateien, Festplatten, Dateisysteme und dergleichen geht, ist die kanonische Einheit das _Byte_.
 Da Computer so etwas meist in Zweierpotenzen organisieren, also z. B. in Einheiten zu 512, 1024 oder 65 536 Bytes, hatte sich dabei von Beginn an eingebürgert,
-dass ein _Kilobyte_ nicht 1000, sondern 1024 Bytes ist.
-Das ist sehr praktisch, weil so meist runde Zahlen rauskommen.
+dass ein _Kilobyte_ nicht 1000, und damit das Tausendfache der Einheit ist, sondern 1024 (2 hoch 10) Bytes.
+Das ist zwar unlogisch, aber sehr praktisch, weil so meist runde Zahlen herauskommen.
 Der legendäre Commodore C64 hatte eben 64 Kilobyte Speicher und nicht 65,536.
 
-Leider kamen irgendwann Festplattenhersteller auf die Idee, die Größen ihrer Platten in 1000'er-Einheiten anzugeben. Da bei jeder Größenordnung
-der Unterschied zwischen 1000 und 1024 immerhin 2,4{nbsp}% ausmacht, und diese sich
-aufmultiplizieren, wird so aus einer Platte der Größe 1 GB (1024 mal 1024 *
-1024) auf einmal 1,07 GB. Das verkauft sich besser.
+Leider kamen irgendwann Festplattenhersteller auf die Idee, die Größen ihrer Platten in 1000er-Einheiten anzugeben.
+Da bei jeder Größenordnung der Unterschied zwischen 1000 und 1024 immerhin 2,4{nbsp}% ausmacht, und diese sich aufmultiplizieren,
+wird so aus einer Platte der Größe 1 GB (1024 mal 1024 mal 1024) auf einmal 1,07 GB.
+Das verkauft sich besser.
 
 Diese lästige Verwirrung besteht bis heute und sorgt immer wieder für Fehler.
-Als Linderung wurden von der internationalen elektrotechnischen Kommission
-neue Präfixe auf Grundlage des Binärsystems festgelegt. Demnach ist heute
-offiziell ein Kilobyte 1000 Byte und ein _Kibibyte_ 1024 Byte (2 hoch 10).
-Außerdem soll man _Mebibyte_ und _Gibitbyte_ und _Tebibyte_
-sagen (schon mal gehört?). Die Abkürzungen lauten (Achtung, hier auf
-einmal immer i, statt e!) _KiB_, _MiB_, _GiB_ und _TiB_.
+Als Linderung wurden von der internationalen elektrotechnischen Kommission (IEC) neue Präfixe auf Grundlage des Binärsystems festgelegt.
+Demnach ist heute offiziell ein Kilobyte 1000 Bytes und ein _Kibibyte_ 1024 Bytes (2 hoch 10).
+Außerdem soll man _Mebibyte,_ _Gibibyte_ und _Tebibyte_ sagen.
+Die Abkürzungen lauten dann KiB, MiB, GiB und TiB.
 
-{CMK} passt sich an diesen Standard an und hilft Ihnen mit mehreren angepassten
-Renderfunktionen dabei, dass Sie immer korrekte Ausgaben machen. So
-gibt es speziell für Festplatten und Dateisysteme die Funktion
-`render.disksize()`, welche die Ausgabe in 1000'er-Potenzen macht.
+{CMK} passt sich an diesen Standard an und hilft Ihnen mit mehreren angepassten Render-Funktionen dabei, dass Sie immer korrekte Ausgaben machen.
+So gibt es speziell für Festplatten und Dateisysteme die Funktion `render.disksize()`, welche die Ausgabe in 1000er-Potenzen macht.
 
-
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.disksize(1000)` |`1.00 kB`
 |`render.disksize(1024)` |`1.02 kB`
 |`render.disksize(2000000)` |`2.00 MB`
 |===
 
+Bei der Größe von Dateien ist es oft üblich, die genaue Größe in Bytes _ohne Rundung_ anzugeben.
+Dies hat den Vorteil, dass man so sehr schnell sehen kann, wenn sich eine Datei auch nur minimal geändert hat oder dass zwei Dateien (wahrscheinlich) gleich sind.
+Hierfür ist die Funktion `render.filesize()` verantwortlich:
 
-Bei der Größe von _Dateien_ ist es oft üblich, die genaue Größe in
-Bytes _ohne Rundung_ anzugeben. Dies hat den Vorteil, dass man so
-sehr schnell sehen kann, wenn sich eine Datei auch nur minimal geändert
-hat oder dass zwei Dateien (wahrscheinlich) gleich sind. Hierfür ist
-die Funktion `render.filesize()` verantwortlich:
-
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.filesize(1000)` |`1,000 B`
 |`render.filesize(1024)` |`1,024 B`
 |`render.filesize(2000000)` |`2,000,000 B`
 |===
 
+Wenn Sie eine Größe ausgeben möchten, die keine Festplatten- oder Dateigröße ist, dann verwenden Sie einfach das generische `render.bytes()`.
+Hier bekommen Sie die Ausgabe in klassischen 1024er-Potenzen in der neuen offiziellen Schreibweise:
 
-Wenn Sie eine Größe ausgeben möchten, die keine Platten- oder Dateigröße ist,
-dann verwenden Sie einfach das generische `render.bytes()`. Hier bekommen
-sie die Ausgabe in klassischen 1024'er-Potenzen in der neuen offiziellen Schreibweise:
-
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.bytes(1000)` |`1000 B`
 |`render.bytes(1024)` |`1.00 KiB`
 |`render.bytes(2000000)` |`1.91 MiB`
 |===
 
 
-
 === Bandbreiten, Datenraten
 
 Die Netzwerker haben ihre eigenen Begriffe und Arten, Dinge auszudrücken.
-Und wie immer gibt sich {CMK} Mühe, in jeder Domäne, die dort übliche
-Art zu kommunizieren, zu übernehmen. Deswegen gibt es für Datenraten
-und Geschwindigkeiten gleich drei verschiedene Renderfunktionen. Alle
-haben gemeinsam, dass die Raten in _Bytes pro Sekunde_ übergeben
-werden, selbst dann, wenn die Ausgabe in Bits erfolgt!
+Und wie immer gibt sich {CMK} Mühe, in jeder Domäne, die dort übliche Art zu kommunizieren, zu übernehmen.
+Deswegen gibt es für Datenraten und Geschwindigkeiten gleich drei verschiedene Render-Funktionen.
+Alle haben gemeinsam, dass die Raten in _Bytes pro Sekunde_ übergeben werden, selbst dann, wenn die Ausgabe in Bits erfolgt!
 
-`render.nicspeed()` stellt die Maximalgeschwindigkeit einer
-Netzwerkkarte oder eines Switchports dar. Da es keine Messwerte sind, muss
-auch nicht gerundet werden. Obwohl kein Port einzelne Bits versenden
-kann, sind die Angaben aus historischen Gründen in Bits. Achtung: trotzdem
-müssen Sie auch hier Bytes pro Sekunde übergeben! Beispiele:
+`render.nicspeed()` stellt die Maximalgeschwindigkeit einer Netzwerkkarte oder eines Switchports dar.
+Da es keine Messwerte sind, muss auch nicht gerundet werden.
+Obwohl kein Port einzelne Bits versenden kann, sind die Angaben aus historischen Gründen in Bits.
 
-[cols="50,~"]
+*Wichtig:* Trotzdem müssen Sie auch hier Bytes pro Sekunde übergeben!
+
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.nicspeed(12500000)` |`100 MBit/s`
 |`render.nicspeed(100000000)` |`800 MBit/s`
 |===
 
 
-`render.networkbandwidth()` ist für eine tatsächlich gemessene
-Übertragungsgeschwindigkeit im Netzwerk. Eingabewert sind wieder Bytes pro
-Sekunde (Oder „Oktette“, wie der Netzwerker sagen würde):
+`render.networkbandwidth()` ist gedacht für eine tatsächlich gemessene Übertragungsgeschwindigkeit im Netzwerk.
+Eingabewert ist wieder Bytes pro Sekunde (_Oktette_ würde der Netzwerker sagen):
 
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.networkbandwidth(123)` |`984 Bit/s`
 |`render.networkbandwidth(123456)` |`988 kBit/s`
 |`render.networkbandwidth(123456789)` |`988 MBit/s`
 |===
 
+Wo es nicht ums Netzwerk geht und dennoch Datenraten ausgegeben werden, sind wieder Bytes üblich.
+Prominentester Fall sind IO-Raten von Festplatten.
+Dafür gibt es die Funktion `render.iobandwidth()`, die in {CMK} mit 1000er-Potenzen arbeitet:
 
-Wo es nicht ums Netzwerk geht und dennoch Datenraten ausgegeben werden,
-sind wieder Bytes üblich. Prominentester Fall sind IO-Raten von Festplatten.
-Dafür gibt es die Renderfunktion `render.iobandwidth()`, die in
-{CMK} mit 1000'er-Potenzen arbeitet:
-
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
 |`render.iobandwidth(123)` |`123 B/s`
 |`render.iobandwidth(123456)` |`123 kB/s`
 |`render.iobandwidth(123456789)` |`123 MB/s`
 |===
 
 
-=== Prozentwerte
+=== Prozentsätze
 
-Die Funktion `render.percent()` stellt einen Prozentwert dar --
-auf zwei Nachkommastellen gerundet. Es ist insofern eine Ausnahme zu
-den anderen Funktionen, als hier nicht der eigentlich natürliche Wert
--- also das Verhältnis -- übergeben wird, sondern wirklich die Prozentzahl.
-Wenn also etwas z.B. zur Hälfte voll ist, müssen Sie nicht 0.5 sondern 50 übergeben.
+Die Funktion `render.percent()` stellt einen Prozentsatz dar -- auf zwei Nachkommastellen gerundet.
+Sie ist insofern eine Ausnahme zu den anderen Funktionen, als hier nicht der eigentlich natürliche Wert -- also das Verhältnis -- übergeben wird, sondern wirklich die Prozentzahl.
+Wenn also etwas z.B. zur Hälfte voll ist, müssen Sie nicht `0.5` sondern `50` übergeben.
 
-Weil es manchmal interessant sein kann zu wissen, ob ein Wert beinahe Null
-oder exakt Null ist, werden Werte durch Anfügen eines „<“ Zeichens markiert,
-die größer als Null, aber kleiner als 0.01 sind.
+Weil es manchmal interessant sein kann zu wissen, ob ein Wert beinahe Null oder exakt Null ist, werden Werte durch Anfügen eines „<“ Zeichens markiert,
+die größer als Null, aber kleiner als 0,01 sind.
 
-[cols="50,~"]
+[cols="50,~",options="header"]
 |===
 |Aufruf |Ausgabe 
-
-|`render.percent(0.004)` |`<0.01{nbsp}%`
-|`render.percent(18.5)` |`18.50{nbsp}%`
-|`render.percent(123)` |`123.00{nbsp}%`
+|`render.percent(0.004)` |`<0.01%`
+|`render.percent(18.5)` |`18.50%`
+|`render.percent(123)` |`123.00%`
 |===
 
 
 [#numbers_summary]
 === Zusammenfassung
 
-Hier ist nochmal eine Übersicht über alle Renderfunktionen:
+Hier folgt zum Abschluss die Übersicht über alle Render-Funktionen:
 
-[cols="10,10,40,~"]
+[cols="20,20,~,20",options="header"]
 |===
 |Funktion |Eingabe |Beschreibung |Beispielausgabe 
-
-|`date` |Epoche |Datum |`Dec 18 1970`
-|`datetime` |Epoche |Datum und Uhrzeit |`Dec 18 1970 10:40:00`
-|`timespan` |Sekunden |Dauer / Alter |`3d 5m`
-|`frequency` |Hz |Frequenz (z.B. Taktrate) |`110 MHz`
-|`disksize` |Bytes |Größe von Festplatte, Basis 1000 |`1,234 GB`
-|`filesize` |Bytes |Größe von Dateien, volle Genauigkeit |`1,334,560 B`
-|`bytes` |Bytes |Größe in Bytes, Basis 1024 |`23,4 KiB`
-|`nicspeed` |Octets/sec |Geschwindigkeit von Netzwerkkarten |`100 MBit/s`
-|`networkbandwidth` |Octets/sec |Übertragungsgeschwindigkeit |`23.50 GBit/s`
-|`iobandwidth` |Bytes/sec |IO-Bandbreiten |`124 MB/s`
-|`percent` |Prozent |Prozentwert, sinnvoll gerundet |`99.997{nbsp}%`
+|`date()` |Unix-Zeit |Datum |`Nov 14 2023`
+|`datetime()` |Unix-Zeit |Datum und Uhrzeit |`Nov 14 2023 23:13:20`
+|`timespan()` |Sekunden |Dauer / Alter |`3 hours 25 minutes`
+|`frequency()` |Hz |Frequenz (z.B. Taktrate) |`111 GHz`
+|`disksize()` |Bytes |Größe einer Festplatte, Basis 1000 |`1,234 GB`
+|`filesize()` |Bytes |Größe einer Datei, volle Genauigkeit |`1,334,560 B`
+|`bytes()` |Bytes |Größe in Bytes, Basis 1024 |`23,4 KiB`
+|`nicspeed()` |Oktette pro Sekunde |Geschwindigkeit von Netzwerkkarten |`100 MBit/s`
+|`networkbandwidth()` |Oktette pro Sekunde |Übertragungsgeschwindigkeit |`23.50 GBit/s`
+|`iobandwidth()` |Bytes pro Sekunde |IO-Bandbreiten |`124 MB/s`
+|`percent()` |Prozentzahl |Prozentsatz, sinnvoll gerundet |`99.997%`
 |===
-////
 
 
 [#errors]

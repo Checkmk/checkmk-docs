@@ -54,9 +54,13 @@ register.check_plugin(
 )
 
 
-def check_myhostgroups_advanced(item, params, section):
-    hosts_up_lower = params["hosts_up_lower"]
-    services_ok_lower = params["services_ok_lower"]
+def discover_myhostgroups_advanced(section):
+    for group in section:
+        if group != "check_mk":
+            yield Service(item=group)
+
+
+def check_myhostgroups_advanced(item, section):
     attr = section.get(item)
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
@@ -75,10 +79,10 @@ def check_myhostgroups_advanced(item, params, section):
     )
 
     hosts_up_perc = num_hosts_up / num_hosts * 100
-    yield from check_levels(hosts_up_perc, levels_lower=(hosts_up_lower), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
+    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
 
     services_ok_perc = num_services_ok / num_services * 100
-    yield from check_levels(services_ok_perc, levels_lower=(services_ok_lower), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
+    yield from check_levels(services_ok_perc, levels_lower=(90, 80), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
 
     yield Metric(name="num_hosts", value=num_hosts)
     yield Metric(name="num_hosts_up", value=num_hosts_up)
@@ -92,6 +96,4 @@ register.check_plugin(
     service_name="Host group %s",
     discovery_function=discover_myhostgroups_advanced,
     check_function=check_myhostgroups_advanced,
-    check_default_parameters = {"hosts_up_lower": (90, 80), "services_ok_lower": (90, 80)},
-    check_ruleset_name="myhostgroups_advanced",
 )
