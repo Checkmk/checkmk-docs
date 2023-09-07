@@ -1,0 +1,781 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+include::global_attr.adoc[]
+= SNMP-basierte Check-Plugins schreiben
+:revdate: draft
+:title: SNMP-basierte Check-Plugins schreiben
+:description: Hier erfahren Sie, wie Sie Check-Plugins für SNMP mithilfe der Check-API entwickeln und in {CMK} nutzen können.
+
+{related-start}
+xref:devel_check_plugins#[Agentenbasierte Check-Plugins schreiben]
+xref:draft_intro_devel#[Erweiterungen für {CMK} entwickeln]
+xref:snmp#[Überwachen via SNMP]
+xref:wato_services#[Services verstehen und konfigurieren]
+xref:cmk_commandline#[{CMK} auf der Kommandozeile]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Check-Plugins, die mit SNMP arbeiten, werden auf ähnliche Weise entwickelt wie ihre xref:devel_check_plugins#[agentenbasierten Verwandten.]
+// TK: Hier den neuen Check-Plugin-Artikel verlinken
+Der Unterschied liegt im Ablauf der Service-Erkennung (Discovery) und des Checks selbst.
+Während der {CMK}-Agent von sich aus alle interessanten Informationen sendet, müssen Sie bei SNMP selbst genau festlegen, welche Datenbereiche Sie benötigen.
+Diese Bereiche werden bei SNMP durch OIDs (_object identifier_) bezeichnet.
+
+Ein Komplettabzug aller Daten wäre zwar theoretisch möglich (durch den sogenannten _SNMP-Walk_),
+dauert aber bei schnellen Geräten eher im Bereich von Minuten und bei komplexen Switches gern auch über eine Stunde.
+Daher scheidet das beim Check selbst, aber auch bei der Discovery aus.
+{CMK} geht stattdessen zielgerichteter vor.
+
+Falls Sie noch keine Erfahrung mit SNMP haben, empfehlen wir Ihnen als Vorbereitung unbedingt den Artikel über das xref:snmp#[Überwachen via SNMP.]
+
+
+[#snmp_special]
+== Was bei SNMP anders läuft
+
+Im Vergleich zu einem Check-Plugin für den {CMK}-Agenten gibt es bei SNMP einige Besonderheiten zu beachten.
+Bei einem Check-Plugin für SNMP teilt sich die Service-Erkennung in zwei Phasen auf.
+
+Zunächst erfolgt die *SNMP-Detection.*
+Diese ermittelt, welche Plugins denn überhaupt auf dem jeweiligen Gerät interessant sind.
+// TK: Plugins auf dem Gerät? oder: für das Gerät?
+Dazu werden einige wenige OIDs abgerufen -- und zwar einzelne, ohne SNMP-Walk.
+
+Die wichtigste davon ist die `sysDescr` (OID: `1.3.6.1.2.1.1.1.0`).
+Unter dieser OID hält jedes SNMP-Gerät eine Beschreibung von sich selbst bereit, zum Beispiel `JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots`.
+
+Ausgehend von diesem Text kann man für sehr viele Plugins schon definitiv entscheiden, ob diese hier Sinn ergeben.
+// TK: Ach ja? Was entscheide ich denn anhand des oben gezeigten Beispieltextes?
+Wenn der Text noch nicht spezifisch genug ist, werden weitere OIDs geholt und geprüft.
+Ergebnis der SNMP-Detection ist dann eine Kandidaten-Liste von Check-Plugins.
+// TK: Ich versteh es nicht: Was tue ich hier? Ein Check-Plugin entwickeln - oder Check-Plugins suchen, die auch noch auf dem Gerät laufen?
+
+Im zweiten Schritt werden für jeden dieser Kandidaten die jeweils nötigen Monitoring-Daten mit SNMP-Walks geholt.
+Diese werden dann zu einer Tabelle zusammengefasst und der *Discovery-Funktion* des Check-Plugins in dem Argument `section` bereitgestellt, welche dann daraus die zu überwachenden Items ermittelt.
+
+Beim *Check* ist dann schon bekannt, welche Plugins für das Gerät ausgeführt werden sollen und die SNMP-Detection entfällt.
+// TK: Wie kann etwas entfallen, was vorher noch gar nicht da war?
+Hier werden gleich per SNMP-Walks die für die Plugins benötigten Monitoring-Daten geholt und daraus das Argument `section` für die Check-Funktion befüllt.
+// TK: gleich? Hier? Die Monitoring-Daten wurden doch gerade schon geholt. Jetzt nochmal?
+
+Was müssen Sie also bei einem SNMP-Check anders machen als bei einem agentenbasierten?
+
+. Sie benötigen _kein_ xref:glossar#agent_plugin[Agentenplugin.]
+
+. Sie legen die für die SNMP-Detection nötigen OIDs fest und die Texte, die diese enthalten sollen.
+
+. Sie entscheiden, welche SNMP-Bereiche für das Monitoring geholt werden müssen.
+
+
+[#mibs]
+== Ein Wort zu den MIBs
+
+Bevor wir weitermachen, wollen wir zuerst kurz auf die berüchtigten SNMP-MIBs eingehen, denn über diese gibt es viele Vorurteile.
+Gleich zu Beginn eine gute Nachricht:
+{CMK} benötigt keine MIBs.
+Wirklich!
+Sie sind aber eine wichtige Hilfe, um ein Check-Plugin für SNMP _entwickeln_ zu können.
+
+MIB bedeutet wörtlich  _Management Information Base,_ was ähnlich nichtssagend ist wie die Abkürzung.
+Konkret ist eine MIB eine ganz gut lesbare Textdatei, welche einen bestimmten Teilbaum der SNMP-Daten beschreibt.
+
+Hier steht, welcher Ast im Baum -- also welche _OID_ -- welche Bedeutung hat.
+Das umfasst einen Namen für die OID, einen Hinweis, welche Werte diese annehmen kann
+(zum Beispiel bei enumerierten Datentypen, die dann Dinge wie `1=up`, `2=down`, etc. festlegen) und manchmal auch noch einen nützlichen Kommentar.
+
+{CMK} liefert eine Reihe von frei verfügbaren MIB-Dateien mit aus.
+Diese beschreiben sehr allgemeine Bereiche im globalen OID-Baum, enthalten aber keine herstellerspezifischen Bereiche.
+Daher helfen sie für selbst entwickelte Check-Plugins nicht viel weiter.
+
+Versuchen Sie also, die für Ihr spezielles Gerät relevanten MIB-Dateien irgendwo auf der Website des Herstellers oder sogar auf dem Management-Interface des Geräts zu finden.
+Installieren Sie diese Dateien in der {CMK}-Instanz in das Verzeichnis `~/local/share/check_mk/mibs/`.
+Dann können Sie in SNMP-Walks OID-Nummern in Namen übersetzen lassen und so schneller finden, wo die für das Monitoring interessanten Daten sind.
+// TK: Ein SNMP-Walk holt doch die SNMP-Daten. Ist das nicht dasgleiche in Grün? Kann ich nur mit einer MIB aus OIDs Namen machen?
+Wie gesagt, enthalten die MIBs außerdem interessante Informationen in den Kommentaren -- wenn sie sorgfältig gemacht sind.
+Sie können eine MIB-Datei einfach mit einem Texteditor oder auf der Kommandozeile mit `less` ansehen.
+
+
+[#simple_snmp_plugin]
+== Ein einfaches Check-Plugin schreiben
+
+// TK: Intro neu schreiben
+
+
+[#locating_oids]
+=== Die richtigen OIDs finden
+
+Die entscheidende Voraussetzung, um ein Check-Plugin zu entwickeln, ist, dass Sie wissen, welche OIDs die relevanten Informationen enthalten.
+Der erste Schritt dabei ist, einen kompletten SNMP-Walk zu ziehen -- falls das Gerät das nicht verweigert.
+// TK: Und wenn? Was dann? Finito?
+Dabei werden _alle_ per SNMP verfügbaren Daten abgerufen.
+
+{CMK} kann das sehr einfach für Sie erledigen.
+Nehmen Sie dazu zunächst das Gerät, für das Sie ein Check-Plugin entwickeln wollen, xref:snmp#add_device[in das Monitoring auf.]
+Stellen Sie sicher, dass es xref:snmp#services[in den Grundfunktionen] überwacht werden kann.
+Zumindest müssen die Services [.guihint]#SNMP Info# und [.guihint]#Uptime# gefunden werden und wahrscheinlich auch noch mindestens ein [.guihint]#Interface#.
+So stellen Sie sicher, dass der SNMP-Zugriff sauber funktioniert.
+
+Wechseln Sie dann auf die Kommandozeile der {CMK}-Instanz.
+Hier können Sie mit folgendem Befehl einen kompletten Walk ziehen -- im folgenden Beispiel für das Gerät mit dem Host-Namen `mydevice01`.
+Dabei empfehlen wir, zusätzlich die Option `-v` (für _verbose_) zu verwenden:
+
+[{shell}]
+----
+{c-omd} cmk -v --snmpwalk mydevice01
+mydevice01:
+Walk on ".1.3.6.1.2.1"...3898 variables.
+Walk on ".1.3.6.1.4.1"...6025 variables.
+Wrote fetched data to /omd/sites/mysite/var/check_mk/snmpwalks/mydevice01.
+----
+
+Wie bereits erwähnt, kann so ein kompletter SNMP-Walk Minuten oder sogar Stunden dauern (auch wenn letzteres eher selten ist).
+Werden Sie also nicht nervös, wenn es hier etwas dauert.
+Der Walk wurde nun in der Datei `~/var/check_mk/snmpwalks/mydevice01` gespeichert.
+Es handelt sich dabei um eine gut lesbare Textdatei, die etwa so beginnt:
+
+.~/var/check_mk/snmpwalks/mydevice01
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3
+.1.3.6.1.2.1.1.3.0 546522419
+.1.3.6.1.2.1.1.4.0 hh@example.com
+.1.3.6.1.2.1.1.5.0 sw-ks-01
+.1.3.6.1.2.1.1.6.0 Core Switch Server Room Small
+.1.3.6.1.2.1.1.7.0 3
+.1.3.6.1.2.1.1.8.0 27
+----
+
+In jeder Zeile steht eine OID und danach deren Wert.
+Und gleich in der ersten Zeile finden Sie die wichtigste, nämlich die `sysDescr`.
+
+Nun sind die OIDs nicht sehr aussagekräftig.
+Wenn die richtigen MIBs installiert sind, können Sie diese in einem zweiten Schritt in Namen übersetzen lassen.
+Am besten leiten Sie die Ausgabe des folgenden Befehls, die sonst im Terminal angezeigt würde, in eine Datei um:
+
+[{shell}]
+----
+{c-omd} cmk --snmptranslate mydevice01 > translated
+----
+
+Die Datei `translated` liest sich wie der ursprüngliche Walk, zeigt aber in jeder Zeile nach dem `--&gt;` den Namen der OID:
+// TK: Brauch ich für --snmptranslate die zugehörige MIB oder nicht?
+// TK: Ich habs für einen SNMP gewalkten Netgear-Switch ausprobiert - und es hat funktioniert - wenn auch nur teilweise für einige OIDs
+
+.translated
+[{file},highlight=4]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots --> SNMPv2-MIB::sysDescr.0
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3 --> SNMPv2-MIB::sysObjectID.0
+.1.3.6.1.2.1.1.3.0 546522419 --> DISMAN-EVENT-MIB::sysUpTimeInstance
+.1.3.6.1.2.1.1.4.0 hh@example.com --> SNMPv2-MIB::sysContact.0
+.1.3.6.1.2.1.1.5.0 sw-ks-01 --> SNMPv2-MIB::sysName.0
+.1.3.6.1.2.1.1.6.0 Core Switch Server Room Small --> SNMPv2-MIB::sysLocation.0
+.1.3.6.1.2.1.1.7.0 3 --> SNMPv2-MIB::sysServices.0
+.1.3.6.1.2.1.1.8.0 27 --> SNMPv2-MIB::sysORLastChange.0
+----
+
+In der obigen Ausgabe hat zum Beispiel die OID `.1.3.6.1.2.1.1.4.0` den Wert `hh@example.com` und den Namen `SNMPv2-MIB::sysContact.0`.
+Die zusätzliche Information der Namen für die OIDs gibt wichtige Hinweise, um die interessanten OIDs zu identifizieren.
+Der Rest ist dann Übung, Erfahrung und natürlich Ausprobieren.
+
+// TK: für später
+// === Die Datei vorbereiten
+
+
+[#register_snmp_section]
+=== Die SNMP-Sektion registrieren
+
+Nachdem Sie die richtigen OIDs herausgefunden haben, geht es an die eigentliche Entwicklung des Check-Plugins.
+Das geschieht in drei Schritten:
+
+. Legen Sie für die SNMP-Detection fest, welche OIDs welche Texte enthalten müssen, damit Ihr Plugin ausgeführt werden soll.
+// TK: damit Ihr Plugin ausgeführt werden soll? 
+
+. Deklarieren Sie, welche OID-Zweige für das Monitoring geholt werden müssen.
+
+. Schreiben Sie sonst das SNMP-basierte analog zu einem xref:devel_check_plugins#[agentenbasierten Check-Plugin.]
+
+Die ersten beiden Schritte erfolgen durch die Registrierung der SNMP-Sektion.
+Dies erledigen Sie durch den Aufruf von `register.snmp_section()`.
+Hier geben Sie mindestens drei Argumente an:
+den Namen der Sektion (`name`), die Angaben für die SNMP-Detection ()`detect`) und die benötigten OID-Zweige für das Monitoring (`fetch`).
+
+Hier ist ein Beispiel für ein fiktives Check-Plugin mit dem Namen `foo`:
+// TK: Warum wird ein SNMP-Plugin unter agent_based abgelegt?
+
+.~/local/lib/check_mk/base/plugins/agent_based/foo.py
+[{python}]
+----
+register.snmp_section(
+    name = "foo",
+    detect = startswith(".1.3.6.1.2.1.1.1.0", "foobar device"),
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+)
+----
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+[#detect]
+==== Die SNMP-Detection
+
+Mit dem Schlüsselwort `detect` geben Sie an, unter welchen Bedingungen
+die Discovery-Funktion überhaupt ausgeführt werden soll. In unserem Beispiel
+ist das der Fall, wenn der Wert der OID `.1.3.6.1.2.1.1.1.0` (also
+die `sysDescr`) mit dem Text `foobar device` beginnt (wobei
+Groß-/Kleinschreibung grundsätzlich nicht unterschieden wird). Neben
+`startswith` gibt es noch eine ganze Reihe weiterer möglichen
+Attribute. Dabei existiert von jedem auch eine negierte Form, welche mit
+`not_` beginnt:
+
+[cols="28,33,~"]
+|===
+|Attribut |Negation |Bedeutung 
+
+|`equals(oid, needle)` |`not_equals(oid, needle)` |Der Wert der OID ist gleich dem Text `needle`
+|`contains(oid, needle)` |`not_contains(oid, needle)` |Der Wert der OID enthält an irgendeiner Stelle den Text `needle`
+|`startswith(oid, needle)` |`not_startswith(oid, needle)` |Der Wert der OID beginnt mit dem Text `needle`
+|`endswith(oid, needle)` |`not_endswith(oid, needle)` |Der Wert der OID endet mit dem Text `needle`
+|`matches(oid, regex)` |`not_matches(oid, regex)` |Der Wert der OID matcht auf den xref:regexes#[regulären Ausdruck] `regex`, und zwar hinten und vorne geankert, also mit einem exakten Match. Wenn Sie nur einen Teilstring benötigen, ergänzen Sie einfach vorne bzw. hinten noch ein `pass:[.*]`
+|`exists(oid)` |`not_exists(oid)` |Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.
+|===
+
+Daneben gibt es noch die Möglichkeit, mehrere Tests mit `all_of`
+oder `any_of` zu verknüpfen. `all_of` erfordert mehrere
+erfolgreiche Attribute für eine positive Erkennung des Plugins. Folgendes
+Beispiel findet auf einem Gerät das Plugin, wenn in der `sysDescr` der Text mit `foo` (oder `FOO` oder `Foo`) beginnt *und*
+die OID `.1.3.6.1.2.1.1.2.0` den Text `.4.1.11863.` enthält:
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
+    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
+)
+----
+
+`any_of` hingegen ist damit zufrieden, wenn auch nur eines der Kriterien
+erfüllt ist. Hier ist ein Beispiel, in dem verschiedene Werte für die `sysDescr`
+erlaubt sind:
+
+[{python}]
+----
+detect = any_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
+)
+----
+
+Übrigens: Kennen Sie sich gut mit xref:regexes#[regulären Ausdrücken] aus? Dann würden Sie wahrscheinlich
+das ganze vereinfachen und doch wieder mit einer Zeile auskommen:
+
+[{python}]
+----
+detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*"),
+----
+
+Und noch ein wichtiger Hinweis: Die OIDs, die Sie bei der `detect`-Deklaration
+von einem Plugin angeben, werden im Zweifel von *jedem* Gerät geholt, welches
+per SNMP überwacht wird. Seien Sie daher sehr sparsam bei der Verwendung von herstellerspezifischen
+OIDs. Versuchen Sie, Ihre Erkennung unbedingt so zu machen, dass ausschließlich
+die `sysDescr` (`.1.3.6.1.2.1.1.1.0`) und die `sysObjectID`
+(`.1.3.6.1.2.1.1.2.0`) verwendet werden. Falls Sie dennoch eine weitere
+andere OID benötigen, dann reduzieren Sie die Anzahl der Geräte, wo diese angefragt
+wird, auf ein Minimum, indem Sie zuvor mittels der `sysDescr` so viele Geräte
+wie möglich bereits ausschließen, zum Beispiel so:
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),   # first check sysDescr
+    contains(".1.3.6.1.4.1.4455.1.3", "bar"),  # fetch vendor specific OID
+)
+----
+
+Das `all_of()` funktioniert so, dass bei einem Scheitern der ersten
+Bedingung die zweite gar nicht erst probiert wird (und somit die betreffende
+OID auch nicht geholt). Hier im Beispiel wird die OID `.1.3.6.1.4.1.4455.1.3` nur
+bei solchen Geräten geholt, die `foo` in ihrer `sysDescr` haben.
+
+Was geschieht, wenn Sie die Deklaration falsch oder zumindest nicht ganz
+zielsicher gemacht haben?
+
+* Falls die Detection fälschlicherweise Geräte erkennt, auf denen die nötigen OIDs gar nicht vorhanden sind, wird Ihre Discovery-Funktion dann auch keine Services erzeugen. Es passiert also nichts „Schlimmes“. Allerdings wird das die Discovery auf solchen Geräten verlangsamen, da jetzt jedes mal nutzlos versucht wird, die entsprechenden OIDs abzufragen.
+* Falls die Detection eigentlich zulässige Geräte _nicht_ erkennt, werden dort im Monitoring bei der Discovery auch keine Services gefunden.
+
+
+[#fetch]
+==== OIDs für das Monitoring holen
+
+Die wichtigste Stelle der SNMP-Deklaration ist die Angabe, welche OIDs für
+das Monitoring geholt werden sollen. In fast allen Fällen benötigt ein Plugin
+dazu nur ausgewählte Äste aus einer einzigen Tabelle. Betrachten wir folgendes
+Beispiel:
+
+[{python}]
+----
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+----
+
+Das Schlüsselwort `base` gibt hier einen OID-Präfix an. Alle
+nötigen Daten liegen unterhalb. Bei `oids` geben Sie dann eine
+Liste von Sub-OIDs an, die ab dort geholt werden sollen. In obigem
+Beispiel werden dann insgesamt drei SNMP-Walks gemacht, nämlich
+ausgehend von den OIDs `.1.3.6.1.4.1.35424.1.2.4.0`, `.1.3.6.1.4.1.35424.1.2.5.0`
+und `.1.3.6.1.4.1.35424.1.2.8.0`. Dabei ist es wichtig, dass diese
+Walks die gleiche Anzahl von Variablen holen und dass diese auch einander
+entsprechen. Damit ist gemeint, dass zum Beispiel das n-te Element aus jedem der
+Walks dem selben überwachten Objekt entspricht.
+
+Hier ist ein Beispiel vom Check-Plugin `snmp_quantum_storage_info`:
+
+[{python}]
+----
+    tree = SNMPTree(
+       base=".1.3.6.1.4.1.2036.2.1.1",  # qSystemInfo
+       oids=[
+           "4",   # qVendorID
+           "5",   # qProdId
+           "6",   # qProdRev
+           "12",  # qSerialNumber
+       ],
+    ),
+)
+----
+
+Hier wird pro Storage-Gerät jeweils die Vendor ID, die Product ID, die Product Revision
+und die Seriennummer geholt.
+
+Der Discovery- und Check-Funktion werden diese Daten als Tabelle präsentiert, also
+als Liste von Listen. Dabei wird die Tabelle so gespiegelt, dass Sie pro Eintrag
+in der äußeren Liste alle Daten zu einem Item haben. Jeder Eintrag hat so viele
+Elemente, wie Sie bei `oids` angegeben haben. So können Sie die Liste
+sehr praktisch mit einer Schleife durchlaufen, zum Beispiel
+
+[{python}]
+----
+    for vendor_id, prod_id, prod_rev, serial_number in section:
+        ...
+----
+
+Bitte beachten Sie:
+
+* Alle Einträge sind _strings_, selbst wenn die betreffenden OIDs eigentlich Zahlen sind.
+* Fehlende OIDs werden als leere Strings präsentiert.
+* Denken Sie an die Möglichkeit, während der Entwicklung mit `pprint` die Daten formatiert auszugeben.
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`~/local/lib/check_mk/base/plugins/agent_based/` |Ablageort für selbst geschriebene Check-Plugins.
+|`~/local/share/check_mk/mibs/` |Legen Sie hier SNMP-MIB-Dateien ab, die automatisch geladen werden sollen.
+|===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////
+[#snmp]
+== SNMP-basierte Checks
+
+=== Grundsätzliches
+
+Das Entwickeln von Checks, die mit SNMP arbeiten, läuft sehr ähnlich zu den
+agentenbasierten, nur dass Sie hier noch angeben müssen, welche SNMP-Bereiche
+(OIDs) der Check benötigt. Falls Sie noch keine Erfahrung mit SNMP haben,
+so empfehlen wir Ihnen an dieser Stelle als Vorbereitung unbedingt den
+Artikel über das xref:snmp#[Monitoring via SNMP].
+
+Der Ablauf der Discovery und des Checks via SNMP ist etwas anders als beim
+normalen Agenten. Denn anders also dort -- wo der Agent von sich aus alle
+interessanten Informationen sendet -- müssen wir bei SNMP selbst genau
+sagen, welche Datenbereiche wir benötigen. Ein Komplettabzug aller Daten
+wäre zwar theoretisch möglich (via SNMP-Walk), dauert aber bei schnellen
+Geräten eher im Bereich von Minuten und bei komplexen Switches gern auch
+über eine Stunde. Daher scheidet das beim Checken und sogar auch bei der
+Discovery aus. {CMK} geht deswegen etwas zielgerichteter vor.
+
+==== SNMP-Detection
+
+Die Serviceerkennung teilt sich in zwei Phasen auf. Zunächst geschieht die
+_SNMP-Detection_. Diese ermittelt, welche Plugins
+denn überhaupt auf dem jeweiligen Gerät interessant sind. Dazu werden einige
+wenige SNMP-OIDs abgerufen -- und zwar einzelne, ohne Walk.  Die wichtigste
+davon ist die `sysDescr` (OID: `1.3.6.1.2.1.1.1.0`). Unter dieser
+OID hält jedes SNMP-Gerät eine Beschreibung von sich selbst bereit, zum Beispiel
+`Cisco NX-OS(tm) n5000, Software (n5000-uk9),...`.
+
+Ausgehend von diesem Text kann man für sehr viele Plugins schon definitiv
+entscheiden, ob diese hier Sinn ergeben. Wenn der Text noch nicht spezifisch
+genug ist, werden weitere OIDs geholt und geprüft. Ergebnis der SNMP-Detection
+ist dann eine Kandidaten-Liste von Check-Plugins.
+
+==== Discovery
+
+Im zweiten Schritt werden für jeden dieser Kandidaten die jeweils nötigen
+Monitoring-Daten mit SNMP-Walks geholt. Diese werden dann zu einer Tabelle
+zusammengefasst und der Discovery-Funktion des Checks in dem Argument
+`section` bereitgestellt, welche dann daraus wie gewohnt die zu
+überwachenden Items ermittelt.
+
+==== Checken
+
+Beim Checken ist ja schon bekannt, welche Plugins für das Gerät ausgeführt
+werden sollen und die SNMP-Detection entfällt. Hier werden gleich per
+SNMP-Walks die für die Plugins benötigten Monitoring-Daten geholt und daraus
+das Argument `section` für die Check-Funktion befüllt.
+
+==== Zusammenfassung
+
+Was müssen Sie also bei einem SNMP-Check anders machen als bei einem agentenbasierten?
+
+. Sie benötigen kein Plugin für den Agenten.
+. Sie müssen die für die SNMP-Detection nötigen Einzel-OIDs und Suchtexte festlegen.
+. Sie müssen festlegen, welche SNMP-Bereiche für das Monitoring geholt werden müssen.
+
+=== Ein Wort zu den MIBs
+
+Bevor wir weitermachen wollen wir hier noch ein Wort zu den berüchtigten
+SNMP-MIBs verlieren, denn über diese gibt es viele Vorurteile. Gleich zu
+Beginn eine gute Nachricht: {CMK} benötigt sie nicht. Wirklich! Sie sind
+aber eine wichtige Hilfe, um einen SNMP-Check _entwickeln_ zu können.
+
+Was ist nun eine MIB? Wörtlich bedeutet die Abkürzung _Management
+Information Base_ -- etwas nichtssagend. Konkret ist eine MIB eine
+ganz gut lesbare Textdatei, welche einen bestimmten Teilbaum der SNMP-Welt
+beschreibt. Und zwar steht hier, welcher Ast im Baum -- also welche _OID_ --
+welche Bedeutung hat. Das umfasst einen Namen für die OID, einen Hinweis,
+welche Werte diese annehmen kann (zum Beispiel bei enumerierten Datentypen, wo
+dann Dinge wie 1=up, 2=down, etc. festgelegt sind) und manchmal auch noch
+einen nützlichen Kommentar.
+
+{CMK} liefert eine Reihe von frei verfügbaren MIB-Dateien mit aus. Diese
+beschreiben sehr allgemeine Bereiche im globalen OID-Baum, enthalten aber
+keine herstellerspezifischen Bereiche. Daher helfen sie für selbst entwickelte
+Checks nicht viel weiter.
+
+Versuchen Sie also, die für Ihr spezielle Gerät relevanten MIB-Dateien irgendwo
+auf den Webseiten vom Hersteller oder sogar auf dem Management-Interface
+des Geräts zu finden und installieren Sie diese in der {CMK}-Instanz nach
+`local/share/check_mk/mibs`. Dann können Sie in SNMP-Walks OID-Nummern
+in Namen umrechnen lassen und so schneller finden, wo die für das Monitoring
+interessanten Daten sind. Wie gesagt, enthalten die MIBs außerdem interessante Informationen in den Kommentaren -- wenn sie sorgfältig gemacht sind.
+Sie können eine MIB-Datei einfach mit einem Texteditor oder mit `less` ansehen.
+
+
+[#locating_oids]
+=== Die richtigen OIDs finden
+
+Die entscheidende Voraussetzung, um ein Plugin zu entwickeln, ist natürlich,
+dass Sie wissen, welche OIDs die notwendigen Informationen enthalten. Der
+erste Schritt dabei ist (falls das Gerät das nicht verweigert), einen kompletten
+SNMP-Walk zu ziehen. Dabei werden _alle_ per SNMP verfügbaren Daten
+abgerufen.
+
+{CMK} kann das sehr einfach für Sie erledigen. Nehmen Sie dazu zunächst
+das Gerät (oder eines der Geräte), für das Sie ein Plugin entwickeln wollen,
+ins Monitoring auf. Sagen wir es heißt `mydevice01`. Stellen Sie sicher,
+dass dieses in den Grundfunktionen überwacht werden kann. Zumindest müssen
+die Services [.guihint]#SNMP Info# und [.guihint]#Uptime# gefunden werden und wahrscheinlich
+auch noch mindestens ein [.guihint]#Interface#. So stellen Sie sicher, dass der SNMP-Zugriff
+sauber funktioniert.
+
+Wechseln Sie dann auf die Kommandozeile der {CMK}-Instanz. Hier können
+Sie mit folgendem Befehl einen kompletten Walk ziehen. Dabei empfehlen wir,
+gleich die Option `-v` (verbose) zu verwenden:
+
+[{shell}]
+----
+{c-omd} cmk -v --snmpwalk mydevice01
+mydevice01:
+Walk on ".1.3.6.1.2.1"...3898 variables.
+Walk on ".1.3.6.1.4.1"...6025 variables.
+Wrote fetched data to /omd/sites/heute/var/check_mk/snmpwalks/mydevice01.
+----
+
+Wie bereits erwähnt, kann so ein kompletter Walk Minuten oder sogar
+Stunden dauern (auch wenn letzteres eher selten ist). Werden Sie also
+nicht nervös, wenn es hier etwas dauert. Der Walk wurde nun in der Datei
+`var/check_mk/snmpwalks/mydevice01` gespeichert. Es handelt sich
+dabei um eine gut lesbare Textdatei, die etwa so beginnt:
+
+.~/var/check_mk/snmpwalks/mydevice01
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3
+.1.3.6.1.2.1.1.3.0 546522419
+.1.3.6.1.2.1.1.4.0 hh@example.com
+.1.3.6.1.2.1.1.5.0 sw-ks-01
+.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein
+.1.3.6.1.2.1.1.7.0 3
+.1.3.6.1.2.1.2.1.0 27
+----
+
+In jeder Zeile steht eine OID und danach deren Wert. Und gleich in der ersten Zeile finden Sie die
+wichtigste, nämlich die `sysDescr`.
+
+Nun sind die OIDs nicht sehr aussagekräftig. Wenn die richtigen MIBs installiert sind,
+können Sie diese in einem zweiten Schritt mit dem Befehl `cmk --snmptranslate`
+in Namen umrechnen lassen. Am besten leiten Sie das Ergebnis, was ansonsten im Terminal
+käme, in eine Datei um:
+
+[{shell}]
+----
+OMD[heute]:~$ cmk --snmptranslate mydevice01  > translated
+Processing 9923 lines.
+finished.
+----
+
+Die Datei `translated` liest sich wie der ursprüngliche Walk, hat aber in jeder
+Zeile nach dem `--&gt;` einen übersetzten Wert für die OID:
+
+.translated
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots --> SNMPv2-MIB::sysDescr.0
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3 --> SNMPv2-MIB::sysObjectID.0
+.1.3.6.1.2.1.1.3.0 546522419 --> DISMAN-EVENT-MIB::sysUpTimeInstance
+.1.3.6.1.2.1.1.4.0 hh@example.com --> SNMPv2-MIB::sysContact.0
+.1.3.6.1.2.1.1.5.0 sw-ks-01 --> SNMPv2-MIB::sysName.0
+.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein --> SNMPv2-MIB::sysLocation.0
+.1.3.6.1.2.1.1.7.0 3 --> SNMPv2-MIB::sysServices.0
+.1.3.6.1.2.1.2.1.0 27 --> IF-MIB::ifNumber.0
+.1.3.6.1.2.1.2.2.1.1.1 1 --> IF-MIB::ifIndex.1
+.1.3.6.1.2.1.2.2.1.1.2 2 --> IF-MIB::ifIndex.2
+----
+
+Beispiel: die OID `.1.3.6.1.2.1.1.4.0` hat den übersetzten Namen
+`SNMPv2-MIB::sysContact.0`. Dies ist ein wichtiger Hinweis, der Rest
+ist dann Übung, Erfahrung und natürlich experimentieren.
+
+=== Die Registrierung der SNMP-Sektion
+
+Wenn Sie also die notwendigen OIDs herausgefunden haben, geht es an die
+eigentliche Entwicklung des Plugins. Das geschieht in drei Schritten:
+
+. Legen Sie für die SNMP-Detection fest, welche OIDs welche Texte enthalten müssen, damit Ihr Plugin ausgeführt werden soll.
+. Deklarieren Sie, welche OID-Zweige für das Monitoring geholt werden müssen.
+. Schreiben Sie ein Check-Plugin analog zu denjenigen für agentenbasierte Checks.
+
+Die ersten beiden Schritte erfolgen durch die Registrierung einer SNMP-Sektion.
+Dies erledigen Sie durch den Aufruf von `register.snmp_section()`. Hier
+geben Sie mindestens drei Argumente an: den Namen der Sektion (`name`),
+die Angaben für die SNMP-Detection `detect` und die benötigten
+OID-Zweige für das eigentlich Monitoring (`fetch`). Hier ist ein Beispiel für ein
+fiktives Check-Plugin mit dem Namen `foo`:
+
+.~/local/lib/check_mk/base/plugins/agent_based/foo.py
+[{python}]
+----
+register.snmp_section(
+    name = "foo",
+    detect = startswith(".1.3.6.1.2.1.1.1.0", "foobar device"),
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+)
+----
+
+==== Die SNMP-Detection
+
+Mit dem Schlüsselwort `detect` geben Sie an, unter welchen Bedingungen
+die Discovery-Funktion überhaupt ausgeführt werden soll. In unserem Beispiel
+ist das der Fall, wenn der Wert der OID `.1.3.6.1.2.1.1.1.0` (also
+die `sysDescr`) mit dem Text `foobar device` beginnt (wobei
+Groß-/Kleinschreibung grundsätzlich nicht unterschieden wird). Neben
+`startswith` gibt es noch eine ganze Reihe weiterer möglichen
+Attribute. Dabei existiert von jedem auch eine negierte Form, welche mit
+`not_` beginnt:
+
+[cols="28,33,~"]
+|===
+|Attribut |Negation |Bedeutung 
+
+|`equals(oid, needle)` |`not_equals(oid, needle)` |Der Wert der OID ist gleich dem Text `needle`
+|`contains(oid, needle)` |`not_contains(oid, needle)` |Der Wert der OID enthält an irgendeiner Stelle den Text `needle`
+|`startswith(oid, needle)` |`not_startswith(oid, needle)` |Der Wert der OID beginnt mit dem Text `needle`
+|`endswith(oid, needle)` |`not_endswith(oid, needle)` |Der Wert der OID endet mit dem Text `needle`
+|`matches(oid, regex)` |`not_matches(oid, regex)` |Der Wert der OID matcht auf den xref:regexes#[regulären Ausdruck] `regex`, und zwar hinten und vorne geankert, also mit einem exakten Match. Wenn Sie nur einen Teilstring benötigen, ergänzen Sie einfach vorne bzw. hinten noch ein `pass:[.*]`
+|`exists(oid)` |`not_exists(oid)` |Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.
+|===
+
+Daneben gibt es noch die Möglichkeit, mehrere Tests mit `all_of`
+oder `any_of` zu verknüpfen. `all_of` erfordert mehrere
+erfolgreiche Attribute für eine positive Erkennung des Plugins. Folgendes
+Beispiel findet auf einem Gerät das Plugin, wenn in der `sysDescr` der Text mit `foo` (oder `FOO` oder `Foo`) beginnt *und*
+die OID `.1.3.6.1.2.1.1.2.0` den Text `.4.1.11863.` enthält:
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
+    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
+)
+----
+
+`any_of` hingegen ist damit zufrieden, wenn auch nur eines der Kriterien
+erfüllt ist. Hier ist ein Beispiel, in dem verschiedene Werte für die `sysDescr`
+erlaubt sind:
+
+[{python}]
+----
+detect = any_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
+)
+----
+
+Übrigens: Kennen Sie sich gut mit xref:regexes#[regulären Ausdrücken] aus? Dann würden Sie wahrscheinlich
+das ganze vereinfachen und doch wieder mit einer Zeile auskommen:
+
+[{python}]
+----
+detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*"),
+----
+
+Und noch ein wichtiger Hinweis: Die OIDs, die Sie bei der `detect`-Deklaration
+von einem Plugin angeben, werden im Zweifel von *jedem* Gerät geholt, welches
+per SNMP überwacht wird. Seien Sie daher sehr sparsam bei der Verwendung von herstellerspezifischen
+OIDs. Versuchen Sie, Ihre Erkennung unbedingt so zu machen, dass ausschließlich
+die `sysDescr` (`.1.3.6.1.2.1.1.1.0`) und die `sysObjectID`
+(`.1.3.6.1.2.1.1.2.0`) verwendet werden. Falls Sie dennoch eine weitere
+andere OID benötigen, dann reduzieren Sie die Anzahl der Geräte, wo diese angefragt
+wird, auf ein Minimum, indem Sie zuvor mittels der `sysDescr` so viele Geräte
+wie möglich bereits ausschließen, zum Beispiel so:
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),   # first check sysDescr
+    contains(".1.3.6.1.4.1.4455.1.3", "bar"),  # fetch vendor specific OID
+)
+----
+
+Das `all_of()` funktioniert so, dass bei einem Scheitern der ersten
+Bedingung die zweite gar nicht erst probiert wird (und somit die betreffende
+OID auch nicht geholt). Hier im Beispiel wird die OID `.1.3.6.1.4.1.4455.1.3` nur
+bei solchen Geräten geholt, die `foo` in ihrer `sysDescr` haben.
+
+Was geschieht, wenn Sie die Deklaration falsch oder zumindest nicht ganz
+zielsicher gemacht haben?
+
+* Falls die Detection fälschlicherweise Geräte erkennt, auf denen die nötigen OIDs gar nicht vorhanden sind, wird Ihre Discovery-Funktion dann auch keine Services erzeugen. Es passiert also nichts „Schlimmes“. Allerdings wird das die Discovery auf solchen Geräten verlangsamen, da jetzt jedes mal nutzlos versucht wird, die entsprechenden OIDs abzufragen.
+* Falls die Detection eigentlich zulässige Geräte _nicht_ erkennt, werden dort im Monitoring bei der Discovery auch keine Services gefunden.
+
+=== Die OID-Bereiche für das Monitoring
+
+Die wichtigste Stelle der SNMP-Deklaration ist die Angabe, welche OIDs für
+das Monitoring geholt werden sollen. In fast allen Fällen benötigt ein Plugin
+dazu nur ausgewählte Äste aus einer einzigen Tabelle. Betrachten wir folgendes
+Beispiel:
+
+[{python}]
+----
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.35424.1.2',
+        oids = [
+            '4.0',
+            '5.0',
+            '8.0',
+        ],
+    ),
+----
+
+Das Schlüsselwort `base` gibt hier einen OID-Präfix an. Alle
+nötigen Daten liegen unterhalb. Bei `oids` geben Sie dann eine
+Liste von Sub-OIDs an, die ab dort geholt werden sollen. In obigem
+Beispiel werden dann insgesamt drei SNMP-Walks gemacht, nämlich
+ausgehend von den OIDs `.1.3.6.1.4.1.35424.1.2.4.0`, `.1.3.6.1.4.1.35424.1.2.5.0`
+und `.1.3.6.1.4.1.35424.1.2.8.0`. Dabei ist es wichtig, dass diese
+Walks die gleiche Anzahl von Variablen holen und dass diese auch einander
+entsprechen. Damit ist gemeint, dass zum Beispiel das n-te Element aus jedem der
+Walks dem selben überwachten Objekt entspricht.
+
+Hier ist ein Beispiel vom Check-Plugin `snmp_quantum_storage_info`:
+
+[{python}]
+----
+    tree = SNMPTree(
+       base=".1.3.6.1.4.1.2036.2.1.1",  # qSystemInfo
+       oids=[
+           "4",   # qVendorID
+           "5",   # qProdId
+           "6",   # qProdRev
+           "12",  # qSerialNumber
+       ],
+    ),
+)
+----
+
+Hier wird pro Storage-Gerät jeweils die Vendor ID, die Product ID, die Product Revision
+und die Seriennummer geholt.
+
+Der Discovery- und Check-Funktion werden diese Daten als Tabelle präsentiert, also
+als Liste von Listen. Dabei wird die Tabelle so gespiegelt, dass Sie pro Eintrag
+in der äußeren Liste alle Daten zu einem Item haben. Jeder Eintrag hat so viele
+Elemente, wie Sie bei `oids` angegeben haben. So können Sie die Liste
+sehr praktisch mit einer Schleife durchlaufen, zum Beispiel
+
+[{python}]
+----
+    for vendor_id, prod_id, prod_rev, serial_number in section:
+        ...
+----
+
+Bitte beachten Sie:
+
+* Alle Einträge sind _strings_, selbst wenn die betreffenden OIDs eigentlich Zahlen sind.
+* Fehlende OIDs werden als leere Strings präsentiert.
+* Denken Sie an die Möglichkeit, während der Entwicklung mit `pprint` die Daten formatiert auszugeben.
+
+=== Weitere SNMP-Sonderheiten
+
+// COMMENT[Das fehlt alles noch, OIDCached("1.2.3"), OIDBytes("1.2.3")]
+
+Hier beschreiben wir in Zukunft noch:
+
+* Wie Sie mehrere unabhängige SNMP-Bereiche abrufen können
+* Was es mit OIDEnd() auf sich hat
+* Weitere Sonderfälle beim Umgang mit SNMP
+////
