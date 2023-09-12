@@ -30,6 +30,11 @@ Daneben gibt es auf der link:https://exchange.checkmk.com[{CMK} Exchange^] weite
 
 Und trotzdem kann es immer wieder vorkommen, dass ein Gerät, eine Anwendung oder einfach nur eine bestimmte xref:glossar#metric[Metrik,] die für Sie wichtig ist, noch von keinem dieser Plugins erfasst ist 
 -- vielleicht auch einfach deshalb, weil es sich dabei um etwas handelt, dass in Ihrer Firma entwickelt wurde und es daher niemand anders haben kann.
+Im Artikel zur Einführung in die xref:draft_intro_devel#[Programmierung von Erweiterungen] für {CMK} erfahren Sie, welche Möglichkeiten Sie haben.
+
+Dieser Artikel zeigt Ihnen, wie Sie echte Check-Plugins für den {CMK}-Agenten entwickeln können — mit allem was dazugehört.
+Dabei zeigen wir Ihnen, wie Sie die Check-API für die Plugin-Programmierung nutzen.
+Für SNMP-basierte Check-Plugins gibt es einen xref:draft_devel_check_plugins_snmp#[eigenen Artikel.]
 
 
 [#check_api_doc]
@@ -61,11 +66,16 @@ Wenn Sie Lust haben, sich mit dem Programmieren von Check-Plugins zu befassen, b
 * Erfahrung mit {CMK}, vor allem was das Thema Agenten und Checks betrifft
 * etwas Übung mit Linux auf der Kommandozeile
 
+
 === Terminologie
-Zwar ist hier immer die Rede von einem Check-Plugin und davon, dieses zu schreiben. Aber genaugenommen benötigen Sie immer zwei Plugins, das xref:glossar#agent_plugin[Agentenplugin] auf der Host-Seite und das xref:glossar#check_plugin[Check-Plugin] auf der {CMK}-Seite. Beide müssen geschrieben und aufeinander abgestimmt werden, nur so funktionieren sie hinterher reibungsfrei.
+
+Zwar ist hier immer die Rede von einem Check-Plugin und davon, dieses zu schreiben.
+Aber genau genommen benötigen Sie immer zwei Plugins, das xref:glossar#agent_plugin[Agentenplugin] auf dem überwachten Host und das xref:glossar#check_plugin[Check-Plugin] auf dem {CMK}-Server.
+Beide müssen geschrieben und aufeinander abgestimmt werden.
+Nur so funktionieren sie hinterher reibungsfrei.
 
 
-[#first_check_plugin]
+[#agentplugin]
 == Ein Agentenplugin schreiben
 
 Wer sich für die Programmierung von Check-Plugins in {CMK} interessiert, hat mit großer Wahrscheinlichkeit auch schon einmal einen {CMK}-Server aufgesetzt.
@@ -73,8 +83,6 @@ Haben auch Sie dies bereits gemacht, haben Sie dabei als Einstieg vermutlich auc
 
 Im Folgenden gehen wir von einem beispielhaften Szenario aus, in dem {CMK}-Server und überwachter Host identisch sind.
 So ist es uns möglich über xref:glossar#livestatus[Livestatus]-Abfragen vom Host Informationen über Host-Gruppen zu erhalten, die der {CMK}-Server zur Verfügung stellt.
-// TK: Nach meinem Gefühl sollten wir ein paar mehr Sätze zum Setup der Beispielkonfiguration spendieren...
-// SP: Was sollte ich noch ergänzen? Soll ja auch nicht zu langatmig werden.
 
 Im beschriebenen Beispiel gehen wir von einem Unternehmen mit mehreren Standorten aus:
 
@@ -88,8 +96,10 @@ Das Ziel in diesem Beispiels ist nun, eine Prüfung aufzusetzen mit der kontroll
 Das Ganze läuft in zwei Schritten:
 
 . Informationen für das Monitoring aus dem Host auslesen.
+Darum geht es in diesem Kapitel.
 
 . Schreiben eines Check-Plugins in der {CMK}-Instanz, welches diese Daten auswertet.
+Das zeigen wir im xref:write_check_plugin[nächsten Kapitel.]
 
 Und los geht's...
 
@@ -97,13 +107,11 @@ Und los geht's...
 [#right_command]
 === Informationen auslesen und filtern
 
-Am Anfang jeder Check-Plugin-Programmierung steht: die Recherche!
+Am Anfang jeder Plugin-Programmierung steht: die Recherche!
 Das bedeutet, dass Sie herausfinden müssen, wie Sie überhaupt an die Informationen kommen, die Sie für die Überwachung brauchen.
 
 Für das gewählte Beispiel nutzen wir die Tatsache, dass der {CMK}-Server zugleich der Host ist.
 Damit genügt zunächst ein xref:livestatus#[Abruf der Statusdaten via Livestatus,] also der in Tabellen organisierten Daten, die {CMK} über die überwachten Hosts und Services im flüchtigen Speicher vorhält.
-
-Hinweis: Sie könnten auch `echo` verwenden, z.B. falls die Variante mit `su` und `lq` aus irgendwelchen Gründen nicht funktionieren sollte. Lesen Sie bei Bedarf hierzu xref:livestatus#network[Livestatus über das Netzwerk nutzen.]
 
 Melden Sie sich als Instanzbenutzer an und fragen Sie die Informationen zu den Host-Gruppen mit folgendem Befehl ab: 
 
@@ -116,7 +124,7 @@ action_url;alias;members;members_with_state;name;notes;notes_url;num_hosts;num_h
 ;check_mk;localhost;localhost|0|1;check_mk;;;1;0;0;0;0;0;1;66;0;0;0;4;0;1;4;61;1;0;1;0;1;1
 ----
 
-Die erste Zeile der Ausgabe enthält die Spaltennamen der abgefragten Tabelle `hostgroups`.
+Die erste Zeile der Ausgabe enthält die Spaltennamen der abgefragten Ta belle `hostgroups`.
 Als Trennzeichen fungiert das Semikolon.
 In der zweiten Zeile folgen dann die Inhalte sämtlicher Spalten, ebenfalls durch Semikolons getrennt.
 
@@ -197,10 +205,12 @@ acme_agent_sessions         snmp       ACME Devices: Agent Sessions
 acme_certificates           snmp       ACME Devices: Certificates
 ----
 
-Die Ausgabe zeigt nur die ersten Zeilen der sehr langen Liste. Durch die Verwendung von Präfixen ist die Zugehörigkeit vieler Check-Plugins hier bereits gut zu erkennen. Auch für Ihre eigenen Check-Plugins empfiehlt sich daher die Verwendung von Präfixen.
-Die zweite Spalte zeigt übrigens an, wie das jeweilige Check-Plugin seine xref:agents[Daten] bezieht.
+Die Ausgabe zeigt nur die ersten Zeilen der sehr langen Liste. Durch die Verwendung von Präfixen ist die Zugehörigkeit vieler Check-Plugins hier bereits gut zu erkennen.
+Auch für Ihre eigenen Check-Plugins empfiehlt sich daher die Verwendung von Präfixen.
+// TK: Tja, wir halten uns nicht an unsere eigenen Regeln, da wir im Beispiel keinen Präfix verwenden. Oder zählt „my“ als Präfix? 
+Die zweite Spalte zeigt übrigens an, wie das jeweilige Check-Plugin seine Daten bezieht.
 
-Ein für unser Beispiel passender Name für das neue Check-Plugin, der alle Kriterien erfüllt, ist zum Beispiel `myhostgroups`.
+Ein für unser Beispiel passender Name für das neue Check-Plugin ist zum Beispiel `myhostgroups`.
 
 Nun haben Sie alle Informationen zusammen, um das Skript mit dem Agentenplugin zu erstellen.
 Legen Sie als `root`-Benutzer eine neue Datei `myhostgroups` im Verzeichnis `/usr/lib/check_mk_agent/plugins/` an:
@@ -217,27 +227,30 @@ echo '<<<myhostgroups:sep(59)>>>'
 su -${site} lq "GET hostgroups\nColumns: ${columns}"
 ----
 
-
 Was bedeutet das nun im Einzelnen?
 
 Die erste Zeile enthält den „Shebang“ (das ist eine Abkürzung für _sharp_ und _bang_, wobei letzteres eine Abkürzung für das Ausrufezeichen ist), an dem Linux erkennt, dass es das Skript mit der Shell ausführen soll.
 
 Um das Skript erweiterbar zu halten, werden als nächstes zwei Variablen eingeführt:
 
-* die Variable `columns`, die aktuell die Gruppennamen und die zugehörigen Mitglieder enthält
+* die Variable `columns`, die aktuell die Gruppennamen und die zugehörigen Mitglieder enthält,
 
-* die Variable `site`, die den Namen der {CMK}-Instanz enthält
+* die Variable `site`, die den Namen der {CMK}-Instanz enthält.
 
 Mit dem `echo`-Befehl geben Sie den Sektions-Header aus.
 Da die Spalten der Tabelle mit dem Semikolon getrennt werden, legen Sie gleichzeitig mit dem Zusatz `sep(59)` fest, dass das Semikolon als Trennzeichen (_separator_) für die Daten in der Agentenausgabe genutzt wird.
-// TK2SP: Link in en ist: https://en.wikipedia.org/wiki/ASCII#Printable_characters
 59 steht für das link:https://de.wikipedia.org/wiki/American_Standard_Code_for_Information_Interchange#ASCII-Tabelle[ASCII^]-Zeichen Nummer 59, das Semikolon.
+// TK: Link in en ist: https://en.wikipedia.org/wiki/ASCII#Printable_characters
 Ohne diesen Zusatz würde als Standard das Leerzeichen (ASCII-Zeichen 32) als Trennzeichen verwendet werden.
 
 Um den `lq`-Befehl, der Ihnen als Instanzbenutzer zur Verfügung steht, auch in einem Skript nutzen zu können, das vom `root`-Benutzer ausgeführt wird, stellen Sie ein `su` voran.
 
-Eines ist noch sehr wichtig, sobald Sie die Datei erstellt haben:
-Machen Sie die Datei ausführbar.
+*Hinweis:* Es kann vorkommen, dass der Zugriff auf `lq` per `su` Probleme bereitet.
+Sie können alternativ als `root`-Benutzer auch direkt auf Livestatus in der Shell mit `printf` oder `echo -e` über einen Unix-Socket zugreifen.
+Im Artikel zu xref:livestatus#lql_shell[Livestatus] erfahren Sie, wie das geht.
+
+Eines ist noch sehr wichtig, sobald Sie die Datei erstellt haben.
+Machen Sie die Datei ausführbar:
 
 [{shell}]
 ----
@@ -303,7 +316,7 @@ check_mk;localhost
 ----
 
 Der dritte und letzte Test ist dann direkt von der {CMK}-Instanz aus.
-Nehmen Sie den xref:intro_setup_monitor#linux[Host ins Monitoring] auf (zum Beispiel als `localhost`), melden Sie sich als Instanzbenutzer am und rufen Sie dann die Agentendaten mit `cmk -d` ab:
+Nehmen Sie den xref:intro_setup_monitor#linux[Host ins Monitoring] auf (zum Beispiel als `localhost`), melden Sie sich als Instanzbenutzer an und rufen Sie dann die Agentendaten mit `cmk -d` ab:
 
 [{shell}]
 ----
@@ -317,10 +330,10 @@ Und was haben Sie dafür gemacht?
 Sie haben ein kurzes Skript mit dem Pfad `/usr/lib/check_mk_agent/plugins/myhostgroups` erzeugt und ausführbar gemacht.
 
 Alles was nun folgt, geschieht nur noch auf dem {CMK}-Server:
-Dort schreiben Sie das eigentliche Check-Plugin.
+Dort schreiben Sie das Check-Plugin.
 
 
-[#write_checkplugin]
+[#write_check_plugin]
 == Ein einfaches Check-Plugin schreiben
 
 Das Vorbereiten des Agenten ist zwar der komplizierteste Teil, aber nur die halbe Miete.
@@ -349,7 +362,8 @@ _Pflicht_ ist, dass die Datei mit `.py` endet, denn ab Version {v20} von {CMK} h
 
 Ein lauffähiges Grundgerüst, das Sie im Folgenden Schritt für Schritt weiter ausbauen werden, sieht so aus:
 
-[{shell}]
+.~/local/lib/check_mk/base/plugins/agent_based/myhostgroups.py
+[{python}]
 ----
 from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
 
@@ -409,9 +423,9 @@ In {CMK} steht daher statt der Rohdaten des Agentenplugins die folgende Datenstr
 [{python}]
 ----
 [
-  ['Hamburg', 'myhost11,myhost22,myhost33'],
-  ['Munich', 'myhost1,myhost2,myhost3'],
-  ['check_mk', 'localhost']
+    ['Hamburg', 'myhost11,myhost22,myhost33'],
+    ['Munich', 'myhost1,myhost2,myhost3'],
+    ['check_mk', 'localhost']
 ]
 ----
 
@@ -419,22 +433,22 @@ Es wird ein einziger langer Datensatz ausgelesen.
 Jede eckige Klammer enthält die Informationen zu einer Host-Gruppe:
 erst den Namen der Host-Gruppe, dann dahinter die zugehörigen Hosts.
 
-Diese Informationen können Sie zwar alle ansprechen, aber jeweils nur über ihre Position im Datensatz. Sie müssten also immer angeben, die wievielte eckige Klammer und den wievielten Inhalt innerhalb der jeweiligen Klammer Sie brauchen.
+Diese Informationen können Sie zwar alle ansprechen, aber jeweils nur über ihre Position im Datensatz.
+Sie müssten also immer angeben, die wievielte eckige Klammer und den wievielten Inhalt innerhalb der jeweiligen Klammer Sie brauchen.
 Bei größeren Datenmengen gestaltet sich dies komplex und es wird immer schwieriger, den Überblick zu behalten.
 
-An diesem Punkt bietet die Parse-Funktion durch ihre andere Struktur deutliche Vorteile. Durch sie wird der Code leichter lesbar, die Zugriffe werden performanter und Sie behalten viel einfacher den Überblick.
+An diesem Punkt bietet die Parse-Funktion durch die von ihr erzeugte andere Struktur deutliche Vorteile.
+Durch sie wird der Code leichter lesbar, die Zugriffe werden performanter und Sie behalten viel einfacher den Überblick.
 Sie transformiert die von Checkmk gelieferte Datenstruktur so, dass man jeden der einzelnen Werte wahlfrei durch einen Namen (oder Schlüssel) ansprechen kann und nicht darauf angewiesen ist, den Bereich (_array_) iterativ zu durchlaufen, um das zu finden, was man sucht:
 
 [{python}]
 ----
 {
-'Hamburg': {'members': 'myhost11,myhost22,myhost33'},
-'Munich': {'members': 'myhost1,myhost2,myhost3'},
-'check_mk': {'members': 'localhost'}
+    'Hamburg': {'members': 'myhost11,myhost22,myhost33'},
+    'Munich': {'members': 'myhost1,myhost2,myhost3'},
+    'check_mk': {'members': 'localhost'}
 }
 ----
-
-Diese Aufgabe übernimmt die Parse-Funktion.
 
 Konvention ist, dass die Parse-Funktion nach der Agentensektion benannt wird und mit `parse_` beginnt.
 Sie bekommt als einziges Argument `string_table`.
@@ -446,7 +460,7 @@ Es muss wirklich so heißen.
 ----
 def parse_myhostgroups(string_table):
     parsed = {}
-    
+        
     for line in string_table:
         parsed[line[0]] = {"members": line[1]}
         
@@ -455,11 +469,12 @@ def parse_myhostgroups(string_table):
 
 
 Mit `def` geben Sie in Python an, dass nachfolgend eine Funktion definiert wird.
-`parsed = {}` erzeugt das „Dictionary“ mit der verbesserten Datenstruktur.
-In unserem Beispiel bedeutet dies, dass jede Zeile Element für Element durchgegangen wird.
-Aus jeder Zeile wird die Host-Gruppe gefolgt von den Mitgliedern der Host-Gruppe genommen und zu einem Eintrag für das _Dictionary_ zusammengesetzt.
+`parsed = {}` erzeugt das _Dictionary_ mit der verbesserten Datenstruktur.
+In unserem Beispiel wird jede Zeile Element für Element durchgegangen.
+Aus jeder Zeile wird die Host-Gruppe gefolgt von den Mitgliedern der Host-Gruppe genommen und zu einem Eintrag für das Dictionary zusammengesetzt.
 
-Mit `return parsed` wird dann das _Dictionary_ zurückgegeben.
+Mit `return parsed` wird dann das Dictionary zurückgegeben.
+
 
 === Die Agentensektion registrieren
 
@@ -511,10 +526,10 @@ Für unser Check-Plugin sieht das dann also so aus:
 [{python}]
 ----
 register.check_plugin(
-    name="myhostgroups",
-    service_name="Host group check_mk",
-    discovery_function=discover_myhostgroups,
-    check_function=check_myhostgroups,
+    name = "myhostgroups",
+    service_name = "Host group check_mk",
+    discovery_function = discover_myhostgroups,
+    check_function = check_myhostgroups,
 )
 ----
 
@@ -537,10 +552,6 @@ Daher implementieren Sie folgende simple Logik:
 _Wenn_ die Agentensektion `myhostgroups` vorhanden ist, dann legen Sie auch einen passenden Service an.
 Dann erscheint dieser automatisch auf allen Hosts, auf denen Ihr Agentenplugin ausgerollt ist.
 
-Die Discovery-Funktion muss für jeden anzulegenden Service mittels `yield` ein Objekt vom Typ `Service` zurückgeben (nicht mit `return`).
-`yield` hat in Python die gleiche Aufgabe wie `return` – beide geben einen Wert an die aufrufende Funktion zurück. Der entscheidende Unterschied besteht darin, dass sich bei einem `yield` "gemerkt" wird, wie weit die Funktion in einer Liste/Tabelle etc. gekommen ist. Beim nächsten Aufruf wird _nach_ der letzten `yield`-Anweisung weiter gemacht - und nicht wieder am Anfang begonnen. Dadurch wird nicht nur der erste „Treffer“ in einer Tabelle ausgelesen (wie es beim `return` der Fall wäre), sondern sukzessive alle „Treffer“.
-
-
 Bei Check-Plugins, die pro Host nur einen Service erzeugen, benötigt man keine weiteren Angaben:
 
 [{python}]
@@ -548,6 +559,13 @@ Bei Check-Plugins, die pro Host nur einen Service erzeugen, benötigt man keine 
 def discover_myhostgroups(section):
     yield Service()
 ----
+
+Die Discovery-Funktion muss für jeden anzulegenden Service mittels `yield` ein Objekt vom Typ `Service` zurückgeben (nicht mit `return`).
+`yield` hat in Python die gleiche Aufgabe wie `return` – beide geben einen Wert an die aufrufende Funktion zurück.
+Der entscheidende Unterschied besteht darin, dass sich bei einem `yield` gemerkt wird, wie weit die Funktion in einer Liste/Tabelle etc. gekommen ist.
+Beim nächsten Aufruf wird _nach_ der letzten `yield`-Anweisung weiter gemacht - und nicht wieder am Anfang begonnen.
+Dadurch wird nicht nur der erste Treffer in einer Tabelle ausgelesen (wie es beim `return` der Fall wäre), sondern sukzessive alle Treffer.
+// TK: Ist im obigen Absatz “Tabelle” wirklich der korrekte Begriff? Ich würde ihn ersatzlos streichen.
 
 
 [#check_function]
@@ -707,21 +725,21 @@ Uns interessieren die folgenden:
 Anzahl der Hosts pro Gruppe (Spalte `num_hosts`), Anzahl der Hosts im Zustand {UP} (`num_hosts_up`), Anzahl der Services aller Hosts in der Gruppe (`num_services`) und Anzahl der Services im Zustand {OK} (`num_services_ok`).
 
 Jetzt müssen diese neuen Spalten nur noch vom Agenten geliefert werden.
-Das erreichen wir durch Erweiterung des im vorherigen Kapitel erstellten xref:command_in_agent[Agentenplugins.]
+Das erreichen wir durch Erweiterung des im vorherigen Kapitel erstellten xref:agentplugin[Agentenplugins.]
 
 Editieren Sie als root-Benutzer das Skript des Agentenplugins.
-Da das Skript die konfigurierbaren Werte bereits in Variablen gesteckt hat, reicht es aus, nur die mit `COLUMNS` beginnende Zeile zu ändern und dort die zusätzlichen vier Spalten einzutragen:
+Da das Skript die konfigurierbaren Werte bereits in Variablen gesteckt hat, reicht es aus, nur die mit `columns` beginnende Zeile zu ändern und dort die zusätzlichen vier Spalten einzutragen:
 
 ./usr/lib/check_mk_agent/plugins/myhostgroups
 [{file},highlight=3]
 ----
 #!/bin/bash
 
-COLUMNS="name members num_hosts num_hosts_up num_services num_services_ok"
-SITE="mysite"
+columns="name members num_hosts num_hosts_up num_services num_services_ok"
+site="mysite"
 
-echo "<<<my_hostgroups:sep(59)>>>"
-echo -e "GET hostgroups\nColumns: $COLUMNS" | /omd/sites/$SITE/bin/unixcat /omd/sites/$SITE/tmp/run/live
+echo '<<<myhostgroups:sep(59)>>>'
+su -${site} lq "GET hostgroups\nColumns: ${columns}"
 ----
 
 Führen Sie zur Kontrolle das Skript aus:
@@ -755,7 +773,7 @@ Die Parse-Funktion muss also fit gemacht werden, um auch die zusätzlichen vier 
 ----
 def parse_myhostgroups(string_table):
     parsed = {}
- 
+    
     for line in string_table:
         column_names = (
             "members",
@@ -773,7 +791,9 @@ Die markierten Zeilen zeigen, was in der neuen Parse-Funktion verändert wird.
 In der `for`-Schleife werden zunächst die zu verarbeitenden Spalten unter ihrem Namen als Variable `column_names` definiert.
 Anschließend wird aus der aktuellen Zeile ein Dictionary mit der Python-Funktion `zip` aufgebaut, die im Reißverschlussverfahren aus Spaltennamen und ausgelesenem Wert die Schlüssel-Wert-Paare erzeugt.
 // MFS: zip() kannte ich bislang nicht. Das hat aber einige Feinheiten, die hier erwähnt werden sollten: 1. Beide Eingaben könnon beliebig iterierbare Objekte sein, dennoch hielte ich es aus didaktischen Gründen für besser, statt eines Tupels ein Array zu verwenden, 2. Auf das Slicing des Arrays sollte verwiesen werden, 3. Hinweis, dass Casting vom zip Objekt nach dict nötig ist.
+// TK: Uff, das überfordert mich. Wenn zip so kompliziert ist, kann man das nicht anders = einfacher lösen? Kannst du das übernehmen?
 // MFS: Einrückungen der Leerzeilen
+// TK: Ich bin den Artikel durchgegangen. Sollte jetzt ok sein. Aber 4 Augen sehen mehr...
 
 Für die existierende xref:check_function[Check-Funktion] ist diese Erweiterung unkritisch, denn die Datenstruktur für die ersten beiden Spalten bleibt unverändert.
 Es werden nur zusätzliche Spalten bereitgestellt, die in der Check-Funktion (noch) gar nicht ausgewertet werden.
@@ -805,19 +825,20 @@ Sie muss dann aus den Agentendaten die für dieses Item relevanten Daten herausf
 
 Um dies praktisch auszuprobieren, werden wir für jede existierende Host-Gruppe einen eigenen Service erzeugen.
 
-Da das im xref:first_check_plugin[vorherigen Kapitel] erstellte Check-Plugin `myhostgroups` zur Überprüfung der Standardgruppe `check_mk` weiterhin funktionieren soll, bleibt dieses Check-Plugin so, wie es ist.
+Da das im xref:write_check_plugin[vorherigen Kapitel] erstellte Check-Plugin `myhostgroups` zur Überprüfung der Standardgruppe `check_mk` weiterhin funktionieren soll, bleibt dieses Check-Plugin so, wie es ist.
 Für die Erweiterung erstellen wir in der Datei `myhostgroups.py` ein neues Check-Plugin -- im ersten Schritt so wie xref:register_check_plug-in[zuvor] durch die Registrierung des Plugins:
 
 // MFS: Formatierung im Artikel konsistent
+// TK: siehe oben. Wenn Du noch was findest, bitte korrigieren.
 .~/local/lib/check_mk/base/plugins/agent_based/myhostgroups.py
 [{python}]
 ----
 register.check_plugin(
-    name="myhostgroups_advanced",
-    sections=["myhostgroups"],
-    service_name="Host group %s",
-    discovery_function=discover_myhostgroups_advanced,
-    check_function=check_myhostgroups_advanced,
+    name = "myhostgroups_advanced",
+    sections = ["myhostgroups"],
+    service_name = "Host group %s",
+    discovery_function = discover_myhostgroups_advanced,
+    check_function = check_myhostgroups_advanced,
 )
 ----
 
@@ -841,13 +862,11 @@ def discover_myhostgroups_advanced(section):
 Wie xref:discovery_function[zuvor] bekommt die Discovery-Funktion das Argument `section`.
 Mit einer Schleife werden die einzelnen Host-Gruppen durchlaufen.
 Uns interessieren alle Host-Gruppen -- mit Ausnahme von `check_mk`, denn um diese spezielle Host-Gruppe kümmert sich bereits das existierende Check-Plugin `myhostgroups`.
-Immer, wenn wir ein Item gefunden haben, geben wir das mit `yield` zurück, wobei ein Objekt vom Typ `Service` erzeugt wird, das den Host-Gruppennamen als Item bekommt.
-// MFS: den Host-Gruppennamen als Item übergeben bekommt
+Immer, wenn wir ein Item gefunden haben, geben wir das mit `yield` zurück, wobei ein Objekt vom Typ `Service` erzeugt wird, das den Host-Gruppennamen als Item übergeben bekommt.
 
 Wenn später der Host überwacht wird, dann wird die Check-Funktion für jeden Service -- und damit für jedes Item -- separat aufgerufen.
 Womit wir bereits bei der Definition der Check-Funktion für das neue Check-Plugin `myhostgroups_advanced` angekommen sind.
-Die Check-Funktion bekommt zusätzlich zur Sektion das Argument `item`.
-// MFS:  bekommt ... übergeben
+Die Check-Funktion bekommt zusätzlich zur Sektion das Argument `item` übergeben.
 Die erste Zeile der Funktion sieht dann so aus:
 
 [{python}]
@@ -866,13 +885,11 @@ def check_myhostgroups_advanced(item, section):
     if attr:
         yield Result(state=State.OK, summary=f"{attr['num_hosts']} hosts in this group: {attr['members']}")
 ----
-// MFS: Brauchen wir da noch ein "else" für leere Gruppen? Achso, kommt noch...
 
 Das Check-Ergebnis wird geliefert, indem wir ein Objekt der Klasse `Result` per `yield` zurückgeben.
 Dieses benötigt die Parameter `state` und `summary`.
-`state` legt den Zustand des Services fest (im Beispiel `OK`) und `summary` den Text, der in der [.guihint]#Summary# des Services angezeigt wird.
-// MFS: informativ, nicht informell...
-Er ist rein informell und wird von {CMK} nicht weiter ausgewertet.
+`state` legt den Zustand des Services fest (im Beispiel `OK`) und `summary` den Text, der in dem [.guihint]#Summary# des Services angezeigt wird.
+Er ist rein informativ und wird von {CMK} nicht weiter ausgewertet.
 Mehr dazu erfahren Sie im xref:summary_details[nächsten Abschnitt.]
 
 So weit, so gut.
@@ -916,7 +933,7 @@ Damit ist das neue Check-Plugin als Erweiterung des alten fertiggestellt.
 Das erweiterte link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/agent_plugin_advanced_myhostgroups[Agentenplugin^]
 und die erweiterte Datei für die link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins/check_plugin_advanced_myhostgroups_step01.py[Check-Plugins^]
 finden Sie wieder auf GitHub.
-Letztere enthält das einfache Check-Plugin `myhostgroups` aus dem xref:first_check_plugin[vorherigen Kapitel], die erweiterte Parse-Funktion und die Komponenten des neuen Check-Plugins `myhostgroups_advanced` mit der Registrierung, der Discovery-Funktion und der Check-Funktion.
+Letztere enthält das einfache Check-Plugin `myhostgroups` aus dem xref:write_check_plugin[vorherigen Kapitel], die erweiterte Parse-Funktion und die Komponenten des neuen Check-Plugins `myhostgroups_advanced` mit der Registrierung, der Discovery-Funktion und der Check-Funktion.
 Beachten Sie, dass die Funktionen immer vor dem Registrieren definiert werden müssen, damit es keine Fehler wegen nicht definierter Funktionsnamen gibt.
 
 Da das neue Check-Plugin `myhostgroups_advanced` neue Services zur Verfügung stellt, müssen Sie eine Service-Erkennung für dieses Check-Plugin durchführen und die Änderungen aktivieren, um die Services im Monitoring zu sehen:
@@ -938,19 +955,19 @@ Das sorgt dann immer für eine übersichtliche Tabellendarstellung ohne störend
 Daneben gibt es noch das Feld [.guihint]#Details,# in dem alle Details zum Zustand des Services angezeigt werden, wobei alle Informationen des Summary auch in den Details enthalten sind.
 Nach Anklicken des Services wird die Service-Seite geöffnet, in der neben vielen anderen auch die beiden Felder [.guihint]#Summary# und [.guihint]#Details# zu sehen sind.
 
-Beim Aufruf von `yield Result(...)` können Sie bestimmen, welche Informationen so wichtig sind, dass sie in der Summary angezeigt werden sollen, und bei welchen es genügt, dass diese in den Details erscheinen.
+Beim Aufruf von `yield Result(...)` können Sie bestimmen, welche Informationen so wichtig sind, dass sie im Summary angezeigt werden sollen, und bei welchen es genügt, dass diese in den Details erscheinen.
 
 In unserem Beispiel haben wir bisher immer einen Aufruf der folgenden Art verwendet:
 
 [{python}]
 ----
     yield Result(
-        state=State.OK,
-        summary=f"{attr['num_hosts']} hosts in this group: {attr['members']}"),
+        state = State.OK,
+        summary = f"{attr['num_hosts']} hosts in this group: {attr['members']}",
     )
 ----
 
-Dieser führt dazu, dass der als `summary` festgelegte Text immer in der [.guihint]#Summary# erscheint -- und zusätzlich auch in den [.guihint]#Details#.
+Dieser führt dazu, dass der als `summary` festgelegte Text immer im [.guihint]#Summary# erscheint -- und zusätzlich auch in den [.guihint]#Details#.
 Dies sollten Sie also nur für wichtige Informationen verwenden.
 Enthält eine Host-Gruppe viele Hosts, kann die Liste sehr lang werden -- länger als die empfohlene Länge von 60 Zeichen.
 Ist eine Information eher untergeordnet, so können Sie mit `details` festlegen, dass der Text _nur_ in den Details erscheint:
@@ -959,28 +976,27 @@ Ist eine Information eher untergeordnet, so können Sie mit `details` festlegen,
 [{python}]
 ----
     yield Result(
-        state=State.OK,
-        summary=f"{attr['num_hosts']} hosts in this group",
-        details=f"{attr['num_hosts']} hosts in this group: {attr['members']}",
+        state = State.OK,
+        summary = f"{attr['num_hosts']} hosts in this group",
+        details = f"{attr['num_hosts']} hosts in this group: {attr['members']}",
     )
 ----
 
 Im obigen Beispiel wird die Liste der Hosts daher nur noch in den [.guihint]#Details# angezeigt.
-In der [.guihint]#Summary# steht dann nur die Anzahl der Hosts in der Gruppe:
+Im [.guihint]#Summary# steht dann nur die Anzahl der Hosts in der Gruppe:
 
 .Unterschiedliche Inhalte für Summary und Details im Monitoring
-image::devel_cpi_service_summary_details.png[alt="Die Summary und Details in den Service-Details."]
+image::devel_cpi_service_summary_details.png[alt="Summary und Details in den Service-Details."]
 
 [#notice]
 Es gibt neben `summary` und `details` noch einen dritten Parameter.
-Mit `notice` bestimmen Sie, dass ein Text für einen Service im Zustand {OK} _nur_ in den Details angezeigt wird -- aber zusätzlich in der Summary für alle anderen Zustände.
-Somit wird dann aus der Summary sofort klar, warum der Service nicht {OK} ist.
+Mit `notice` bestimmen Sie, dass ein Text für einen Service im Zustand {OK} _nur_ in den Details angezeigt wird -- aber zusätzlich im Summary für alle anderen Zustände.
+Somit wird dann aus dem Summary sofort klar, warum der Service nicht {OK} ist.
 Der Parameter `notice` ist nicht besonders sinnvoll, wenn Texte fest an Zustände gebunden sind, wie bisher in unserem Beispiel.
-// Das ändert sich im nächsten Kapitel, in dem es um mehrere Teilresultate pro Service geht.
 
 Zusammengefasst bedeutet das:
 
-* Der Gesamttext für die Summary sollte bei Services, die {OK} sind, nicht länger als 60 Zeichen sein.
+* Der Gesamttext für das Summary sollte bei Services, die {OK} sind, nicht länger als 60 Zeichen sein.
 * Verwenden Sie immer entweder `summary` oder `notice` -- nicht beides und nicht keines davon.
 * Fügen Sie bei Bedarf `details` hinzu, wenn der Text für die Details ein alternativer sein soll.
 
@@ -1025,9 +1041,9 @@ Auch das bisher einzig existierende Resultat bleibt (fast) unverändert:
 [{python}]
 ----
     yield Result(
-        state=State.OK,
-        summary=f"{num_hosts} hosts in this group",
-        details=f"{num_hosts} hosts in this group: {members}"
+        state = State.OK,
+        summary = f"{num_hosts} hosts in this group",
+        details = f"{num_hosts} hosts in this group: {members}"
     )
 ----
 
@@ -1038,57 +1054,41 @@ Nun zum eigentlichen Kern der Erweiterung, der Definition eines Resultats, das d
 Dabei gilt die Konvention, dass der Check bereits beim _Erreichen_ der Schwelle -- und nicht erst beim Überschreiten -- auf {WARN} bzw. {CRIT} geht.
 Für den Vergleich eines ermittelten Werts mit Schwellwerten stellt die Check-API die Hilfsfunktion `check_levels` bereit.
 
-// MFS: Achtung: Wir sollten nie davon ausgehen, dass int / int = float ist, das ist in Python zufälligerweise so, da wir uns aber keinen Kopf machen wollen, sollte die Ermittlung des Prozentwertes so aussehen:
-// hosts_up_perc = 100 * num_hosts_up / num_hosts
-////
-mattias@barium:~$ python3
-Python 3.10.12 (main, Jun 11 2023, 05:26:28) [GCC 11.4.0] on linux
-Type "help", "copyright", "credits" or "license" for more information.
->>> 80 / 100
-0.8
->>> 
-mattias@barium:~$ irb
-irb(main):001:0> 80 / 100
-=> 0
-irb(main):002:0>
-////
 [{python}]
 ----
-    hosts_up_perc = num_hosts_up / num_hosts * 100
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), label="UP hosts", notice_only=True)
+    hosts_up_perc = 100 * num_hosts_up / num_hosts
+    yield from check_levels(hosts_up_perc, levels_lower=(90.0, 80.0), label="UP hosts", notice_only=True)
 ----
 
 In der ersten Zeile wird aus Gesamtzahl und Zahl der Hosts im Zustand {UP} der Prozentsatz berechnet und in der Variablen `hosts_up_perc` gespeichert.
 
-In der zweiten Zeile wird dann das Ergebnis der Funktion `check_levels` zurückgegeben.
+In der zweiten Zeile wird dann das Ergebnis der Funktion `check_levels` als Objekt vom Typ `Result` zurückgegeben.
 Die Funktion wird gefüttert mit dem gerade berechneten Prozentsatz als Wert (`hosts_up_perc`), den beiden unteren Schwellwerten (`levels_lower`), einer Bezeichnung, die der Ausgabe vorangestellt wird (`label`), und schließlich mit `notice_only=True`.
-// MFS: Und wo kommt die Funktion check_levels her? Aus dem API oder müssen wir die selbst noch schreiben?
-// MFS: Hier ist es zudem sinnvoll, zu schreiben, dass die Funktion ein Objekt vom Typ Result zurückliefert.
-// MFS: Bei Vergleichen tendiere ich dazu, nur die selben Datentypen zu vergleichen, also entweder den errechneten Prozentsatz nach int zu casten oder im Schwellwerttupel explizit als float anzugeben: levels_lower=(90.0, 80.0)
 
 Der letzte Parameter nutzt den im xref:notice[vorherigen Abschnitt] für das Objekt `Ŗesult()` bereits vorgestellten Parameter `notice`.
-Mit `notice_only=True` legen Sie fest, dass der Text für den Service nur dann in der [.guihint]#Summary# angezeigt wird, wenn der Zustand nicht {OK} ist.
-Allerdings werden Teilergebnisse, die zu einem {WARN} oder {CRIT} führen, sowieso _immer_ in der Summary sichtbar werden -- unabhängig davon, welchen Wert `notice_only` hat.
+Mit `notice_only=True` legen Sie fest, dass der Text für den Service nur dann im [.guihint]#Summary# angezeigt wird, wenn der Zustand nicht {OK} ist.
+Allerdings werden Teilergebnisse, die zu einem {WARN} oder {CRIT} führen, sowieso _immer_ im Summary sichtbar werden -- unabhängig davon, welchen Wert `notice_only` hat.
 // TK: Womit sich die Frage stellt, ob notice_only hier überhaupt erwähnt werden soll 
 
 Schließlich definieren wir analog zum zweiten das dritte Resultat, das den Prozentsatz der Services im Zustand {OK} auswertet:
 
-// MFS: s.o.
 [{python}]
 ----
-    services_ok_perc = num_services_ok / num_services * 100
-    yield from check_levels(services_ok_perc, levels_lower=(90, 80), label="OK services", notice_only=True)
+    services_ok_perc = 100 * num_services_ok / num_services
+    yield from check_levels(services_ok_perc, levels_lower=(90.0, 80.0), label="OK services", notice_only=True)
 ----
 
 Damit ist die Check-Funktion komplett.
 
 Der Service für eine Host-Gruppe wertet jetzt drei Resultate aus und zeigt aus diesen den schlechtesten Zustand im Monitoring an, wie im folgenden Beispiel:
 
-.Die Summary zeigt den Text zum kritischen Zustand
-image::devel_cpi_service_partial_results.png[alt="Die Summary zeigt den Text zum kritischen Zustand."]
+.Das Summary zeigt den Text zum kritischen Zustand
+image::devel_cpi_service_partial_results.png[alt="Das Summary zeigt den Text zum kritischen Zustand."]
 
 // TK: Hier auf den Performance-Gewinn bei mehreren Services durch die Parse-Funktion hinweisen?
 // MFS: Ja!
+// TK: Kannst Du das schreiben? Ich bin nicht sicher, ob ich das richtig verstanden habe.
+
 
 [#metrics]
 === Metriken
@@ -1109,19 +1109,20 @@ Pro Metrik wird automatisch ein Graph erzeugt.
 Metriken werden von der Check-Funktion ermittelt und als zusätzliches Ergebnis zurückgegeben.
 Am einfachsten ist es, der Funktion `check_levels()` im Aufruf die Metrikinformationen mitzugeben.
 
-Zur Erinnerung folgt die Zeile mit dem Funktionsaufruf von `check_levels()` aus dem xref:partial_results[vorherigen Kapitel:]
+Zur Erinnerung folgt die Zeile mit dem Funktionsaufruf von `check_levels()` aus dem xref:partial_results[vorherigen Abschnitt:]
 
 [{python}]
 ----
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), label="UP hosts", notice_only=True)
+    yield from check_levels(hosts_up_perc, levels_lower=(90.0, 80.0), label="UP hosts", notice_only=True)
 ----
 
 Die beiden neuen Argumente für die Metrik sind `metric_name` und `boundaries`:
 // MFS: und hier noch der Hinweis, dass check_levels nun zwei Objekte yieldet: Service und Metric.
+// TK: Hab einen Satz weiter unten hinzugefügt: Durch diese Erweiterung ...
 
 [{python}]
 ----
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
+    yield from check_levels(hosts_up_perc, levels_lower=(90.0, 80.0), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
 ----
 
 Wir sind faul und nehmen als Namen der Metrik den Variablennamen, in dem der Prozentsatz als Wert gespeichert ist.
@@ -1136,16 +1137,18 @@ Bei einem Prozentsatz sind die Grenzen mit `0` und `100` nicht allzu schwer zu b
 Es sind auch Gleitkommazahlen (_float_) erlaubt, aber keine Strings.
 Falls nur eine Grenze des Wertebereichs definiert ist, tragen Sie für die andere einfach `None` ein, also zum Beispiel `boundaries=(0, None)`.
 
+Durch diese Erweiterung gibt die Funktion `check_levels` nun per `yield` zusätzlich zum `Result` auch noch ein Objekt vom Typ `Metric` zurück.
+
 Analog können Sie jetzt auch die Metrik `services_ok_perc` definieren.
 Die letzten Zeilen der Check-Funktion sehen dann so aus:
 
 [{python}]
 ----
-    hosts_up_perc = num_hosts_up / num_hosts * 100
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
+    hosts_up_perc = 100 * num_hosts_up / num_hosts
+    yield from check_levels(hosts_up_perc, levels_lower=(90.0, 80.0), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
 
-    services_ok_perc = num_services_ok / num_services * 100
-    yield from check_levels(services_ok_perc, levels_lower=(90, 80), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
+    services_ok_perc = 100 * num_services_ok / num_services
+    yield from check_levels(services_ok_perc, levels_lower=(90.0, 80.0), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
 ----
 
 Mit der so erweiterten Check-Funktion sind die beiden Graphen im Monitoring sichtbar.
@@ -1160,6 +1163,10 @@ Wenn Sie mit der Maus auf das Symbol zeigen, werden die Graphen als Vorschau ein
     yield Metric(name="num_services_ok", value=num_services_ok)
 ////
 // MFS: Und erst danach check_levels erweitern...
+// TK: Ich find das didaktisch richtig im Kontext des Beispiels:
+// TK: Wir haben mit check_levels aufgehört und nehmen das jetzt sofort wieder auf, wenns um Metriken geht.
+// TK: Dass man Metriken auch ohne Funktion zurückgeben kann, wird ja nicht verschwiegen, kommt nur später.
+// TK: Man kann es natürlich auch so machen, wie Du vorschlägst, dafür müsste man aber alles umschreiben und auch den Screenshot neu ziehen.
 
 .Die Namen der Metriken werden als Titel der Graphen verwendet
 image::devel_cpi_service_graphs.png[alt="Die Service-Übersicht mit 2 Graphen als Vorschau."]
@@ -1184,8 +1191,6 @@ Zusätzlich gibt es noch zwei optionale Argumente: `levels` für die Schwellwert
 *Wichtig:* Die Angabe von `levels` dient hier lediglich als Information für die Darstellung des Graphen.
 Im Graphen werden die Schwellwerte üblicherweise als gelbe und rote Linien eingezeichnet.
 Für die _Überprüfung_ ist die Funktion `check_levels` mit den dort festgelegten Schwellwerten verantwortlich.
-// TK: Nicht (mehr) erwähnt, dass man für Anzeige andere Schwellwerte als für die Zustandsberechnung nehmen kann.
-// MFS: Sollte an der Stelle bereits klar sein.
 
 Wir nutzen nun die Möglichkeit, nicht nur die beiden berechneten Werte sondern mit `Metric()` _alle_ Messwerte als Metriken zu definieren
 -- in unserem Beispiel also die vier Messwerte aus der Host-Gruppentabelle.
@@ -1194,12 +1199,12 @@ Die vier neuen Zeilen komplettieren die Erweiterung der Check-Funktion für Metr
 
 [{python}]
 ----
-    hosts_up_perc = num_hosts_up / num_hosts * 100
-    yield from check_levels(hosts_up_perc, levels_lower=(90, 80), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
-
-    services_ok_perc = num_services_ok / num_services * 100
-    yield from check_levels(services_ok_perc, levels_lower=(90, 80), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
-
+    hosts_up_perc = 100 * num_hosts_up / num_hosts
+    yield from check_levels(hosts_up_perc, levels_lower=(90.0, 80.0), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
+    
+    services_ok_perc = 100 * num_services_ok / num_services
+    yield from check_levels(services_ok_perc, levels_lower=(90.0, 80.0), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
+    
     yield Metric(name="num_hosts", value=num_hosts)
     yield Metric(name="num_hosts_up", value=num_hosts_up)
     yield Metric(name="num_services", value=num_services)
@@ -1216,13 +1221,10 @@ finden Sie wieder die gesamte Check-Funktion.
 
 [#rule_set]
 === Check-Parameter für Regelsätze
-// TK: In dem (alten) Kapitel wird fast nur von Check geschrieben und nicht von Check-Plugin.
-// TK: Ist Check die Abkürzung für Check-Funktion? („Falls Ihr Check kein Item hat...“) oder Check-Plugin oder mal so, mal so oder doch ganz anders?
-// MFS: In der Regel wird Check-Funktion gemeint. Wo mehr Präzision erforderlich ist, weise ich darauf hin.
-// TK: Bitte sorgfältig den Code reviewen und auch die verwendeten Namen für Variablen & Co - die sind evtl. nicht so passend, wie sie sein sollten.
 // TK: Nach Fertigstellung hab ich gesehen, dass es ja auch noch eine ValueSpec für Prozentsätze gibt. Muss das Beispiel wohl nochmal umgeschrieben werden?
 // TK: Muss hier erwähnt werden, dass Regelsätze (wie auch später die Metriken für Experten) nicht von der Check-API abgedeckt sind?
 // MFS: Ja, hier muss darauf verwiesen werden, dass wir das GUI API verwenden.
+// TK: Hinweis aufgenommen am Ende der Einleitung (auch im Metrik-Kapitel weiter unten). 
 
 Im erweiterten Check-Plugin `myhostgroups_advanced` haben wir den Zustand {WARN} erzeugt, wenn nur 90{nbsp}% der Hosts {UP} sind, und {CRIT} bei 80{nbsp}%.
 Dabei sind die Zahlen `90` und `80` direkt in der Check-Funktion fest einprogrammiert oder, wie Programmierer sagen würden, _hart codiert._
@@ -1235,6 +1237,8 @@ Dazu benötigen wir einen xref:glossar#rule_set[Regelsatz.]
 Falls es in {CMK} bereits einen passenden Regelsatz gibt, dann können Sie diesen verwenden.
 Da Check-Funktion und Regelsatz zusammenpassen müssen, wird dies in aller Regel nicht der Fall sein.
 Weiter unten finden Sie mehr Informationen zu xref:reuse_ruleset[vorhandenen Regelsätzen.]
+
+*Hinweis:* Beachten Sie, dass die in diesem Abschnitt vorgestellten Beispiele _nicht_ durch die Check-API abgedeckt sind.
 
 
 [#new_ruleset]
@@ -1265,8 +1269,7 @@ findet solche Texte und übernimmt sie in die Liste der zu übersetzenden Texte 
 // TK: Das macht CMK für *mein* Plugin? Und wo stehen die Texte dann?
 // MFS: Kannst Du im Prinzip ausprobieren: Wenn Du einen englischen Text verwendest, der schon in Weblate übersetzt ist, erhältst Du in der GUI den deutschen. Also das Beispiel mit einem Text zeigen, der in Weblate ist.
 // MFS: Mit neuen Plugins gehn das natürlich erst, wenn diese Teil von Checkmk geworden sind.
-Falls Sie den Check nur für sich selbst bauen, können Sie darauf auch verzichten und brauchen diesen Importbefehl nicht.
-// MFS: Import Statement...
+Falls Sie den Check nur für sich selbst bauen, können Sie darauf und damit auch auf die `import`-Zeile verzichten
 
 Als nächstes importieren Sie sogenannte _ValueSpecs._
 // TK: Sind ValueSpecs eigentlich ein CMK-Ding?
@@ -1284,14 +1287,13 @@ from cmk.gui.valuespec import (
 )
 ----
 
-Das `Dictionary` benötigen Sie auf jeden Fall, denn seit {CMK}-Version {v20} müssen Check-Parameter Python-Dictionaries sein.
-// TK: Wohl präziser: mit der neuen Check-API statt {CMK}-Version {v20}
-// MFS: Vielleicht: ...werden Check-Parameter in Python-Dictionaries gespeichert...
+Das `Dictionary` benötigen Sie auf jeden Fall, denn seit {CMK}-Version {v20} werden Check-Parameter in Python-Dictionaries gespeichert.
 `Integer` ist für die Eingabe einer Zahl ohne Kommastellen verantwortlich, `TextInput` für einen Unicode-Text und `Tuple` für eine geordnete, eindimensionale Menge von Objekten.
 
 Als nächstes werden noch Symbole importiert, die beim Registrieren benötigt werden:
 // TK: Symbole? Ist das ein Python-Spezialding? Ich dachte, man kann nur Klassen und Funktionen importieren?
 // MFS: Das hat jemand geschrieben, der sonst eher C programmiert. "Klassen und Funktionen" ist besser.
+// TK: Und was importiere ich da jetzt gleich? rulespec_registry + CheckParameterRulespecWithItem sind Funktionen. Was ist RulespecGroupCheckParametersApplications?
 
 [{python}]
 ----
@@ -1348,16 +1350,9 @@ def _parameter_valuespec_myhostgroups_advanced():
     )
 ----
 
-////
-TK: Ursprünglich wollte ich zuerst einfach loslegen und für hosts_up zwei unterschiedliche Werte definieren (und erst anschließend das Tupel einführen), etwa so:
-        elements=[
-            ("hosts_up_lower_warn", Integer(title=_("Warning if this percentage of hosts is UP"))),
-            ("hosts_up_lower_crit", Integer(title=_("Critical if this percentage of hosts is UP"))),
-        ],
-Aber das hätte das eh schon sehr lange Kapitel noch länger gemacht...
-////
-
 // MFS: Sollen wir hier auch noch default_value zeigen? Die dienen zum Vorausfüllen der Formularfelder:
+// TK: Sehr gut - aaaber: Die haben dann nix mit den check_default_parameters von unten zu tun, oder? Die muss man dann manuell konsistent halten?
+// TK: Und der Screenshot muss auch neu gezogen werden...
 ////
 def _parameter_valuespec_eset_license_levels():
     return Dictionary(
@@ -1384,6 +1379,7 @@ Innerhalb dessen legen Sie mit `elements=[]` die Liste der Parameter an, im Beis
 Beide Parameter werden jeweils durch ein _Tupel_ von zwei Werten für die {CRIT} und {WARN} Schwellwerte definiert.
 Alle Schwellwerte sollen Ganzzahlen sein, also verwenden wir hier `Integer`.
 // MFS: An das oben gesagte denken: Wenn hier Integer verwendet wird, sollte auch oben Integer verwendet werden. Gut möglich, dass unsere Hilfsfunktionen, die Metric und Result yielden, irgendwann nur noch dieselben Datentypen vergleichen.
+// TK: Jetzt habe ich oben aber schon die ganzen Schwellwerte auf float geändert. Heisst das, hier muss Float() statt Integer() verwendet werden?
 
 Zu guter Letzt registrieren wir jetzt mithilfe der importierten und selbst definierten Dinge den neuen Regelsatz.
 Dazu gibt es die Funktion `rulespec_registry.register()`:
@@ -1392,12 +1388,12 @@ Dazu gibt es die Funktion `rulespec_registry.register()`:
 ----
 rulespec_registry.register(
     CheckParameterRulespecWithItem(
-        check_group_name="myhostgroups_advanced",
-        group=RulespecGroupCheckParametersApplications,
-        match_type="dict",
-        item_spec=_item_valuespec_myhostgroups_advanced,
-        parameter_valuespec=_parameter_valuespec_myhostgroups_advanced,
-        title=lambda: _("Host group status"),
+        check_group_name = "myhostgroups_advanced",
+        group = RulespecGroupCheckParametersApplications,
+        match_type = "dict",
+        item_spec = _item_valuespec_myhostgroups_advanced,
+        parameter_valuespec = _parameter_valuespec_myhostgroups_advanced,
+        title = lambda: _("Host group status"),
     )
 )
 ----
@@ -1407,14 +1403,12 @@ Dazu die folgenden Erklärungen:
 * Falls Ihr Check kein Item verwendet, lautet die innere Funktion `CheckParameterRulespecWithoutItem`.
 Die Zeile `item_spec` entfällt dann.
 
-* Der `check_group_name` stellt die Verbindung zu den Check-Plugins her, welche diesen Regelsatz verwenden wollen.
-// TK: Ich bin unsicher: check_group_name legt hier doch zuerst einmal den Namen des Regelsatzes fest, oder?
-// MFS: Ja, der Variablenname ist doof gewählt.
-// TK: Ein Check-Plugin, das diesen Regelsatz verwenden will, muss beim Registrieren diesen Namen als check_ruleset_name verwenden. Richtig?
-// MFS: Exakt.
-Er darf auf keinen Fall identisch sein mit einem bereits existierenden Regelsatz, weil dieser damit überschrieben würde.
+* Der `check_group_name` als Name des Regelsatzes stellt die Verbindung zu den Check-Plugins her.
+Ein Check-Plugin, das diesen Regelsatz verwenden will, muss beim Registrieren diesen Namen als `check_ruleset_name` verwenden.
+Der Name darf auf keinen Fall identisch sein mit einem bereits existierenden Regelsatz, weil dieser damit überschrieben würde.
 // TK: Ja super. Und wie find ich das wieder raus?
 // MFS: Das ist einfach ein Problem, das Checkmk hat – es gibt keine saubere Trennung der Namensräume. Hier kann man eigentlich nur darauf verweisen, dass man für eigene Rulespecs die Prefixes vendor_product nehmen sollte. Eine Liste der von uns selbst verwendeten Rulespecs gibt es meines Wissens nicht. Allerdings müsste die Entwicklung eine haben oder aus dem Code erzeugen können. Auf jeden Fall auf dem Schirm behalten, zumindest leicht wiederverwendbare müssen identifiziert und erklärt werden.
+Um dieser Gefahr aus dem Weg zu gehen, verwenden Sie am besten im Namen einen Präfix.
 
 * Die `group` legt fest, wo im Setup der Regelsatz auftauchen soll.
 Mit dem im Beispiel gewählten Wert finden Sie ihn unter [.guihint]#Setup > Services > Service monitoring rules# im ersten Kasten [.guihint]#Applications, Processes & Services.#
@@ -1424,7 +1418,6 @@ Dort finden Sie auch Beispiele, wie Sie eine eigene neue Gruppe anlegen können.
 // MFS: Ja, nur Checkparameters. Andere Rulespecs sind für weitere interne Verwendung, die nicht Scope dieses Artikels ist.
 
 * Der `match_type` ist immer `"dict"`.
-// In älteren {CMK}-Versionen gab es auch Parameterregeln mit anderen Typen.
 
 * Als `item_spec` und `parameter_valuespec` geben Sie die Namen der beiden zuvor erstellten Funktionen ein.
 
@@ -1438,6 +1431,7 @@ Der Titel wird aber nicht direkt als Text, sondern als ausführbare Funktion ang
 Wenn Sie die Datei für den Regelsatz angelegt haben, sollten Sie ausprobieren, ob alles soweit funktioniert -- noch ohne Verbindung zum Check-Plugin.
 Dazu müssen Sie zuerst den Apache der Instanz neu starten, damit die neue Datei gelesen wird.
 // MFS: Vielleicht hier darauf hinweisen, dass wir uns jetzt ja in der GUI und damit auf einer anderen Ebene als vorher (Monitoringkern) befinden?
+// MFS: Wirkt sich doch nicht aus, oder? Um die Änderungen testen zu können, muss ich wie gehabt den Apache neustarten. Oder hab ich was falsch verstanden?
 Das macht der Befehl:
 
 [{shell}]
@@ -1454,6 +1448,7 @@ Mit der Suchfunktion im Setup-Menü finden Sie den Regelsatz auch -- aber erst n
 ----
 // TK: Kann man eigentlich mit omd 2 Services in einem Befehl starten?
 // MFS: Ich mache immer ein omd restart – also ganze Instanz. Gerade, wenn man immer GUI-Code und Check-Code miteinander editiert, macht das vom Zeitbedarf keinen Unterschied mehr.
+// TK: Ok, hab jetzt aber auf omd restart als Abkürzung verzichtet.
 
 Der soeben definierte Regelsatz sieht in der GUI so aus:
 
@@ -1476,16 +1471,20 @@ Damit die Regel zum Greifen kommt, müssen wir dem Check-Plugin erlauben, Check-
 Dazu fügen wir zwei neue Zeilen in die Registrierungsfunktion ein:
 
 // MFS: Wieder konsistente Formatierung des Codes, name = "myhostgroups_advanced", ...
+// TK: hier: done, sonst auch (hoffentlich)
+
 [{python},highlight=7-8]
+----
 register.check_plugin(
-    name="myhostgroups_advanced",
-    sections=["myhostgroups"],
-    service_name="Host group %s",
-    discovery_function=discover_myhostgroups_advanced,
-    check_function=check_myhostgroups_advanced,
+    name = "myhostgroups_advanced",
+    sections = ["myhostgroups"],
+    service_name = "Host group %s",
+    discovery_function = discover_myhostgroups_advanced,
+    check_function = check_myhostgroups_advanced,
     check_default_parameters = {},
-    check_ruleset_name="myhostgroups_advanced",
+    check_ruleset_name = "myhostgroups_advanced",
 )
+----
 
 Mit dem Eintrag `check_default_parameters` können Sie die Standardwerte setzen, die gelten, solange noch keine Regel angelegt ist.
 Bei der Registrierung muss diese Zeile unbedingt vorhanden sein.
@@ -1520,6 +1519,7 @@ Bei der Ausführung des Check-Plugins sehen die beiden ausgedruckten Zeilen (fü
 Parameters({'hosts_up_lower': (70, 60), 'services_ok_lower': (75, 65)})
 Parameters({'hosts_up_lower': (70, 60), 'services_ok_lower': (75, 65)})
 ----
+// TK: Die Beispielausgaben sehen dann mit Float wohl auch anders aus.
 
 *Wichtig:* Wenn alles fertig ist und funktioniert, entfernen Sie unbedingt die `print`-Befehle wieder.
 Diese können die interne Kommunikation von {CMK} durcheinanderbringen.
@@ -1536,13 +1536,12 @@ def check_myhostgroups_advanced(item, params, section):
 
 Weiter unten in der Check-Funktion werden dann die bisher hart kodierten Schwellwerte `(90, 80)` durch die Variablen `hosts_up_lower` und `services_ok_lower` ersetzt:
 
-// MFS: Hinweise zur Division siehe oben.
 [{python}]
 ----
-    hosts_up_perc = num_hosts_up / num_hosts * 100
+    hosts_up_perc = 100 * num_hosts_up / num_hosts
     yield from check_levels(hosts_up_perc, levels_lower=(hosts_up_lower), metric_name="hosts_up_perc", label="UP hosts", boundaries=(0, 100), notice_only=True)
-
-    services_ok_perc = num_services_ok / num_services * 100
+    
+    services_ok_perc = 100 * num_services_ok / num_services
     yield from check_levels(services_ok_perc, levels_lower=(services_ok_lower), metric_name="services_ok_perc", label="OK services", boundaries=(0, 100), notice_only=True)
 ----
 
@@ -1552,19 +1551,21 @@ Da die Default-Parameter des Check-Plugins nicht befüllt sind, wird das Plugin 
 
 Dieses Problem kann aber behoben werden, wenn bei der Registrierung die Standardwerte gesetzt sind:
 
-// MFS: Hier ist noch "Foobar Sector %s" drin...
-[{python},highlight=6]
+[{python},highlight=7]
 ----
 register.check_plugin(
-    name = "foobar",
-    service_name = "Foobar Sector %s",
-    discovery_function = discover_foobar,
-    check_function = check_foobar,
-    check_default_parameters = {"hosts_up_lower": (90, 80), "services_ok_lower": (90, 80)},
-    check_ruleset_name = "foobar",
+    name = "myhostgroups_advanced",
+    sections = ["myhostgroups"],
+    service_name = "Host group %s",
+    discovery_function = discover_myhostgroups_advanced,
+    check_function = check_myhostgroups_advanced,
+    check_default_parameters = {"hosts_up_lower": (90.0, 80.0), "services_ok_lower": (90.0, 80.0)},
+    check_ruleset_name = "myhostgroups_advanced",
 )
 ----
+
 // MFS: Der Hinweis ist sehr gut. Falls wir oben die default_values zeigen, wäre noch sinnvoll darauf zu verweisen, dass diese mit check_default_parameters synchron gehalten werden sollten, Checkmk hat dafür keinen Automatismus.
+// TK: Frage von oben damit beantwortet :-)
 
 Sie sollten Standardwerte immer auf diese Weise übergeben (und den Fall fehlender Parameter nicht im Check-Plugin abfangen), da diese Standardwerte auch in der Setup-Oberfläche angezeigt werden können.
 Dazu gibt es zum Beispiel bei der Service-Erkennung eines Hosts, auf der Seite [.guihint]#Services of host#, im Menü [.guihint]#Display# den Eintrag [.guihint]#Show check parameters.#
@@ -1592,12 +1593,12 @@ Diese deklariert einen Regelsatz mit folgendem Abschnitt:
 ----
 rulespec_registry.register(
     CheckParameterRulespecWithItem(
-        check_group_name="memory_simple",
-        group=RulespecGroupCheckParametersOperatingSystem,
-        item_spec=_item_spec_memory_simple,
-        match_type="dict",
-        parameter_valuespec=_parameter_valuespec_memory_simple,
-        title=lambda: _("Main memory usage of simple devices"),
+        check_group_name = "memory_simple",
+        group = RulespecGroupCheckParametersOperatingSystem,
+        item_spec = _item_spec_memory_simple,
+        match_type = "dict",
+        parameter_valuespec = _parameter_valuespec_memory_simple,
+        title = lambda: _("Main memory usage of simple devices"),
     )
 )
 ----
@@ -1613,389 +1614,12 @@ register.check_plugin(
     service_name = "Foobar %s",
     discovery_function = discover_foobar,
     check_function = check_foobar,
-    check_ruleset_name="memory_simple",
-    check_default_parameters={},
+    check_ruleset_name = "memory_simple",
+    check_default_parameters = {},
 )
 ----
 
 Notwendig ist auch hier die Definition von Standardwerten über das Schlüsselwort `check_default_parameters`.
-
-
-[#snmp]
-== Ein Check-Plugin für SNMP schreiben
-// TK: alter Inhalt aus: 8. SNMP-basierte Checks
-
-////
-[#snmp]
-== SNMP-basierte Checks
-
-=== Grundsätzliches
-
-Das Entwickeln von Checks, die mit SNMP arbeiten, läuft sehr ähnlich zu den
-agentenbasierten, nur dass Sie hier noch angeben müssen, welche SNMP-Bereiche
-(OIDs) der Check benötigt. Falls Sie noch keine Erfahrung mit SNMP haben,
-so empfehlen wir Ihnen an dieser Stelle als Vorbereitung unbedingt den
-Artikel über das xref:snmp#[Monitoring via SNMP].
-
-Der Ablauf der Discovery und des Checks via SNMP ist etwas anders als beim
-normalen Agenten. Denn anders also dort -- wo der Agent von sich aus alle
-interessanten Informationen sendet -- müssen wir bei SNMP selbst genau
-sagen, welche Datenbereiche wir benötigen. Ein Komplettabzug aller Daten
-wäre zwar theoretisch möglich (via SNMP-Walk), dauert aber bei schnellen
-Geräten eher im Bereich von Minuten und bei komplexen Switches gern auch
-über eine Stunde. Daher scheidet das beim Checken und sogar auch bei der
-Discovery aus. {CMK} geht deswegen etwas zielgerichteter vor.
-
-==== SNMP-Detection
-
-Die Serviceerkennung teilt sich in zwei Phasen auf. Zunächst geschieht die
-_SNMP-Detection_. Diese ermittelt, welche Plugins
-denn überhaupt auf dem jeweiligen Gerät interessant sind. Dazu werden einige
-wenige SNMP-OIDs abgerufen -- und zwar einzelne, ohne Walk.  Die wichtigste
-davon ist die `sysDescr` (OID: `1.3.6.1.2.1.1.1.0`). Unter dieser
-OID hält jedes SNMP-Gerät eine Beschreibung von sich selbst bereit, zum Beispiel
-`Cisco NX-OS(tm) n5000, Software (n5000-uk9),...`.
-
-Ausgehend von diesem Text kann man für sehr viele Plugins schon definitiv
-entscheiden, ob diese hier Sinn ergeben. Wenn der Text noch nicht spezifisch
-genug ist, werden weitere OIDs geholt und geprüft. Ergebnis der SNMP-Detection
-ist dann eine Kandidaten-Liste von Check-Plugins.
-
-==== Discovery
-
-Im zweiten Schritt werden für jeden dieser Kandidaten die jeweils nötigen
-Monitoring-Daten mit SNMP-Walks geholt. Diese werden dann zu einer Tabelle
-zusammengefasst und der Discovery-Funktion des Checks in dem Argument
-`section` bereitgestellt, welche dann daraus wie gewohnt die zu
-überwachenden Items ermittelt.
-
-==== Checken
-
-Beim Checken ist ja schon bekannt, welche Plugins für das Gerät ausgeführt
-werden sollen und die SNMP-Detection entfällt. Hier werden gleich per
-SNMP-Walks die für die Plugins benötigten Monitoring-Daten geholt und daraus
-das Argument `section` für die Check-Funktion befüllt.
-
-==== Zusammenfassung
-
-Was müssen Sie also bei einem SNMP-Check anders machen als bei einem agentenbasierten?
-
-. Sie benötigen kein Plugin für den Agenten.
-. Sie müssen die für die SNMP-Detection nötigen Einzel-OIDs und Suchtexte festlegen.
-. Sie müssen festlegen, welche SNMP-Bereiche für das Monitoring geholt werden müssen.
-
-=== Ein Wort zu den MIBs
-
-Bevor wir weitermachen wollen wir hier noch ein Wort zu den berüchtigten
-SNMP-MIBs verlieren, denn über diese gibt es viele Vorurteile. Gleich zu
-Beginn eine gute Nachricht: {CMK} benötigt sie nicht. Wirklich! Sie sind
-aber eine wichtige Hilfe, um einen SNMP-Check _entwickeln_ zu können.
-
-Was ist nun eine MIB? Wörtlich bedeutet die Abkürzung _Management
-Information Base_ -- etwas nichtssagend. Konkret ist eine MIB eine
-ganz gut lesbare Textdatei, welche einen bestimmten Teilbaum der SNMP-Welt
-beschreibt. Und zwar steht hier, welcher Ast im Baum -- also welche _OID_ --
-welche Bedeutung hat. Das umfasst einen Namen für die OID, einen Hinweis,
-welche Werte diese annehmen kann (zum Beispiel bei enumerierten Datentypen, wo
-dann Dinge wie 1=up, 2=down, etc. festgelegt sind) und manchmal auch noch
-einen nützlichen Kommentar.
-
-{CMK} liefert eine Reihe von frei verfügbaren MIB-Dateien mit aus. Diese
-beschreiben sehr allgemeine Bereiche im globalen OID-Baum, enthalten aber
-keine herstellerspezifischen Bereiche. Daher helfen sie für selbst entwickelte
-Checks nicht viel weiter.
-
-Versuchen Sie also, die für Ihr spezielle Gerät relevanten MIB-Dateien irgendwo
-auf den Webseiten vom Hersteller oder sogar auf dem Management-Interface
-des Geräts zu finden und installieren Sie diese in der {CMK}-Instanz nach
-`local/share/check_mk/mibs`. Dann können Sie in SNMP-Walks OID-Nummern
-in Namen umrechnen lassen und so schneller finden, wo die für das Monitoring
-interessanten Daten sind. Wie gesagt, enthalten die MIBs außerdem interessante Informationen in den Kommentaren -- wenn sie sorgfältig gemacht sind.
-Sie können eine MIB-Datei einfach mit einem Texteditor oder mit `less` ansehen.
-
-
-[#locating_oids]
-=== Die richtigen OIDs finden
-
-Die entscheidende Voraussetzung, um ein Plugin zu entwickeln, ist natürlich,
-dass Sie wissen, welche OIDs die notwendigen Informationen enthalten. Der
-erste Schritt dabei ist (falls das Gerät das nicht verweigert), einen kompletten
-SNMP-Walk zu ziehen. Dabei werden _alle_ per SNMP verfügbaren Daten
-abgerufen.
-
-{CMK} kann das sehr einfach für Sie erledigen. Nehmen Sie dazu zunächst
-das Gerät (oder eines der Geräte), für das Sie ein Plugin entwickeln wollen,
-ins Monitoring auf. Sagen wir es heißt `mydevice01`. Stellen Sie sicher,
-dass dieses in den Grundfunktionen überwacht werden kann. Zumindest müssen
-die Services [.guihint]#SNMP Info# und [.guihint]#Uptime# gefunden werden und wahrscheinlich
-auch noch mindestens ein [.guihint]#Interface#. So stellen Sie sicher, dass der SNMP-Zugriff
-sauber funktioniert.
-
-Wechseln Sie dann auf die Kommandozeile der {CMK}-Instanz. Hier können
-Sie mit folgendem Befehl einen kompletten Walk ziehen. Dabei empfehlen wir,
-gleich die Option `-v` (verbose) zu verwenden:
-
-[{shell}]
-----
-{c-omd} cmk -v --snmpwalk mydevice01
-mydevice01:
-Walk on ".1.3.6.1.2.1"...3898 variables.
-Walk on ".1.3.6.1.4.1"...6025 variables.
-Wrote fetched data to /omd/sites/heute/var/check_mk/snmpwalks/mydevice01.
-----
-
-Wie bereits erwähnt, kann so ein kompletter Walk Minuten oder sogar
-Stunden dauern (auch wenn letzteres eher selten ist). Werden Sie also
-nicht nervös, wenn es hier etwas dauert. Der Walk wurde nun in der Datei
-`var/check_mk/snmpwalks/mydevice01` gespeichert. Es handelt sich
-dabei um eine gut lesbare Textdatei, die etwa so beginnt:
-
-.~/var/check_mk/snmpwalks/mydevice01
-[{file}]
-----
-.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots
-.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3
-.1.3.6.1.2.1.1.3.0 546522419
-.1.3.6.1.2.1.1.4.0 hh@example.com
-.1.3.6.1.2.1.1.5.0 sw-ks-01
-.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein
-.1.3.6.1.2.1.1.7.0 3
-.1.3.6.1.2.1.2.1.0 27
-----
-
-In jeder Zeile steht eine OID und danach deren Wert. Und gleich in der ersten Zeile finden Sie die
-wichtigste, nämlich die `sysDescr`.
-
-Nun sind die OIDs nicht sehr aussagekräftig. Wenn die richtigen MIBs installiert sind,
-können Sie diese in einem zweiten Schritt mit dem Befehl `cmk --snmptranslate`
-in Namen umrechnen lassen. Am besten leiten Sie das Ergebnis, was ansonsten im Terminal
-käme, in eine Datei um:
-
-[{shell}]
-----
-OMD[heute]:~$ cmk --snmptranslate mydevice01  > translated
-Processing 9923 lines.
-finished.
-----
-
-Die Datei `translated` liest sich wie der ursprüngliche Walk, hat aber in jeder
-Zeile nach dem `--&gt;` einen übersetzten Wert für die OID:
-
-.translated
-[{file}]
-----
-.1.3.6.1.2.1.1.1.0 JetStream 24-Port Gigabit L2 Managed Switch with 4 Combo SFP Slots --> SNMPv2-MIB::sysDescr.0
-.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.11863.1.1.3 --> SNMPv2-MIB::sysObjectID.0
-.1.3.6.1.2.1.1.3.0 546522419 --> DISMAN-EVENT-MIB::sysUpTimeInstance
-.1.3.6.1.2.1.1.4.0 hh@example.com --> SNMPv2-MIB::sysContact.0
-.1.3.6.1.2.1.1.5.0 sw-ks-01 --> SNMPv2-MIB::sysName.0
-.1.3.6.1.2.1.1.6.0 Core Switch Serverraum klein --> SNMPv2-MIB::sysLocation.0
-.1.3.6.1.2.1.1.7.0 3 --> SNMPv2-MIB::sysServices.0
-.1.3.6.1.2.1.2.1.0 27 --> IF-MIB::ifNumber.0
-.1.3.6.1.2.1.2.2.1.1.1 1 --> IF-MIB::ifIndex.1
-.1.3.6.1.2.1.2.2.1.1.2 2 --> IF-MIB::ifIndex.2
-----
-
-Beispiel: die OID `.1.3.6.1.2.1.1.4.0` hat den übersetzten Namen
-`SNMPv2-MIB::sysContact.0`. Dies ist ein wichtiger Hinweis, der Rest
-ist dann Übung, Erfahrung und natürlich experimentieren.
-
-=== Die Registrierung der SNMP-Sektion
-
-Wenn Sie also die notwendigen OIDs herausgefunden haben, geht es an die
-eigentliche Entwicklung des Plugins. Das geschieht in drei Schritten:
-
-. Legen Sie für die SNMP-Detection fest, welche OIDs welche Texte enthalten müssen, damit Ihr Plugin ausgeführt werden soll.
-. Deklarieren Sie, welche OID-Zweige für das Monitoring geholt werden müssen.
-. Schreiben Sie ein Check-Plugin analog zu denjenigen für agentenbasierte Checks.
-
-Die ersten beiden Schritte erfolgen durch die Registrierung einer SNMP-Sektion.
-Dies erledigen Sie durch den Aufruf von `register.snmp_section()`. Hier
-geben Sie mindestens drei Argumente an: den Namen der Sektion (`name`),
-die Angaben für die SNMP-Detection `detect` und die benötigten
-OID-Zweige für das eigentlich Monitoring (`fetch`). Hier ist ein Beispiel für ein
-fiktives Check-Plugin mit dem Namen `foo`:
-
-.~/local/lib/check_mk/base/plugins/agent_based/foo.py
-[{python}]
-----
-register.snmp_section(
-    name = "foo",
-    detect = startswith(".1.3.6.1.2.1.1.1.0", "foobar device"),
-    fetch = SNMPTree(
-        base = '.1.3.6.1.4.1.35424.1.2',
-        oids = [
-            '4.0',
-            '5.0',
-            '8.0',
-        ],
-    ),
-)
-----
-
-==== Die SNMP-Detection
-
-Mit dem Schlüsselwort `detect` geben Sie an, unter welchen Bedingungen
-die Discovery-Funktion überhaupt ausgeführt werden soll. In unserem Beispiel
-ist das der Fall, wenn der Wert der OID `.1.3.6.1.2.1.1.1.0` (also
-die `sysDescr`) mit dem Text `foobar device` beginnt (wobei
-Groß-/Kleinschreibung grundsätzlich nicht unterschieden wird). Neben
-`startswith` gibt es noch eine ganze Reihe weiterer möglichen
-Attribute. Dabei existiert von jedem auch eine negierte Form, welche mit
-`not_` beginnt:
-
-[cols="28,33,~"]
-|===
-|Attribut |Negation |Bedeutung 
-
-|`equals(oid, needle)` |`not_equals(oid, needle)` |Der Wert der OID ist gleich dem Text `needle`
-|`contains(oid, needle)` |`not_contains(oid, needle)` |Der Wert der OID enthält an irgendeiner Stelle den Text `needle`
-|`startswith(oid, needle)` |`not_startswith(oid, needle)` |Der Wert der OID beginnt mit dem Text `needle`
-|`endswith(oid, needle)` |`not_endswith(oid, needle)` |Der Wert der OID endet mit dem Text `needle`
-|`matches(oid, regex)` |`not_matches(oid, regex)` |Der Wert der OID matcht auf den xref:regexes#[regulären Ausdruck] `regex`, und zwar hinten und vorne geankert, also mit einem exakten Match. Wenn Sie nur einen Teilstring benötigen, ergänzen Sie einfach vorne bzw. hinten noch ein `pass:[.*]`
-|`exists(oid)` |`not_exists(oid)` |Erfüllt, wenn die OID auf dem Gerät verfügbar ist. Der Wert darf leer sein.
-|===
-
-Daneben gibt es noch die Möglichkeit, mehrere Tests mit `all_of`
-oder `any_of` zu verknüpfen. `all_of` erfordert mehrere
-erfolgreiche Attribute für eine positive Erkennung des Plugins. Folgendes
-Beispiel findet auf einem Gerät das Plugin, wenn in der `sysDescr` der Text mit `foo` (oder `FOO` oder `Foo`) beginnt *und*
-die OID `.1.3.6.1.2.1.1.2.0` den Text `.4.1.11863.` enthält:
-
-[{python}]
-----
-detect = all_of(
-    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
-    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
-)
-----
-
-`any_of` hingegen ist damit zufrieden, wenn auch nur eines der Kriterien
-erfüllt ist. Hier ist ein Beispiel, in dem verschiedene Werte für die `sysDescr`
-erlaubt sind:
-
-[{python}]
-----
-detect = any_of(
-    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
-    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
-    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
-)
-----
-
-Übrigens: Kennen Sie sich gut mit xref:regexes#[regulären Ausdrücken] aus? Dann würden Sie wahrscheinlich
-das ganze vereinfachen und doch wieder mit einer Zeile auskommen:
-
-[{python}]
-----
-detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*"),
-----
-
-Und noch ein wichtiger Hinweis: Die OIDs, die Sie bei der `detect`-Deklaration
-von einem Plugin angeben, werden im Zweifel von *jedem* Gerät geholt, welches
-per SNMP überwacht wird. Seien Sie daher sehr sparsam bei der Verwendung von herstellerspezifischen
-OIDs. Versuchen Sie, Ihre Erkennung unbedingt so zu machen, dass ausschließlich
-die `sysDescr` (`.1.3.6.1.2.1.1.1.0`) und die `sysObjectID`
-(`.1.3.6.1.2.1.1.2.0`) verwendet werden. Falls Sie dennoch eine weitere
-andere OID benötigen, dann reduzieren Sie die Anzahl der Geräte, wo diese angefragt
-wird, auf ein Minimum, indem Sie zuvor mittels der `sysDescr` so viele Geräte
-wie möglich bereits ausschließen, zum Beispiel so:
-
-[{python}]
-----
-detect = all_of(
-    startswith(".1.3.6.1.2.1.1.1.0", "foo"),   # first check sysDescr
-    contains(".1.3.6.1.4.1.4455.1.3", "bar"),  # fetch vendor specific OID
-)
-----
-
-Das `all_of()` funktioniert so, dass bei einem Scheitern der ersten
-Bedingung die zweite gar nicht erst probiert wird (und somit die betreffende
-OID auch nicht geholt). Hier im Beispiel wird die OID `.1.3.6.1.4.1.4455.1.3` nur
-bei solchen Geräten geholt, die `foo` in ihrer `sysDescr` haben.
-
-Was geschieht, wenn Sie die Deklaration falsch oder zumindest nicht ganz
-zielsicher gemacht haben?
-
-* Falls die Detection fälschlicherweise Geräte erkennt, auf denen die nötigen OIDs gar nicht vorhanden sind, wird Ihre Discovery-Funktion dann auch keine Services erzeugen. Es passiert also nichts „Schlimmes“. Allerdings wird das die Discovery auf solchen Geräten verlangsamen, da jetzt jedes mal nutzlos versucht wird, die entsprechenden OIDs abzufragen.
-* Falls die Detection eigentlich zulässige Geräte _nicht_ erkennt, werden dort im Monitoring bei der Discovery auch keine Services gefunden.
-
-=== Die OID-Bereiche für das Monitoring
-
-Die wichtigste Stelle der SNMP-Deklaration ist die Angabe, welche OIDs für
-das Monitoring geholt werden sollen. In fast allen Fällen benötigt ein Plugin
-dazu nur ausgewählte Äste aus einer einzigen Tabelle. Betrachten wir folgendes
-Beispiel:
-
-[{python}]
-----
-    fetch = SNMPTree(
-        base = '.1.3.6.1.4.1.35424.1.2',
-        oids = [
-            '4.0',
-            '5.0',
-            '8.0',
-        ],
-    ),
-----
-
-Das Schlüsselwort `base` gibt hier einen OID-Präfix an. Alle
-nötigen Daten liegen unterhalb. Bei `oids` geben Sie dann eine
-Liste von Sub-OIDs an, die ab dort geholt werden sollen. In obigem
-Beispiel werden dann insgesamt drei SNMP-Walks gemacht, nämlich
-ausgehend von den OIDs `.1.3.6.1.4.1.35424.1.2.4.0`, `.1.3.6.1.4.1.35424.1.2.5.0`
-und `.1.3.6.1.4.1.35424.1.2.8.0`. Dabei ist es wichtig, dass diese
-Walks die gleiche Anzahl von Variablen holen und dass diese auch einander
-entsprechen. Damit ist gemeint, dass zum Beispiel das n-te Element aus jedem der
-Walks dem selben überwachten Objekt entspricht.
-
-Hier ist ein Beispiel vom Check-Plugin `snmp_quantum_storage_info`:
-
-[{python}]
-----
-    tree = SNMPTree(
-       base=".1.3.6.1.4.1.2036.2.1.1",  # qSystemInfo
-       oids=[
-           "4",   # qVendorID
-           "5",   # qProdId
-           "6",   # qProdRev
-           "12",  # qSerialNumber
-       ],
-    ),
-)
-----
-
-Hier wird pro Storage-Gerät jeweils die Vendor ID, die Product ID, die Product Revision
-und die Seriennummer geholt.
-
-Der Discovery- und Check-Funktion werden diese Daten als Tabelle präsentiert, also
-als Liste von Listen. Dabei wird die Tabelle so gespiegelt, dass Sie pro Eintrag
-in der äußeren Liste alle Daten zu einem Item haben. Jeder Eintrag hat so viele
-Elemente, wie Sie bei `oids` angegeben haben. So können Sie die Liste
-sehr praktisch mit einer Schleife durchlaufen, zum Beispiel
-
-[{python}]
-----
-    for vendor_id, prod_id, prod_rev, serial_number in section:
-        ...
-----
-
-Bitte beachten Sie:
-
-* Alle Einträge sind _strings_, selbst wenn die betreffenden OIDs eigentlich Zahlen sind.
-* Fehlende OIDs werden als leere Strings präsentiert.
-* Denken Sie an die Möglichkeit, während der Entwicklung mit `pprint` die Daten formatiert auszugeben.
-
-=== Weitere SNMP-Sonderheiten
-
-// COMMENT[Das fehlt alles noch, OIDCached("1.2.3"), OIDBytes("1.2.3")]
-
-Hier beschreiben wir in Zukunft noch:
-
-* Wie Sie mehrere unabhängige SNMP-Bereiche abrufen können
-* Was es mit OIDEnd() auf sich hat
-* Weitere Sonderfälle beim Umgang mit SNMP
-////
 
 
 // == Weitere Komponenten der Check-Entwicklung
@@ -2007,6 +1631,7 @@ Hier beschreiben wir in Zukunft noch:
 Im xref:metrics[obigen Beispiel] haben wir das Check-Plugin `myhostgroups_advanced` Metriken für alle gemessenen und berechneten Werte erzeugen lassen.
 Dazu haben wir zwei Wege vorgestellt.
 // MFS: Oben habe ich vorgeschlagen, die Beispiele zu vertauschen (das einfachere zuerst), dann müsste hier analog getauscht werden.
+// TK: siehe meine Antwort oben
 Zuerst wurden die Metriken der berechneten Werte als Bestandteil der Funktion `check_levels()` mit dem Argument `metric_name` erstellt, zum Beispiel so:
 
 [{python}]
@@ -2036,13 +1661,13 @@ Allerdings gibt es dabei ein paar Einschränkungen:
 
 Um die Darstellung Ihrer Metriken in diesen Belangen zu vervollständigen, benötigen Sie _Metrikdefinitionen._
 
+*Hinweis:* Beachten Sie, dass die in diesem Kapitel vorgestellten Beispiele _nicht_ durch die Check-API abgedeckt sind.
+
 
 [#reuse_metricdefinition]
 === Vorhandene Metrikdefinitionen verwenden
-// TK: Ich finde, dass es wahrscheinlicher ist, eine passende Metrikdefinition als einen Regelsatz zu finden. Daher hier 1. Abschnitt -- und bei den Regelsätzen letzter.
-// MFS: Definitiv. Und aus "können" sollte daher "sollten"werden!
 
-Bevor Sie eine neue Metrikdefinition erstellen, können Sie zunächst prüfen, ob {CMK} nicht bereits eine geeignete Definition mitbringt.
+Bevor Sie eine neue Metrikdefinition erstellen, sollten Sie zunächst prüfen, ob {CMK} nicht bereits eine geeignete Definition mitbringt.
 Die vordefinierten Metrikdefinitionen finden Sie im Verzeichnis `~/lib/check_mk/gui/plugins/metrics/`.
 
 In der Datei `cpu.py` finden Sie beispielsweise die Metrik mit dem Namen `util` für die CPU-Auslastung (_CPU utilization_):
@@ -2059,6 +1684,7 @@ metric_info["util"] = {
 // MFS: Die Übersetzungsthematik von oben. Ohne allzutief zu graben: Das wird ein Wrapper für _() sein, mit dem bereits übersetzte Strings in Metriknamen verwendbar sind.
 // TK: Wenn ich testweise "util" bei einer meiner Metriken in der Check-Funktion eintrage, sind alle alten Werte weg. Warum ist das so? Wann passiert das?
 // MFS: Da werden neue RRDs für die "neue" Metrik angelegt...
+// TK: Habs mir fast gedacht: Frage: Will man das?
 
 Falls Ihr Check-Plugin die CPU-Auslastung in Prozent misst, können Sie diese Metrikdefinition problemlos verwenden.
 Sie müssen lediglich in Ihrer Check-Funktion `"util"` als den Namen für die Metrik einsetzen.
@@ -2066,11 +1692,13 @@ Alles andere leitet sich dann automatisch davon ab.
 // TK: Letzten Satz streichen wg. Nullinformation?
 // MFS: Nö, das ist so ein Fall, wo die Redundanz sogar willkommen ist.
 
+
 [#new_metricdefinition]
 === Neue Metrikdefinition erstellen
 
 Falls keine passende Metrikdefinition dabei ist, legen Sie einfach selbst eine an.
 // MFS: Hier wieder Hinweis, dass man vorhandene "kaputt machen" kann, indem man sie versehentlich überschreibt.
+// TK: Einen Satz weiter unten hinzugefügt (Wählen Sie einen eindeutigen Namen, ...). Überschrieben wird ja nix, nur verschattet (wie es bei CMK sonst so schön heisst).
 
 Für unser Beispiel wollen wir einen eigene Metrik für die Anzahl der Services im Zustand {OK} definieren.
 Dazu legen wir eine Datei in `~/local/share/check_mk/web/plugins/metrics` an:
@@ -2094,6 +1722,7 @@ Hier die Erklärung dazu:
 * Das Importieren und Verwenden des Unterstrichs (`_`) für die Internationalisierung ist optional, wie bereits bei der Erstellung von xref:new_ruleset[Regelsätzen] besprochen.
 
 * Der Schlüssel (hier `"num_services_ok"`) ist der Metrikname und muss dem entsprechen, was die Check-Funktion ausgibt.
+Wählen Sie einen eindeutigen Namen, so dass keine vorhandene Metrik „überschrieben“ wird.
 
 * Der `title` ist die Überschrift im Metrikgraphen und ersetzt den bisher verwendeten internen Variablennamen.
 
@@ -2169,10 +1798,8 @@ Das Resultat ist der kombinierte Graph in der {CMK}-GUI:
 
 image::devel_cpi_graph_two_metrics.png[alt="Der Graph zeigt beide Metriken in den Service-Details."]
 
-// TK: Folgenden Altsatz find ich merkwürdig, da wir doch gerade diese Möglichkeiten beschrieben haben -- wenn auch nicht alle.
 // MFS: ich tendiere fast dazu, diesen Absatz rauszunehmen. Stacked wäre in unserem Beispiel Gutwerte + Schlechtwerte = Gesamtwerte. Ich habe keinen Plan, was da noch an Anpassungen folgen wird.
-// Leider gibt es im Handbuch noch keine Beschreibung der Möglichkeiten dieser Definition. 
-Sie können statt `line` auch `area` oder `stack` ausprobieren - und Sie finden sehr viele Beispiele in den Dateien im Verzeichnis `~/lib/check_mk/gui/plugins/metrics`.
+// Sie können statt `line` auch `area` oder `stack` ausprobieren - und Sie finden sehr viele Beispiele in den Dateien im Verzeichnis `~/lib/check_mk/gui/plugins/metrics`.
 
 
 [#perfometer]
@@ -2245,7 +1872,7 @@ perfometer_info.append(
 image::devel_cpi_perfometer_linear.png[alt="Das Perf-O-Meter zeigt den Prozentsatz der Services im Status 'OK'."]
 
 Das ist schon einmal eine Verbesserung.
-Allerdings wird der Zustand des Services nicht nur durch den Prozentsatz der Services im Zustand {OK} sondern auch durch Prozentsatz der Hosts im Zustand {UP} bestimmt.
+Allerdings wird der Zustand des Services nicht nur durch den Prozentsatz der Services im Zustand {OK} sondern auch durch den Prozentsatz der Hosts im Zustand {UP} bestimmt.
 Um mehrere Metriken in einem Perf-O-Meter zu kombinieren, gibt es verschiedene Möglichkeiten.
 Eine davon sieht so aus:
 
@@ -2281,7 +1908,7 @@ Auch zu diesem Thema finden Sie viele Beispiele in den von {CMK} ausgelieferten 
 [#format_numbers]
 == Zahlen formatieren
 
-In der [.guihint]#Summary# und den [.guihint]#Details# eines Services werden oft Zahlen ausgegeben.
+Im [.guihint]#Summary# und den [.guihint]#Details# eines Services werden oft Zahlen ausgegeben.
 Um Ihnen eine schöne und korrekte Formatierung möglichst einfach zu machen,
 und um auch die Ausgaben von allen Check-Plugins zu vereinheitlichen, gibt es Hilfsfunktionen für die Darstellung von verschiedenen Arten von Größen.
 Alle diese sind Unterfunktionen vom Modul `render` und werden folglich mit `render.` aufgerufen.
@@ -2293,8 +1920,9 @@ Beispielsweise werden Zeiten immer in Sekunden angegeben und Größen von Festpl
 
 Verwenden Sie diese Funktionen auch dann, wenn Ihnen die Darstellung nicht so gut gefällt.
 Immerhin ist diese dann für den Benutzer einheitlich.
-Und zukünftige Versionen von {CMK} können die Darstellung möglicherweise ändern oder sogar konfigurierbar für den Benutzer machen.
+Und zukünftige Versionen von {CMK} können die Darstellung möglicherweise ändern oder sogar konfigurierbar für den Benutzer machen, wie es zum Beispiel bereits bei der Anzeige der Temperatur der Fall ist.
 // MFS: Hier würde ich schreiben, dass an einigen Stellen bereits in andere Einheitensysteme gewechselt werden kann, beispielsweise kann bei Temperaturen Fahrenheit eingestellt werden.
+// TK: Nebensatz ergänzt.
 Davon wird dann Ihr Check-Plugin auch profitieren.
 
 Bevor Sie die `render`-Funktion in Ihrem Check-Plugin nutzen können, müssen Sie sie zusätzlich importieren:
@@ -2338,6 +1966,7 @@ Für Zeiträume (oder _Zeitspannen_) gibt es noch die Funktion `render.timespan(
 Diese bekommt eine Dauer in Sekunden und gibt das menschenlesbar aus.
 Bei größeren Zeitspannen werden Sekunden oder Minuten weggelassen.
 // MFS: Nimmt diese Funktion auch das Timedelta-Objekt an? Nachgeschaut: Nein. Dann müssen wir darauf hinweisen, dass nur Sekunden als Integer zulässig sind.
+// TK: Echt? Du meinst, hier muss stehen, dass man Sekunden nicht als Float eingeben darf? 
 
 [cols="50,~",options="header"]
 |===
@@ -2433,9 +2062,9 @@ Obwohl kein Port einzelne Bits versenden kann, sind die Angaben aus historischen
 |`render.nicspeed(100000000)` |`800 MBit/s`
 |===
 
-
 `render.networkbandwidth()` ist gedacht für eine tatsächlich gemessene Übertragungsgeschwindigkeit im Netzwerk.
 // MFS: Wenn man Oktette einführt, sollte man das oben tun. Historisch gabe es bspw. Systeme, die 7 Bit oder 12 Bit Wortbreite hatten. Da ist Oktett statt Byte pragmatischer. Heute irrelevant.
+// TK: Nunja, Oktette hab ich mir nicht ausgedacht. Dann lassen wir Oktette weg. Bytes pro Sekunde reicht doch aus.
 Eingabewert ist wieder Bytes pro Sekunde (_Oktette_ würde der Netzwerker sagen):
 
 [cols="50,~",options="header"]
@@ -2493,6 +2122,7 @@ Hier folgt zum Abschluss die Übersicht über alle Render-Funktionen:
 |`filesize()` |Bytes |Größe einer Datei, volle Genauigkeit |`1,334,560 B`
 |`bytes()` |Bytes |Größe in Bytes, Basis 1024 |`23,4 KiB`
 // MFS: Bei den beiden folgenden stimmen Beschreibung und Beispielausgabe nicht überein.
+// TK: Ich verstehe nicht, was Du meinst. Einfach so ändern, dass es stimmt ;-)
 |`nicspeed()` |Oktette pro Sekunde |Geschwindigkeit von Netzwerkkarten |`100 MBit/s`
 |`networkbandwidth()` |Oktette pro Sekunde |Übertragungsgeschwindigkeit |`23.50 GBit/s`
 |`iobandwidth()` |Bytes pro Sekunde |IO-Bandbreiten |`124 MB/s`
@@ -2521,10 +2151,11 @@ Hierfür können Sie sowohl die GUI als auch die Kommandozeile verwenden – je 
 // *Fangen Sie Exceptions nicht selbst ab.*
 // Denn {CMK} übernimmt das für Sie in einer sinnvollen immer gleichen Art und Weise.
 
+
 [#error_exception_gui]
 === Exceptions und Absturzberichte in der GUI
 
-Tritt eine Exception im normalen Monitoring oder während der Serviceerkennung im Setup auf, enthält das _Summary_ Hinweise auf den eben erstellten Absturzbericht (_crash report_).
+Tritt eine Exception im Monitoring oder während der Service-Erkennung im Setup auf, enthält das [.guihint]#Summary# Hinweise auf den eben erstellten Absturzbericht (_crash report_).
 Das sieht dann zum Beispiel so aus:
 
 image::devel_cpi_service_crash_report.png[alt="Ein Service, dessen Check-Plugin abgestürzt ist."]
@@ -2549,10 +2180,11 @@ Falls Sie eigene Plugins Dritten zugänglich machen, können Sie Ihre Anwender b
 // Sie würden vielleicht den Service auf {UNKNOWN} setzen und eine Fehlermeldung ausgeben.
 // Aber die ganzen Umstände, wie es dazu kam (zum Beispiel die Daten vom Agenten), wären nicht verfügbar.
 
+
 [#error_exception_cli]
 === Exceptions auf der Kommandozeile ansehen
 
-Wenn Sie ihr Check-Plugin auf der Kommandozeile ausführen, erhalten Sie keinen Hinweis auf die ID des erzeugten Absturzberichtes.
+Wenn Sie ihr Check-Plugin auf der Kommandozeile ausführen, erhalten Sie keinen Hinweis auf die ID des erzeugten Absturzberichts.
 Sie sehen nur die zusammengefasste Fehlermeldung:
 
 [{shell}]
@@ -2594,7 +2226,7 @@ Traceback (most recent call last):
 SyntaxError: invalid syntax
 ----
 
-Tritt der Fehler beim Aufruf mit `--debug` beim nächsten Mal nicht mehr auf – zum Beispiel, weil eine neue Agentenausgabe bereitsteht –, können Sie die letzten Crash-Reports auch im Dateisystem einsehen:
+Tritt der Fehler beim Aufruf mit `--debug` beim nächsten Mal nicht mehr auf – zum Beispiel, weil eine neue Agentenausgabe bereitsteht –, können Sie die letzten Absturzberichte auch im Dateisystem einsehen:
 
 [{shell}]
 ----
@@ -2609,12 +2241,13 @@ drwx------ 1 mysite mysite 44 Sep  4 14:11 fdec3ef6-4b2c-11ee-9eaf-001617122312/
 In jedem dieser Ordner liegen zwei Dateien:
 
 . `crash.info` enthält ein Python-Dictionary mit Traceback und vielen weiteren Informationen. Oft genügt der Blick in die Datei mit dem Pager.
-. `agent_output` enthält die vollständige Agentenausgabe, die zum Zeitpunkt des Crashes aktuell war.
+. `agent_output` enthält die vollständige Agentenausgabe, die zum Zeitpunkt des Absturzes aktuell war.
+
 
 [#error_invalid_agent]
 === Ungültige Agentenausgabe
 
-Die Frage ist, wie Sie reagieren sollen, wenn die Ausgaben vom Agenten nicht die Form haben, die Sie eigentlich erwarten -- egal ob vom {CMK}-Agenten oder per SNMP erhalten.
+Die Frage ist, wie Sie reagieren sollen, wenn die Ausgaben vom Agenten nicht die Form haben, die Sie eigentlich erwarten -- egal ob vom {CMK}-Agenten oder per xref:draft_devel_check_plugins_snmp#[SNMP] erhalten.
 Nehmen wir an, dass Sie pro Zeile immer drei Worte erwarten.
 Was sollen Sie tun, falls nur zwei kommen?
 
@@ -2665,6 +2298,7 @@ Ist das gesuchte Item nicht dabei, so wird die Schleife durchlaufen und Python f
 Und das ist genau das Richtige!
 Denn daran erkennt {CMK}, dass das zu überwachende Item fehlt und erzeugt mit {UNKNOWN} den richtigen Status und einen passenden Standardtext dazu.
 
+
 [#error_spool]
 === Test mit Spool-Dateien
 
@@ -2673,8 +2307,9 @@ Diese können Sie nutzen, um sonst schwer nachzustellende Grenzfälle zu testen.
 Oder Sie verwenden direkt die Agentenausgabe, welche zu einem Absturzbericht geführt hat, zur Prüfung von Änderungen an einem Check-Plugin.
 
 Deaktivieren Sie zunächst Ihr reguläres Agentenplugin, beispielsweise indem Sie ihm die Ausführungsberechtigung entziehen.
-Erstellen Sie dann eine Datei im Verzeichnis `/var/lib/check_mk_agent/spool`, welche die von Ihrem Check-Plugin erwartete Agentensektion (oder _erwarteten Agentensektionen_) inclusive Header enthält und auf Newline endet.
+Erstellen Sie dann eine Datei im Verzeichnis `/var/lib/check_mk_agent/spool`, welche die von Ihrem Check-Plugin erwartete Agentensektion (oder _erwarteten Agentensektionen_) inclusive Sektions-Header enthält und auf Newline endet.
 Beim nächsten Aufruf des Agenten wird dann der Inhalt der Spool-Datei statt der Ausgabe des Agentenplugins übertragen.
+
 
 // TK: alter Inhalt aus: 1.2. Was hat sich seit der alten API geändert? und 12. Hinweise für Nutzer der alten API
 // TK: Vorerst auskommentiert (und nicht gelöscht), falls es doch wider erwarten noch Interesse an der alten API geben sollte.
@@ -2738,9 +2373,7 @@ Das wird nicht mehr in der SNMP-Scanfunktion gemacht.
 |`~/local/share/check_mk/web/plugins/wato/` |Ablageort für Ihre Regelsätze für Check-Parameter.
 |`~/local/share/check_mk/web/plugins/metrics/` |Ablageort für eigene Metrikdefinitionen.
 |`~/local/share/check_mk/web/plugins/perfometer/` |Ablageort für eigene Definitionen von Perf-O-Metern.
-|`~/local/share/check_mk/mibs/` |Legen Sie hier SNMP-MIB-Dateien ab, die automatisch geladen werden sollen.
 |`~/lib/check_mk/gui/plugins/wato/check_parameters/` |Hier finden Sie die Regelsatzdefinitionen von allen mitgelieferten Check-Plugins von {CMK}.
-
 |`~/lib/check_mk/gui/plugins/wato/utils/pass:[__init__].py` |In dieser Datei sind die Gruppen der Setup-Oberfläche definiert, in welchen Sie neue Regelsätze ablegen können.
 |`~/lib/check_mk/gui/plugins/metrics/`  |Hier finden Sie die Metrikdefinitionen der mitgelieferten Plugins.
 |`~/lib/check_mk/gui/plugins/metrics/unit.py`  |In dieser Datei stehen die vordefinierten Einheiten für Metriken.
