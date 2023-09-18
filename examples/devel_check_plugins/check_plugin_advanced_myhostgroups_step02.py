@@ -106,6 +106,7 @@ def check_myhostgroups_advanced(item, section):
     yield Metric(name="num_services", value=num_services)
     yield Metric(name="num_services_ok", value=num_services_ok)
 
+
 register.agent_section(
     name = "myhostgroups",
     parse_function = parse_myhostgroups,
