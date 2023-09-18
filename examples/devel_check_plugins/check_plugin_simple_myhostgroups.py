@@ -10,7 +10,7 @@ def parse_myhostgroups(string_table):
     # ]
     parsed = {}
     for line in string_table:
-    parsed[line[0]] = {"members": line[1]}
+        parsed[line[0]] = {"members": line[1]}
     # print(parsed)
     # parsed = {
     #     'check_mk': {'members': 'myhost1,myhost2,myhost3,myhost4'},
