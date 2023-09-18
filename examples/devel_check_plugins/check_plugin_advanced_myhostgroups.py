@@ -52,6 +52,12 @@ def check_myhostgroups(section):
         yield Result(state=State.OK, summary="Everything is fine")
 
 
+def discover_myhostgroups_advanced(section):
+    for group in section:
+        if group != "check_mk":
+            yield Service(item=group)
+
+
 def check_myhostgroups_advanced(item, params, section):
     hosts_up_lower = params["hosts_up_lower"]
     services_ok_lower = params["services_ok_lower"]
