@@ -39,11 +39,8 @@ def parse_myhostgroups(string_table):
     return parsed
 
 
-def discover_myhostgroups_advanced(section):
-    for group in section:
-        if group != "check_mk":
-            yield Service(item=group)
-
+def discover_myhostgroups(section):
+    yield Service()
 
 def check_myhostgroups(section):
     attr = section.get("check_mk")
@@ -58,7 +55,6 @@ def discover_myhostgroups_advanced(section):
     for group in section:
         if group != "check_mk":
             yield Service(item=group)
-
 
 def check_myhostgroups_advanced(item, params, section):
     hosts_up_lower = params["hosts_up_lower"]

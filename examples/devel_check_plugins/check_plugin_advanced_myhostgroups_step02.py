@@ -39,32 +39,22 @@ def parse_myhostgroups(string_table):
     return parsed
 
 
-def discover_myhostgroups_advanced(section):
-    for group in section:
-        if group != "check_mk":
-            yield Service(item=group)
-
+def discover_myhostgroups(section):
+    yield Service()
 
 def check_myhostgroups(section):
     attr = section.get("check_mk")
     hosts = attr["members"] if attr else ""
     if hosts:
-        yield Result(
-            state = State.CRIT,
-            summary = f"Default group is not empty; Current member list: {hosts}",
-        )
+        yield Result(state=State.CRIT, summary=f"Default group is not empty; Current member list: {hosts}")
     else:
-        yield Result(
-            state=State.OK,
-            summary="Everything is fine",
-        )
+        yield Result(state=State.OK, summary="Everything is fine")
 
 
 def discover_myhostgroups_advanced(section):
     for group in section:
         if group != "check_mk":
             yield Service(item=group)
-
 
 def check_myhostgroups_advanced(item, section):
     attr = section.get(item)

@@ -45,6 +45,7 @@ def _parameter_valuespec_myhostgroups_advanced():
         ],
     )
 
+
 rulespec_registry.register(
     CheckParameterRulespecWithItem(
         check_group_name = "myhostgroups_advanced",

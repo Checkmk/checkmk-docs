@@ -18,23 +18,18 @@ def parse_myhostgroups(string_table):
     # }
     return parsed
 
+
 def discover_myhostgroups(section):
     yield Service()
-
 
 def check_myhostgroups(section):
     attr = section.get("check_mk")
     hosts = attr["members"] if attr else ""
     if hosts:
-        yield Result(
-            state = State.CRIT,
-            summary = f"Default group is not empty; Current member list: {hosts}",
-        )
+        yield Result(state=State.CRIT, summary=f"Default group is not empty; Current member list: {hosts}")
     else:
-        yield Result(
-            state = State.OK,
-            summary = "Everything is fine",
-        )
+        yield Result(state=State.OK, summary="Everything is fine")
+
 
 register.agent_section(
     name = "myhostgroups",
