@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 from cmk.gui.i18n import _
+
 from cmk.gui.valuespec import (
     Dictionary,
     Percentage,
     TextInput,
     Tuple,
 )
+
 from cmk.gui.plugins.wato.utils import (
     CheckParameterRulespecWithItem,
     rulespec_registry,
@@ -19,7 +21,6 @@ def _item_valuespec_myhostgroups_advanced():
         title="Host group name",
         help="You can restrict this rule to certain services of the specified hosts.",
     )
-
 
 def _parameter_valuespec_myhostgroups_advanced():
     return Dictionary(
