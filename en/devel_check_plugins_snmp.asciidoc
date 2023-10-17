@@ -19,3 +19,629 @@ xref:cmk_commandline#[{CMK} on the command line]
 This article is currently being prepared for publication.
 Please be patient. Thank you! +
 By the way, the https://docs.checkmk.com/latest/de/devel_check_plugins_snmp.html[German version] of this article has already been updated -- if that is an alternative for you.
+
+
+// This block is new
+// start translation
+////
+[#intro]
+== Einleitung
+
+Check-Plugins, die mit SNMP arbeiten, werden auf ähnliche Weise entwickelt wie ihre xref:devel_check_plugins#[agentenbasierten Verwandten.]
+Der Unterschied liegt sowohl im Ablauf der xref:glossar#service_discovery[Service-Erkennung] (_Discovery_) als auch des Checks selbst.
+Bei den agentenbasierten Check-Plugins wird mit dem xref:glossar#agent_plugin[Agentenplugin] festgelegt, welche Daten an die {CMK}-Instanz _gesendet_ werden, zudem findet dort oft bereits eine Vorfilterung (aber keine Auswertung) statt.
+Im Gegensatz dazu müssen Sie bei SNMP selbst genau festlegen, welche Datenbereiche Sie benötigen und diese explizit _anfordern._
+Diese Bereiche (Äste eines Baumes) oder einzelne Datenfelder (Blätter) werden bei SNMP durch OIDs (_object identifier_) identifiziert.
+
+Eine Komplettübertragung aller Daten wäre zwar theoretisch möglich (durch den sogenannten _SNMP-Walk_),
+dauert aber selbst bei schnellen Geräten eher im Bereich von Minuten und bei komplexen Switches gern auch über eine Stunde.
+Daher scheidet dies bereits bei der Discovery und erst recht beim Check selbst aus.
+{CMK} geht hier zielgerichteter vor.
+Für das Debugging vorhandener und die Entwicklung eigener Checks stehen in {CMK} dennoch SNMP-Walks zur Verfügung.
+
+Falls Sie noch keine Erfahrung mit SNMP haben, empfehlen wir Ihnen als vorbereitende Lektüre den Artikel über das xref:snmp#[Überwachen via SNMP.]
+
+
+[#snmp_special]
+=== Was bei SNMP anders läuft
+
+Im Vergleich zu einem Check-Plugin für den {CMK}-Agenten gibt es bei SNMP einige Besonderheiten zu beachten.
+Bei einem Check-Plugin für SNMP teilt sich die Service-Erkennung in zwei Phasen auf.
+
+Zunächst erfolgt mit der *SNMP-Detection* die Erkennung des Gerätes.
+Diese dient dazu, zu ermitteln, ob das Check-Plugin für das jeweilige Gerät denn überhaupt interessant ist und wird bei jedem Gerät durchgeführt, welches per SNMP überwacht wird.
+Dazu werden einige wenige OIDs abgerufen -- und zwar einzelne, ohne SNMP-Walk.
+Die wichtigste davon ist die `sysDescr` (OID: `1.3.6.1.2.1.1.1.0`).
+Unter dieser OID hält jedes SNMP-Gerät eine Beschreibung von sich selbst bereit, zum Beispiel `Flintstones, Inc. Fred Router rev23`.
+
+Im zweiten Schritt werden für jeden dieser Kandidaten die jeweils nötigen Monitoring-Daten mit SNMP-Walks geholt.
+Diese werden dann zu einer Tabelle zusammengefasst und der *Discovery-Funktion* des Check-Plugins in dem Argument `section` bereitgestellt, welche dann daraus die zu überwachenden Items ermittelt.
+Für jedes dieser Items wird dann ein xref:glossar#service[Service] erzeugt.
+
+Beim *Check* ist dann schon bekannt, ob das Plugin für das Gerät ausgeführt werden soll, und eine erneute SNMP-Detection entfällt.
+Hier werden per SNMP-Walks die für das Plugin benötigten aktuellen Monitoring-Daten geholt.
+
+Was müssen Sie also bei einem Check-Plugin für SNMP anders machen als bei einem agentenbasierten?
+
+. Sie benötigen _kein_ xref:glossar#agent_plugin[Agentenplugin.]
+
+. Sie legen die für die SNMP-Detection nötigen OIDs fest und die Texte, die diese enthalten sollen.
+
+. Sie entscheiden, welche Äste und Blätter des SNMP-Baums für das Monitoring geholt werden müssen.
+
+
+[#mibs]
+=== Keine Angst vor MIBs!
+
+In diesem kurzen Einschub wollen wir auf die berüchtigten SNMP-MIBs eingehen, über die es viele Vorurteile gibt.
+Die gute Nachricht:
+{CMK} benötigt keine MIBs!
+Sie können aber eine wichtige Hilfe bei der _Entwicklung_ eines Check-Plugins oder der _Fehlersuche_ in vorhandenen Check-Plugins sein.
+
+Was sind MIBs?
+MIB bedeutet wörtlich _Management Information Base,_ was kaum mehr Information als die Abkürzung beinhaltet.
+Konkret ist eine MIB eine auch menschenlesbare Textdatei, welche Äste und Blätter im Baum der SNMP-Daten beschreibt.
+
+OIDs können Äste oder Blätter identifizieren.
+In der Beschreibung der Äste finden Sie Informationen zu den System- und Subsysteminformationen, welche der Ast bereithält.
+Referenziert eine OID ein Blatt, enthalten die Informationen der MIB Hinweise zum Datentyp (Zeichenkette, Festkommazahl, Hex-String, ...), dem Wertebereich und der Repräsentation.
+So können Temperaturen beispielsweise mal als Festkommazahl mit Vorzeichen auf der Celsius-Skala in 0,1° Auflösung gespeichert werden oder mal ohne Vorzeichen in Schritten von 1,0° auf der Kelvin-Skala.
+
+{CMK} liefert eine Reihe von frei verfügbaren MIB-Dateien mit aus.
+Diese beschreiben sehr allgemeine Bereiche im globalen OID-Baum, enthalten aber keine herstellerspezifischen Bereiche.
+Daher helfen sie für selbst entwickelte Check-Plugins nicht viel weiter.
+
+Versuchen Sie also, die für Ihr spezielles Gerät relevanten MIB-Dateien irgendwo auf der Website des Herstellers oder sogar auf dem Management-Interface des Geräts zu finden.
+Installieren Sie diese Dateien in der {CMK}-Instanz in das Verzeichnis `~/local/share/check_mk/mibs/`.
+Dann können Sie in SNMP-Walks OID-Nummern in Namen übersetzen lassen und so schneller die für das Monitoring interessanten Daten finden.
+Wie bereits erwähnt, enthalten gut gepflegte MIBs außerdem interessante Informationen in den Kommentaren.
+Sie können eine MIB-Datei einfach mit einem Texteditor oder dem Pager `less` ansehen.
+
+
+[#locating_oids]
+== Die richtigen OIDs finden
+
+Die entscheidende Voraussetzung, um ein SNMP-basiertes Check-Plugin zu entwickeln, ist, dass Sie wissen, welche OIDs die relevanten Informationen enthalten.
+Für das vorgestellte Beispielszenario gehen wir davon aus, dass Sie einen Schwung Router vom Typ _Flintstones, Inc. Fred Router rev23_ frisch in Betrieb genommen haben.
+Diesem fiktiven Gerät werden Sie auch häufig in Herstellerdokumentation und MIB-Kommentaren begegnen.
+Dabei haben Sie aber bei einigen Geräten vergessen, Kontakt- und Standortinformationen einzutragen.
+Ein selbst geschriebenes Check-Plugin für {CMK} soll nun helfen, diese Geräte zu identifizieren.
+
+*Tipp:* Das von uns vorbereitete Beispiel-Plugin ist so geschrieben, dass Sie es mit _beinahe jedem_ SNMP-fähigen Gerät durchspielen können.
+Lediglich die zu vergleichende Zeichenkette müssen Sie anpassen.
+Ist gerade kein Gerät zur Hand, finden Sie im Kapitel zur xref:simulation[Fehlerbehebung] verschiedene Simulationsmöglichkeiten.
+
+Der erste Schritt dahin ist, einen kompletten SNMP-Walk auszuführen.
+Dabei werden _alle_ per SNMP verfügbaren Daten abgerufen.
+{CMK} kann das sehr einfach für Sie erledigen.
+Nehmen Sie dazu zunächst das Gerät, für das Sie ein Check-Plugin entwickeln wollen, xref:snmp#add_device[in das Monitoring auf.]
+Stellen Sie sicher, dass es xref:snmp#services[in den Grundfunktionen] überwacht werden kann.
+Zumindest müssen die Services [.guihint]#SNMP Info# und [.guihint]#Uptime# gefunden werden und wahrscheinlich auch noch mindestens ein [.guihint]#Interface.#
+So stellen Sie sicher, dass der SNMP-Zugriff sauber funktioniert.
+
+Wechseln Sie dann auf die Kommandozeile der {CMK}-Instanz.
+Hier können Sie mit folgendem Befehl einen kompletten Walk ziehen -- im folgenden Beispiel für das Gerät mit dem Host-Namen `mydevice01`.
+Dabei empfehlen wir, zusätzlich die Option `-v` (für _verbose_) zu verwenden:
+
+[{shell}]
+----
+{c-omd} cmk -v --snmpwalk mydevice01
+mydevice01:
+Walk on ".1.3.6.1.2.1"...3898 variables.
+Walk on ".1.3.6.1.4.1"...6025 variables.
+Wrote fetched data to /omd/sites/mysite/var/check_mk/snmpwalks/mydevice01.
+----
+
+Wie bereits erwähnt, kann so ein kompletter SNMP-Walk Minuten oder sogar Stunden dauern (auch wenn letzteres eher selten ist).
+Werden Sie also nicht nervös, wenn es hier etwas dauert.
+Der Walk wird in der Datei `~/var/check_mk/snmpwalks/mydevice01` gespeichert.
+Es handelt sich dabei um eine gut lesbare Textdatei, die etwa so beginnt:
+
+.~/var/check_mk/snmpwalks/mydevice01
+[{file}]
+----
+.1.3.6.1.2.1.1.1.0 Flintstones, Inc. Fred Router rev23
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.424242.2.3
+.1.3.6.1.2.1.1.3.0 546522419
+.1.3.6.1.2.1.1.4.0 barney@example.com
+.1.3.6.1.2.1.1.5.0 big-router-01
+.1.3.6.1.2.1.1.6.0 Server room 23, Stonestreet 52, Munich
+.1.3.6.1.2.1.1.7.0 72
+.1.3.6.1.2.1.1.8.0 0
+----
+
+In jeder Zeile steht eine OID und danach deren Wert.
+Gleich in der ersten Zeile finden Sie die Wichtigste, nämlich die `sysDescr`.
+Diese sollte ein Hardware-Modell eindeutig identifizieren.
+
+Interessant ist auch die zweite Zeile:
+Unterhalb von `1.3.6.1.4.1` befinden sich Äste, die Hardware-Hersteller selbst belegen können, hier hat _Flintstones, Inc._ die fiktive Hersteller-ID `424242`.
+Darunter hat das Unternehmen die `2` für Router vergeben und die `3` für eben jenes Modell.
+Innerhalb dieses Astes finden Sie dann gerätespezifische OIDs.
+
+Nun sind die OIDs nicht sehr aussagekräftig.
+Wenn die richtigen MIBs installiert sind, können Sie diese in einem zweiten Schritt in Namen übersetzen lassen.
+Am besten leiten Sie die Ausgabe des folgenden Befehls, die sonst im Terminal angezeigt würde, in eine Datei um:
+
+[{shell}]
+----
+{c-omd} cmk --snmptranslate mydevice01 > /tmp/translated
+----
+
+Die Datei `translated` liest sich wie der ursprüngliche Walk, zeigt aber in jeder Zeile nach dem `--&gt;` den Namen der OID:
+
+./tmp/translated
+[{file},highlight=4]
+----
+.1.3.6.1.2.1.1.1.0 Flintstones, Inc. Fred Router rev23 --> SNMPv2-MIB::sysDescr.0
+.1.3.6.1.2.1.1.2.0 .1.3.6.1.4.1.424242.2.3 --> SNMPv2-MIB::sysObjectID.0
+.1.3.6.1.2.1.1.3.0 546522419 --> DISMAN-EVENT-MIB::sysUpTimeInstance
+.1.3.6.1.2.1.1.4.0 barney@example.com --> SNMPv2-MIB::sysContact.0
+.1.3.6.1.2.1.1.5.0 big-router-01 --> SNMPv2-MIB::sysName.0
+.1.3.6.1.2.1.1.6.0 Server room 23, Stonestreet 52, Munich --> SNMPv2-MIB::sysLocation.0
+.1.3.6.1.2.1.1.7.0 42 --> SNMPv2-MIB::sysServices.0
+.1.3.6.1.2.1.1.8.0 27 --> SNMPv2-MIB::sysORLastChange.0
+----
+
+In der obigen Ausgabe hat zum Beispiel die OID `1.3.6.1.2.1.1.4.0` den Wert `barney@example.com` und den Namen `SNMPv2-MIB::sysContact.0`.
+Die zusätzliche Angabe der Namen für die OIDs gibt wichtige Hinweise, um die interessanten OIDs zu identifizieren.
+Für das vorgestellte Beispiel genügen die OIDs `1.3.6.1.2.1.1.4.0` bis `1.3.6.1.2.1.1.6.0`.
+
+
+[#simple_snmp_plugin]
+== Ein einfaches Check-Plugin schreiben
+
+Nun haben Sie die Vorarbeit erledigt:
+Sie haben jetzt eine Liste der OIDs, die Sie auslesen und auswerten wollen.
+Jetzt geht es darum, anhand dieser Notizen {CMK} beizubringen, welche Services erzeugt werden, und wann diese auf {WARN} oder {CRIT} gehen sollen.
+Die dafür angewandte Programmierung eines Check-Plugins in Python hat viele Parallelen zum xref:devel_check_plugins#write_check_plugin[agentenbasierten Check-Plugin.]
+Da einige Feinheiten zu beachten sind, zeigen wir den vollständigen Aufbau mit allen verwendeten Funktionen.
+
+
+[#scaffold]
+=== Die Datei vorbereiten
+
+Für Ihre eigenen Check-Plugins finden Sie ein Verzeichnis vorbereitet in der `local`-Hierarchie des xref:cmk_commandline#sitedir[Instanzverzeichnisses.]
+Dieses lautet `~/local/lib/check_mk/base/plugins/agent_based/`.
+Hier im Pfad steht `base` für den Teil von {CMK}, der für das eigentlich Monitoring und die Benachrichtigungen zuständig ist.
+Das `agent_based` steht für alle Plugins, die sich auf den {CMK}-Agenten, aber auch SNMP-Agenten beziehen (also keine Benachrichtigungs-Plugins).
+Am einfachsten, Sie wechseln zum Arbeiten dort hinein:
+
+[{shell}]
+----
+{c-omd} cd local/lib/check_mk/base/plugins/agent_based
+----
+
+Das Verzeichnis gehört dem Instanzbenutzer und ist daher für Sie schreibbar.
+Sie können Ihr Check-Plugin mit jedem auf dem Linux-System installierten Texteditor bearbeiten.
+
+Legen Sie also die Datei `flintstone_setup_check.py` für das neu zu erstellende Check-Plugin hier an.
+Konvention ist, dass der Dateiname den Namen des Check-Plugins wiedergibt, wie er in der Registrierfunktion `register.check_plugin()` festgelegt wird.
+_Pflicht_ ist, dass die Datei mit `.py` endet, denn ab Version {v20} von {CMK} handelt es sich bei den Check-Plugins immer um echte Python-Module.
+
+Ein lauffähiges Grundgerüst (link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins_snmp/flintstone_setup_check_bare_minimum.py[Download bei GitHub^]), das Sie im Folgenden Schritt für Schritt weiter ausbauen werden, sieht so aus:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from .agent_based_api.v1 import register, Result, Service, startswith, SNMPTree, State
+
+def parse_flintstone(string_table):
+    return {}
+
+def discover_flintstone(section):
+    yield Service()
+
+def check_flintstone(section):
+    yield Result(state=State.OK, summary="Everything is fine")
+
+register.snmp_section(
+    name = "flintstone_base_config",
+    parse_function = parse_flintstone,
+    detect = startswith(".1.3.6.1.2.1.1.1.0", "Flintstone"),
+    fetch = SNMPTree(base='.1.3.6.1.2.1.1', oids=['4.0']),
+)
+
+register.check_plugin(
+    name = "flintstone_setup_check",
+    sections = ["flintstone_base_config"],
+    service_name = "Flintstone setup check",
+    discovery_function = discover_flintstone,
+    check_function = check_flintstone,
+)
+----
+
+Als erstes müssen Sie die für die Check-Plugins nötigen Funktionen und Klassen aus Python-Modulen importieren.
+Die einfachste Methode dafür ist die mit einem `import pass:[*]`, allerdings sollten Sie das vermeiden, da so verschleiert wird, welche Namensräume tatsächlich verfügbar gemacht werden.
+
+Für unser Beispiel wird also nur das importiert, was im weiteren Verlauf des Artikels genutzt wird:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+from .agent_based_api.v1 import register, Result, Service, startswith, SNMPTree, State
+----
+
+Im Vergleich zum xref:devel_check_plugins#scaffold[agentenbasierten Check-Plugin] sind hier `startswith` und `SNMPTree` neu.
+Selbsterklärend ist `SNMPTree`, es handelt sich um eine Klasse zur Darstellung von SNMP-Bäumen.
+Die Funktion `startswith()` vergleicht den Inhalt eines SNMP-Blattes mit einer Zeichenkette.
+Mehr dazu später.
+
+
+[#register_snmp_section]
+=== Die SNMP-Sektion registrieren
+
+Nachdem Sie die xref:locating_oids[richtigen OIDs] herausgefunden haben, geht es an die eigentliche Entwicklung des Check-Plugins.
+Beim Registrieren der SNMP-Sektion legen Sie zwei Dinge fest:
+
+. Sie identifizieren die Geräte, für welche das Check-Plugin ausgeführt werden soll. +
+Im folgenden Beispiel geschieht dies mit der Funktion `startswith()`, welche eine Zeichenkette mit dem Anfang des Inhalts eines OID-Blattes vergleicht.
+Weitere Zuordnungsmöglichkeiten zeigen wir weiter unten.
+
+. Sie deklarieren, welche OID-Äste oder Blätter für das Monitoring geholt werden. +
+Dies geschieht mit dem Konstruktor der Klasse `SNMPTree`.
+
+Erweitern Sie die vorbereitete Beispieldatei so, dass das Plugin nur für eine kleine Zahl von Geräten ausgeführt wird: den Modellen des `Flintstones, Inc. Fred Router`.
+Für diese Geräte werden dann die  OIDs für _Kontakt_, _Gerätename_ und _Standort_ abgerufen.
+Diese drei OIDs stellt jedes Gerät bereit.
+Wenn Sie das Beispiel mit echten SNMP-fähigen Geräten testen wollen, genügt es daher, den zu erkennenden Modellnamen anzupassen.
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+register.snmp_section(
+    name = "flintstone_base_config",
+    parse_function = parse_flintstone,
+    detect = startswith(
+        ".1.3.6.1.2.1.1.1.0",
+        "Flintstones, Inc. Fred Router",
+    ),
+    fetch = SNMPTree(
+        base = '.1.3.6.1.2.1.1',
+        oids = ['4.0', '5.0', '6.0'],
+    ),
+)
+----
+
+Das Beispiel enthält noch den Parameter `name` mit dem die erzeugte SNMP-Sektion identifiziert wird und eine Parse-Funktion, auf die wir xref:parse_function[später] noch zu sprechen kommen.
+
+
+[#detect]
+==== Die SNMP-Detection
+
+Mit dem Parameter `detect` geben Sie an, unter welchen Bedingungen die Discovery-Funktion überhaupt ausgeführt werden soll.
+In unserem Beispiel ist das der Fall, wenn der Wert der OID `1.3.6.1.2.1.1.1.0` (also die `sysDescr`) mit dem Text `Flintstones, Inc. Fred Router` beginnt (wobei Groß-/Kleinschreibung grundsätzlich nicht unterschieden werden).
+Neben `startswith` gibt es noch eine ganze Reihe weiterer möglicher Funktionen zur Identifikation.
+Dabei existiert von jeder auch eine negierte Form, welche mit `not_` beginnt.
+Beachten Sie, dass jede Funktion separat im `import`-Statement verfügbar gemacht werden muss.
+
+[cols="25,~,25",options="header"]
+|===
+|Attribut |Bedeutung |Negation
+|`equals(oid, "needle")` |Der Wert der OID ist gleich dem Text `needle`. |`not_equals(oid, "needle")`
+|`contains(oid, "needle")` |Der Wert der OID enthält an irgendeiner Stelle den Text `needle`. |`not_contains(oid, "needle")`
+|`startswith(oid, "needle")` |Der Wert der OID beginnt mit dem Text `needle`. |`not_startswith(oid, "needle")`
+|`endswith(oid, "needle")` |Der Wert der OID endet auf den Text `needle`. |`not_endswith(oid, "needle")`
+|`matches(oid, regex)` |Der Wert der OID entspricht dem xref:regexes#[regulären Ausdruck] `regex`, und zwar hinten und vorne geankert, also mit einer exakten Übereinstimmung. Wenn Sie nur einen Teilstring benötigen, ergänzen Sie einfach vorne bzw. hinten noch ein `pass:[.*]`. |`not_matches(oid, regex)`
+|`exists(oid)` |Die OID ist auf dem Gerät verfügbar. Ihr Wert darf leer sein. |`not_exists(oid)`
+|===
+
+Daneben gibt es noch die Möglichkeit, mehrere Attribute mit `all_of` oder `any_of` zu verknüpfen.
+
+`all_of` erfordert mehrere erfolgreiche Prüfungen für eine positive Erkennung.
+Folgendes Beispiel ordnet Ihr Check-Plugin einem Gerät zu, wenn in der `sysDescr` der Text mit `foo` (oder `FOO` oder `Foo`) beginnt *und*
+die OID `1.3.6.1.2.1.1.2.0` den Text `.4.1.11863.` enthält:
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo"),
+    contains(".1.3.6.1.2.1.1.2.0", ".4.1.11863.")
+)
+----
+
+`any_of` hingegen ist damit zufrieden, wenn auch nur eines der Kriterien erfüllt ist.
+Hier ist ein Beispiel, in dem verschiedene Werte für die `sysDescr` erlaubt sind:
+
+[{python}]
+----
+detect = any_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 3 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4 system"),
+    startswith(".1.3.6.1.2.1.1.1.0", "foo version 4.1 system"),
+)
+----
+
+Übrigens: Kennen Sie sich gut mit xref:regexes#[regulären Ausdrücken] aus?
+Dann würden Sie wahrscheinlich das Beispiel vereinfachen und doch wieder mit einer Zeile auskommen:
+
+[{python}]
+----
+detect = matches(".1.3.6.1.2.1.1.1.0", "FOO Version (3|4|4.1) .*")
+----
+
+Und noch ein wichtiger Hinweis:
+Die OIDs, die Sie der SNMP-Detection eines Check-Plugins übergeben, werden von *jedem* Gerät geholt, welches per SNMP überwacht wird.
+Nur so kann {CMK} feststellen, auf welche Geräte das Check-Plugin anzuwenden ist.
+
+Seien Sie daher sehr sparsam bei der Verwendung von herstellerspezifischen OIDs.
+Versuchen Sie, Ihre SNMP-Detection so zu gestalten, dass bevorzugt die `sysDescr` (`1.3.6.1.2.1.1.1.0`) und die `sysObjectID` (`1.3.6.1.2.1.1.2.0`) geprüft werden.
+
+Falls Sie dennoch eine andere OID zur exakten Identifikation benötigen, verwenden Sie `all_of()` und gehen Sie wie folgt vor:
+
+. Prüfen Sie zunächst auf `sysDescr` oder `sysObjectID`.
+
+. In weiteren Argumenten können Sie dann den Kreis der Geräte weiter einschränken, für die Ihr Plugin ausgeführt werden soll.
+
+[{python}]
+----
+detect = all_of(
+    startswith(".1.3.6.1.2.1.1.1.0", "Flintstone"),   # first check sysDescr
+    contains(".1.3.6.1.4.1.424242.2.3.37.0", "foo"),  # fetch vendor specific OID
+)
+----
+
+Dies funktioniert dank _lazy evaluation_:
+Sobald eine der früheren Prüfungen fehlschlägt, wird keine weitere mehr durchgeführt.
+Im obigen Beispiel wird die OID `1.3.6.1.4.1.424242.2.3.37.0` nur bei solchen Geräten geholt, die auch `Flintstone` in ihrer `sysDescr` haben.
+
+
+[#parse_function]
+=== Die Parse-Funktion schreiben
+
+Wie beim xref:devel_check_plugins.html#parsefunction[agentenbasierten] hat auch beim SNMP-basierten Check-Plugin die Parse-Funktion die Aufgabe, die erhaltenen Agentendaten in eine gut und vor allem performant zu verarbeitende Form zu bringen.
+
+Die Daten erhalten Sie hier ebenfalls als Liste.
+Allerdings gilt es einige Feinheiten zu beachten, denn es macht einen Unterschied, ob Sie Blätter abfragen oder Äste.
+Zur Erinnerung: In unserem xref:register_snmp_section[oben] vorgestellten Beispiel werden Blätter angefordert: 
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+    fetch = SNMPTree(
+        base = '.1.3.6.1.2.1.1',
+        oids = ['4.0', '5.0', '6.0'],
+    )
+----
+
+Wenn Sie die Parse-Funktion temporär mit der Funktion `print()` erweitern, können Sie sich beim xref:test[Testen des Check-Plugins] die Daten anzeigen lassen, die {CMK} aus dieser Abfrage zur Verfügung stellt:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+def parse_flintstone(string_table):
+    print(string_table)
+    return {}
+----
+
+Sie erhalten eine verschachtelte Liste, welche in der ersten Ebene nur ein Element, nämlich eine Liste der abgerufenen Werte, enthält:
+
+[{python}]
+----
+[
+    ['barney@example.com', 'big-router-01', 'Server room 23, Stonestreet 52, Munich']
+]
+----
+
+Ein wenig anders sieht das Ergebnis aus, wenn Sie Äste abrufen, die mehrere Blätter enthalten.
+Angenommen, der Router kann mit einer variablen Zahl von Netzwerkkarten bestückt werden, deren Name, Verbindungsstatus und Geschwindigkeit unterhalb von `1.3.6.1.4.1.424242.2.3.23` ausgelesen werden können &#8230;
+
+[{python}]
+----
+    fetch = SNMPTree(
+        base = '.1.3.6.1.4.1.424242.2.3.23',
+        oids = [
+            '6', # all names
+            '7', # all states
+            '8', # all speeds
+        ],
+    )
+----
+
+&#8230; dann sähe die zweidimensionale Liste möglicherweise so aus:
+
+[{python}]
+----
+[
+    # Name, State, Speed
+    ['net0', '1', '1000'],
+    ['net1', '0', '100'],
+    ['net2', '1', '10000'],
+    ['net3', '1', '1000'],
+]
+----
+
+Alle unter einer OID erhältlichen Blätter werden in eine Tabellenspalte geschrieben.
+Damit dürfte es offensichtlich sein, dass wegen der Darstellung der Daten nur zusammenpassende OIDs abgefragt werden dürfen.
+
+*Tipp:* Auch das zuletzt gezeigte Beispiel zum Abruf von OID-Ästen ist Bestandteil unseres auf GitHub bereitgestellten link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins_snmp/flintstones_fred_router.txt[SNMP-Walks^], den Sie zur xref:simulation[Simulation] nutzen können.
+
+Doch nun zurück zum Beispiel, in dem die OID-Blätter zu Kontakt, Gerätename und Standort abgefragt werden:
+Die folgende Parse-Funktion übernimmt einfach jedes Element der inneren Liste in ein Schlüssel-Wert-Paar des zurückgegebenen Dictionaries:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+def parse_flintstone(string_table):
+    # print(string_table)
+    result = {}
+    result["contact"] = string_table[0][0]
+    result["name"] = string_table[0][1]
+    result["location"] = string_table[0][2]
+    # print(result)
+    return result
+----
+
+Das Resultat der Parse-Funktion sieht dann so aus:
+
+[{python}]
+----
+{
+    'contact': 'barney@example.com',
+    'name': 'big-router-01',
+    'location': 'Server room 23, Stonestreet 52, Munich'
+}
+----
+
+
+[#register_check_plug-in]
+=== Das Check-Plugin registrieren
+
+Die Registrierung des Check-Plugins geschieht exakt wie bei den xref:devel_check_plugins#register_check_plug-in[agentenbasierten Check-Plugin] beschrieben.
+
+Da Sie in den meisten Fällen mehrere SNMP-Äste abfragen werden und daraus mehrere SNMP-Sektionen resultieren, ist der Parameter `sections` mit der Liste der auszuwertenden Sektionen in der Regel erforderlich:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+register.check_plugin(
+    name = "flintstone_setup_check",
+    sections = ["flintstone_base_config"],
+    service_name = "Flintstone setup check",
+    discovery_function = discover_flintstone,
+    check_function = check_flintstone,
+)
+----
+
+
+[#discovery_function]
+=== Die Discovery-Funktion schreiben
+
+Auch die Discovery-Funktion entspricht dem Beispiel des xref:devel_check_plugins#discovery_function[agentenbasierten Check-Plugins.]
+Bei Check-Plugins, die pro Host nur einen Service erzeugen, genügt ein einziges `yield()`:
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+def discover_flintstone(section):
+    yield Service()
+----
+
+
+[#check_function]
+=== Die Check-Funktion schreiben
+
+Im Beispiel soll überprüft werden, ob die Informationen zu Kontakt, Gerätename und Standort vorhanden sind.
+Es reicht daher aus, in der Check-Funktion zu prüfen, welche Felder leer sind und entsprechend den Zustand auf {CRIT} zu setzen (wenn etwas fehlt) oder auf {OK} (wenn alles da ist):
+
+.~/local/lib/check_mk/base/plugins/agent_based/flintstone_setup_check.py
+[{python}]
+----
+def check_flintstone(section):
+    missing = 0
+    for e in ["contact", "name", "location"]:
+        if section[e] == "":
+            missing += 1
+            yield Result(state=State.CRIT, summary=f"Missing information: {e}!")
+    if missing > 0:
+        yield Result(state=State.CRIT, summary=f"Missing fields: {missing}!")
+    else:
+        yield Result(state=State.OK, summary="All required information is available.")
+----
+
+Mit der Erstellung der Check-Funktion ist das Check-Plugin fertig.
+
+Das komplette Check-Plugin haben wir auf link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins_snmp/flintstone_setup_check.py[GitHub^] bereitgestellt.
+
+
+[#test]
+=== Das Check-Plugin testen und aktivieren
+
+Test und Aktivierung erfolgen wie beim xref:devel_check_plugins#test[agentenbasierten Check-Plugin.]
+
+Als erstes ist die Service-Erkennung des Plugins an der Reihe:
+
+[{shell},highlight=12-14]
+----
+{c-omd} cmk -vI --detect-plugins=flintstone_setup_check mydevice01
+Discovering services and host labels on: mydevice01
+mydevice01:
++ FETCHING DATA
+[SNMPFetcher] Execute data source
+[PiggybackFetcher] Execute data source
+No piggyback files for 'mydevice01'. Skip processing.
+No piggyback files for '198.51.100.123'. Skip processing.
++ ANALYSE DISCOVERED HOST LABELS
+SUCCESS - Found no new host labels
++ ANALYSE DISCOVERED SERVICES
++ EXECUTING DISCOVERY PLUGINS (1)
+  1 flintstone_setup_check
+SUCCESS - Found 1 services
+----
+
+Wie erwartet hat die Service-Erkennung funktioniert.
+Jetzt können Sie den im Check-Plugin enthaltenen Check ausprobieren:
+
+[{shell},highlight=7]
+----
+{c-omd} cmk -v --detect-plugins=flintstone_setup_check mydevice01
++ FETCHING DATA
+[SNMPFetcher] Execute data source
+[PiggybackFetcher] Execute data source
+No piggyback files for 'mydevice01'. Skip processing.
+No piggyback files for '198.51.100.123'. Skip processing.
+Flintstone setup check All required information is available.
+[snmp] Success, [piggyback] Success ...
+----
+
+Nach dem Neustart des Monitoring-Kerns &#8230; 
+
+[{shell}]
+----
+{c-omd} cmk -R
+Generating configuration for core (type nagios)...
+Precompiling host checks...OK
+Validating Nagios configuration...OK
+Restarting monitoring core...OK
+----
+
+&#8230; ist dann der neue Service im Monitoring sichtbar:
+
+.Da alle Felder der drei SNMP-Blätter befüllt sind, ist der Service {OK}
+image::devel_snmp_service.png[alt="Der vom Check-Plugin erzeugte neue Service im Monitoring."]
+
+
+[#errors]
+== Fehler beheben
+
+Da die Fehlerbehebung bei xref:devel_check_plugins#errors[agentenbasierten Check-Plugins] im Wesentlichen auch für SNMP-basierte Check-Plugin gilt, gehen wir hier nur auf SNMP-Spezifika ein.
+
+
+[#simulation]
+=== Simulationsmöglichkeiten
+
+[#savedwalk]
+==== Gespeicherte SNMP-Walks in {CMK} nutzen
+
+Im Artikel zur Überwachung via SNMP xref:snmp#simulation[zeigen wir detailliert,] wie Sie SNMP-Walks aus der GUI erstellen und wie Sie diese zur Simulation einsetzen können.
+So ist es auch möglich, Check-Plugins auf Testsystemen zu entwickeln, welche die SNMP-Hosts, für die Sie ein Plugin entwickeln, nicht erreichen können.
+In unserem GitHub-Repository finden Sie ein Beispiel eines link:https://github.com/Checkmk/checkmk-docs/blob/master/examples/devel_check_plugins_snmp/flintstones_fred_router.txt[SNMP-Walks,^] den wir in diesem Artikel verwenden, und den Sie zur Entwicklung und zum Testen des Check-Plugins nutzen können.
+
+
+[#dummydaemon]
+==== Dummy SNMP-Daemon
+
+Soll sichergestellt werden, dass bestimmte OIDs sich abhängig voneinander ändern, kann es sinnvoll sein, einen Dummy SNMP-Daemon zu programmieren, der in sich konsistente Daten ausliefert.
+Ein Hilfsmittel bei der Programmierung eines solchen kann das link:https://pypi.org/project/snmp-agent/[Python-Modul `snmp-agent`^] sein.
+
+
+[#hwbugs]
+=== Unkooperative Hardware
+
+Bevor ein Gerät mit einem neuen SNMP-basierten Check-Plugin überwacht werden kann, muss es zuerst einmal grundsätzlich über SNMP überwacht werden können.
+Die Übersicht bekannter Probleme mit Lösungsvorschlägen finden Sie daher im Artikel zur xref:snmp#cursedhardware[Überwachung via SNMP.]
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`~/local/lib/check_mk/base/plugins/agent_based/` |Ablageort für selbst geschriebene Check-Plugins.
+|`~/local/share/check_mk/mibs/` |Legen Sie hier SNMP-MIB-Dateien ab, die automatisch geladen werden sollen.
+|===
+////
+// end translation

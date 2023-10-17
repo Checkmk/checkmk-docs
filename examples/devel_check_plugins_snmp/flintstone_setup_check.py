@@ -3,10 +3,12 @@
 from .agent_based_api.v1 import register, Result, Service, startswith, SNMPTree, State
 
 def parse_flintstone(string_table):
+    # print(string_table)
     result = {}
     result["contact"] = string_table[0][0]
     result["name"] = string_table[0][1]
     result["location"] = string_table[0][2]
+    # print(result)
     return result
 
 def discover_flintstone(section):
@@ -17,11 +19,11 @@ def check_flintstone(section):
     for e in ["contact", "name", "location"]:
         if section[e] == "":
             missing += 1
-            yield Result(state=State.CRIT, summary=f"Missing info: {e}!")
+            yield Result(state=State.CRIT, summary=f"Missing information: {e}!")
     if missing > 0:
         yield Result(state=State.CRIT, summary=f"Missing fields: {missing}!")
     else:
-        yield Result(state=State.OK, summary="All required info is there.")
+        yield Result(state=State.OK, summary="All required information is available.")
 
 register.snmp_section(
     name = "flintstone_base_config",
