@@ -21,10 +21,11 @@ image::grafana_logo.png[width=168]
 Dennoch kann es sinnvoll sein, link:https://grafana.com/[Grafana^] als externes Graphing-System anzubinden,
 z.B. weil Sie Grafana bereits nutzen und die Daten von {CMK} mit Daten aus anderen Systemen in gemeinsamen Dashboards zusammenführen möchten.
 
-Beginnend mit Version {v20} ist es in allen {CMK}-Editionen möglich, {CMK} direkt als Datenquelle in Grafana 8.x anzusprechen und einzelne Metriken oder sogar ganze Graphen, wie sie in {CMK} vordefiniert sind, in Grafana anzeigen zu lassen.
+Ab Grafana 8.x ist es möglich, {CMK} in allen Editionen direkt als Datenquelle anzusprechen und einzelne Metriken oder sogar ganze Graphen, wie sie in {CMK} vordefiniert sind, anzeigen zu lassen.
 Zusätzlich können Sie dynamisch eigene Graphen erstellen lassen, indem Sie über xref:regexes#[reguläre Ausdrücke] eine Gruppe von Hosts und Services bestimmen, von denen bestimmte Metriken in dem Graphen berücksichtigt werden sollen.
 
 Dieser Artikel beschreibt, wie Sie Ihre Metriken aus {CMK} in Grafana abrufen und darstellen.
+Screenshots wurden mit Grafana 10.1 erstellt, frühere Versionen weichen in der Nutzerführung etwas davon ab.
 Eine ausführliche Anleitung, wie Sie Grafana nutzen und konfigurieren können, finden Sie in der link:https://grafana.com/docs/[Dokumentation bei Grafana Labs^].
 
 Das Grafana-Plugin wird unabhängig von {CMK} entwickelt und in einem eigenen link:https://github.com/Checkmk/grafana-checkmk-datasource[Github-Repository] gepflegt.
@@ -141,13 +142,29 @@ allow_loading_unsigned_plugins = tribe-29-checkmk-datasource
 ----
 
 Mit dieser Einstellung fügen Sie eine Ausnahme für dieses eine Plugin hinzu.
-Sollten Sie Grafana in einem (Docker-) Container einsetzen, verlinken Sie entweder die angepasste INI-Datei in den Container oder erstellen ein `Volume`, welches Sie auf das Verzeichnis im Container (`/etc/grafana`) mappen.
+Sollten Sie Grafana in einem (Docker-) Container einsetzen, haben Sie verschiedene Möglichkeiten.
+Sind nur kleine Konfigurationsänderungen nötig, können diese über Umgebungsvariablen vorgenommen werden:
+
+[{shell}]
+----
+{c-user} sudo docker run -d \
+-e GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=tribe-29-checkmk-datasource \
+-p 3000:3000 --name grafana \
+-v grafana-plugins:/var/lib/grafana/plugins \
+-v grafana-db:/var/lib/grafana grafana/grafana
+----
+
+Falls größere Anpassungen an der INI-Datei oder dem gesamten `/etc/grafana` erforderlich sind verlinken Sie entweder die angepasste INI-Datei in den Container oder erstellen ein `Volume`, welches Sie auf das Verzeichnis im Container (`/etc/grafana`) mappen.
 Es folgt ein Beispiel, wie Sie mit `--mount` die INI-Datei verlinken.
 Beachten Sie, dass es sich hier nur um ein Beispiel handelt und wahrscheinlich nicht direkt auf Ihre Umgebung passt:
 
 [{shell}]
 ----
-{c-user} sudo docker run -d pass:q[*--mount type=bind,source=/home/user/grafana/grafana.ini,target=/etc/grafana/grafana.ini*] -p 3000:3000 --name grafana -v grafana-plugins:/var/lib/grafana/plugins -v grafana-db:/var/lib/grafana grafana/grafana
+{c-user} sudo docker run -d \
+pass:q[*--mount type=bind,source=/home/user/grafana/grafana.ini,target=/etc/grafana/grafana.ini*] \
+-p 3000:3000 --name grafana \
+-v grafana-plugins:/var/lib/grafana/plugins \
+-v grafana-db:/var/lib/grafana grafana/grafana
 ----
 
 [#restart]
@@ -165,12 +182,14 @@ Anschließend ist das Plugin in der Oberfläche von Grafana verfügbar und kann 
 [#create_user]
 == Grafana-Nutzer in Checkmk erstellen
 
-Die Grafana-Anbindung benötigt auf Seite von {CMK} einen Nutzer, der über ausreichende Berechtigungen verfügt.
+Die Grafana-Anbindung benötigt auf Seite von {CMK} einen Nutzer, der über ausreichende Berechtigungen verfügt und sich zudem über ein _Automation secret_ statt einem Passwort authentifiziert.
 Normale Gast- oder Monitoring-Nutzer genügen nicht, aus Sicherheitsgründen sollten Sie jedoch keinen Administrator verwenden.
-Der einfachste Weg zu einem "passenden" Nutzer ist, die xref:wato_user#roles[Nutzerrolle] des Gastnutzers (`guest`) zu klonen und mit der zusätzlichen Berechtigung [.guihint]#User management# zu versehen.
-Falls Sie Ihre Grafana-Nutzerrolle auf einer anderen Rolle basieren lassen, achten Sie darauf, dass die Berechtigung [.guihint]#See all host and services# gesetzt ist.
 
-Ist die Rolle erstellt, legen Sie einen oder mehrere Grafana-Nutzer an.
+Der einfachste Weg zu einem "passenden" Nutzer ist, die xref:wato_user#roles[Nutzerrolle] des Gastnutzers (`guest`) zu klonen und mit der zusätzlichen Berechtigung [.guihint]#User management# (lesender Zugriff auf Nutzerinformationen) zu versehen.
+// MFS: User management ist sehr irreführend für eine read-only Berechtigung!
+Falls Sie Ihre Grafana-Nutzerrolle auf einer anderen Rolle basieren lassen, achten Sie darauf, dass neben [.guihint]#User management# auch die Berechtigung [.guihint]#See all host and services# gesetzt ist.
+
+Ist die Rolle erstellt, legen Sie einen oder mehrere Grafana-Nutzer mit _Automation secret_ an.
 Der Rolle zugewiesene Rechte können Sie später weiter einschränken, beispielsweise wird kein Zugriff auf BI oder Event Console benötigt.
 
 [#activate]
@@ -241,8 +260,8 @@ Wählen Sie zunächst die [.guihint]#Site#, danach filtern Sie nach einem [.guih
 Nutzen Sie für den ersten Test einen beliebigen Host, der den Windows- oder Linux-Agenten nutzt.
 Als [.guihint]#Service# wählen Sie [.guihint]#Check_MK#.
 Setzen Sie den Typ der [.guihint]#Aggregation# auf [.guihint]#Lines#.
-Als [.guihint]#Graph type# stehen [.guihint]#Single metric# oder [.guihint]#Template# (Vorlagen) zur Auswahl:
-Templates übernehmen Metriken aus {CMK}, welche auch kombinierte Graphen enthalten können.
+Als [.guihint]#Graph type# stehen [.guihint]#Single metric# oder [.guihint]#Predefined graph# (vordefinierte Graphen) zur Auswahl:
+[.guihint]#Predefined graphs# übernehmen Metriken aus {CMK}, welche auch kombinierte Graphen enthalten können.
 Unsere Screenshots zeigen hier die [.guihint]#Single metric#, welche die Gesamtausführungszeit des Agenten ([.guihint]#Time spent waiting for Checkmk agent#) enthält.
 
 .Auswahl der Metriken über Filter in den kommerziellen Editionen
@@ -268,8 +287,8 @@ Sie können die Metriken aus einem solchen vorgefertigten Graphen direkt in Graf
 Die Vorgehensweise entspricht zunächst der im vorherigen Abschnitt erläuterten.
 Allerdings wählen Sie zum Abschluss als [.guihint]#Graph type# den Eintrag [.guihint]#Predefined graph# und den zu verwendenden [.guihint]#Predefined graph# des Services.
 
-// Sollten Sie eine Fehlermeldung erhalten, dass die Auswahl kombinierter Metriken mit mehr als 100 Elementen unzulässig ist, schränken Sie mit weiteren Filtern ein.
-// Stellen Sie im Zweifel die Filter nach vorne, die eine deutliche Einschränkung der Ergebnismenge versprechen.
+Sollten Sie eine Fehlermeldung erhalten, dass die Auswahl kombinierter Metriken mit mehr als 200 Elementen unzulässig ist, schränken Sie mit weiteren Filtern ein.
+Stellen Sie im Zweifel die Filter nach vorne, die eine deutliche Einschränkung der Ergebnismenge versprechen.
 
 image::grafana_dashboard_predefined_config.png[]
 
