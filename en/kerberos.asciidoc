@@ -25,12 +25,155 @@ The following prerequisites must be satisfied before the configuration in {CMK} 
 * A Keytab -- e.g. as `/etc/krb5.keytab` -- has been installed and may be read by the site user.
 * The {CMK} server has been set up as the _Service Principal_.
 * The client's browser has been configured for access using Kerberos.
+// This block replaces the following list item and paragraph
+// start translation
+////
+
+_Optional:_
+
+Wenn Sie möchten, dass sich Nutzer *ohne SSO* weiterhin über die reguläre Login-Seite anmelden können, muss die xref:cookie[Cookie-Authentifizierung eingeschaltet] sein.
+////
+// end translation
 * Cookie authentication is enabled for the {CMK} site (to check with `omd config show` > Web GUI > `MULTISITE_COOKIE_AUTH: on`).
 
 The last point ensures that users without SSO can log in over the regular login dialog.
-This option can also be xref:kerberos#cookie[deactivated].
+This option can also be xref:cookie[deactivated].
 This prerequisite of course does not apply in such a case.
 
+
+
+
+
+
+
+
+
+
+
+
+// This block replaces the following 2 chapters. The final chapter Diagnostics remains.
+// start translation
+////
+
+[#configuration]
+== Integration von Kerberos
+
+Um {CMK} auf die Authentifizierung über Kerberos umzustellen, löschen Sie die Datei `~/etc/apache/conf.d/auth.conf` und schreiben sie neu.
+Die Einträge am Anfang des folgenden Dateiinhalts sind lediglich Beispiele.
+Passen Sie daher alle mit dem Ausdruck `Define` beginnenden Zeilen Ihrer Umgebung entsprechend an:
+
+.~/etc/apache/conf.d/auth.conf
+[source,apache,subs="attributes+"]
+----
+Define SITE My{CMK}Site
+Define REALM MyRealm.org
+Define SERVICENAME myservice.mydomain.tld
+Define KEYTAB /omd/sites/${SITE}/etc/apache/cmk_http.keytab
+
+<IfModule !mod_auth_kerb.c>
+  LoadModule auth_kerb_module /usr/lib/apache2/modules/mod_auth_kerb.so
+</IfModule>
+
+<Location /${SITE}>
+  <If "! %{HTTP_COOKIE} =~ /^(.*;)?auth_${SITE}/ && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/webapi.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+    ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+    ! %{REQUEST_URI} = '/${SITE}check_mk/ajax_graph_images.py' && \
+    ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+    ! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+  Order allow,deny
+  Allow from all
+  Require valid-user
+
+  AuthType Kerberos
+  AuthName "{CMK} Kerberos Login"
+
+  KrbMethodNegotiate on
+  KrbMethodK5Passwd off
+  KrbLocalUserMapping on
+
+
+  # Environment specific: Path to the Keytab, Realm and ServicePrincipal
+  KrbAuthRealm ${REALM}
+  KrbServiceName HTTP/${SERVICENAME}@${REALM}
+  Krb5Keytab ${KEYTAB}
+
+  # When Kerberos auth fails, show the login page to the user
+  ErrorDocument 401 '<html> \
+      <head> \
+        <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+      </head> \
+      <body> \
+        Kerberos authentication failed, redirecting to login page. \
+        <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+      </body> \
+    </html>'
+  </If>
+</Location>
+
+# These files are accessible unauthenticated (login page and needed ressources)
+<LocationMatch /${SITE}/(omd/|check_mk/(images/.*\.png|login\.py|.*\.(css|js)))>
+  Order allow,deny
+  Allow from all
+  Satisfy any
+</LocationMatch>
+----
+
+In der Beispiel-Konfiguration werden anschließend nur noch Authentifizierungen über Kerberos zugelassen.
+Sie müssen nun entscheiden, ob Sie weiterhin `basic auth` mit oder ohne Cookies - für Nutzer ohne SSO bzw. als Fallback - unterstützen möchten.
+Was Sie dazu einstellen müssen erklären wir in den beiden folgenden Abschnitten.
+
+
+[#basic_auth]
+== Basic auth zulassen
+
+Wenn Sie zusätzlich zum SSO per Kerberos weiterhin die Authentifizierung per `basic auth` erlauben möchten, müssen Sie in der oben angegebenen Konfiguration eine Zeile anpassen.
+
+Ändern Sie dazu in der folgenden Zeile den Wert auf `on`:
+
+.~/etc/apache/conf.d/auth.conf
+[{apache}]
+----
+  KrbMethodK5Passwd on
+----
+
+
+[#cookie]
+== Authentifizierung per Cookie prüfen
+
+Um die Authentifizierung komfortabler zu gestalten, bietet {CMK} darüber hinaus noch die Anmeldung über ein Cookie an. In einer unveränderten und neuen {CMK}-Instanz ist dies derzeit der Standard.
+
+Zu guter Letzt sollten Sie noch prüfen, ob diese Möglichkeit der Authentifizierung noch eingeschaltet ist und ob dies so bleiben soll.
+
+Den aktuellen Zustand Ihrer Instanz prüfen Sie mit dem folgenden Befehl:
+
+[{shell}]
+----
+{c-omd} omd config show MULTISITE_COOKIE_AUTH
+----
+
+Wenn Sie hier ein `on` zurückbekommen und die Authentifizierung per Cookie - beispielsweise als Fallback - weiterhin aktiviert lassen wollen, sind Sie an dieser Stelle fertig.
+
+Möchten Sie die `MULTISITE_COOKIE_AUTH` hingegen abschalten, funktioniert dies über den folgenden Befehl:
+
+[{shell}]
+----
+{c-omd} omd config set MULTISITE_COOKIE_AUTH off
+----
+
+Löschen Sie anschließend noch die Datei `cookie_auth.conf` aus dem Apache-Verzeichnis der Instanz:
+
+[{shell}]
+----
+{c-omd} rm ~/etc/apache/conf.d/cookie_auth.conf
+----
+////
+// end translation
 
 == Integrating Kerberos
 
@@ -112,6 +255,22 @@ The following line can also be omitted from or commented out in the `auth.conf` 
 ----
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 == Diagnostics
 
 You can check with the following commands, if your Kerberos setup is working:
@@ -121,50 +280,3 @@ You can check with the following commands, if your Kerberos setup is working:
 {c-root} kinit -p username
 {c-root} klist
 ----
-
-// H2:Configuration on the server
-//
-// So that the {CMK} server can communicate with the Kerberos server, and a user's
-// authenticity can be verified, the server must be set up as a Service Principal.
-// If this has not yet been configured when the Kerberos-Client is being installed,
-// this can be performed retrospectively in the `krb5.conf` file.
-// Substitute your domain in the `mycompany.org` path:
-//
-//  F+:/etc/krb5.conf
-//  [libdefaults]
-//          default_realm = MYCOMPANY.ORG
-//          forwardable = true
-//          proxiable = true
-//  [realms]
-//          MY.REALM.ROOT = {
-//                  kdc = kerberos.mycompany.org
-//                  admin_server = kerberos.mycompany.org
-//                  default_domain = mycompany.org
-//          }
-//
-//  [domain_realm]
-//          .mycompany.org = MYCOMPANY.ORG
-//          mycompany.org = MYCOMPANY.ORG
-//
-//  [logging]
-//          kdc = SYSLOG:INFO:DAEMON
-//          admin_server = SYSLOG:INFO:DAEMON
-//          default = SYSLOG:INFO:DAEMON
-//  F-:
-//
-// Next define the server as _Service Principal_.
-// Via this, in the future a client can verify that it really concerns the requested
-// service (Check_MK), and the service can in turn authenticate the client.
-// // // Über diesen kann ein Client später verifizieren, dass es sich
-// // // wirklich um den angeforderten Dienst (Check_MK) handelt und der Dienst kann
-// // // wiederum den Client authentifizieren:
-//
-// C+:
-// RP:kadmin -p myprincipaladmin -q "addprinc -randkey HTTTP/myserver.mycompany.org"
-// C-:
-//
-// LI:Test with kinit/klist
-// C+:
-// RP:kinit -k -t /path/to/http.keytab HTTP/myserver.mycompany.org
-// RP:klist -e
-// C-:
