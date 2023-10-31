@@ -1,0 +1,349 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+include::global_attr.adoc[]
+= Log-Dateien überwachen
+:revdate: 2021-11-18
+:title: Log-Dateien überwachen
+:description: In {CMK} können Sie mit mk_logwatch Log-Dateien auf bestimmte Inhalte prüfen und überwachen.
+
+{related-start}
+xref:mk_filestats#[Dateien überwachen]
+xref:ec#[Die Event Console]
+{related-end}
+
+////
+Probably
+soon
+you
+can
+henceforth
+enjoy the new article on mk_logwatch.
+////
+
+[#basics]
+== Grundlagen zur Überwachung von Log-Dateien
+
+////
+Inhalt des alten Artikels logfiles
+
+TI:Monitoring of Logfiles
+MT:Log File Monitoring for Windows, Linux & UNIX
+MD:With Checkmk you can monitor service logs, application logs, syslog data, log files, event logs and system logs of Windows, Linux and UNIX servers.
+DT:outdated
+KW:Eventlog,syslog,logfile
+SA:windows
+
+H1:How check_mk monitors logfiles
+
+The monitoring of the contents of logfiles is an especially challenging
+task for a Nagios administrator. The key difficulty is, that log messages
+are event based by nature - whereas Nagios is based on states. Checkmk's
+logwatch mechanism overcomes this problem by defining the critical state
+for a logfile as "<i>no unacknownledged critical log messages</i>".
+
+At the beginning of the monitoring a logfile starts in the state OK -
+regardless of its contents. When a new critical message is seen in the
+file, it is stored on the Nagios server for reference by the
+administrator. The state of the logfile changes to CRITICAL and stays
+in that state unless the
+administrator acknowledges the messages.  New critical messages
+arriving while in CRITICAL state are simply being stored and do not
+change the state.
+
+Checkmk provides a webpage <tt>logwatch.php</tt> that
+displays log messages and allows the delete (and thus acknowledge) them in an easy way:
+
+BI:logwatch.png
+
+H1:Logwatch on Linux and UNIX
+
+H2:Installing the logwatch extension
+Logfiles on Linux and UNIX are monitored with the logwatch extension for the check_mk_agent. In
+the directory <tt>/usr/share/check_mk/agents</tt> you find the file <tt>mk_logwatch</tt>.
+It is a small Python-programm that must be installed into the <tt>plugins</tt> directory of
+the agent (you specify that directory while running <tt>setup.sh</tt>). The default path for
+the plugins directory is <tt>/usr/lib/check_mk_agent/plugins</tt>.  Please make sure that your
+host has Python in at least version 2.3 installed. On Linux this is most probably the case. On
+UNIX you probably have to install it.
+
+On Linux another way is to install the logwatch extension via its RPM or DEB
+package.
+
+H2: Configuration
+
+Logwatch needs to know which files to monitor and for which patterns
+to look. This is done in the configuration file <tt>logwatch.cfg</tt>
+on each target host. That file is searched in the following
+directories:
+
+<ul>
+<li>In the directory specified by the environment variable <tt>LOGWATCH_DIR</tt></li>
+<li>In the check_mk configuration directory you specified during <tt>setup.sh</tt>.
+</li>
+<li>If <tt>LOGWATCH_DIR</tt> is not set and <tt>mk_logwatch</tt> is called
+manually, then it looks in the currenty directory for that file.</li>
+</ul>
+
+It is also possible to split the config in multiple files. Just create a folder
+in <tt>LOGWATCH_DIR</tt> named <tt>logwatch.d</tt>. Inside this directory
+you can place multipe files ending with .cfg
+
+If you've used the DEB or RPM package for installation
+or used the default settings for setup as root,
+the path to the file is <tt>/etc/check_mk/logwatch.cfg</tt>. That file
+lists all relevant logfiles and defines patterns that should indicate
+a critical or warning level if found in a log line. The following example defines
+some patterns for <tt>/var/log/messages</tt>:
+
+F+:/etc/check_mk/logwatch.cfg
+/var/log/messages
+ C Fail event detected on md device
+ O Backup created*
+ I mdadm.*: Rebuild.*event detected
+ W mdadm\[
+F-:
+
+Each pattern is a regular expression and
+must be prefixed with one space, one of <tt>C</tt>, <tt>W</tt>, <tt>O</tt>
+and <tt>I</tt> and another space. The upper example means:
+
+<ul>
+<li>Lines containing <tt>Fail event detected on md device</tt> are critical.</li>
+<li>Lines containing <tt>Backup created on 2012-11-02</tt> are ok.</li>
+<li>Lines containing <tt>mdadm</tt>, then something, then <tt>Rebuild</tt>,
+than something else and then <tt>event detected</tt> will be ignored.</li>
+<li>All other lines containing <tt>mdadm[</tt> are warnings.</li>
+<li>All other lines will also be ignored.</li>
+</ul>
+
+You may list several logfiles separated by spaces:
+F+:/etc/check_mk/logwatch.cfg
+/var/log/kern /var/log/kern.log
+ C panic
+ C Oops
+F-:
+
+It is also allowed to use shell globbing patterns in file names:
+F+:/etc/check_mk/logwatch.cfg
+/sapdata/*/saptrans.log
+ C critical.*error
+ C some.*other.*thingy
+F-:
+
+An arbitrary number of such chunks can be listed in <tt>logwatch.cfg</tt>.
+Emtpy lines and comment lines will be ignored. This example defines
+different patterns for several logfiles:
+
+F+:/etc/check_mk/logwatch.cfg
+# This is a comment: monitor system messages
+/var/log/messages
+ C Fail event detected on md device
+ I mdadm.*: Rebuild.*event detected
+ W mdadm\[
+
+# Several instances of SAP log into different subdirectories
+/sapdata/*/saptrans.log
+ C critical.*error
+ C some.*other.*thingy
+F-:
+
+H2: Rewriting lines
+Its possible to rewrite lines by simple
+add a second Rule after the matching pattern beginning with R
+
+F+:/etc/check_mk/logwatch.cfg
+/var/log/messages
+ C Error: (.*)
+ R There is error: \1
+F-:
+You can group multipe matches with ( ) and use them in the rewrite with \1, \2...
+
+H2: Merging multiple lines
+Logwatch can be configured to process multiple lines together as one log line, this
+is useful, e.g. to process java traces. To configure this, you need to add a second rule
+after the matching pattern beginning with <tt> A </tt>. For example:
+
+F+:/etc/check_mk/logwatch.cfg
+/var/log/messages
+ C Error
+ A ^\s
+F-:
+
+This joins each line beginning with a space or tab directly following a line containing
+<tt>Error</tt> together to a single line.
+
+H2: Logfile options
+<tt>mk_logwatch</tt> allows to limit the time
+needed to parse the new messages in a logfile. This helps in cases
+where logfiles are growing very fast (i.e. due to reoccuring error,
+and endless loop or similar). Those cases often arise in the context
+of Java application servers logging long stack traces.
+
+You can limit the number of new lines to be processed in a logfile
+as well as the time spent during parsing the file. This is done
+by appending options to the filename lines:
+
+F+:/etc/check_mk/logwatch.cfg
+/var/log/foobar.log <b>maxlines=10000 maxtime=3 overflow=W</b>
+ C critical.*error
+ C some.*other.*thingy
+F-:
+
+There are also options for limiting the length of the <i>lines</i> in a logfile and for
+getting a warning of the size of a logfile is too large (e.g. because of a filed
+logfile rotation).
+
+The options have the following meanings:
+<table>
+<tr><td class=tt>maxlines</td><td>the maximum number of <i>new</i> log messages that will by
+parsed in one turn in this logfile</td></tr>
+<tr><td class=tt>maxtime</td><td>the maximum time in seconds that will be spent parsing the
+new lines in this logfile</td></tr>
+<tr><td class=tt>overflow</td><td>When either the number of lines or the time is exceeded,
+an <i>artificial logfile message</i> will be appended, so that you will be warned.
+The class of that message is per default <tt>C</tt>, but you can also set it to
+<tt>W</tt> or <tt>I</tt>. Setting <tt>overflow=I</tt> will silently ignore
+any succeeding messages. If you leave out this option, then a <tt>C</tt> is assumed.</td></tr>
+<tr><td class=tt>nocontext</td><td>This option can be used to disable processing of context
+log messages, which occur together with a pattern matched line. To disable processing, add
+<tt>nocontext=1</tt> as option.</td></tr>
+<tr><td class=tt>maxlinesize</td><td><b class=new>1.2.6</b> The maximum number of characters that are processed
+of each line of the file. If a line is longer than this, the rest of the line is being
+truncated and the word <tt>[TRUNCATED]</tt> is being appended to the line. You can filter
+for that word in the expressions if you like.</td></tr>
+<tr><td class=tt>maxfilesize</td><td><b class=new>1.2.6</b> The maximum number of bytes the logfile is expected to be in size.
+If the size is exceeded, then <i>once</i> there is created an artificial logfile message
+with the classification <tt>W</tt>. The text of this warning will be:
+<tt>Maximum allowed logfile size (<b>12345</b> bytes) exceeded.</tt> You cannot do any classification
+of this line right in the configuration of the plugin. If you need a reclassification then
+please do this on the Checkmk server.</td></tr>
+</table>
+
+Note (1): when the number of new messages or the processing time is exceeded, the non-processed new
+log messages will be skipped and not parsed even in the next run. That way the agent always
+keeps in sync with the current end of the logfile.  From that follows that you might have to
+manually check the contents of the logfile if an overflow happened. We propose letting
+the overflow level set to <tt>C</tt>.
+
+Note (2): It is not neccessary to specify both <tt>maxlines</tt> and <tt>maxtime</tt>. It also
+allowed to specify only one limit. The default is not to impose any limit at all.
+
+H2: Filtering filenames with regular expressions
+Sometimes the file matching patterns with <tt>*</tt>
+and <tt>?</tt> are not specific enough in order to specify logfiles.
+In such a case you can use the new options <tt>regex</tt> or <tt>iregex</tt> in order
+to further filter the filenames found by the pattern. Here is an example:
+
+F+:/etc/check_mk/logwatch.cfg
+/var/log/*.log <b>regex=/[A-Z]+\.log$</b>
+ C foo.*bar
+ W some.*text
+F-:
+
+This just includes files whose path end with a <tt>/</tt>, followed
+by one or more upper case letters followed by <tt>.log</tt>, such
+as <tt>/var/log/FOO.log</tt>. The file <tt>/var/log/bar.log</tt> would
+be ignored by this line.
+
+<table>
+<tr><td class=tt>regex</td><td>Extended regular expression that must be found
+in the file name. Otherwise the file will be ignored. Use <tt>^</tt> for matching
+the beginning of the path and <tt>$</tt> for matching the end.</td></tr>
+<tr><td class=tt>iregex</td><td>The same as <tt>regex</tt>, but the match is
+made case insensitive.</td></tr>
+</table>
+
+Note: In each logfile line you can use <tt>regex</tt> and <tt>iregex</tt> at
+most once.
+
+H2: State Persistency
+
+In order to only send new messages, <tt>mk_logwatch</tt> remembers
+the current byte offset of each logfile seen so
+far. It keeps that information in <tt>/etc/check_mk/logwatch.state</tt>.
+If a logfile is scanned for the very first time, all existing messages
+are considered to be historic and are ignored - regardless any patterns.
+This behaviour is important. Otherwise you would be
+bombarded with thousands of ancient messages when check_mk runs for
+the first time.
+
+H2: Context
+
+When something bad happens that has usually more impact into the
+logfile than one single line. In order to make a error diagnosis
+easier, logwatch always sends <b>all</b> new lines seen in a logfile
+if at least one of those lines is classified as warning or critical.
+If you monitor each host once in a minute (a quasi standard with Nagios),
+you'll then see all messages appeared in that last minute.
+
+H1: Logwatch on Windows
+
+The <tt>check_mk_agent.exe</tt> for Windows automatically monitors the
+[windows|Windows Eventlog]. Its output is fully compatible with that of the
+logwatch extension for Linux/UNIX. The main difference is that
+Windows already classifies its messages with <b>Warning</b> or <b>Error</b>.
+Furthermore the agent automatically
+monitors all existing event logs it finds, so no configuration is needed by you
+at all on the target host. It is - however - possible to reclassify messages
+to a higher or lower level via the configuration variable <tt>logwatch_patterns</tt>.
+Messages classified as informational by Windows cannot be reclassified since
+they are not sent by the agent. Please refer to the article about the [windows|Windows agent]
+for details on <tt>logwatch_patterns</tt>.
+
+The Windows agent also now supports the monitoring of custom textfiles, just
+like the linux/unix agent. For details please refer to the article [windows|Windows logfiles monitoring].
+
+H1: The logwatch web page
+
+Whenever check_mk detects new log messages, it stores them
+on the Nagios host in a directory that defaults to
+<tt>/var/lib/check_mk/logwatch</tt>. Each host gets a
+subdirectory, each logfile's messages are stored in one file.
+
+The Nagios service that reflects a logfile is in warning
+or critical state, if that file exists and contains at
+least one warning or critical message resp.
+
+The <tt>/check_mk/logwatch.py</tt> web page allows you to nicely
+browse the messages in that file and acknowledges them, if
+you consider the problem to be solved. Acknowledgement
+means deletion of the file. Shortly afterwards the service
+of the logfile enters OK state in Nagios.
+
+The default Nagios templates of Checkmk automatically
+create <tt>notes_url</tt> entries for all logwatch based
+services to that page.
+
+H1: Limiting the size of unaknowledged messages
+In some situations the number of error messages can get
+quite large in a short time. In order to make the web
+pages still usage, the logwatch check stops to store
+new error messages on the monitoring server. The
+maximum size of a logfile is set to <tt>500000</tt> Bytes.
+This can be overridden in <tt>main.mk</tt> by setting
+<tt>logwatch_max_filesize</tt> to another number:
+
+F+:main.mk
+# Limit maximum size of stored message per file to 10 KB
+logwatch_max_filesize = 10000
+F-:
+////
+
+[#troubleshooting]
+== Troubleshooting
+
+[#files]
+== Dateien und Verzeichnisse
+
+Alle Pfadangaben für den {CMK}-Server sind relativ zum Instanzverzeichnis (z.B. `/omd/sites/mysite`) angegeben.
+
+=== mk_logwatch
+[cols="15,39,~",options="header"]
+|===
+|Ort |Pfad |Bedeutung
+|{CMK}-Server |`~/share/check_mk/agents/cfg_examples/logwatch.cfg` |Beispielkonfigurationsdatei
+|{CMK}-Server |`~/share/check_mk/agents/plugins/mk_logwatch.py` |Python-3-Agentenplugin inklusive Erläuterungen
+|{CMK}-Server |`~/share/check_mk/agents/plugins/mk_logwatch_2.py` |Python-2-Agentenplugin inklusive Erläuterungen
+|Linux-Host |`/etc/check_mk/logwatch.cfg` |Konfigurationsdatei - von der Agentenbäckerei oder manuell erstellt
+|Windows-Host |`c:\ProgramData\checkmk\agent\config\logwatch.cfg` |Konfigurationsdatei - von der Agentenbäckerei oder manuell erstellt
+|===
