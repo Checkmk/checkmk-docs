@@ -1,0 +1,316 @@
+// -*- coding: utf-8 -*-
+// IGNORE BTRFS Checkmk Herkopieren Hinkopieren Instanzbenutzer Paläontologie Softlink Softlinks Unmount ZFS checkmk instanzspezifischen localdev
+include::global_attr.adoc[]
+= Linux-Upgrade auf dem {CMK}-Server
+:revdate: 2023-04-27
+:title: Linux-Upgrade auf dem {CMK}-Server
+:description: Was es beim Release-Upgrade der Linux-Distribution auf dem {CMK}-Server zu beachten gibt, erfahren Sie in diesem Artikel.
+
+{related-start}
+link:update.html[Updates und Upgrades]
+link:install_packages.html[Grundsätzliches zur Installation von {CMK}]
+{related-end}
+
+
+[#intro]
+== Einleitung
+// TK: Bei CMK heißt der Versionswechsel Update, bei Linux Upgrade. Wenns um Linux geht, müssen wir wohl beim Begriff Upgrade bleiben.
+// TK: Evtl. am Anfang des Artikels den Unterschied klarmachen?
+
+Für das Release-Upgrade der Linux-Distribution auf einem {CMK}-Server gibt es verschiedene empfohlene Methoden.
+Welche davon für Sie die richtige ist, hängt von den Möglichkeiten Ihrer IT-Landschaft, dem Datenbestand der {CMK}-Installation und der angestrebten Ausfallzeit ab.
+Die unterschiedlichen Methoden mit Ihren jeweiligen Voraussetzungen stellen wir hier vor.
+
+Im Wesentlichen ist das zum einen die Aktualisierung an Ort und Stelle – in der Archäologie oder Paläontologie wird die Arbeit am Fundort auf Lateinisch _in situ_ genannt.
+Und zum anderen die Sicherung als Archiv, auf welche die Neuinstallation des Grundsystems und schließlich die Wiederherstellung eben jenen Archivs erfolgt – nicht unähnlich zur Arbeit im Labor _ex situ_.
+Englisch wird für die beiden Verfahren mitunter analog _in-place_ oder _out-of-place_ verwendet.
+
+Auch Kombinationen der vorgestellten Methoden sind möglich, zum Beispiel, wenn Sie `/opt/omd` oder `/opt/omd/sites` auf einem eigenen Mount-Punkt abgelegt haben.
+
+Das Release-Upgrade spielen wir hier exemplarisch anhand des Wechsels von Ubuntu 20.04 (Focal) auf 22.04 (Jammy) durch.
+Bei anderen Distributionen weichen die Befehle für Upgrade und Paketmanagement hiervon mehr oder weniger stark ab.
+// TK: So schlimm ists doch gar nicht. Die einzigen Befehle, die Distrospezifisch sind, sind doch apt install und apt-get remove. Vielleicht so:
+// Bei anderen Distributionen weichen die Befehle für das Paketmanagement, d.h. zum Installieren und Deinstallieren, von den gezeigten mehr oder weniger stark ab.
+
+Unser Beispielsystem nutzt nur eine einzige xref:glossar#site[Instanz.]
+Falls Sie mehrere Instanzen auf dem zu aktualisierenden System betreiben (beispielsweise eine produktive und eine zum Testen), sind die instanzspezifischen Befehle für jede zu wiederholen.
+
+
+[#getyourbackupdone]
+== Hinweise zum Backup
+
+Die Wichtigkeit einer Datensicherung ausreichenden Umfangs, welche auf Konsistenz geprüft ist, müssen wir IT-Profis nicht wirklich erklären.
+// TK: Beim 2. Lesen: Ist IT-Profis nicht ein wenig kumpelhaft (und ausschliessend für die Amateure)? Wir Profis wissen scho, was wichtig ist...
+Im Idealfall – beispielsweise beim Betrieb von {CMK} in einer virtuellen Maschine – ist eine Vollsicherung leicht durch Kopieren von Festplatten-Images möglich.
+
+Wir empfehlen mindestens:
+
+* Eine Sicherung mit den von {CMK} bereitgestellten Tools, entweder auf der Kommandozeile mit dem xref:omd_basics#[Befehl `omd`] oder im xref:backup#[Setup] erstellt.
+Dies kann vorbereitend im laufenden Betrieb erledigt werden.
+
+* Eine Sicherung des Inhaltes von `/opt/omd/sites` mit Werkzeugen des Betriebssystems nach Stoppen der Instanz und Unmount des instanzspezifischen `/tmp` Dateisystems.
+Dies kann im Zuge des Upgrades durchgeführt werden.
+
+Bewahren Sie die Sicherung _separat_ von der zu aktualisierenden Maschine auf und testen Sie das Backup _vor_ den ersten Änderungen am Produktivsystem.
+
+Falls Sie sich bei der Installation des {CMK}-Servers für ein _Copy-on-Write-Dateisystem_ wie ZFS oder BTRFS entschieden haben, sollten Sie vor dem Upgrade _Snapshots_ erstellen.
+Diese ersetzen kein separat gelagertes Backup, können aber bei Wiederherstellung des Ursprungszustandes nach einem fehlgeschlagenen Upgrade helfen, Ausfallzeiten erheblich zu reduzieren.
+
+
+[#insitu]
+== Upgrade an Ort und Stelle _(in situ)_
+// Die Methode 'Alex'
+// MFS: Alex ist der Beste!
+// MFS: Dreifache Verwendung desselben Begriffs für Suchmaschinen.
+
+Diese Methode ist oft beim Einsatz von {CMK} auf dedizierter Hardware mit großen Datenbeständen sinnvoll, wo das Hinkopieren eines Archivs und das Herkopieren für dessen Wiederherstellung die Ausfallzeit deutlich erhöhen würde.
+
+
+=== Vorbereitung
+
+Die Vorbereitung besteht vor allem aus der Entfernung _aller_ bereits jetzt nicht mehr benötigter {CMK}-Pakete.
+So vermeiden Sie beim eigentlichen Upgrade Probleme im Paketmanagement.
+Daneben sollten Sie bereits jetzt das richtige {CMK}-Installationspaket für die neue Distributionsversion herunterladen.
+
+. Verschaffen Sie sich zuerst einen Überblick über installierte {CMK}-Versionen...
+
++
+[{shell}]
+----
+{c-root} omd versions
+2.0.0p37.cre
+2.0.0p39.cee
+2.0.0p38.cee (default)
+----
+
+. ...und dann, welche davon tatsächlich im Einsatz sind:
+
++
+[{shell}]
+----
+{c-root} omd sites
+SITE      VERSION        COMMENTS
+mysite    2.0.0p38.cee    default version
+----
+
++
+Von diesen müssen sie die Installationspakete für die neue Betriebssystemversion herunterladen.
+*Wichtig:* Die Edition und die Versionsnummer von {CMK} müssen exakt der bisher verwendeten entsprechen.
+
+. Deinstallieren Sie jetzt alle nicht benutzten {CMK}-Versionen.
+Im folgenden Befehl sorgt der Parameter `--purge` dafür, auch alte Konfigurationsdateien zu tilgen.
+
++
+[{shell}]
+----
+{c-root} apt-get remove --purge -y check-mk-enterprise-2.0.0p39
+Reading package lists... Done
+Building dependency tree       
+Reading state information... Done
+The following packages will be REMOVED:
+  check-mk-enterprise-2.0.0p39*
+0 upgraded, 0 newly installed, 1 to remove and 1 not upgraded.
+After this operation, 884 MB disk space will be freed.
+(Reading database ... 125980 files and directories currently installed.)
+Removing check-mk-enterprise-2.0.0p39 (0.focal) ...
+(Reading database ... 89444 files and directories currently installed.)
+Purging configuration files for check-mk-enterprise-2.0.0p39 (0.focal) ...
+Processing triggers for systemd (245.4-4ubuntu3.21) ...
+----
+
+=== Durchführung
+
+Und nun zur heißen Phase, in welcher der {CMK}-Server nicht zur Verfügung steht.
+
+. Stoppen Sie Ihre {CMK}-Instanz:
+
++
+[{shell}]
+----
+{c-root} omd stop mysite
+----
+
+. Benennen Sie den Softlink um, welcher auf die verwendete {CMK}-Installation zeigt. Der folgende Befehl ändert ihn von `version` zu `_version`:
+
++
+[{shell}]
+----
+{c-root} mv -v /opt/omd/sites/mysite/{,_}version
+----
+
+. Jetzt können Sie {CMK} deinstallieren.
+In diesem Fall behalten Sie vorhandene Konfigurationsdateien:
+
++
+[{shell}]
+----
+{c-root} apt-get remove -y check-mk-enterprise-2.0.0p38
+Reading package lists... Done
+Building dependency tree       
+Reading state information... Done
+The following packages will be REMOVED:
+  check-mk-enterprise-2.0.0p38*
+...
+----
+
+. Führen Sie das Upgrade von Linux entsprechend der Anleitung des jeweiligen Distributors durch.
+Im Fall von Ubuntu wäre das:
+
++
+[{shell}]
+----
+{c-root} do-release-upgrade
+----
+
++
+Wird ein Neustart empfohlen, folgen Sie der Empfehlung bevor Sie zum nächsten Schritt gehen.
+
+. Machen Sie die Umbenennung des Softlinks rückgängig, welcher auf die verwendete {CMK}-Installation zeigt. Der folgende Befehl ändert ihn wieder von `_version` zu `version`:
+
++
+[{shell}]
+----
+{c-root} mv -v /opt/omd/sites/mysite/{_,}version
+----
+
+. Installieren Sie nun das zur neuen Version der verwendeten Distribution passendes Paket von {CMK}.
+Im Falle von Ubuntu genügt an dieser Stelle der folgende Befehl:
+
++
+[{shell}]
+----
+{c-root} apt install /tmp/check-mk-enterprise-2.0.0p38_0.jammy_amd64.deb
+----
+
++
+Halten Sie sich bei der Neuinstallation von {CMK} an die jeweilige xref:install_packages#[detaillierte Installationsanleitung] für Ihre jeweilige Distribution.
+
+. Starten Sie Ihre {CMK}-Instanz:
+
++
+[{shell}]
+----
+{c-root} omd start mysite
+----
+
+// MFS: 2. und 5. sind eher Workaround, um auf nicht ganz Debian typisches Verhalten zu reagieren, siehe CMK-13090
+
+////
+MFS: Einschub nach 3?
+. Hängen Sie dann das `tmp`-Verzeichnis der Site aus:
+
++
+[{shell}]
+----
+{c-root} umount /opt/omd/sites/mysite/tmp
+----
+
++
+Sollte das Aushängen fehlschlagen, führen Sie bitte einen Neustart durch und machen Sie danach an diesem Punkt weiter.
+
+. An dieser Stelle ist es sinnvoll, eine lokale Sicherung per _Snapshot_ oder `rsync` durchzuführen.
+Die Trailing Slashes im Pfadnamen sind wichtig, damit `rsync` Verzeichnisinhalte kopiert.
+
++
+[{shell}]
+----
+{c-root} rsync -avSP /opt/omd/ /opt/omd.bak/
+----
+////
+
+
+[#exsitu]
+== Archivierung, Neuinstallation und Wiederherstellung _(ex situ)_
+// Die Methode 'Manni'
+// MFS: Manni ist natürlich auch der Beste!
+
+Diese Methode bietet sich häufig beim Einsatz von {CMK} in virtualisierten Umgebungen an, wo es möglich ist, einen zweiten Server mit der neuen Distributionsversion vorbereitend "hochzuziehen" und mit diesem im Parallelbetrieb bereits erste Tests durchzuführen.
+Zudem ist die Flexibilität größer, weil auch ein Wechsel der Linux-Distribution möglich ist.
+Technisch entspricht das der Vorgehensweise in einem Schadensfall als _Backup, Reinstall and Restore_.
+
+=== Vorbereitung
+
+Wesentlicher Vorbereitungsschritt ist, das passende {CMK}-Installationspaket für die neue Distributionsversion herunterzuladen.
+
+// . {CMK} auf höchst-mögliches Patchlevel bringen
+
+Verschaffen Sie sich einen Überblick über die von den Instanzen genutzten {CMK}-Versionen:
+
+[{shell}]
+----
+{c-root} omd sites
+SITE      VERSION        COMMENTS
+mysite    2.0.0p38.cee    default version
+----
+
+Von diesen müssen sie die Installationspakete für die neue Betriebssystemversion herunterladen.
+
+*Wichtig:* Die Edition und die Versionsnummer von {CMK} müssen exakt der bisher verwendeten entsprechen.
+
+=== Durchführung
+
+Die Schritte, welche hier seriell dargestellt werden, können Sie oft teilweise parallelisieren, was die Ausfallzeit minimieren hilft.
+So zum Beispiel bei Verwendung virtueller Maschinen oder wenn sowieso eine Hardware-Neuanschaffung ansteht.
+
+. Stoppen Sie Ihre {CMK}-Instanz – hier ist dieser Schritt nicht zwingend, aber aus Gründen der Konsistenz der Daten empfohlen:
+
++
+[{shell}]
+----
+{c-root} omd stop mysite
+----
+
+. Erstellen Sie ein xref:omd_basics#[Archiv] (in anderen Kontexten Backup) der Instanz.
+Unser Beispiel verwendet als Ziel ein Netzwerk-Share, welches später auch auf der neuen Installation bereitstehen wird.
+
++
+[{shell}]
+----
+{c-omd} omd backup /mnt/someshare/mysite.tgz
+----
+
+. Bereiten Sie nun das Zielsystem vor und konfigurieren Sie dort die für {CMK} benötigte Software, beispielsweise das E-Mail-System.
+Verwenden Sie denselben Host-Namen und dieselbe IP-Adresse wie beim Ausgangssystem.
+
+. xref:install_packages#[Installieren] Sie die zuvor heruntergeladene {CMK}-Version, passend für die neue Distribution.
+
++
+Im Falle von Ubuntu genügt an dieser Stelle der folgende Befehl:
+
++
+[{shell}]
+----
+{c-root} apt install /tmp/check-mk-enterprise-2.0.0p38_0.jammy_amd64.deb
+----
+
+. Erstellen Sie eine neue Instanz mit demselben Namen wie die gesicherte Instanz:
+
++
+[{shell}]
+----
+{c-root} omd create mysite
+----
+
+. Führen Sie nun als Instanzbenutzer die Wiederherstellung aus dem Archiv durch:
+
++
+[{shell}]
+----
+{c-omd} omd restore /mnt/someshare/mysite.tgz
+----
+
+. Starten Sie Ihre {CMK}-Instanz:
+
++
+[{shell}]
+----
+{c-omd} omd start
+----
+
+// MFS: omd create mysite und omd restore /mnt/someshare/mysite.tgz könnten zusammengefasst werden, indem man omd restore als root durchführt, das kann bei älteren CMK-Versionen allerdings manuelle Nacharbeit erfordern, daher würde ich gerne die Methode mit zwei Schritten belassen.
+
+////
+[#mixed]
+== Mischform Sites auf eigener Partition
+MFS: Rücksprache mit Consulting, wie groß der Bedarf ist.
+////
