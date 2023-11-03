@@ -1,0 +1,274 @@
+// -*- coding: utf-8 -*-
+// IGNORE BTRFS Deregister reinstallation unmounting virtualized Checkmk Deutsch ZFS checkmk localdev
+include::global_attr.adoc[]
+= Linux upgrade on the {CMK} server
+:revdate: 2023-06-19
+:title: Linux upgrade on the {CMK} server
+:description: What to consider when release upgrading the Linux distribution on the {CMK} server, you will learn in this article.
+
+{related-start}
+link:update.html[Updates and Upgrades]
+link:install_packages.html[Basic information on the installation of {CMK}]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+There are a number of recommended methods for upgrading the Linux distribution release on a {CMK} server.
+Which one is the right one for you depends on the capabilities of your IT landscape, the inventory of data on the {CMK} installation, and the anticipated downtime.
+We present the various methods with their respective requirements here.
+
+Essentially, one method is to update on the spot, sometimes referred to as _in situ_ (from Latin).
+The other method uses a backup as an archive, on which the reinstallation of the basic system and finally the restoration of the same archive takes place, sometimes correspondingly known as _ex situ_.
+In English the analogous terms _in-place_, or _out-of-place_ are sometimes used for these two methods.
+
+Combinations of the methods presented here are also possible, for example, if you have placed `/opt/omd` or `/opt/omd/sites` on a separate mount point.
+
+We will demonstrate the release upgrade here using the change from Ubuntu 20.04 (Focal) to 22.04 (Jammy) as an example.
+For other distributions, the upgrade and package management commands may differ from this to a greater or lesser extent.
+
+Our example system uses only a single xref:glossar#site[site].
+If you run multiple sites on the system to be upgraded (for example, one for production and one for testing), repeat the appropriate site-specific commands for each.
+
+
+[#getyourbackupdone]
+== Some notes on backups
+
+We IT professionals do not really need to explain the importance of a sufficiently comprehensive data backup, which is also checked for consistency.
+In the ideal scenario -- for example, when running {CMK} in a virtual machine -- a full backup is easily achieved by copying hard disk images.
+
+As a minimum, we recommend:
+
+* Creating a backup using the tools provided by {CMK}, either via the command line using the xref:omd_basics#[`omd` command] or via the xref:backup#[Setup].
+This can be done in preparation while the system is still running.
+
+* A backup of the contents of `/opt/omd/sites` using operating system tools after stopping the site and unmounting the site-specific `/tmp` file system.
+This can be done during the upgrade.
+
+Keep the backup _separate_ from the machine being upgraded and test the backup _before_ making the first changes to the production system.
+
+If you chose a _copy-on-write file system_ such as ZFS or BTRFS when you installed the {CMK} server, you should take _snapshots_ before upgrading.
+These do not replace a separately stored backup, but can help significantly reduce downtime when restoring the system to its original condition if the upgrade fails.
+
+
+[#insitu]
+== Upgrading in-place
+
+This method is often useful when using {CMK} on dedicated hardware with large data sets, where copying an archive back and forth to restore it would significantly increase downtime.
+
+
+=== Preparation
+
+The preparation consists mainly of removing _all_ {CMK} packages that are already redundant.
+This way you can avoid package management problems during the actual upgrade.
+In addition, you should have already downloaded the correct {CMK} installation package for the new distribution version.
+
+. First get an overview of all currently installed {CMK} versions...
+
++
+[{shell}]
+----
+{c-root} omd versions
+1.6.0p30.cre
+2.0.0p37.cee
+2.0.0p38.cee (default)
+----
+
+. ... and then which versions are actually in use:
+
++
+[{shell}]
+----
+{c-root} omd sites
+SITE      VERSION        COMMENTS
+mysite    2.0.0p38.cee    default version
+----
+
++
+
+For these you will need to download the installation packages for the new operating system version.
+*Important:* The edition and version number of {CMK} must be exactly the same as the one used so far.
+
+. Now uninstall all unused {CMK} versions.
+In the following command, the `--purge` parameter ensures that old configuration files are also erased.
+
++
+[{shell}]
+----
+{c-root} apt-get remove --purge -y check-mk-enterprise-2.0.0p37
+Reading package lists... Done
+Building dependency tree       
+Reading state information... Done
+The following packages will be REMOVED:
+  check-mk-enterprise-2.0.0p37*
+0 upgraded, 0 newly installed, 1 to remove and 1 not upgraded.
+After this operation, 884 MB disk space will be freed.
+(Reading database ... 125980 files and directories currently installed.)
+Removing check-mk-enterprise-2.0.0p37 (0.focal) ...
+(Reading database ... 89444 files and directories currently installed.)
+Purging configuration files for check-mk-enterprise-2.0.0p37 (0.focal) ...
+Processing triggers for systemd (245.4-4ubuntu3.21) ...
+----
+
+
+=== Execution
+
+And now for the hot phase, during which the {CMK} server is not available.
+
+. Stop your {CMK} site:
+
++
+[{shell}]
+----
+{c-root} omd stop mysite
+----
+
+. Rename the soft link pointing to the {CMK} installation you are using. The following command changes it from `version` to `_version`:
+
++
+[{shell}]
+----
+{c-root} mv -v /opt/omd/sites/mysite/{,_}version
+----
+
+. Now you can uninstall {CMK}.
+In this case you keep existing configuration files:
+
++
+[{shell}]
+----
+{c-root} apt-get remove -y check-mk-enterprise-2.0.0p38
+Reading package lists... Done
+Building dependency tree       
+Reading state information... Done
+The following packages will be REMOVED:
+  check-mk-enterprise-2.0.0p38*
+...
+----
+
+. Perform the upgrade of Linux according to the instructions provided by the respective distributor.
+In the case of Ubuntu, this would be:
+
++
+[{shell}]
+----
+{c-root} do-release-upgrade
+----
+
++
+If a restart is recommended, follow the recommendation before continuing to the next step.
+
+. Deregister the soft link pointing to the {CMK} installation you are using. The following command changes it back from `_version` to `version`:
+
++
+[{shell}]
+----
+{c-root} mv -v /opt/omd/sites/mysite/{_,}version
+----
+
+. Now install the package from {CMK} that matches the new version of the distribution you are using.
+In the case of Ubuntu, the following command is sufficient at this point:
+
++
+[{shell}]
+----
+{c-root} apt install /tmp/check-mk-enterprise-2.0.0p38_0.jammy_amd64.deb
+----
+
++
+When reinstalling {CMK}, follow the respective xref:install_packages#[detailed installation instructions] for your particular distribution.
+
+. Restart your {CMK} site:
+
++
+[{shell}]
+----
+{c-root} omd start mysite
+----
+
+
+[#exsitu]
+== Archive, reinstall and restore (upgrading out-of-place)
+
+This method is often useful when using {CMK} in virtualized environments, in which as a preparation it is possible to 'pull up' a second server with the new distribution version and perform initial tests with this in a parallel operation.
+In addition, the flexibility of this approach is greater, because it is possible to simultaneously change the Linux distribution as well.
+Technically, this corresponds to the procedure in the event of a system failure.
+
+
+=== Preparation
+
+The most essential preparatory step is to download the appropriate {CMK} installation package for the new distribution version.
+
+Get an overview of the {CMK} versions currently used by the sites:
+
+[{shell}]
+----
+{c-root} omd sites
+SITE      VERSION        COMMENTS
+mysite    2.0.0p38.cee    default version
+----
+
+Based on the information for the site(s) you will need to download the appropriate installation packages for the new operating system version.
+
+*Important:* The {CMK} edition and version number must be exactly the same as the one used previously.
+ 
+
+=== Execution
+
+The steps, which are shown here in sequence, can often be performed partially in parallel, which helps to minimize downtime, for example, when using virtual machines or if a new hardware acquisition is scheduled anyway.
+
+. Stop your {CMK} site -- here this step is not mandatory, but is recommended for data consistency:
+
++
+[{shell}]
+----
+{c-root} omd stop mysite
+----
+
+. Create an xref:omd_basics#[archive] (in other contexts a backup) of the site.
+Our example uses a network share as the target, which will also be available later on the new installation.
+
++
+[{shell}]
+----
+{c-omd} omd backup /mnt/someshare/mysite.tgz
+----
+
+. Now prepare the target system, and there configure the software required for {CMK}, for example, the email system.
+Use the same host name and IP address as with the source system.
+
+. xref:install_packages#[Install] the previously downloaded {CMK} version, suitable for the new distribution.
+
++
+In the case of Ubuntu, the following command will suffice at this point:
+
++
+[{shell}]
+----
+{c-root} apt install /tmp/check-mk-enterprise-2.0.0p38_0.jammy_amd64.deb
+----
+
+. Create a new site with the same name as the backed up site:
+
++
+[{shell}]
+----
+{c-root} omd create mysite
+----
+
+. Now, as a site user, perform a restore from the archive:
+
++
+[{shell}]
+----
+{c-omd} omd restore /mnt/someshare/mysite.tgz
+----
+
+. Restart your {CMK} site:
+
++
+[{shell}]
+----
+{c-omd} omd start
+----
