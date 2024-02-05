@@ -34,7 +34,7 @@ MARKER_LANG = dict(de=MARKER[0], en=MARKER[1])
 
 
 class GitCommits:
-    def __init__(self):
+    def __init__(self, custom_branch):
         self.Commit = NamedTuple(
             "Commit", [("name", str), ("date", str), ("id", str), ("message", str)]
         )
@@ -44,9 +44,21 @@ class GitCommits:
         self.translated_markers = list()
         self.last_translation = dict()
         self.commits = list()
-        self.default_branch = (
+        self.default_branch = self._set_default_branch(custom_branch)
+
+    @staticmethod
+    def _set_default_branch(custom_branch):
+        """
+        Return the preferred branch if provided. Otherwise the current branch will be used.
+        If the repository is detached and there is no current branch,
+        "master" will be used as fallback.
+        """
+        if custom_branch:
+            return custom_branch
+        current_branch = (
             check("git branch --show-current", shell=True).decode("utf-8").strip("\n")
         )
+        return current_branch if current_branch else "master"
 
     def _create_translated_file_list(self):
         for _id, new_date, files in self.translated_markers:
@@ -268,6 +280,12 @@ def parse_arguments(argv):
         default=85,
         help="Adjust the width to use more of your screen. Default is set to 85 characters",
     )
+    parser.add_argument(
+        "-b",
+        "--branch",
+        default="",
+        help="In special scenarios you may need to set a specific branch. E.g. if you checked out a specific command and the branch cannot be determined",
+    )
 
     return parser.parse_args(argv)
 
@@ -367,7 +385,7 @@ def main():
     """Show info depending on input data"""
     opts = parse_arguments(sysargs[1:])
 
-    repo = GitCommits()
+    repo = GitCommits(custom_branch=opts.branch if opts.branch else None)
     repo.get_translated_markers()
     write = ColorizedOutput(box_size=int(opts.width), tty=sysout.isatty())
 
