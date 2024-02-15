@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This file is explained in the Checkmk User Guide:
+# https://docs.checkmk.com/2.2.0/en/devel_check_plugins.html#rule_set
 
 from cmk.gui.i18n import _
 
