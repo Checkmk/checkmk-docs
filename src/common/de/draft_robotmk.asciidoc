@@ -1,0 +1,341 @@
+// -*- coding: utf-8 -*-
+
+// IGNORE se Ver
+// NONASCII →
+include::global_attr.adoc[]
+= Checkmk Synthetic Monitoring
+:revdate: draft
+:title: Checkmk Synthetic Monitoring
+:description: Checkmk Synthetic Monitoring integriert Software-Tests auf Basis von Robot Framework ins Monitoring
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:agent_deployment#[Automatische Agenten-Updates]
+{related-end}
+
+////
+Fragen fürs Review:
+Umbegung vielleicht überall als Ausführungsumgebung - oder sonstwas?
+Falls Artikel arg komplex wirkt: Vielleicht zu Anfang zeigen, wie der Test am Ende im Monitoring zu sehen sein wird? Haben wir ähnlich bei BI, aber das ist da drei Nummern komplexer ...
+Derzeit ist das Beispiel einfach in den Text eingeflochten. Alternativ könnte man das Beispiel nach der Konfiguration und vor den Daten im Monitoring separat zeigen - mir wären das allerdings viel zu viele Doppelungen, und das für nur zwei, drei Daten ...
+////
+
+
+[#intro]
+== Synthetisches Monitoring mit Robot Framework
+
+Mit {CMK} können Sie Ihre eigene Infrastruktur sehr genau überwachen -- bis hin zur Frage, ob ein bestimmter Service, beispielsweise ein Webserver, ordentlich läuft.
+Wird Ihre Webseite über einen Cloud-Service von Dritten betrieben, werden Sie keinen Zugriff auf den Service selbst haben, können aber über einen HTTP-Check prüfen, ob die Webseite erreichbar ist.
+Aber was sagt das über die Nutzererfahrung aus? Dass ein Online-Shop erreichbar ist, heißt ja noch nicht, dass die Navigation, Bestellprozesse und dergleichen reibungslos funktionieren.
+
+An dieser Stelle setzt das {CMK} Synthetic Monitoring an.
+Mit dem Plugin Robotmk bietet {CMK} echtes End-to-End-Monitoring, also die Überwachung laufender Anwendungen aus Sicht der Nutzer.
+Das eigentliche Testen übernimmt dabei Robot Framework.
+Mit der Automationssoftware lässt sich Nutzerverhalten komplett automatisieren, um beispielsweise Bestellprozesse in Online-Shops Klick für Klick nachzustellen.
+Das Besondere an Robot Framework: Tests werden nicht über echten Code geschrieben, sondern über einfach zu verwendende Schlüsselwörter wie `Open Browser checkmk.com` zum Aufrufen der {CMK}-Webseite.
+Mehrere Testfälle werden dann in so genannten Suiten zusammengefasst.
+
+Das Agenten-Plugin Robotmk kann nun diese Robot-Framework-Suiten auf dem Host triggern und ihre Ausführung als Service in {CMK} monitoren.
+Auch die einzelnen Tests werden überwacht und als Services ins Monitoring aufgenommen.
+In der {CMK}-Weboberfläche finden Sie zum einen zugehörige Performance-Graphen, zum anderen aber auch die Original-Auswertungen von Robot Framework selbst.
+
+Die Robot-Framework-Suiten müssen auf einem Windows-Host bereit stehen -- der allerdings nicht zwangsläufig für die Ausführung der Suiten konfiguriert werden muss.
+Für die reguläre Ausführung durch Robot Framework benötigen Suiten Zugriff auf ihre Abhängigkeiten, Python, Bibliotheken, Treiber und so weiter.
+Diese Konfiguration ist allerdings komplett unabhängig von {CMK}.
+Alternativ können Suiten mit Hilfe von RCC (Robotic Command Center???) ausgeführt werden: Das Kommandozeilen-Werkzeug erzeugt virtuelle Umgebungen samt sämtlicher Abhängigkeiten und wird optional mit dem {CMK}-Agenten ausgerollt.
+Die Verwendung mittels RCC ist auch die Standardeinstellung.
+
+[#ruleconfig]
+== Test-Suiten überwachen mit Robotmk
+Im Folgenden zeigen wir, wie Sie eine Test-Suite ins Monitoring aufnehmen und überwachen.
+Als Beispiel dient dazu eine simple Hello-World-Suite.
+Eine Einführung in Robot Framework ist hier freilich nicht das Thema, ein kurzer Blick in die Beispiel-Suite muss aber sein, damit Sie sehen, welche Daten wo im Monitoring landen.
+
+Das Beispiel läuft auf Basis von RCC, so dass der Windows-Host nicht extra konfiguriert werden muss.
+Die Suite basiert auf der Minimalvorlage für einen per Robot Framework deklarierten `robot,` wie Suites auch genannt werden.
+Eine solche Suite lässt sich mit dem Kommando `rcc create myrobot` per Assistent erstellen.
+Das Verzeichnis hat anschließend folgenden Inhalt:
+
+.C:\robot\mybot\
+[{file}]
+----
+.gitignore
+conda.yaml
+LICENSE
+README.md
+robot.yaml
+tasks.robot
+----
+
+Wichtig: RCC könnte an dieser Stelle auch Suiten auf Basis von zum Beispiel Python verarbeiten, für den Einsatz in {CMK} muss es aber die Deklaration nach Robot Framework sein.
+
+Der Suite-Ordner beinhaltet nun zwei wichtige Dateien: Die Deklaration der für die Ausführung benötigten Umgebung in der Datei `conda.yaml` und die eigentlichen Tests in der Datei `tasks.robot`.
+
+Für die Umgebung werden in diesem Fall lediglich die Abhängigkeiten Python, Pip, Robocorp Truststore und RPA Framework installiert.
+Im Monitoring taucht der Umgebungsbau später als [.guihint]#RCC environment build status# auf.
+Nur wenn die Umgebung erfolgreich gebaut wird, können auch die Tests abgearbeitet und gemonitort werden.
+
+Der eigentliche Test sieht nun wie folgt aus:
+
+.C:\robot\mybot\tasks.robot
+[{file}]
+----
+*** Settings ***
+Documentation       Template robot main suite.
+
+*** Tasks ***
+Mytask
+    Log    ${myvar}
+    Sleep    15 Seconds
+    Log    Done.
+
+----
+
+Hier wird also lediglich der Wert der später zu setzenden Variable `myvar` ausgegeben, dann 15 Sekunden gewartet und abschließend `Done` ausgegeben.
+
+[#agentconfig]
+=== Regel für das Agentenplugin konfigurieren (RMK Scheduler Status)
+Den Robotmk Scheduler finden Sie unter [.guihint]#Setup > Agent rules > Robotmk Scheduler (Windows).#
+Da die Regel recht umfangreich ist, hier zunächst ein Blick auf die noch leere Konfiguration:
+
+image::robotmk_scheduler_00.png[alt="Leere Robotmk-Scheduler-Regel."]
+
+Zunächst benötigt der Scheduler die Angabe des Verzeichnisses, in dem all Ihre Test-Suiten liegen.
+Tragen Sie diesen beliebigen, absoluten Pfad unter [.guihint]#Base directory of suites# ein, beispielsweise `C:\robots`.
+
+image::robotmk_scheduler_01.png[alt="Pfad für Test-Suiten."]
+
+Mit [.guihint]#Suite execution groups# folgt nun ein {CMK}-eigenes Konzept.
+Suiten werden von Robot Framework sequenziell ausgeführt.
+In der Praxis geht es häufig um Tests, die auf dem Desktop ausgeführt werden und da könnten sich mehrere Suiten gleichzeitig in die Quere kommen.
+Die Ausführungsgruppen sind nun eine Art Kapselung für Suiten.
+Ausführungsgruppen werden parallel verarbeitet.
+So lassen sich Suiten, die nicht auf den Desktop angewiesen sind, ohne Wartezeiten durchführen.
+Die einzige explizite Einstellung ist das Ausführungsintervall, das Sie unter [.guihint]#Group execution interval# setzen.
+
+image::robotmk_scheduler_02.png[alt="Ausführungsintervall für Ausführungsgruppen."]
+
+Achtung: Die Suiten in der Ausführungsgruppe haben natürlich selbst eine gewisse Laufzeit, bestimmt durch einen Timeout für den Aufbau der Umgebung und die maximale Anzahl wiederholter Ausführungen im Falle fehlgeschlagener Tests. 
+Das Ausführungsintervall der Gruppe muss folglich größer sein als die Summe der maximalen Laufzeiten aller Suiten in der Gruppe.
+Die maximale Laufzeit einer Suite berechnet sich wie folgt: [.guihint]#Timeout per attempt# x (1 + [.guihint]#Maximum number of re-executions#).
+
+Nun geht es an die Konfiguration einer ersten Suite.
+Unter [.guihint]#Application name# können Sie einen beliebigen Namen eingeben.
+Dieser Name muss nicht eindeutig sein!
+Sinnvoll ist hier der Name der zu überwachenden Anwendung, beispielsweise `Online Shop.`
+Nun kann es natürlich vorkommen, dass eben dieser Online Shop mehrfach getestet wird, sei es durch andere Suites oder dieselbe Suite mit unterschiedlichen Parametern.
+Um in solchen Fällen trotz identischer Namen dennoch eine Eindeutigkeit in den Ergebnissen zu erzielen, gibt es das Feld [.guihint]#Variant.#
+Wird die Anwendung `My Online Shop` etwa einmal auf Deutsch und einmal auf Englisch getestet, könnten Sie hier entsprechende Kürzel verwenden.
+Im Monitoring gibt es dann Ergebnisse für `My Online Shop - DE` und `My Online Shop - EN.`
+
+Notwendig ist hingegen die Angabe unter [.guihint]#Path to test suite.#
+Die Pfadangabe ist relativ zum oben angegebenen Basisverzeichnis, also beispielsweise schlicht `mybot` für eine Suite im Verzeichnis `C:\robot\mybot`.
+Alternativ kann hier auch direkt eine robot-Datei angegeben werden, etwa `C:\robot\mybot\shopping.robot` -- je nach Aufbau Ihres Robot-Framework-Projekts.
+
+image::robotmk_scheduler_03.png[alt="Bezeichnung und Pfad der Suite."]
+
+Weiter geht es mit der [.guihint]#Execution configuration.#
+Unter [.guihint]#Timeout per attempt# legen Sie fest, wie lange eine Suite maximal laufen darf -- pro Versuch.
+Mit [.guihint]#Robot Framework re-executions# können Sie nun Robot Framework anweisen, Suiten bei fehlgeschagenen Tests komplett oder inkrementell zu wiederholen.
+Wenn die einzelnen Tests einer Suite unabhängig voneinander sind, bietet sich die inkrementelle Strategie an, um Zeit zu sparen.
+Testet die Suite hingegen eine logische Abfolge, etwa "Login -> Aufruf Produktseite -> Produkt in den Warenkorb -> Checkout", muss die Suite natürlich komplett neu abgearbeitet werden.
+Am Ende gibt es immer nur ein Ergebnis, das sich aus den besten Teilergebnissen zusammensetzt.
+Laufen also Tests erst im dritten Anlauf erfolgreich durch, wird auch das Endergebnis als Erfolg gewertet.
+Zur Erinnerung: Die Kombination aus Versuchen und maximalen Laufzeiten aller Suites einer Ausführungsgruppe bestimmt deren minimales Ausführungsintervall.
+
+image::robotmk_scheduler_04.png[alt="Konfiguration von Ausfühungslaufzeiten und -wiederholungen."]
+
+Standardmäßig ist die Ausführung via RCC unter [.guihint]#Automated environment setup (via RCC)# aktiviert, für die Sie zwei Werte eintragen müssen.
+Zum einen benötigt RCC die Angabe, wo die Datei `robot.yaml` liegt.
+Deren primärer Zweck ist der Verweis auf die Datei `conda.yaml`, die für den Aufbau der Python-Umgebung verantwortlich ist, also die Installation von Python und Abhängigkeiten.
+Diese Angabe ist abhängig davon, ob Sie oben als [.guihint]#Path to test suite# ein Verzeichnis oder eine robot-Datei angegeben haben.
+Für das obige Verzeichnis `C:\robot\mybot` ist es entsprechend `mybot\robot.yaml`.
+Für eine robot-Datei `C:\robot\mybot\foobar\foo.robot` wäre es `robot.yaml`.
+// ML: Den Pfad müsste man nochmal checken - die Inline-Hilfe ist da bislang etwas vage/falsch, was das "relativ zu" betrifft.
+
+Beim folgenden Zeitlimit für den Bau der Python-Umgebung sollten Sie bedenken, dass bisweilen größere Datenmengen heruntergeladen und eingerichtet werden müssen.
+Insbesondere für die benötigten Browser fallen hier schnell einige Hundert Megabyte an -- allerdings nur beim ersten Durchlauf.
+Später wird auf je nach Verfügbarkeit und Bedarf auf die bereits gebauten Umgebungen zurückgegriffen.
+
+Die letzte RCC-Option [.guihint]#Load environment variables from file# benötigen Sie eigenlich nur, wenn Suiten online bei Robocorp laufen und dort individuelle Umgebungsvariablen benötigen.
+
+image::robotmk_scheduler_05.png[alt="RCC-Konfiguration der Suite."]
+
+Unter [.guihint]#Robot Framework parameters# haben Sie die Möglichkeit, einige der Kommandozeilenparameter von Robot Framework zu nutzen (die auch der Befehl `robot --help` anzeigt).
+Sollten Sie weitere Parameter nutzen wollen, hilft die Option [.guihint]#Argument files.#
+Eine hier angegebene Datei kann beliebige robot-Parameter beinhalten.
+Weitere Informationen über die einzelnen Parameter bekommen Sie über die Inline-Hilfe.
+
+Für unser Beispielprojekt wird lediglich die Option [.guihint]#Variables# aktiviert und eine Variable `myvar` mit dem Wert `My Value` gesetzt -- Sie erinnern sich an den Befehl `Log    ${myvar}` oben in der Datei `tasks.robot`?
+Dies ist die zugehörige Referenz.
+
+image::robotmk_scheduler_06.png[alt="Kommandozeilenparameter von Robot Framework."]
+
+Am Ende der Suite-Konfiguration gibt es noch drei simple Optionen.
+[.guihint]#Execute as a specific user# ermöglicht es, Robotmk im Kontext eines bestimmten Nutzerkontos auszuführen.
+Hintergrund: Standardmäßig wird Robotmk im Kontext des {CMK}-Agenten ausgeführt, der keine Berechtigung für den Zugriff auf den Desktop hat.
+Hier kann nun ein Nutzer angegeben werden, der permanent an einer Desktop-Sitzung angemeldet ist und entsprechend Zugriff auf grafische Desktop-Anwendungen hat.
+
+Mit [.guihint]#Assign result to piggyback host# lassen sich die Ergebnisse der Suite einem anderen Host zuweisen.
+Testet Robot Framework zum Beispiel den Bestellprozess eines Online-Shops, ließen sich die Ergebnisse so dem zugehörigen Webserver zuweisen.
+
+Jeder Testdurchlauf produziert Daten, die unter `C:\ProgramData\checkmk\agent\robotmk_output\working\suites\` abgelegt werden.
+Standardmäßig werden die Ergebnisse der letzten 14 Tage behalten, allerdings sollten Sie bedenken, dass sich hier schnell große Datenberge auftürmen.
+Pro Durchlauf fallen mindestens knapp 500 Kilobyte Daten an - mit komplexeren Suiten und beispielsweise angehängten Screenshots können es aber auch schnell einige Megabyte sein.
+Je nach Ausführungsintervall, Größe des Reports und Anforderungen an Ihre Dokumentation sollten Sie hier eingreifen.
+
+image::robotmk_scheduler_07.png[alt="Optionen für Nutzerkontext, Host-Zuweisung und automatische Aufräumarbeiten."]
+
+Hier angelangt, könnten Sie nun weitere Suiten in dieser Ausführungsgruppe oder weitere Ausführungsgruppen erstellen.
+
+Am Ende warten noch zwei Optionen, die sich wiederum auf die komplette Robotmk-Scheduler-Konfiguration beziehen.
+
+[.guihint]#RCC profile configuration# erlaubt die Angabe von Proxy-Servern sowie davon auszunehmende Hosts.
+
+Sehr nützlich kann auch [.guihint]#Grace period before scheduler starts# sein: Der Scheduler startet zusammen mit dem {CMK}-Agenten noch vor der Desktop-Anmeldung - was freilich dazu führt, dass etwaige Tests auf dem Desktop fehlschlagen müssen.
+Über eine Vorlaufzeit lässt sich der Start manuell verzögern.
+
+image::robotmk_scheduler_08.png[alt="Optionen für Proxy-Server und eine Vorlaufszeit für den Scheduler-Start."]
+
+Damit ist die Konfiguration abgeschlossen und Sie können das Plugin samt Konfiguration über die Agentenbäckerei verteilen.
+
+==== Daten in der Agentenausgabe
+Die Ausgabe im Agenten ist recht umfangreich: In mehreren Sektionen werden Fehlermeldungen, Status, Konfiguration und Test-Daten übermittelt.
+Letztere finden sich in der Sektion `robotmk_suite_execution_report`, hier ein stark gekürzter Auszug:
+
+.mysite-robot-host-agent.txt
+[{json}]
+----
+<<<robotmk_suite_execution_report:sep(0)>>>
+{
+    "attempts": [
+        {
+            "index": 1,
+            "outcome": "AllTestsPassed",
+            "runtime": 20
+        }
+    ],
+    "rebot": {
+        "Ok": {
+            "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n
+			<robot generator=\"Rebot 6.1.1 (Python 3.10.12 on win32)\" 
+			generated=\"20240319 16:23:19.944\" 
+			rpa=\"true\" 
+			schemaversion=\"4\">\r\n<suite id=\"s1\" 
+			name=\"Mybot\" 
+			source=\"C:\\ProgramData\\checkmk\\agent\\robot\\mybot\">\r\n<suite id=\"s1-s1\" 
+			name=\"Tasks\" 
+			source=\"C:\\ProgramData\\checkmk\\agent\\robot\\mybot\\tasks.robot\">\r\n<test id=\"s1-s1-t1\" 
+			name=\"Mytask\" 
+			line=\"6\">\r\n<kw 
+			name=\"Sleep\" 
+			library=\"BuiltIn\">\r\n<arg>2 Seconds</arg>\r\n<doc>Pauses the test executed for the given time.</doc>\r\n<msg 
+			timestamp=\"20240319 16:23:02.936\" 
+			level=\"INFO\">Slept 2 seconds</msg>\r\n<status 
+			status=\"PASS\" 
+			starttime=\"20240319 16:23:00.934\" 
+			endtime=\"20240319 16:23:02.936\"/>"
+        }
+    },
+    "suite_id": "mybot",
+    "timestamp": 1710861778
+}
+...
+"html_base64":"PCFET0NUWVBFIGh0bWw+DQo8aHRtbCBsYW ...
+----
+
+Interessant sind hier vor allem zwei Bereiche.
+Zum einen "rebot": Das Tool `rebot` produziert den eigentlichen Statusbericht für Robot Framework aus gegebenenfalls mehreren Teilergebnissen (daher auch re-bot).
+Zum anderen die letzte Zeile `html_base64`: Danach folgen die HTML-Berichte von Robot Framework base64-kodiert.
+Auch Screenshots, die über Tests angefertigt werden, werden auf diese Weise übertragen - entsprechend umfangreich ist die Ausgabe/Datenmenge im Agenten.
+
+[#serviceconfig]
+=== Service-Regeln konfigurieren
+==== Regel für Suite-Status anlegen
+Zur Erinnerung: In der Agenten-Regel oben wurden maximale Laufzeiten für Suiten festgelegt.
+Mit der Regel [.guihint]#Robotmk suite status# lassen sich diese Laufzeiten auswerten.
+So können Sie den Service etwa auf {CRIT} setzen, wenn 90 Prozent aller zusammengerechneten Timeouts erreicht werden.
+
+image::robotmk_service_suite_status_01.png[alt="Konfigurationsdialog für Grenzwerte für Laufzeiten von Suiten."]
+
+Im Bereich [.guihint]#Conditions# gibt es die Möglichkeit, die Regel auf bestimmte Suiten zu beschränken.
+
+image::robotmk_service_suite_status_02.png[alt="Dialog mit Beschränkung auf die Suite mybot."]
+
+==== Regel für Test-Status anlegen
+Auch für einzelne Tests in den Suiten lassen sich weitere Daten ins Monitoring holen, über die Regel [.guihint]#Robotmk test status.#
+Hier finden Sie wieder die Möglichkeit, Laufzeiten zu überwachen, sowohl von Tests als auch von Schlüsselwörtern.
+Die Überwachung von  Schlüsselwörtern ist dabei eine {CMK}-eigene Funktion.
+Daher könnte auch der Suite-interne Status im Bericht `OK` sein, weil alles innerhalb der maximalen Laufzeiten verarbeitet wurde -- in {CMK} jedoch {WARN} oder {CRIT}, weil schon bei zum Beispiel 80 Prozent der maximalen Laufzeiten ein Statuswechsel stattfindet.
+
+Zudem können über die Option [.guihint]#Enable metrics for high-level keywords# Metriken für übergeordnete Schlüsselwörter erzeugt werden.
+Dies kann insbesondere bei verschachtelten Tests mit vielen (Nutzer-)Schlüsselwörtern nützlich sein.
+
+Hier im Beispiel liegen die Schwellwerte für die maximale Laufzeit eines Tests bei 10 und 30 Sekunden.
+Die Auswirkungen werden Sie unten im Kapitel xref:#monitoring[Robotmk im Monitoring] sehen.
+
+image::robotmk_service_test_status_01.png[alt="Regel zum Überwachen von Schlüsselwörtern mit Beispielwerten."]
+
+
+Abermals gibt es im Bereich [.guihint]#Conditions# eine explizite Filtermöglichkeit, hier für einzelne Tests.
+
+image::robotmk_service_test_status_02.png[alt="Dialog mit beschränkbar auf den Test mytask."]
+
+[#monitoring]
+=== Robotmk im Monitoring
+Im Monitoring finden Sie anschließend Services für den Status des Robotmk Schedulers sowie der einzelnen Suiten und Tests.
+
+==== Scheduler-Status
+Der Service [.guihint]#RMK Scheduler Status# ist {OK}, wenn der Scheduler anläuft und erfolgreich die Auführungsumgebungen bauen konnte.
+
+image::robotmk_monitorng_scheduler.png[alt="Status des Schedulers im Monitoring."]
+
+==== Suite-Status
+Der Status der Suite wird in einem nach ihr benannten Service wiedergegeben, beispielsweise [.guihint]#RMK mybot Suite.#
+
+image::robotmk_monitorng_suite.png[alt="Status der Suite im Monitoring."]
+
+==== Test-Status
+Wirklich interessant wird es bei der Auswertung der Tests.
+Hier im Bild sehen Sie nun die Auswirkung oben gesetzten Schwellwerte für Laufzeit von Tests -- hier die 10 Sekunden für den Zustand {WARN}.
+Da im Test selbst die Anweisung `Sleep 15 Seconds` schon für eine längere Laufzeit sorgt, muss dieser Service hier auf {WARN} gehen, obwohl der Test natürlich erfolgreich verlaufen ist.
+Dass der Test erfolgreich verlaufen ist, zeigt der Bericht von Robot Framework, den Sie über das icon:icon_log[Alt="Log-Icon."] Log-Icon bekommen.
+
+image::robotmk_monitorng_test.png[alt="Status des Tests im Monitoring."]
+
+Der Bericht zeigt nun klar und deutlich, dass Test und Suite erfolgreich durchgelaufen sind.
+
+image::robotmk_monitorng_report_01.png[alt="Robot-Framework-Bericht für Suite Mybot."]
+
+Ganz unten in den Daten sehen Sie auch die einzelnen Schlüsselwörter, hier zum Beispiel [.guihint]#Log ${myvar}# samt dem in {CMK} für `myvar` gesetzten Wert `My value`.
+
+image::robotmk_monitorng_report_02.png[alt="Robot-Framework-Bericht auf Ebene der Schlüsselwörter."]
+
+
+[#troubleshooting]
+== Troubleshooting
+
+=== Scheduler ist {CRIT} wegen NoData
+Umgebungsbau funktioniert nicht
+
+=== Environment Building schlägt fehl: "exit status 252"
+Suite nicht auf Basis von Robot Framework gebaut - rcc versteht hier aber kein Python, Ruby oder Ähnliches 
+
+=== Environment Building schlägt fehl: "post-install script execution"
+Python-Aliasse - falls mit frischem Windows getestet wird
+	
+[#files]
+== Dateien und Verzeichnisse
+	
+[cols="30,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`C:\ProgramData\checkmk\agent\robotmk_output\working\suites\` |Logs und Ergebnisse der Suiten
+|`C:\ProgramData\checkmk\agent\robotmk_output\working\environment_building` |Logs zum Aufbau virtueller Umgebungen
+|`C:\ProgramData\checkmk\agent\robotmk_output\working\rcc_setup` |Meldungen der RCC-Ausführung
+|`C:\ProgramData\checkmk\agent\logs\robotmk_scheduler_rCURRENT.log` |Log des Agentenplugins
+|`C:\ProgramData\checkmk\agent\bin\` |rcc.exe und robotmk_scheduler.exe
+|`C:\ProgramData\checkmk\agent\plugins\` |Agentenplugin robotmk_agent_plugin.exe
+|===
+
+
