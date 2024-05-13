@@ -27,6 +27,10 @@ EXCLUDES = (
     "deprecated_",
     "training_",
     "global_attr",
+    "featured_",
+    "landingpage",
+    "most_",
+    "recently_",
 )
 DEFAULT_LANGUAGES = ["de", "en"]
 MARKER = ("only-de", "only-en", "translated", "content_sync", "content-sync")
