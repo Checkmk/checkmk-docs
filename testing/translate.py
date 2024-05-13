@@ -31,6 +31,7 @@ EXCLUDES = (
 DEFAULT_LANGUAGES = ["de", "en"]
 MARKER = ("only-de", "only-en", "translated", "content_sync", "content-sync")
 MARKER_LANG = dict(de=MARKER[0], en=MARKER[1])
+DOC_TYPES = ["common", "includes", "onprem", "saas"]
 
 
 class GitCommits:
@@ -279,13 +280,16 @@ def parse_arguments(argv):
 
 def get_article_names():
     article_names = dict()
-    for lang in DEFAULT_LANGUAGES:
-        for article in sorted(listdir(f"{DOCS_ROOT.working_dir}/{lang}")):
-            article = article.replace(".asciidoc", "")
-            if article.startswith((EXCLUDES)):
-                continue
-            article_names.setdefault(article, list())
-            article_names[article].append(lang)
+    for doc_type in DOC_TYPES:
+        for lang in DEFAULT_LANGUAGES:
+            for article in sorted(
+                listdir(f"{DOCS_ROOT.working_dir}/src/{doc_type}/{lang}")
+            ):
+                article = article.replace(".asciidoc", "")
+                if article.startswith((EXCLUDES)):
+                    continue
+                article_names.setdefault(article, list())
+                article_names[article].append(lang)
     return article_names
 
 
@@ -298,8 +302,11 @@ def get_articles(article=None) -> list:
         for language in DEFAULT_LANGUAGES:
             article_path = f"{language}/{article}.asciidoc"
             instance.paths[language] = article_path
-            if Path(f"{DOCS_ROOT.working_dir}/{article_path}").exists():
-                article_exists = True
+            for doc_type in DOC_TYPES:
+                if Path(
+                    f"{DOCS_ROOT.working_dir}/src/{doc_type}/{article_path}"
+                ).exists():
+                    article_exists = True
             instance.lang.append(language)
         if article_exists:
             articles.append(instance)
