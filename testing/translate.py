@@ -189,7 +189,7 @@ class ColorizedOutput(object):
                 prefix=prefix,
                 commit=commit,
                 message=commit.message[:message_length],
-                commit_date=datetime.utcfromtimestamp(int(commit.date)).strftime(
+                commit_date=datetime.fromtimestamp(int(commit.date)).strftime(
                     "%Y-%m-%d %H:%M"
                 ),
             )
