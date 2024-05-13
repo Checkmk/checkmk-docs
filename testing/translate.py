@@ -232,7 +232,7 @@ class ColorizedOutput(object):
             if last_translation == "1104537600":
                 hint = " - Never marked as translated"
             else:
-                date = datetime.utcfromtimestamp(int(last_translation)).strftime(
+                date = datetime.fromtimestamp(int(last_translation)).strftime(
                     "%Y-%m-%d %H:%M"
                 )
                 hint = f" - last full translation: {date}"
