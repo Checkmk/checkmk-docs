@@ -2,6 +2,7 @@
 # encoding: utf-8
 """Tool to check missing translations"""
 
+from re import sub as substitude
 from sys import argv as sysargs
 from sys import stdout as sysout
 from sys import exit as sysexit
@@ -56,9 +57,9 @@ class GitCommits:
     def _create_translated_file_list(self):
         for _id, new_date, files in self.translated_markers:
             for article in files:
-                article = (
-                    article.replace("./", "").replace("de/", "").replace("en/", "")
-                )
+                if not article.endswith(".asciidoc"):
+                    continue
+                article = substitude(r"^src/[a-z]{4,10}/[den]{2}/", "", article)
                 self.last_translation.setdefault(article, new_date)
                 date = self.last_translation[article]
                 date = max(date, new_date)
@@ -69,7 +70,7 @@ class GitCommits:
             branch = self.default_branch
         commits = DOCS_ROOT.iter_commits(
             branch,
-            paths=f"{DOCS_ROOT.working_dir}",
+            paths=f"{DOCS_ROOT.working_dir}/src",
             grep=r"^translated\|^content-sync\|^content_sync",
         )
         for commit in commits:
@@ -99,7 +100,7 @@ class GitCommits:
         commits = self._get_log_as_list_of_dicts(
             max_age,
             "--pretty=format:%an||%ct||%H||%s||||",
-            f"{DOCS_ROOT.working_dir}/{lang}/{file}",
+            f"{DOCS_ROOT.working_dir}/src/*/{lang}/{file}",
         )
         for commit in commits:
             commit_hashes.append(commit.get("id"))
@@ -311,6 +312,7 @@ def get_articles(article=None) -> list:
                     f"{DOCS_ROOT.working_dir}/src/{doc_type}/{article_path}"
                 ).exists():
                     article_exists = True
+                    article_path = f"src/{doc_type}/{language}/{article}.asciidoc"
             instance.lang.append(language)
         if article_exists:
             articles.append(instance)
