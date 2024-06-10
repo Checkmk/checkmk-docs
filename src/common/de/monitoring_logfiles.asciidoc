@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE 
+// IGNORE ereignisbasiert mk_logwatch venv anlassbezogen giga terabyteweise CheckmkService Precompile logfile logfiles logwatch Reklassifizieren aussieben maxcontextlines maxlines maxlinesize maxoutputsize maxtime nocontext skipconsecutiveduplicated Seperate
 include::global_attr.adoc[]
 = Log-Dateien überwachen
 :revdate: draft
@@ -11,23 +11,32 @@ xref:mk_filestats#[Dateien überwachen]
 xref:ec#[Die Event Console]
 {related-end}
 
-////
-Probably
-soon
-you
-can
-henceforth
-enjoy the new article on mk_logwatch.
-////
+[TIP]
+====
+Dieser Artikel ist derzeit im Entstehen begriffen und wird regelmäßig ergänzt.
+====
 
 [#basics]
-== Grundlagen zur Überwachung von Log-Dateien
+== Wesentliches zur Überwachung von Log-Dateien
 
 Die Geschichte der Überwachung von Log-Dateien ist eine Geschichte voller Missverständnisse.
-Die Missverständnisse beginnen bereits, wenn wir uns anschauen, was Log-Einträge sind und was Services in {CMK} anzeigen.
-Zeilen oder Einträge in Log-Dateien sind "von Natur aus" ereignosbasiert ("event based").
+Die Missverständnisse beginnen bereits, wenn wir uns anschauen, was Log-Einträge sind und was andererseits Services in {CMK} anzeigen.
+Zeilen oder Einträge in Log-Dateien sind "von Natur aus" ereignisbasiert (event based).
 {CMK} hingegen bildet Zustände ab.
-Mehr dazu im Artikel xref:monitoring_basics#states_events[Grundlagen des Monitorings mit Checkmk|Zustände und Ereignisse].
+Mehr über den Unterschied von Ereignissen und Zuständen im Artikel xref:monitoring_basics#states_events[Grundlagen des Monitorings mit Checkmk - Zustände und Ereignisse].
+
+In {CMK} umgehen wir dieses Problem, indem wir definieren, wann ein Service, der eine oder mehrere Log-Dateien abbildet, einen kritischen Zustand annimmt.
+Im Regelfall definieren wir "werde kritisch, wenn die Log-Datei Meldungen enthält die
+
+* neu,
+* unbestätigt und
+* kritisch sind".
+
+Außerdem sollten Sie bei der Verwendung von Logwatch Maß halten.
+Logwatch eignet sich für den dosierten Einsatz und nicht dafür, giga- oder terabyteweise Log-Dateien zu verarbeiten.
+Dafür gibt es sicherlich geeignetere Werkzeuge.
+Wir empfehlen unbedingt Logwatch nur anlassbezogen und nicht flächendeckend einzusetzen.
+Wie Sie im weiteren Verlauf des Artikels noch sehen werden, ist es leicht möglich, bereits auf dem überwachten Host einen wichtigen Teil der (Vor-)Filterung vorzunehmen.
 
 
 ////
@@ -61,7 +70,269 @@ Checkmk provides a webpage <tt>logwatch.php</tt> that
 displays log messages and allows the delete (and thus acknowledge) them in an easy way:
 
 BI:logwatch.png
+////
 
+
+[#prereqisites]
+== Voraussetzungen
+
+Logwatch ist ein Python-Programm und benötigt somit eine Python-Umgebung auf dem Host.
+In den meisten Linux-Distributionen wird Python bereits installiert sein und auch Solaris bringt seit geraumer Zeit Python 3.x mit.
+Falls Sie Log-Dateien auf einem Windows-Host überwachen möchten, gibt es unterschiedliche Wege zum Ziel.
+
+{cee-only}
+Nutzer unserer kommerziellen Editionen können Logwatch komfortabel über die GUI konfigurieren und das Plugin mit der Agentenbäckerei in das Agentenpaket einfügen lassen.
+Sobald {CMK} bemerkt, dass Sie ein Agentenplugin auf Basis von Python für einen Windows-Host konfigurieren, wird dem Agenten zusätzlich eine virtuelle Python-Umgebung (venv) mitgegeben.
+
+Sollten Sie zwar eine unserer kommerziellen Editionen, aber die Agentenbäckerei nicht nutzen, so können Sie für Ihre Windows-Hosts den nun folgenden Abschnitt zu Rate ziehen.
+
+[#python_windows]
+=== Python für Windows in {CMK} Raw
+
+[#install_python_venv]
+==== Checkmk Python (venv) installieren
+
+Das Installationspaket des Windows-Agenten aus {CMK} Raw enthält keine Python-Umgebung.
+Eine entsprechende Cabinet-Datei liegt allerdings bereits auf Ihrem {CMK}-Server bereit.
+Diese Datei namens `python-3.cab` finden Sie im Verzeichnis `~share/check_mk/agents/windows` oder in {CMK} über [.guihint]#Setup > Agents > Windows > Windows Agent#.
+Kopieren Sie diese Datei auf Ihren Windows-Host in das Verzeichnis `C:\Program Files (x86)\checkmk\service\install`.
+Dort liegt bereits eine Datei mit diesem Namen und einer Dateigröße von 0 Byte.
+Diese Datei müssen Sie mit der Version vom {CMK}-Server überschreiben.
+Starten Sie anschließend den Service des {CMK}-Agenten neu.
+In der Windows PowerShell mit Administratorrechten, können Sie das mit dem folgenden Befehl erledigen:
+
+[{shell}]
+----
+net stop checkmkservice; net start checkmkservice
+----
+
+Beim Neustart des Windows-Service wird die virtuelle Python-Umgebung automatisch installiert.
+
+[#install_full_python]
+==== Python vollständig installieren
+
+Alternativ können Sie auch ein aktuelles Python-Paket von link:https://www.python.org/[python.org] herunterladen und installieren.
+Achten Sie bei der Installation darauf, die folgenden Optionen zu aktivieren:
+
+* [.guihint]#Install Python 3.x for all users#. Hierdurch wird auch automatisch die Option [.guihint]#Precompile standard library# aktiviert und das ist auch gut so.
+* [.guihint]#Add Python to environment variables#
+
+Falls sie nach der Installation von Python gleich drauflos testen wollen, ist auch unbedingt ein Neustart des [.guihint]#CheckmkService# entweder über den Windows Task Manager oder mit den oben angegebenen Befehlen notwendig.
+Sonst weiß der Service nämlich nichts von den neuen Umgebungsvariablen.
+
+
+[#monitor_logfiles]
+== Log-Dateien überwachen
+
+[#installation]
+=== Installation auf dem Host
+
+Beginnen Sie damit, das Agentenplugin zu installieren.
+Kopieren Sie dazu die Datei `~/share/check_mk/agents/plugins/mk_logwatch.py` von Ihrem {CMK}-Server auf den Host in das Verzeichnis `/usr/lib/check_mk_agent/plugins/` (Linux) bzw. `C:\ProgramData\checkmk\agent\plugins` (Windows).
+Achten Sie darauf, dass die Datei auf dem Host ausführbar ist.
+Weitere Informationen zu diesem Schritt finden Sie jeweils im Abschnitt "Manuelle Installation" in den Artikeln xref:agent_linux#manualplugins[Linux überwachen] und xref:agent_windows#manual_installation_of_plugins[Windows überwachen].
+
+{cee-only}
+Nutzer unserer kommerziellen Editionen können während der xref:configuration[Konfiguration der Regel] [.guihint]#Text logfiles (Linux, Solaris, Windows)# die Option [.guihint]#Deploy the Logwatch plugin and its configuration# auswählen und das Agentenplugin so automatisch mit dem Agenten ausrollen.
+
+
+[#configuration]
+=== Konfiguration von Logwatch
+
+Passend zu den anfänglichen Überlegungen überwacht Logwatch ohne Konfiguration nichts.
+Deshalb ist es nach der Installation den Agentenplugins unerlässlich, eine Konfigurationsdatei vom dem überwachten Host anzulegen.
+
+[#configuration_bakery]
+==== Konfiguration über die Agentenbäckerei
+
+{cee-only}
+In den kommerziellen Editionen rufen Sie zunächst die Regel für das Agentenplugin [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Text logfiles (Linux, Solaris, Windows)# auf.
+Die Voreinstellung [.guihint]#Deploy the Logwatch plugin and its configuration# sollte im Regelfall so belassen werden.
+Falls Sie die Konfigurationsdatei `logwatch.cfg` allerdings auf einem anderen Weg auf den Host übertragen wollen oder müssen, steht hier noch die Option [.guihint]#Deploy the Logwatch plugin without configuration# zur Verfügung.
+
+Weiter geht es mit der Option [.guihint]#Retention period#.
+Die Voreinstellung beträgt hier eine Minute, was auch dem voreingestellten Check-Intervall in {CMK} entspricht.
+Der Wert sollte immer mindestens dem Check-Intervall entsprechen.
+Diese Option ist in erster Linie dafür zuständig, dass keine Log-Meldungen durch eine Service-Erkennung oder die manuelle Ausführung von `cmk -d myhost` verloren gehen.
+Weitere Details dazu finden Sie in der Inline-Hilfe der Option und im link:https://checkmk.com/werk/14451[Werk #14451^] mit dem diese Option eingeführt wurde.
+
+Jetzt folgt die Sektion der Regel, wo es endlich richtig losgeht - [.guihint]#Configure a logfile section#.
+Und das beginnen wir direkt mit dem größten Stolperstein der vergangenen Jahre.
+In dem Feld [.guihint]#Patterns for logfiles to monitor# müssen Sie die Log-Dateien, die Sie überwachen wollen, benennen.
+Dies können Sie einzeln und explizit oder mit sogenannten Glob Patterns (kurz: Glob) erledigen.
+Wir verwenden an dieser Stelle das Python-Modul `glob`, zu dem es auf docs.python.org eine link:https://docs.python.org/3/library/glob.html[ausführliche Dokumentation] gibt.
+Wir wollen Ihnen aber gleich hier ein paar hilfreiche Beispiele an die Hand geben.
+
+Schreiben Sie hier beispielsweise `/var/log/my.log` hinein, wird Logwatch eben diese eine Log-Datei überwachen.
+Geben Sie hier stattdessen `/var/log/*log` ein, wird Logwatch alle Dateien, die auf die Zeichenfolge `log` enden und *direkt* im Verzeichnis `/var/log` liegen, überwachen.
+Wollen Sie Log-Dateien in allen direkten Unterverzeichnissen von `/var/` überwachen, können Sie das beispielsweise mit dem folgenden Glob erledigen: `pass:[/var/*/*log]`.
+Das Glob `pass:[**]` zum rekursiven Durchsuchen einer Verzeichnisstruktur bieten wir hier explizit *nicht* an, weil wir damit viel zu schnell bei viel zu großen Trefferlisten landen und den eigentlichen Einsatzzweck von Logwatch hinter uns lassen.
+
+Die folgende Tabelle gibt Ihnen noch ein paar hilfreiche Beispiele, wie Sie Globs verwenden können, um auch wirklich zu die Dateien zu überwachen, die der Überwachung bedürfen, ohne alle einzeln angeben zu müssen:
+
+//SK: Die folgenden Beispiele sollen bei jeder Gelegenheit mit interessanten Beispielen aus dem RL ergänzt werden.
+
+[cols=3]
+|===
+|Glob Pattern |Erläuterung |Beispieltreffer
+|`/var/log/*` | Alle Dateien in `/var/log` | `/var/log/mylog` `/var/log/my.log`
+|`pass:[/var/log/*/*]`| Alle Dateien in allen direkten Unterverzeichnissen von /var/log/ | `/var/log/foo/mylog` `/var/log/bar/mylog`
+|`/var/log/mylog?.log` | Alle Dateien in `/var/log` deren Namen mit `mylog` beginnen, gefolgt von einem einzelnen Zeichen und mit `.log` enden | `/var/log/mylog1.log` `/var/log/mylog9.log`
+|`/var/log/mylog[123].log`| Alle Dateien in `/var/log` deren Namen mit `mylog` beginnen, gefolgt von entweder einer `1`, `2` oder `3` und auf `.log` enden | `/var/log/mylog1.log` `/var/log/mylog3.log`
+|===
+
+Wenn es also darum geht, welche Dateien im *ersten* Schritt "gematcht" werden, verwenden wir *keine* regulären Ausdrücke und womöglich genügt Ihnen das schon, um alle gewünschten Dateien zu erreichen.
+
+Wenn Sie jetzt allerdings weiter aussieben müssen, können Sie in einem zweiten Schritt mit der Option [.guihint]#Regular expression for logfile filtering# reguläre Ausdrücke auf die Treffer aus Schritt 1 anwenden.
+
+Haben Sie also im ersten Schritt mit `/var/log/*` und `pass:[/var/log/*/*]` allen Dateien `/var/log/` und seinen direkten Unterverzeichnissen eingesammelt, könnte Sie mit dem regulären Ausdruck `error.log$|err$` die Trefferliste auf alle Dateien reduzieren, die auf `err.log` oder `err` enden.
+Obacht: Der Punkt ist nun wieder ein beliebiges Zeichen.
+Somit könnten dann zum Beispiel die Dateien `/var/log/apache2/error.log`, `/var/log/mail.err` und `/var/log/cups/error_log` übrig bleiben.
+
+Sie sehen also, dass wir Ihnen für Auswahl der überwachten Dateien bereits zwei gute und mächtige Werkzeuge an die Hand geben, damit Logwatch im nächsten Schritt sehr zügig durch eine überschaubare Dateiliste auch die weiteren Parameter bzw. Inhalte prüfen kann.
+Zu Letzterem können Sie Ihre Kenntnisse im Artikel xref:regexes#[reguläre Ausdrücke in Checkmk] weiter vertiefen.
+
+//SK: TODO: Genauer. Wann wird wie was abgeschnitten.
+Mit der Option [.guihint]#Restrict the length of the lines# können Sie Logwatch anweisen, überlange Zeilen nach der vorgegebenen Anzahl an Zeichen abzuschneiden.
+
+Die folgende Option [.guihint]#Watch the total size of the log file# bietet sich an, um eine defekte Log-Rotation zu erkennen.
+Wenn Sie hier 100 MiB einstellen, erhalten Sie jedes Mal eine Warnung, wenn eine bestimmte Log-Datei erneut um die eingestellte Größe gewachsen ist.
+
+Die maximale Anzahl der Zeilen, die Logwatch pro Durchlauf und Datei prüft, lässt sich mit [.guihint]#Restrict number of processed messages per cycle# einschränken und mit [.guihint]#Restrict runtime of logfile parsing# können Sie dafür sorgen, dass Logwatch sich nicht zu lang an einer einzelnen Datei aufhält, die womöglich seit der letzten Prüfung mit abertausenden neuen Einträgen geflutet wurde.
+
+Wenn Sie eine der beiden letzteren Optionen aktivieren, müssen Sie auch festlegen, was bei einer Überschreitung der angegebenen Grenzwert passieren soll.
+Mit unserer Voreinstellung wird der zugehörige Service kritisch und Sie erhalten die Mitteilung, dass Zeilen übersprungen wurden bzw. dass die maximale Laufzeit überschritten wurde.
+
+[.guihint]#Handling of context messages# ist eine Option, mit der die Menge der übertragenen Daten sehr rasch sehr groß werden *kann*.
+Überlegen Sie also genau, ob Ihnen nur die Log-Meldung wichtig ist, die Ihrer Ansicht nach ein {CRIT} oder {WARN} erzeugen soll, oder ob *alle* Zeilen, die seit dem letzten Durchlauf von Logwatch hinzugekommen sind, an den {CMK}-Server übertragen werden sollen.
+Bei kleinen Log-Dateien, die minütlich nur um ein paar Zeilen anwachsen, ist die Einstellung [.guihint]#Do transfer context# sicherlich unproblematisch.
+Wenn aber auf einem Host aber 50 Log-Dateien überwacht werden, die plötzlich 100.000 neue Zeilen mit einer Länge von 500 Zeichen aufweisen, landen wir schon im Gigabyte-Bereich.
+Womöglich würde es bei einem solchen Ereignis eben genügen zu sehen, dass seit der letzten Prüfung sehr viele neue Meldungen dazu gekommen sind, um eine Prüfung direkt auf dem betroffenen Host zu veranlassen.
+
+Sollten Sie den Kontext - also die Zeilen vor und nach einer für Sie wichtigen Log-Meldung - doch benötigen, so können Sie diesen mit der Optionen [.guihint]#Limit the amount of context data sent to the monitoring server# und [.guihint]# auf eine bestimmte Menge an Zeilen vorher und nachher beschränken.
+
+Mit [.guihint]#Limit the amount of data sent to the monitoring server# beschränken Sie die Größe der übertragenen Daten ganz allgemein.
+
+[.guihint]#Process new logfiles from the beginning# ist standardmäßig abgeschaltet.
+Dies führt mitunter zu Verwunderung, weil Logwatch Probleme, die in Log-Dateien stehen, nicht "erkennt" und an den {CMK}-Server weiterreicht.
+Nach unserer Auffassung ist nichts älter als die Zeitung von gestern und so eben auch die Log-Meldungen, die *vor dem ersten Durchlauf* von Logwatch bereits in einer Log-Datei standen.
+Bei diesem allerersten Durchlauf tut Logwatch nämlich nicht mehr, als sich zu notieren, wie viele Zeilen bereits in dem jeweiligen Log enthalten sind.
+Erst beim zweiten Durchlauf werden die Dateien dann auf Ihren Inhalt - sprich die neu hinzugekommenen Zeilen - geprüft.
+
+Logwatch ist bei seiner Arbeit darauf angewiesen, die Log-Dateien aus tatsächlich lesen zu können.
+Unter der Haube gibt sich Logwatch sehr viel Mühe, die Kodierung einer jeden Log-Datei zu erkennen.
+Allzu exotische Codecs können aber dazu führen, dass es hier zu Problemen kommt.
+Falls Sie den Codec der überwachten Log-Dateien beeinflussen können, ist UTF-8 eine sehr gute Wahl.
+Geht das nicht und schafft Logwatch es nicht, die Kodierung herauszufinden, können Sie mit [.guihint]#Codec that should be used to decode the matching files# eine explizite Angabe machen.
+
+Mit [.guihint]#Duplicated messages management# lässt sich wieder ein bisschen Bandbreite sparen und auch die spätere Ausgabe in {CMK} wird leserlicher, wenn Sie diese Option aktivieren.
+Wenn Sie [.guihint]#Filter out consecutive duplicated messages in the agent output# aktivieren, zählt Logwatch wie oft eine Zeile wiederholt wurde und schreibt dies entsprechend in den Output, statt die Zeilen zu wiederholen.
+
+Zu guter Letzt werden jetzt, die für Sie interessanten Zeilen in den Log-Dateien per regulärem Ausdruck beschrieben und einem Status zugeordnet.
+Wenn Sie möchten, dass jede Zeile, die das Wort `panic` enthält zu einem {CRIT} in {CMK} führt, genügt es hier nach einem Klick auf [.guihint]#Add message pattern# unterhalb von [.guihint]#Regular expressions for message classification# `panic` in das Feld [.guihint]#Pattern(Regex)# einzutragen.
+Die Funktion der weiteren angebotenen Optionen sind bereits sehr detailliert ist der Inline-Hilfe an dieser Stelle beschrieben und werden hier nicht dupliziert.
+
+Nur soviel: Der Status [.guihint]#OK# mag auf den ersten Blick verwirren.
+Er dient dazu, Zeilen aus einer Log-Datei erstmal an den {CMK}-Server zu übertragen, um dann dort erst die endgültige Klassifizierung vorzunehmen.
+Und damit kommen wir zu einem wichtigen Punkt, der zeigt, wie flexibel Logwatch - bei richtigem Einsatz - sein kann.
+
+Alle Optionen, die in diesem Abschnitt erklärt wurden, werden zu Eintragungen in der bereits erwähnten Konfigurationsdatei, die auf dem jeweiligen Host abgelegt wird.
+Sollten Sie nun Änderungen an der Klassifizierung bestimmter Meldungen vornehmen wollen, kann es also sein, dass Sie zuerst die Regel editieren müssen, anschließend den Agenten backen und diesen installieren müssen.
+
+Alternativ können Sie aber erstmal alle interessanten Meldungen an den {CMK}-Server übertragen (beispielsweise eben mit dem Status {OK}) und diese dann im Anschluss mit der Regel [.guihint]#Logfile patterns# auf dem {CMK}-Server (re-)klassifizieren.
+Auf diesem Wege können Sie sich das Backen und Ausrollen des neuen Agenten sparen und müssen nach einer entsprechenden Anpassung der oben genannten Regel nur einmal schnell die Änderungen aktivieren.
+Wie das genau geht, erfahren Sie weiter unten im Kapitel xref:logfile_patterns[Reklassifizieren mit Logfile patterns.]
+
+
+==== Manuelle Konfiguration
+{cre-only}
+In der {CRE} konfigurieren Sie das Agentenplugin wie üblich über eine Textdatei.
+Im Regelfall sucht Logwatch eine Datei namens `logwatch.cfg` in den Verzeichnissen `/etc/check_mk` (Linux) bzw. `c:\ProgramData\checkmk\agent\config\` (Windows).
+Eine (fast) minimale Konfiguration könnte so aussehen:
+
+./etc/check_mk/logwatch.cfg
+[{file}]
+----
+"/var/log/my.log" overflow=C nocontext=True
+ C eine kritische Meldung
+ W etwas, dass nur eine Warnung auslösen soll
+----
+
+Zuerst geben Sie hier also immer ein Glob Pattern an, gefolgt von allen anzuwendenden Optionen.
+Darauf folgt - mit einer Einrückung von einem Leerzeichen - zuerst ein Buchstabe, der den gewünschten Status bzw. die Funktion repräsentiert und schließend ein regulärer Ausdruck, der mit jeder Zeile der Log-Datei verglichen wird.
+Mit obiger Konfiguration würden alle neuen Zeilen, die seit dem letzten Durchlauf von Logwatch in die Datei `/var/log/my.log` hinzugefügt wurden, auf die beiden Pattern "eine kritische Meldung" und "etwas, dass nur eine Warnung auslösen soll" geprüft.
+//SK: Wird ein Pattern gefunden, wird die gesamte Zeile, die dieses Pattern enthält, zusammen mit dem definierten Zustand (C für CRIT und W für WARN), an den {CMK}-Server übergeben.
+//SK: TODO: Alle Buchstaben erklären oder einfach auf die Beispielkofig verweisen?!?
+////
+ C CRIT
+ W WARN
+ O OK
+ I IGNORE
+ R REWRITE
+ A APPEND
+////
+
+Eine sehr umfangreiche Beispielkonfiguration finden Sie als Instanzbenutzer in der Datei `~/share/check_mk/agents/cfg_examples/logwatch.cfg`.
+
+Da alle Optionen, die Sie in einer solchen Konfigurationsdatei angeben können, bereits im Abschnitt xref:configuration_bakery[Konfiguration über Agentenbäckerei] erklärt wurden, folgt hier nur eine Auflistung samt Verweis.
+Konsultieren Sie für die Erklärung bitte obigen Abschnitt.
+
+[cols=4]
+|===
+| Option in logwatch.cfg | Entsprechung | Beispiel | Anmerkung
+| regex | Regular expression for logfile filtering | `regex='error.log$\|err$'` |
+| encoding | Codec that should be used to decode the matching files | `encodig=utf-8` |
+| maxlines | Restrict number of processed messages per cycle | `maxlines=500` |
+| maxtime | Restrict runtime of logfile parsing | `maxtime=23` |
+| overflow | In case of an overflow | `overflow=W` |
+| maxlinesize | Restrict the length of the lines | `maxlinesize=123` |
+| maxoutputsize | Limit the amount of data sent to the monitoring server | `maxoutputsize=10485760` | Größe in Byte
+| skipconsecutiveduplicated| Duplicated messages management | `skipconsecutiveduplicated=True` |
+| nocontext | Handling of context messages |`nocontext=True`|
+| maxcontextlines| Limit the amount of context data sent to the monitoring server | `maxcontextlines=55,66` |
+|===
+
+[#logfile_grouping]
+== Gruppierung von Log-Dateien
+
+//SK: TODO
+
+Der zum Agentenplugin gehörige Check namens `logwatch` erstellt normalerweise für jede Logdatei einen eigenen Service.
+Durch die Definition von Gruppierungen mithilfe der Regel [.guihint]#Logfile Grouping# können Sie auf den Check `logwatch_groups` umschalten.
+
+Weitere Informationen folgen demnächst. Konsultieren Sie bis dahin bitte die Inline-Hilfe der Regel [.guihint]#Logfile Grouping.#
+
+
+[#logfile_patterns]
+== Reklassifizieren mit Logfile patterns
+
+//SK: TODO
+
+Dieser Abschnitt folgt zeitnah. Konsultieren Sie bis dahin bitte die Inline-Hilfe der Regel [.guihint]#Logfile patterns.#
+
+
+== Weiterleitung an die Event Console
+
+Neben der direkten Verarbeitung von Log-Meldungen in {CMK} und einer etwaigen Reklassifizierung mit der Regel [.guihint]#Logfile patterns#, gibt es auch noch die Möglichkeit, durch Logwatch gewonnene Log-Zeilen an die Event Console weiterzuleiten.
+Dies geschieht mithilfe der Regel [.guihint]#Logwatch Event Console Forwarding# und wird im Artikel xref:ec#logwatch[Die Event Console] beschrieben.
+
+
+== Logwatch im Monitoring
+
+Im Monitoring unterscheidet sich die Darstellung je nach verwendetem Check-Plugin.
+
+Verwenden Sie entweder `logwatch` oder `logwatch_groups`, finden Sie - nach der notwendigen Service-Erkennung - pro Log-Datei bzw. pro Gruppierung von Log-Dateien (siehe xref:logfile_grouping[Gruppierung von Log-Dateien]) einen Service der mit `Log` beginnt.
+Darauf folgt der vollständige Pfad der Datei bzw. der Gruppenname.
+
+Wenn Sie ihre Log-Meldungen hingegen and die Event Console weiterleiten, sehen Sie je nach Einstellung der Regel [.guihint]#Logwatch Event Console Forwarding# pro Weiterleitung einen Service, der Sie über die Zahl der weitergeleiteten Log-Meldungen informiert.
+Bei der gebündelten Weiterleitung durch das Plugin `logwatch_ec` heißt dieser Service [.guihint]#Log Forwarding#.
+Wenn Sie die Option [.guihint]#Seperate check# und damit das Plugin `logwatch_ec_single` verwenden, beginnt der Service-Name auch wieder `Log` gefolgt von dem Pfad der Log-Datei.
+Auch dieser Service informiert Sie dann über die Anzahl der weitergeleiteten Meldungen und über darüber, wenn eine Log-Datei nicht gelesen werden kann.
+
+
+//SK: TODO: Logfile pattern analyzer
+
+////
 H1:Logwatch on Linux and UNIX
 
 H2:Installing the logwatch extension
@@ -196,7 +467,10 @@ F+:/etc/check_mk/logwatch.cfg
  C some.*other.*thingy
 F-:
 
-There are also options for limiting the length of the <i>lines</i> in a logfile and for
+There are also optioLogwatch needs to know which files to monitor and for which patterns
+to look. This is done in the configuration file <tt>logwatch.cfg</tt>
+on each target host. That file is searched in the following
+directories:ns for limiting the length of the <i>lines</i> in a logfile and for
 getting a warning of the size of a logfile is too large (e.g. because of a filed
 logfile rotation).
 
@@ -336,15 +610,17 @@ logwatch_max_filesize = 10000
 F-:
 ////
 
+////
 [#troubleshooting]
 == Troubleshooting
+SK: Hier könnte ein Hinweis für Leute hin, die noch mit Python2 unterwegs sind.
+////
 
 [#files]
 == Dateien und Verzeichnisse
 
 Alle Pfadangaben für den {CMK}-Server sind relativ zum Instanzverzeichnis (z.B. `/omd/sites/mysite`) angegeben.
 
-=== mk_logwatch
 [cols="15,39,~",options="header"]
 |===
 |Ort |Pfad |Bedeutung
@@ -352,9 +628,9 @@ Alle Pfadangaben für den {CMK}-Server sind relativ zum Instanzverzeichnis (z.B.
 |{CMK}-Server |`~/share/check_mk/agents/plugins/mk_logwatch.py` |Python-3-Agentenplugin inklusive Erläuterungen
 |{CMK}-Server |`~/share/check_mk/agents/plugins/mk_logwatch_2.py` |Python-2-Agentenplugin inklusive Erläuterungen
 |Linux-Host |`/etc/check_mk/logwatch.cfg` |Konfigurationsdatei - von der Agentenbäckerei oder manuell erstellt
-|Linux-Host |`/var/lib/check_mk_agent/logwatch.state.*` | Statefiles von mk_logwatch
-|Linux-Host |`/var/lib/check_mk_agent/logwatch-batches/*` | Speicherort der einzelnen Batches, die mk_logwatch pro Abfrager erzeugt
+|Linux-Host |`/var/lib/check_mk_agent/logwatch.state.*` | State-Dateien von mk_logwatch
+|Linux-Host |`/var/lib/check_mk_agent/logwatch-batches/*` | Speicherort der einzelnen Batches, die mk_logwatch pro Abfrage erzeugt
 |Windows-Host |`c:\ProgramData\checkmk\agent\config\logwatch.cfg` |Konfigurationsdatei - von der Agentenbäckerei oder manuell erstellt
-|Windows-Host | `c:\irgendwo` | Verzeichnis statefile
-|Windows-Host | `c:\woanders`  | Verzeichnis Batches
+|Windows-Host | `c:\ProgramData\checkmk\agent\state` | Ablageort für die State-Dateien von mk_logwatch
+|Windows-Host | `c:\ProgramData\checkmk\agent\state\logwatch-batches`  | Speicherort der einzelnen Batches, die mk_logwatch pro Abfrage erzeugt
 |===
