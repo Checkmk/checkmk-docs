@@ -2,7 +2,9 @@
 # This file is explained in the Checkmk User Guide:
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#extend
 
-from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
+from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
+# from cmk.utils import debug
+# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -22,6 +24,8 @@ def parse_myhostgroups(string_table):
         parsed[line[0]] = {}
         for n in range(1, len(column_names)):
             parsed[line[0]][column_names[n]] = line[n]
+    # if debug.enabled():
+    #    pprint(parsed)
     # parsed = {
     #     'check_mk': {
     #         'members': 'myhost1,myhost2,myhost3,myhost4', 
@@ -66,22 +70,21 @@ def check_myhostgroups_advanced(item, section):
 
     yield Result(state=State.OK, summary=f"{attr['num_hosts']} hosts in this group: {attr['members']}")
 
-
-register.agent_section(
+agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
     parse_function = parse_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups = CheckPlugin(
     name = "myhostgroups",
     service_name = "Host group check_mk",
     discovery_function = discover_myhostgroups,
     check_function = check_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups_advanced = CheckPlugin(
     name = "myhostgroups_advanced",
-    sections = ["myhostgroups"],
+    sections = [ "myhostgroups" ],
     service_name = "Host group %s",
     discovery_function = discover_myhostgroups_advanced,
     check_function = check_myhostgroups_advanced,

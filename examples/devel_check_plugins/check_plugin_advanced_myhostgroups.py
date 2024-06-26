@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # This file is explained in the Checkmk User Guide:
-# https://docs.checkmk.com/master/en/devel_check_plugins.html#use_ruleset
+# https://docs.checkmk.com/master/en/devel_check_plugins.html#summary_details
 
-from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
+from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
+# from cmk.utils import debug
+# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -38,8 +40,9 @@ def parse_myhostgroups(string_table):
     #         'num_services_ok': '108'
     #     }
     # }
+    if debug.enabled():
+        pprint(parsed)
     return parsed
-
 
 def discover_myhostgroups(section):
     yield Service()
@@ -51,7 +54,6 @@ def check_myhostgroups(section):
         yield Result(state=State.CRIT, summary=f"Default group is not empty; Current member list: {hosts}")
     else:
         yield Result(state=State.OK, summary="Everything is fine")
-
 
 def discover_myhostgroups_advanced(section):
     for group in section:
@@ -65,13 +67,12 @@ def check_myhostgroups_advanced(item, params, section):
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
-
     members = attr["members"]
     num_hosts = int(attr["num_hosts"])
     num_hosts_up = int(attr["num_hosts_up"])
     num_services = int(attr["num_services"])
     num_services_ok = int(attr["num_services_ok"])
-
+    
     yield Result(
         state=State.OK,
         summary=f"{num_hosts} hosts in this group",
@@ -96,31 +97,33 @@ def check_myhostgroups_advanced(item, params, section):
         boundaries = (0.0, 100.0),
         notice_only = True,
     )
-
+    
     yield Metric(name="num_hosts", value=num_hosts)
     yield Metric(name="num_hosts_up", value=num_hosts_up)
     yield Metric(name="num_services", value=num_services)
     yield Metric(name="num_services_ok", value=num_services_ok)
 
 
-register.agent_section(
+agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
     parse_function = parse_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups = CheckPlugin(
     name = "myhostgroups",
     service_name = "Host group check_mk",
     discovery_function = discover_myhostgroups,
     check_function = check_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups_advanced = CheckPlugin(
     name = "myhostgroups_advanced",
-    sections = ["myhostgroups"],
+    sections = [ "myhostgroups" ],
     service_name = "Host group %s",
     discovery_function = discover_myhostgroups_advanced,
     check_function = check_myhostgroups_advanced,
-    check_default_parameters = {"hosts_up_lower": (90, 80), "services_ok_lower": (90, 80)},
-    check_ruleset_name = "myhostgroups_advanced",
+    check_default_parameters = {
+        "hosts_up_lower": ("fixed", (90, 80)),
+        "services_ok_lower": ("fixed", (90, 80))
+    },
 )

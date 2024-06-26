@@ -2,7 +2,9 @@
 # This file is explained in the Checkmk User Guide:
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#summary_details
 
-from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
+from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
+# from cmk.utils import debug
+# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -38,8 +40,9 @@ def parse_myhostgroups(string_table):
     #         'num_services_ok': '108'
     #     }
     # }
+    if debug.enabled():
+        pprint(parsed)
     return parsed
-
 
 def discover_myhostgroups(section):
     yield Service()
@@ -52,7 +55,6 @@ def check_myhostgroups(section):
     else:
         yield Result(state=State.OK, summary="Everything is fine")
 
-
 def discover_myhostgroups_advanced(section):
     for group in section:
         if group != "check_mk":
@@ -63,7 +65,6 @@ def check_myhostgroups_advanced(item, section):
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
-    
     members = attr["members"]
     num_hosts = int(attr["num_hosts"])
     num_hosts_up = int(attr["num_hosts_up"])
@@ -79,7 +80,7 @@ def check_myhostgroups_advanced(item, section):
     hosts_up_perc = 100.0 * num_hosts_up / num_hosts
     yield from check_levels(
         hosts_up_perc,
-        levels_lower = (90.0, 80.0),
+        levels_lower = ("fixed", (90.0, 80.0)),
         metric_name = "hosts_up_perc",
         label = "UP hosts",
         boundaries = (0.0, 100.0),
@@ -88,7 +89,7 @@ def check_myhostgroups_advanced(item, section):
     services_ok_perc = 100.0 * num_services_ok / num_services
     yield from check_levels(
         services_ok_perc,
-        levels_lower = (90.0, 80.0),
+        levels_lower = ("fixed", (90.0, 80.0)),
         metric_name = "services_ok_perc",
         label = "OK services",
         boundaries = (0.0, 100.0),
@@ -101,21 +102,21 @@ def check_myhostgroups_advanced(item, section):
     yield Metric(name="num_services_ok", value=num_services_ok)
 
 
-register.agent_section(
+agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
     parse_function = parse_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups = CheckPlugin(
     name = "myhostgroups",
     service_name = "Host group check_mk",
     discovery_function = discover_myhostgroups,
     check_function = check_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups_advanced = CheckPlugin(
     name = "myhostgroups_advanced",
-    sections = ["myhostgroups"],
+    sections = [ "myhostgroups" ],
     service_name = "Host group %s",
     discovery_function = discover_myhostgroups_advanced,
     check_function = check_myhostgroups_advanced,

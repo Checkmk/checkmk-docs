@@ -2,7 +2,7 @@
 # This file is explained in the Checkmk User Guide:
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#scaffold
 
-from .agent_based_api.v1 import check_levels, Metric, register, Result, Service, State
+from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
 
 def parse_myhostgroups(string_table):
     parsed = {}
@@ -14,12 +14,12 @@ def discover_myhostgroups(section):
 def check_myhostgroups(section):
     yield Result(state=State.OK, summary="Everything is fine")
 
-register.agent_section(
+agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
     parse_function = parse_myhostgroups,
 )
 
-register.check_plugin(
+check_plugin_myhostgroups = CheckPlugin(
     name = "myhostgroups",
     service_name = "Host group check_mk",
     discovery_function = discover_myhostgroups,
