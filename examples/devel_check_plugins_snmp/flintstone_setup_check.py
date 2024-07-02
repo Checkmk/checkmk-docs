@@ -5,7 +5,18 @@
 # Store in your Checkmk site at:
 # local/lib/python3/cmk_addons/plugins/flintstone_setup_check/agent_based/flintstone_setup_check.py
 
-from .agent_based_api.v2 import SNMPSection, CheckPlugin, Result, Service, startswith, SNMPTree, State
+from cmk.agent_based.v2 import (
+    CheckPlugin,
+    CheckResult,
+    startswith,
+    DiscoveryResult,
+    Result,
+    Service,
+    SimpleSNMPSection,
+    SNMPTree,
+    State,
+    StringTable,
+)
 
 def parse_flintstone(string_table):
     # print(string_table)
