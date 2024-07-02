@@ -5,6 +5,8 @@
 # Store in your Checkmk site at:
 # local/lib/python3/cmk_addons/plugins/flintstone_setup_check/agent_based/flintstone_setup_check.py
 
+# from cmk.utils import debug
+# from pprint import pprint
 from cmk.agent_based.v2 import (
     CheckPlugin,
     CheckResult,
@@ -19,12 +21,14 @@ from cmk.agent_based.v2 import (
 )
 
 def parse_flintstone(string_table):
-    # print(string_table)
+    # if debug.enabled():
+    #     pprint(string_table)
     result = {}
     result["contact"] = string_table[0][0]
     result["name"] = string_table[0][1]
     result["location"] = string_table[0][2]
-    # print(result)
+    # if debug.enabled():
+    #     pprint(result)
     return result
 
 def discover_flintstone(section):
