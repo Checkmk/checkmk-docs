@@ -41,7 +41,7 @@ def check_flintstone(section):
     else:
         yield Result(state=State.OK, summary="All required information is available.")
 
-snmp_section_flintstone_setup = SNMPSection(
+snmp_section_flintstone_setup = SimpleSNMPSection(
     name = "flintstone_base_config",
     parse_function = parse_flintstone,
     detect = startswith(

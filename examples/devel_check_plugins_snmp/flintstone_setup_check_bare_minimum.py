@@ -27,7 +27,7 @@ def discover_flintstone(section):
 def check_flintstone(section):
     yield Result(state=State.OK, summary="Everything is fine")
 
-snmp_section_flintstone_setup = SNMPSection(
+snmp_section_flintstone_setup = SimpleSNMPSection(
     name = "flintstone_base_config",
     parse_function = parse_flintstone,
     detect = startswith(".1.3.6.1.2.1.1.1.0", "Flintstone"),
