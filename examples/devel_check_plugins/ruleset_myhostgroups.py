@@ -28,7 +28,7 @@ def _parameter_form() -> Dictionary:
                 parameter_form = SimpleLevels(
                     level_direction = LevelDirection.LOWER,
                     form_spec_template = Float(),
-                    prefill_fixed_levels = DefaultValue(value=(80.0, 90.0)),
+                    prefill_fixed_levels = DefaultValue(value=(90.0, 80.0)),
                     title=Title("Lower percentage threshold for host in UP status"),
                 ),
                 required = True,
@@ -37,7 +37,7 @@ def _parameter_form() -> Dictionary:
                     parameter_form = SimpleLevels(
                     level_direction = LevelDirection.LOWER,
                     form_spec_template = Float(),
-                    prefill_fixed_levels = DefaultValue(value=(80.0, 90.0)),
+                    prefill_fixed_levels = DefaultValue(value=(90.0, 80.0)),
                     title = Title("Lower percentage threshold for services in OK status"),
                 ),
                 required = True,
