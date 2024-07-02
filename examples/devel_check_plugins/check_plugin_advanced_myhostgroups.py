@@ -129,4 +129,5 @@ check_plugin_myhostgroups_advanced = CheckPlugin(
         "hosts_up_lower": ("fixed", (90, 80)),
         "services_ok_lower": ("fixed", (90, 80))
     },
+    check_ruleset_name = "myhostgroups_advanced",
 )
