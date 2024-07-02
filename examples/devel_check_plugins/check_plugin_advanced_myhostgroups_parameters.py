@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # This file is explained in the Checkmk User Guide:
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#rule_set
+# 
+# Store in your Checkmk site at:
+# local/share/check_mk/web/plugins/wato/myhostgroups_advanced_parameters.py
 
 from cmk.gui.i18n import _
 
