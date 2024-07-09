@@ -3,7 +3,7 @@
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#write_check_plugin
 # 
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
+# ~/local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
 
 from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
 
@@ -33,7 +33,6 @@ def check_myhostgroups(section):
         yield Result(state=State.CRIT, summary=f"Default group is not empty; Current member list: {hosts}")
     else:
         yield Result(state=State.OK, summary="Everything is fine")
-
 
 agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
