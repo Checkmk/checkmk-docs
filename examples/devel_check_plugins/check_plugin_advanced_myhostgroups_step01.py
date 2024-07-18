@@ -3,11 +3,9 @@
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#extend
 # 
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
+# ~/local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
 
 from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
-# from cmk.utils import debug
-# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -27,8 +25,6 @@ def parse_myhostgroups(string_table):
         parsed[line[0]] = {}
         for n in range(1, len(column_names)):
             parsed[line[0]][column_names[n]] = line[n]
-    # if debug.enabled():
-    #    pprint(parsed)
     # parsed = {
     #     'check_mk': {
     #         'members': 'myhost1,myhost2,myhost3,myhost4', 
@@ -46,7 +42,6 @@ def parse_myhostgroups(string_table):
     #     }
     # }
     return parsed
-
 
 def discover_myhostgroups(section):
     yield Service()
