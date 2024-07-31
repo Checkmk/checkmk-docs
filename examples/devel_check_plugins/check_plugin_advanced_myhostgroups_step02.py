@@ -3,11 +3,9 @@
 # https://docs.checkmk.com/master/en/devel_check_plugins.html#summary_details
 # 
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
+# ~/local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
 
 from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
-# from cmk.utils import debug
-# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -43,9 +41,8 @@ def parse_myhostgroups(string_table):
     #         'num_services_ok': '108'
     #     }
     # }
-    if debug.enabled():
-        pprint(parsed)
     return parsed
+
 
 def discover_myhostgroups(section):
     yield Service()
@@ -58,6 +55,7 @@ def check_myhostgroups(section):
     else:
         yield Result(state=State.OK, summary="Everything is fine")
 
+
 def discover_myhostgroups_advanced(section):
     for group in section:
         if group != "check_mk":
@@ -68,6 +66,7 @@ def check_myhostgroups_advanced(item, section):
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
+
     members = attr["members"]
     num_hosts = int(attr["num_hosts"])
     num_hosts_up = int(attr["num_hosts_up"])
@@ -77,7 +76,7 @@ def check_myhostgroups_advanced(item, section):
     yield Result(
         state=State.OK,
         summary=f"{num_hosts} hosts in this group",
-        details=f"{num_hosts} hosts in this group: {members}"
+        details=f"{num_hosts} hosts in this group: {members}",
     )
     
     hosts_up_perc = 100.0 * num_hosts_up / num_hosts

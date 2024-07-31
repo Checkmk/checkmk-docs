@@ -43,6 +43,7 @@ def parse_myhostgroups(string_table):
     # }
     return parsed
 
+
 def discover_myhostgroups(section):
     yield Service()
 
@@ -65,8 +66,9 @@ def check_myhostgroups_advanced(item, section):
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
-
+ 
     yield Result(state=State.OK, summary=f"{attr['num_hosts']} hosts in this group: {attr['members']}")
+
 
 agent_section_myhostgroups = AgentSection(
     name = "myhostgroups",
