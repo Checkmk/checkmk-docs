@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # This file is explained in the Checkmk User Guide:
-# https://docs.checkmk.com/master/en/devel_check_plugins.html#summary_details
+# https://docs.checkmk.com/master/en/devel_check_plugins.html#use_ruleset
 # 
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
+# ~/local/lib/python3/cmk_addons/plugins/myhostgroups/agent_based/myhostgroups.py
 
 from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
-# from cmk.utils import debug
-# from pprint import pprint
 
 def parse_myhostgroups(string_table):
     # string_table = [
@@ -43,9 +41,8 @@ def parse_myhostgroups(string_table):
     #         'num_services_ok': '108'
     #     }
     # }
-    if debug.enabled():
-        pprint(parsed)
     return parsed
+
 
 def discover_myhostgroups(section):
     yield Service()
@@ -57,6 +54,7 @@ def check_myhostgroups(section):
         yield Result(state=State.CRIT, summary=f"Default group is not empty; Current member list: {hosts}")
     else:
         yield Result(state=State.OK, summary="Everything is fine")
+
 
 def discover_myhostgroups_advanced(section):
     for group in section:
@@ -70,6 +68,7 @@ def check_myhostgroups_advanced(item, params, section):
     if not attr:
         yield Result(state=State.CRIT, summary="Group is empty or has been deleted")
         return
+
     members = attr["members"]
     num_hosts = int(attr["num_hosts"])
     num_hosts_up = int(attr["num_hosts_up"])
@@ -125,9 +124,6 @@ check_plugin_myhostgroups_advanced = CheckPlugin(
     service_name = "Host group %s",
     discovery_function = discover_myhostgroups_advanced,
     check_function = check_myhostgroups_advanced,
-    check_default_parameters = {
-        "hosts_up_lower": ("fixed", (90, 80)),
-        "services_ok_lower": ("fixed", (90, 80))
-    },
+    check_default_parameters = {"hosts_up_lower": ("fixed", (90, 80)), "services_ok_lower": ("fixed", (90, 80))},
     check_ruleset_name = "myhostgroups_advanced",
 )
