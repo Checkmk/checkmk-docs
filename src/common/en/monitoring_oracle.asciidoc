@@ -233,28 +233,38 @@ The `tnsnames.ora` file must then simply be amended as necessary.
 
 Finally, change the permissions of the files and directories created manually in this section so that xref:access_linux[access rights on execution] are set correctly.
 The agent plug-in executed as `root` will switch to the owner of the Oracle binaries (such as `$ORACLE_HOME/bin/sqlplus`) before executing them.
-This means owner and group of the manually created files in `/etc/check_mk/` have to be adapted, so they can be read by the process.
-For example, the following commands change the owner to `oracle` and the group to `oinstall`:
+At least the group of the owner of the Oracle binaries therefore needs read access to the manually created files in `/etc/check_mk/`.
+In the following example, we assume that the group is `oinstall`.
+
+The following commands change the group to `oinstall`:
 
 [{shell}]
 ----
-{c-root} chown oracle:oinstall /etc/check_mk/sqlnet.ora /etc/check_mk/tnsnames.ora
-{c-root} chown -R oracle:oinstall /etc/check_mk/oracle_wallet
+{c-root} chgrp oinstall /etc/check_mk/sqlnet.ora /etc/check_mk/tnsnames.ora
+{c-root} chgrp -R oinstall /etc/check_mk/oracle_wallet
 ----
 
-The permissions for the owner and group should then look something like this:
+These commands then ensure that the group can read the `oracle_wallet` directory and its contents:
+
+[{shell}]
+----
+{c-root} chmod g+x /etc/check_mk/oracle_wallet
+{c-root} chmod -R g+r /etc/check_mk/oracle_wallet
+----
+
+The permissions should then look something like this:
 
 [{shell}]
 ----
 {c-root} tree -ugpR /etc/check_mk
 [drwxr-xr-x root     root    ]  /etc/check_mk
-├── [drwxr-x--- oracle   oinstall ]  oracle_wallet
-│   └── [-rw-r----- oracle   oinstall ]  cwallet.sso
-│   └── [-rw------- oracle   oinstall ]  cwallet.sso.lck
-│   └── [-rw-r----- oracle   oinstall ]  ewallet.p12
-│   └── [-rw------- oracle   oinstall ]  ewallet.p12.lck
-├── [-rw-r--r-- oracle   oinstall ]  sqlnet.ora
-├── [-rw-r--r-- oracle   oinstall ]  tnsnames.ora
+├── [drwxr-x--- root   oinstall ]  oracle_wallet
+│   └── [-rw-r----- root   oinstall ]  cwallet.sso
+│   └── [-rw-r----- root   oinstall ]  cwallet.sso.lck
+│   └── [-rw-r----- root   oinstall ]  ewallet.p12
+│   └── [-rw-r----- root   oinstall ]  ewallet.p12.lck
+├── [-rw-r--r-- root   oinstall ]  sqlnet.ora
+├── [-rw-r--r-- root   oinstall ]  tnsnames.ora
 ----
 
 The command output only shows the files and directories in question.
@@ -516,7 +526,7 @@ You can find out in which patch version of {CMK} this change was made in the Wer
 
 The execution of Oracle programs by a non-privileged user can lead to problems when using an Oracle wallet, as this user may not be able to access the wallet-specific files.
 The non-privileged user needs the permissions to read the files `$TNS_ADMIN/sqlnet.ora` and `$TNS_ADMIN/tnsnames.ora`, to execute the wallet folder and to read the files in the wallet folder.
-You should not have any problems with the access rights as long as you have changed the owner and group of the files and directories as described at the end of the section on xref:oracle_wallet[Oracle Wallet].
+You should not have any problems with the access rights as long as you have changed the group of the files and directories as described at the end of the section on xref:oracle_wallet[Oracle Wallet].
 
 The agent plug-in helps you with the diagnosis and checks whether there are problems accessing the files mentioned and displays them in the xref:connection_test[connection test].
 The exact procedure for diagnosing and correcting access rights can be found in the link:https://checkmk.atlassian.net/wiki/spaces/KB/pages/70582273/[{CMK} Knowledge Base^].
@@ -1176,6 +1186,10 @@ After that you assign the custom SQL queries with the variables to this check pl
 [#diagnostic]
 == Diagnostic options
 
+Under Linux, diagnostics are performed by calling the agent plug-in `mk_oracle` with various options.
+With `mk_oracle --help` you can display an overview of all available options.
+
+
 [#connection_test]
 === Testing connections
 
@@ -1190,14 +1204,15 @@ The exact procedure for diagnosing and correcting access rights can be found in 
 
 If you have problems connecting to one or more instances on an Oracle server, the first thing you can do is to check basic parameters.
 If you start the agent plug-in with the `-t` option, it displays the details of a connection.
-Note that the plug-in must be provided with the path to its configuration file beforehand, as it relies on this.
+Note that the agent plug-in must be provided with the paths to its configuration file and to the plugin's cached data beforehand.
 In the output the _dummy sections_ have been omitted for readability.
-The following is an example on a Linux server:
+
+The following example is for a Linux server with `systemd`, on which the agent plug-in is executed xref:install_linux[asynchronously] every 60 seconds:
 
 [{shell}]
-----
-{c-root} export MK_CONFDIR="/etc/check_mk/"
-{c-root} /usr/lib/check_mk_agent/plugins/mk_oracle -t
+----  
+{c-root} export MK_CONFDIR="/etc/check_mk/"; export MK_VARDIR="/var/lib/check_mk_agent"
+{c-root} /usr/lib/check_mk_agent/plugins/60/mk_oracle -t --no-spool
 ---login----------------------------------------------------------------
     Operating System:       Linux
     ORACLE_HOME (oratab):   /u01/app/oracle/product/11.2.0/xe
@@ -1207,6 +1222,13 @@ The following is an example on a Linux server:
     SYNC_SECTIONS:          instance dataguard_stats processes longactivesessions sessions recovery_status undostat logswitches recovery_area performance
     ASYNC_SECTIONS:         tablespaces rman jobs ts_quotas resumable
 ------------------------------------------------------------------------
+----
+
+On a Linux server with `xinetd`, call `mk_oracle` for the connection test as follows instead:
+
+[{shell}]
+---- 
+{c-root} /usr/lib/check_mk_agent/plugins/mk_oracle -t
 ----
 
 Since this call is more likely to be made in the event of an error, you will then also receive further information:
@@ -1255,15 +1277,23 @@ XE|FAILURE|...
 ==== Linux, Solaris, AIX
 
 If the error cannot be found by checking a simple connection, the next step is to create a a log file, which logs all of the agent plug-in's steps.
-Again, you will need the path to the configuration file, and also the path to the plug-in's cached data.
-In the following example, the output of the sections has also been omitted to improve readability:
+Do not forget the necessary environment variables here either.
+In the following example, the output of the sections has also been omitted to improve readability.
+
+Here is the call for a Linux server with `systemd`, on which the agent plug-in is executed xref:install_linux[asynchronously] every 60 seconds:
 
 [{shell}]
 ----
-{c-root} export MK_CONFDIR="/etc/check_mk/"
-{c-root} export MK_VARDIR="/var/lib/check_mk_agent/"
-{c-root} /usr/lib/check_mk_agent/plugins/mk_oracle -l
+{c-root} export MK_CONFDIR="/etc/check_mk/"; export MK_VARDIR="/var/lib/check_mk_agent"
+{c-root} /usr/lib/check_mk_agent/plugins/60/mk_oracle -l --no-spool
 Start logging to file: /var/lib/check_mk_agent/log/mk_oracle.log
+----
+
+Here is the call of `mk_oracle` for logging on a Linux server with `xinetd`:
+
+[{shell}]
+---- 
+{c-root} /usr/lib/check_mk_agent/plugins/mk_oracle -l
 ----
 
 You can use the generated log file to identify very precisely on which line of the script the problem has occurred.
@@ -1282,12 +1312,19 @@ If the connection itself is stable, you can add the real sections back to the co
 
 If you cannot get to the problem, even with the help of the log, as a last option the agent plug-in provides the complete output of all steps for error analysis.
 This output is therefore the most comprehensive, and certainly the most difficult to read method to get to the cause of a problem, and should therefore only be used as a last resort.
-You can call up debugging with the `-d` option.
-Do not forget the necessary environment variable here either: 
+
+The following is an example of debugging on a Linux server with `systemd`, on which the agent plug-in is executed xref:install_linux[asynchronously] every 60 seconds:
 
 [{shell}]
 ----
-{c-root} export MK_CONFDIR="/etc/check_mk/"
+{c-root} export MK_CONFDIR="/etc/check_mk/"; export MK_VARDIR="/var/lib/check_mk_agent"
+{c-root} /usr/lib/check_mk_agent/plugins/60/mk_oracle -d --no-spool
+----
+
+Here is the call of `mk_oracle` for debugging on a Linux server with `xinetd`:
+
+[{shell}]
+---- 
 {c-root} /usr/lib/check_mk_agent/plugins/mk_oracle -d
 ----
 
