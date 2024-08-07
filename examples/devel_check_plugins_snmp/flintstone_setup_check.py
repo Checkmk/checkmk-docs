@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # This file is explained in the Checkmk User Guide:
-# https://docs.checkmk.com/master/en/devel_check_plugins_snmp.html#parse_function
+# https://docs.checkmk.com/master/en/devel_check_plugins_snmp.html#simple_snmp_plugin
 #
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/flintstone_setup_check/agent_based/flintstone_setup_check.py
+# ~/local/lib/python3/cmk_addons/plugins/flintstone/agent_based/flintstone_setup_check.py
 
-# from cmk.utils import debug
-# from pprint import pprint
 from cmk.agent_based.v2 import (
     CheckPlugin,
     CheckResult,
@@ -21,14 +19,10 @@ from cmk.agent_based.v2 import (
 )
 
 def parse_flintstone(string_table):
-    # if debug.enabled():
-    #     pprint(string_table)
     result = {}
     result["contact"] = string_table[0][0]
     result["name"] = string_table[0][1]
     result["location"] = string_table[0][2]
-    # if debug.enabled():
-    #     pprint(result)
     return result
 
 def discover_flintstone(section):
@@ -58,7 +52,7 @@ snmp_section_flintstone_setup = SimpleSNMPSection(
     ),
 )
 
-check_plugin__flintstone_setup = CheckPlugin(
+check_plugin_flintstone_setup = CheckPlugin(
     name = "flintstone_setup_check",
     sections = [ "flintstone_base_config" ],
     service_name = "Flintstone setup check",

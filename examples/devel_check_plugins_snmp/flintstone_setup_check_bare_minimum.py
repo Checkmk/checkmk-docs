@@ -3,7 +3,7 @@
 # https://docs.checkmk.com/master/en/devel_check_plugins_snmp.html#scaffold
 #
 # Store in your Checkmk site at:
-# local/lib/python3/cmk_addons/plugins/flintstone_setup_check/agent_based/flintstone_setup_check.py
+# ~/local/lib/python3/cmk_addons/plugins/flintstone/agent_based/flintstone_setup_check.py
 
 from cmk.agent_based.v2 import (
     CheckPlugin,
