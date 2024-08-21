@@ -1,254 +1,440 @@
 #!/usr/bin/env python3
 # encoding: utf-8
-"""Tool to check missing translations"""
+"""Tool for checking missing translations"""
 
-from re import sub as substitude
-from sys import argv as sysargs
-from sys import stdout as sysout
-from sys import exit as sysexit
-from os import listdir, system
-from pathlib import Path
-from subprocess import check_output as check
 from datetime import datetime
+import logging
+from pydantic import BaseModel
+from os import listdir
+from sys import argv, stdout, exit
+from subprocess import check_output
+from typing import Any
 import argparse
 import git
-from typing import NamedTuple
 
-DOCS_ROOT = git.Repo("./", search_parent_directories=True)
-DOCS = git.Git(DOCS_ROOT.working_dir)
-EXCLUDES = (
-    "check_",
-    "draft_",
-    "cma_",
-    "legacy_",
-    ".",
-    "internal_",
-    "missing",
-    "index",
-    "deprecated_",
-    "training_",
-    "global_attr",
-    "featured_",
-    "landingpage",
-    "most_",
-    "recently_",
+TRANSLATE_REGEX: str = r"^translated\|^content-sync\|^content_sync"
+DEFAULT_DATE: int = 1104537600
+EXCLUDE_COMMIT_PREFIX: tuple = (
+    "translated",
+    "content-sync",
+    "content_sync",
+    "only-de",
+    "only-en",
 )
-DEFAULT_LANGUAGES = ["de", "en"]
-MARKER = ("only-de", "only-en", "translated", "content_sync", "content-sync")
-MARKER_LANG = dict(de=MARKER[0], en=MARKER[1])
-DOC_TYPES = ["common", "includes", "onprem", "saas"]
+UTF8: str = "utf-8"
+NEWLINE: str = "\n"
+VERBOSITY = {
+    0: logging.WARNING,
+    1: logging.INFO,
+    2: logging.DEBUG,
+}
+LOGFORMAT = "%(asctime)s Zeile %(lineno)s %(funcName)s %(levelname)s: %(message)s"
+ASCIIDOC_EXTENSION: str = ".asciidoc"
+CURRENT_BRANCH: str = "git branch --show-current"
+INCLUDE_DOCS_TYPES: tuple = ("common", "onprem", "saas", "includes")
+INCLUDE_LANGUAGES: tuple = ("de", "en")
+
+
+class DocsSrcPaths(BaseModel):
+    docs_root: Any = git.Repo("./", search_parent_directories=True)
+    docs_repo: Any = git.Git(docs_root.working_dir)
+    base: str = f"{docs_root.working_dir}/src"
+    legacy: str = docs_repo
+
+
+DOCSSRCPATHS = DocsSrcPaths()
+
+
+class Box(BaseModel):
+    size: int = 120
+    half_size: float = size / 2
+    top: str = "┌" + "─" * size + "┐\n"
+    separator: str = "├" + "─" * size + "┤\n"
+    bottom: str = "└" + "─" * size + "┘\n"
+    borders: str = "\033[500D|\033[{}C|\n".format(size)
+
+
+class BoxColors(BaseModel):
+    bold: str = "\033[1m"
+    normal: str = "\033[0m"
+    black: str = "\033[30m"
+    red: str = bold + "\033[31m"
+    green: str = bold + "\033[32m"
+    yellow: str = bold + "\033[33m"
+    blue: str = bold + "\033[34m"
+    magenta: str = bold + "\033[35m"
+    cyan: str = bold + "\033[36m"
+    white: str = bold + "\033[37m"
+    bg_red: str = "\033[41m"
+    bg_blue: str = "\033[44m"
+    clean: str = bold + "\033[32m"
+    dirty: str = bold + "\033[31m"
+
+
+class BoxText(BaseModel):
+    de: str = (
+        "| {colors.bg_red}{colors.black} "
+        + "⚒ {colors.yellow}Deutsch{colors.black} ⚒ "
+        + "{colors.normal}{box.borders}"
+        + "|{box.borders}"
+    )
+    en: str = (
+        "| {colors.bg_blue}{colors.white} "
+        + "✭ {colors.white}English{colors.white} ✭ "
+        + "{colors.normal}{box.borders}"
+        + "|{box.borders}"
+    )
+    docs_type_header: str = "| -------- {colors.bold}{type} --------{box.borders}"
+    header: str = (
+        "| {colors.bold}{article.name}{colors.normal} "
+        + "\033[500D|\033[50C{color}{article.state}{colors.normal}"
+        + "{colors.bold}{article.hint}{colors.normal}{box.borders}"
+    )
+    commit_clean: str = "| {colors.green}c "
+    commit_dirty: str = "| {colors.red}d "
+    commit_details: str = (
+        "{colors.magenta}{commit_id} "
+        + "{colors.blue}{commit_date} {colors.yellow}{commit_author}"
+        + "\033[500D|\033[50C {colors.normal}{commit_message}{box.borders}"
+    )
+    hint_last_full_translation: str = (
+        " - last full translation: {last_full_translation}"
+    )
+    hint_never_marked: str = " - Never marked as translated"
+    hint_dirty_commits: str = " - {dirty_commit_count} commits are untranslated"
+
+
+BASIC_LINE_PARAMETERS: dict[str, BoxColors | Box] = {
+    "colors": BoxColors(),
+    "box": Box(),
+}
+
+
+class Exclude(BaseModel):
+    article_starts: tuple = (
+        "check_",
+        "draft_",
+        "cma_",
+        "legacy_",
+        ".",
+        "internal_",
+        "missing",
+        "index",
+        "deprecated_",
+        "training_",
+        "global_attr",
+        "featured_",
+        "landingpage",
+        "most_",
+        "recently_",
+    )
+
+
+class CommitProperties(BaseModel):
+    date: int = DEFAULT_DATE
+    author: str = ""
+    msg: str = ""
+    state: str = "clean"
+
+
+class ArticleCommit(BaseModel):
+    commit_id: str = ""
+    properties: CommitProperties = CommitProperties()
+
+
+class CommitsByLanguage(BaseModel):
+    de: list[ArticleCommit] = []
+    en: list[ArticleCommit] = []
+
+
+class Article(BaseModel):
+    name: str = ""
+    hint: str = ""
+    state: str = "clean"
+    dirty_commit_count: int = 0
+    last_full_translation: int = DEFAULT_DATE
+    commits_by_language: dict = {"de": [], "en": []}
+    commit_ids: dict[str, list] = {"de": [], "en": []}
+    commit_msgs: dict[str, list] = {"de": [], "en": []}
+
+
+class ColorizedOutput:
+    def __init__(self, box_size=90):
+        Box.size = box_size
+
+    def _line(self, line: str, additional_parameters: dict = {}) -> None:
+        stdout.write(
+            line.format(
+                **additional_parameters,
+                **BASIC_LINE_PARAMETERS,
+            )
+        )
+
+    def _get_color_str(self, state: str):
+        return BoxColors().model_dump().get(state)
+
+    def _docs_type_header(self, docs_type: str) -> None:
+        self._line(Box().top)
+        self._line(
+            BoxText().docs_type_header,
+            additional_parameters={"type": docs_type.upper()},
+        )
+        self._line(Box().separator)
+
+    def summary(self, data, complete):
+        for article_name, properties in data.items():
+            if properties.state == "clean" and not complete:
+                continue
+            self._line(
+                BoxText().header,
+                additional_parameters={
+                    "color": self._get_color_str(properties.state),
+                    "article": properties,
+                },
+            )
+            self._line(Box().separator)
+        self._line(Box().bottom)
+
+    def details(self, article):
+        text = BoxText()
+        box = Box()
+        msg_length = box.size - 39
+        self._line(box.top)
+        self._line(
+            text.header,
+            additional_parameters={
+                "color": self._get_color_str(article.state),
+                "article": article,
+            },
+        )
+        self._line(box.separator)
+        for lang, commits in article.commits_by_language.items():
+            self._line(text.model_dump().get(lang))
+            for commit in commits:
+                if commit.properties.state == "clean":
+                    prefix = text.commit_clean
+                else:
+                    prefix = text.commit_dirty
+                self._line(
+                    prefix + text.commit_details,
+                    additional_parameters={
+                        "commit_id": commit.commit_id,
+                        "commit_date": datetime.fromtimestamp(
+                            commit.properties.date
+                        ).strftime("%Y-%m-%d %H:%M"),
+                        "commit_author": commit.properties.author,
+                        "commit_message": commit.properties.msg[:msg_length],
+                    },
+                )
+            self._line(box.separator)
+
+    def all_summary(self, data, complete=False):
+        for docs_type in INCLUDE_DOCS_TYPES:
+            if not data.get(docs_type):
+                continue
+            self._docs_type_header(docs_type)
+            self.summary(data[docs_type], complete)
+
+    def details_for_all_docs_type(self, data, article_name):
+        for docs_type in INCLUDE_DOCS_TYPES:
+            if not data.get(docs_type):
+                continue
+            article = data[docs_type][article_name]
+            self._docs_type_header(docs_type)
+            self.details(article)
+
+    def details_for_docs_type(self, data, article_name, docs_type):
+        article = data[docs_type][article_name]
+        self._docs_type_header(docs_type)
+        self.details(article)
 
 
 class GitCommits:
     def __init__(self):
-        self.Commit = NamedTuple(
-            "Commit", [("name", str), ("date", str), ("id", str), ("message", str)]
-        )
-        self.Translate = NamedTuple(
-            "Translate", [("id", str), ("date", str), ("files", dict)]
-        )
-        self.translated_markers = list()
-        self.last_translation = dict()
-        self.commits = list()
         self.default_branch = (
-            check("git branch --show-current", shell=True).decode("utf-8").strip("\n")
+            check_output(CURRENT_BRANCH, shell=True).decode(UTF8).strip(NEWLINE)
+        )
+        self.pretty_git_log = "--pretty=format:%an||%ct||%H||%s||||"
+        self.pretty_split_four = "||||"
+        self.pretty_split_two = "||"
+
+    def _split_path_to_variables(self, file):
+        filepath = file.split("/")
+        if len(filepath) == 2:  # old path structure
+            return None, filepath[0], filepath[1]
+        return filepath[1:]
+
+    def get_translated_marker(self, article_list, path: str = DOCSSRCPATHS.base):
+        commits = DOCSSRCPATHS.docs_root.iter_commits(
+            self.default_branch, paths=path, grep=TRANSLATE_REGEX
         )
 
-    def _create_translated_file_list(self):
-        for _id, new_date, files in self.translated_markers:
-            for article in files:
-                if not article.endswith(".asciidoc"):
-                    continue
-                article = substitude(r"^src/[a-z]{4,10}/[den]{2}/", "", article)
-                self.last_translation.setdefault(article, new_date)
-                date = self.last_translation[article]
-                date = max(date, new_date)
-        return self.last_translation
-
-    def get_translated_markers(self, branch=None):
-        if not branch:
-            branch = self.default_branch
-        commits = DOCS_ROOT.iter_commits(
-            branch,
-            paths=f"{DOCS_ROOT.working_dir}/src",
-            grep=r"^translated\|^content-sync\|^content_sync",
-        )
         for commit in commits:
-            self.translated_markers.append(
-                self.Translate(commit.hexsha, commit.committed_date, commit.stats.files)
-            )
-        return self._create_translated_file_list()
+            for file in commit.stats.files:
+                if not str(file).endswith(ASCIIDOC_EXTENSION):
+                    continue
 
-    def _get_log_as_list_of_dicts(self, max_age, pretty, file):
-        commits = list()
-        raw = DOCS.log(f"--since={max_age}", pretty, "--", file)
-        raw_list = raw.replace("\n", "").split("||||")
+                docs_type, language, filename = self._split_path_to_variables(file)
+                logging.debug(f"Checking {docs_type} / {language} / {filename}")
+                article_name = filename.replace(ASCIIDOC_EXTENSION, "")
+                commit_date = commit.committed_date
+                logging.debug(f"Last full translation: {commit_date}")
+
+                if docs_type and docs_type in article_list.keys():
+                    if article_properties := article_list[docs_type].get(article_name):
+                        logging.debug(
+                            f"article properties before change: {article_properties.model_dump()}"
+                        )
+                        article_translation = article_properties.last_full_translation
+                    else:
+                        continue  # Skipping not moved or excluded articles for now
+                else:
+                    continue  # Skipping legacy paths for now
+
+                article_properties.last_full_translation = max(
+                    article_translation, commit_date
+                )
+                logging.debug(
+                    f"article properties after change: {article_properties.model_dump()}"
+                )
+
+    def _get_commits_of_file(self, article: Article, path, language):
+        raw = DOCSSRCPATHS.docs_repo.log(
+            f"--since={article.last_full_translation}", self.pretty_git_log, "--", path
+        )
+        raw_list = raw.replace(NEWLINE, "").split(self.pretty_split_four)
         for entry in raw_list:
             if not entry:
                 continue
-            name, date, id, summary = entry.split("||")
-            commits.append(dict(name=name, date=date, id=id[:6], summary=summary))
-
-        return commits
-
-    def get_file_commits(self, file, lang, max_age, branch=None):
-        file_commits = list()
-        commit_hashes = list()
-        commit_messages = list()
-        if not branch:
-            branch = self.default_branch
-        commits = self._get_log_as_list_of_dicts(
-            max_age,
-            "--pretty=format:%an||%ct||%H||%s||||",
-            f"{DOCS_ROOT.working_dir}/src/*/{lang}/{file}",
-        )
-        for commit in commits:
-            commit_hashes.append(commit.get("id"))
-            commit_messages.append(commit.get("summary"))
-            file_commits.append(
-                self.Commit(
-                    commit.get("name"),
-                    commit.get("date"),
-                    commit.get("id"),
-                    commit.get("summary"),
+            name, date, id, summary = entry.split(self.pretty_split_two)
+            article.commits_by_language[language].append(
+                ArticleCommit(
+                    commit_id=id[:6],
+                    properties=CommitProperties(
+                        date=date, author=name, msg=str(summary).lower()
+                    ),
                 )
             )
+            article.commit_ids[language].append(id[:6])
+            article.commit_msgs[language].append(summary.lower())
 
-        return commit_messages, commit_hashes, file_commits
+    def get_article_commits(self, article_list):
+        for docs_type, articles in article_list.items():
+            for article_name, article_properties in articles.items():
+                base_dir = f"{DOCSSRCPATHS.docs_root.working_dir}/src/{docs_type}"
+                for lang in INCLUDE_LANGUAGES:
+                    self._get_commits_of_file(
+                        article_properties,
+                        f"{base_dir}/{lang}/{article_name}{ASCIIDOC_EXTENSION}",
+                        lang,
+                    )
 
 
-class Article:
-    def __init__(self, filename):
-        self.filename = filename
-        self.paths = dict()
-        self.lang = list()
-        self.last_translation = "1104537600"
-        self.commits = dict()
-        self.commits_clean = True
-        self.untranslated = dict(de=False, en=False)
+class ArticleDatabase:
+    def __init__(self):
+        self.src_path = DocsSrcPaths().base
+        self.article_list = {}
 
-
-class ColorizedOutput(object):
-    """Write out fancy stuff to the command line"""
-
-    def __init__(self, box_size=90, tty=True):
-        self.box_size = box_size
-        bold = "\033[1m"
-        self.colors = dict(
-            bold=bold,
-            normal="\033[0m",
-            black="\033[30m",
-            red=bold + "\033[31m",
-            green=bold + "\033[32m",
-            yellow=bold + "\033[33m",
-            blue=bold + "\033[34m",
-            magenta=bold + "\033[35m",
-            cyan=bold + "\033[36m",
-            white=bold + "\033[37m",
-            bg_red="\033[41m",
-            bg_blue="\033[44m",
-            de="Deutsch",
-            en="English",
-            box_top="┌" + "─" * box_size + "┐\n",
-            box_separator="├" + "─" * box_size + "┤\n",
-            box_bottom="└" + "─" * box_size + "┘\n",
-            box_borders="\033[500D|\033[{}C|\n".format(box_size),
-            box_size=box_size,
-            box_size_half=box_size / 2,
-        )
-
-        if not tty:
-            self.colors = {key: "" for key in self.colors}
-
-        self.languages = dict(
-            de="{bg_red}{black} ⚒ {yellow}{de}{black} ⚒ {normal}".format(**self.colors),
-            en="{bg_blue}{white} ✭ {white}{en}{white} ✭ {normal}".format(**self.colors),
-        )
-        self.colors.update(de=self.languages["de"], en=self.languages["en"])
-
-    def line(self, line, **kwargs):
-        """Write out a single line."""
-        colors = self.colors.copy()
-        colors.update(kwargs)
-        try:
-            return sysout.write(line.format(**colors))
-        except:  # noqa E722
-            print(colors)
-            raise
-
-    def box_element(self, box_element):
-        """Write Box elements"""
-        return sysout.write(self.colors[box_element])
-
-    def article_details(self, commits, lang):
-        if lang == "de":
-            self.line("| {de}{box_borders}")
-        else:
-            self.line("| {en}{box_borders}")
-
-        self.line("|{box_borders}")
-        for entry in commits:
-            prefix = entry[0]
-            commit = entry[1]
-            message_length = self.box_size - 39
-            attr = dict(
-                prefix=prefix,
-                commit=commit,
-                message=commit.message[:message_length],
-                commit_date=datetime.fromtimestamp(int(commit.date)).strftime(
-                    "%Y-%m-%d %H:%M"
-                ),
-            )
-
-            summary = (
-                "{magenta}{commit.id} {blue}{commit_date} {yellow}{commit.name}"
-                + "\033[500D|\033[38C {normal}{message}{box_borders}"
-            )
-            if prefix:
-                self.line("| {green}c " + summary, **attr)
-            else:
-                self.line("| {red}d " + summary, **attr)
-
-    def summary_details(
-        self,
-        commits,
-        untranslated=False,
-        filename=None,
-        dirty_commits=0,
-        write=False,
-        last_translation=None,
-    ):
-
-        for entry in commits:
-            clean = entry[0]
-            if not clean:
-                dirty_commits += 1
-
-            if clean or untranslated:
+    def _get_all_files(self, language_path, docs_type):
+        for article in listdir(language_path):
+            if not article.endswith(ASCIIDOC_EXTENSION):
                 continue
-
-        if dirty_commits >= 1 and write:
-            hint = f" - {dirty_commits} commits are untranslated"
-            self.line(
-                "| {bold}{filename}{normal} "
-                + "\033[500D|\033[30C{red}dirty{normal}{bold}{hint}{normal}{box_borders}",
-                **dict(filename=filename, hint=hint),
+            article_name = article.replace(ASCIIDOC_EXTENSION, "")
+            self.article_list[docs_type][article_name] = Article(
+                docs_type=docs_type, name=article_name
             )
-        elif write:
-            if last_translation == "1104537600":
-                hint = " - Never marked as translated"
+
+    def _get_file(self, language_path, docs_type, article):
+        for article_file in listdir(language_path):
+            if not article_file.startswith(article):
+                continue
+            article_name = article_file.replace(ASCIIDOC_EXTENSION, "")
+            self.article_list[docs_type][article_name] = Article(
+                docs_type=docs_type, name=article_name
+            )
+
+    def _get_all_languages(self, type_path, docs_type):
+        for language in listdir(type_path):
+            if language not in INCLUDE_LANGUAGES:
+                continue
+            self._get_all_files(f"{type_path}/{language}", docs_type)
+
+    def _get_languages(self, type_path, docs_type, article):
+        for language in listdir(type_path):
+            if language not in INCLUDE_LANGUAGES:
+                continue
+            self._get_file(f"{type_path}/{language}", docs_type, article)
+
+    def get_all_articles(self, specific_docs_type=None):
+        for docs_type in listdir(self.src_path):
+            if docs_type not in INCLUDE_DOCS_TYPES:
+                continue
+            if specific_docs_type and docs_type != specific_docs_type:
+                continue
+            self.article_list.setdefault(docs_type, {})
+            self._get_all_languages(f"{self.src_path}/{docs_type}", docs_type)
+
+    def get_article(self, article, specific_docs_type=None):
+        for docs_type in listdir(self.src_path):
+            if docs_type not in INCLUDE_DOCS_TYPES:
+                continue
+            if specific_docs_type and docs_type != specific_docs_type:
+                continue
+            self.article_list.setdefault(docs_type, {})
+            self._get_languages(f"{self.src_path}/{docs_type}", docs_type, article)
+
+    def _get_article_diff(self, article: Article):
+        article_state = "clean"
+        for commit in article.commits_by_language["de"]:
+            logging.debug(f"Checking: {commit}")
+            if commit.properties.msg.startswith(EXCLUDE_COMMIT_PREFIX):
+                commit.properties.state = "clean"
+            elif commit.commit_id not in article.commit_ids["en"]:
+                commit.properties.state = "dirty"
+                article.dirty_commit_count += 1
+                article_state = "dirty"
+            elif commit.properties.msg not in article.commit_msgs["en"]:
+                commit.properties.state = "dirty"
+                article.dirty_commit_count += 1
+                article_state = "dirty"
             else:
-                date = datetime.fromtimestamp(int(last_translation)).strftime(
-                    "%Y-%m-%d %H:%M"
-                )
-                hint = f" - last full translation: {date}"
-            self.line(
-                "| {bold}{filename}{normal} \033[500D|\033[30C{green}clean{normal}{bold}{hint}"
-                + "{normal}{box_borders}",
-                **dict(filename=filename, hint=hint),
-            )
+                commit.properties.state = "clean"
 
-        return dirty_commits
+        for commit in article.commits_by_language["en"]:
+            if commit.properties.msg.startswith(EXCLUDE_COMMIT_PREFIX):
+                commit.properties.state = "clean"
+                continue
+            elif commit.commit_id not in article.commit_ids["de"]:
+                commit.properties.state = "dirty"
+                article.dirty_commit_count += 1
+                article_state = "dirty"
+            elif commit.properties.msg not in article.commit_msgs["de"]:
+                commit.properties.state = "dirty"
+                article.dirty_commit_count += 1
+                article_state = "dirty"
+            else:
+                commit.properties.state = "clean"
+
+        article.state = article_state
+
+    def get_diff(self):
+        for _docs_type, articles in self.article_list.items():
+            for _name, properties in articles.items():
+                self._get_article_diff(properties)
+                if properties.dirty_commit_count >= 1:
+                    properties.hint = BoxText().hint_dirty_commits.format(
+                        **{"dirty_commit_count": properties.dirty_commit_count}
+                    )
+                elif properties.last_full_translation == DEFAULT_DATE:
+                    properties.hint = BoxText().hint_never_marked
+                else:
+                    properties.hint = BoxText().hint_last_full_translation.format(
+                        **{
+                            "last_full_translation": datetime.fromtimestamp(
+                                properties.last_full_translation
+                            ).strftime("%Y-%m-%d %H:%M")
+                        }
+                    )
 
 
 def parse_arguments(argv):
@@ -256,241 +442,83 @@ def parse_arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument(
-        "article_or_hash",
+        "article",
         type=str,
-        help="Article name or commit hash. The"
-        + " script tries to detect wether"
-        + " it's one or another and creates the corresponding output.",
+        default="all",
+        help="Article name to analyze",
         nargs="?",
     )
     parser.add_argument(
-        "-a", "--article", default="", help="A specific article to show"
+        "-t",
+        "--docs-type",
+        default="all",
+        help="The type of docs that will be build. "
+        + "Valid values are: common, onprem, saas, includes, all_types",
     )
     parser.add_argument(
-        "-c",
-        "--commit",
-        default="",
-        help="Show the diff of an entry of an articles details",
+        "-v",
+        "--verbose",
+        action="count",
+        help="Activate with single and increase by specifying multiple times",
     )
-    parser.add_argument("-d", "--debug", action="store_true", help="Activate debugging")
     parser.add_argument(
         "-w",
         "--width",
         default=85,
         help="Adjust the width to use more of your screen. Default is set to 85 characters",
     )
+    parser.add_argument(
+        "-c",
+        "--complete",
+        action="store_true",
+        default=False,
+        help="Only usable when listing summaries and not specific articles",
+    )
 
     return parser.parse_args(argv)
 
 
-def get_article_names():
-    article_names = dict()
-    for doc_type in DOC_TYPES:
-        for lang in DEFAULT_LANGUAGES:
-            for article in sorted(
-                listdir(f"{DOCS_ROOT.working_dir}/src/{doc_type}/{lang}")
-            ):
-                article = article.replace(".asciidoc", "")
-                if article.startswith((EXCLUDES)):
-                    continue
-                article_names.setdefault(article, list())
-                article_names[article].append(lang)
-    return article_names
+def _prepare_data(db: ArticleDatabase, git: GitCommits):
+    git.get_translated_marker(db.article_list)
+    git.get_article_commits(db.article_list)
+    db.get_diff()
 
 
-def get_articles(article=None) -> list:
-    articles = list()
-
-    if article:
-        article_exists = False
-        instance = Article(f"{article}.asciidoc")
-        for language in DEFAULT_LANGUAGES:
-            article_path = f"{language}/{article}.asciidoc"
-            instance.paths[language] = article_path
-            for doc_type in DOC_TYPES:
-                if Path(
-                    f"{DOCS_ROOT.working_dir}/src/{doc_type}/{article_path}"
-                ).exists():
-                    article_exists = True
-                    article_path = f"src/{doc_type}/{language}/{article}.asciidoc"
-            instance.lang.append(language)
-        if article_exists:
-            articles.append(instance)
-        else:
-            sysexit(f'Article "{article}" does not exist!')
-    else:
-        article_names = get_article_names()
-        for article, languages in article_names.items():
-            instance = Article(f"{article}.asciidoc")
-            for language in DEFAULT_LANGUAGES:
-                if language in languages:
-                    instance.paths[language] = f"{language}/{article}.asciidoc"
-                    instance.lang.append(language)
-            articles.append(instance)
-
-    return articles
-
-
-def dirty_commit(commit, test_ids, test_messages, except_marker):
-    message_to_check = commit.message.split("\n")[0]
-    if commit.id in test_ids:
-        return False
-    elif message_to_check.startswith(MARKER) and not message_to_check.startswith(
-        except_marker
-    ):
-        return False
-
-    for message in test_messages:
-        if message_to_check[:20] == message[:20]:
-            return False
-
-    return True
-
-
-def get_article_diff(article):
-    commits = dict(de=list(), en=list())
-    state = True
-    for combination in [("de", "en"), ("en", "de")]:
-        lang, test = combination
-        for commit in article.commits.get(lang, []):
-            if dirty_commit(
-                commit,
-                article.commits.get(f"{test}_ids", []),
-                article.commits.get(f"{test}_messages", []),
-                MARKER_LANG[test],
-            ):
-                if not article.commits.get(f"{test}_ids"):
-                    article.untranslated[lang] = True
-                commits[lang].append((False, commit))
-                state = False
-            else:
-                commits[lang].append((True, commit))
-
-    return state, commits
-
-
-def identify_positional(argument, for_type):
-    if argument in get_article_names() and for_type == "article":
-        return argument
-    elif for_type == "commit":
-        import re
-
-        unknown = re.compile(r"[0-9a-f]{6,64}")
-        if unknown.search(argument):
-            return argument
-    return ""
+WRITE = ColorizedOutput()
 
 
 def main():
-    """Show info depending on input data"""
-    opts = parse_arguments(sysargs[1:])
-
-    repo = GitCommits()
-    repo.get_translated_markers()
-    write = ColorizedOutput(box_size=int(opts.width), tty=sysout.isatty())
-
-    if opts.article_or_hash:
-        opt_commit = identify_positional(opts.article_or_hash, for_type="commit")
-        opt_article = identify_positional(opts.article_or_hash, for_type="article")
+    opts = parse_arguments(argv[1:])
+    if opts.verbose:
+        logging.basicConfig(level=VERBOSITY.get(opts.verbose, 2), format=LOGFORMAT)
     else:
-        opt_commit = opts.commit
-        opt_article = opts.article
+        logging.basicConfig(level=VERBOSITY[0], format=LOGFORMAT)
+    article = opts.article
+    docs_type = opts.docs_type
+    git = GitCommits()
+    db = ArticleDatabase()
 
-    if opt_commit:
-        if opt_article:
-            command = f"git diff {opt_commit} -- {opt_article}"
-        else:
-            command = f"git show {opt_commit}"
-
-        write.line("Executing: {command}", **dict(command=command))
-        system(command)
-    elif opt_article:
-        article = get_articles(opt_article)[0]
-        last_translation = repo.last_translation.get(article.filename)
-        if last_translation:
-            article.last_translation = last_translation
-
-        for lang in article.lang:
-            (
-                article.commits[f"{lang}_messages"],
-                article.commits[f"{lang}_ids"],
-                article.commits[lang],
-            ) = repo.get_file_commits(
-                article.filename, lang, max_age=article.last_translation
-            )
-        state, commits = get_article_diff(article)
-
-        write.line("{box_top}")
-        if state:
-            summary_line = (
-                "| {bold}{filename}{normal}"
-                + " " * 20
-                + "{green}clean{normal}{box_borders}"
-            )
-        else:
-            summary_line = (
-                "| {bold}{filename}{normal}"
-                + " " * 20
-                + "{red}dirty{normal}{box_borders}"
-            )
-        write.line(
-            summary_line,
-            **dict(filename=article.filename.replace(".asciidoc", ""), clean=state),
-        )
-        write.line("{box_separator}")
-        write.article_details(commits["de"], "de")
-        write.line("{box_separator}")
-        write.article_details(commits["en"], "en")
-        write.line("{box_bottom}")
-
+    if article == "all" and docs_type == "all":
+        # get all articles from all types
+        db.get_all_articles()
+        _prepare_data(db, git)
+        WRITE.all_summary(db.article_list, complete=opts.complete)
+    elif article == "all":
+        # get all articles from specific type
+        db.get_all_articles(docs_type)
+        _prepare_data(db, git)
+        WRITE.all_summary(db.article_list, complete=opts.complete)
+    elif docs_type == "all":
+        # get specific article from all types
+        db.get_article(article)
+        _prepare_data(db, git)
+        WRITE.details_for_all_docs_type(db.article_list, article)
     else:
-        articles = get_articles()
-        without_translation_marker = list()
-        write.line("{box_top}")
-        for article in articles:
-            last_translation = repo.last_translation.get(article.filename)
-            if last_translation:
-                article.last_translation = last_translation
-            else:
-                without_translation_marker.append(
-                    article.filename.replace(".asciidoc", "")
-                )
-            for lang in article.lang:
-                (
-                    article.commits[f"{lang}_messages"],
-                    article.commits[f"{lang}_ids"],
-                    article.commits[lang],
-                ) = repo.get_file_commits(
-                    article.filename, lang, article.last_translation
-                )
-
-            state, commits = get_article_diff(article)
-            if state and not opts.debug:
-                continue
-
-            dirty_count = write.summary_details(
-                commits["de"],
-                untranslated=article.untranslated["de"],
-                filename=article.filename,
-            )
-            if not state or opts.debug:
-                write.summary_details(
-                    commits["en"],
-                    untranslated=article.untranslated["de"]
-                    or article.untranslated["en"],
-                    filename=article.filename.replace(".asciidoc", ""),
-                    dirty_commits=dirty_count,
-                    write=True,
-                    last_translation=article.last_translation,
-                )
-            write.line("{box_separator}")
-        write.line("{box_bottom}")
-        if without_translation_marker:
-            broken_articles = ", ".join(without_translation_marker)
-            write.line(
-                "{red}Without translation marker{normal}: {articles}\n",
-                **dict(articles=broken_articles),
-            )
+        # get specific article from specific type
+        db.get_article(article, docs_type)
+        _prepare_data(db, git)
+        WRITE.details_for_docs_type(db.article_list, article, docs_type)
 
 
-main()
+if __name__ == "__main__":
+    exit(main())
