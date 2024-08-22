@@ -14,7 +14,9 @@ import argparse
 import git
 
 TRANSLATE_REGEX: str = r"^translated\|^content-sync\|^content_sync"
-DEFAULT_DATE: int = 1104537600
+DEFAULT_DATE: int = (
+    1704063599  # set to 2023-12-31 23:59:59; need to adjust if including legacy articles
+)
 EXCLUDE_COMMIT_PREFIX: tuple = (
     "translated",
     "content-sync",
