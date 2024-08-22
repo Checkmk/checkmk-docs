@@ -33,6 +33,23 @@ ASCIIDOC_EXTENSION: str = ".asciidoc"
 CURRENT_BRANCH: str = "git branch --show-current"
 INCLUDE_DOCS_TYPES: tuple = ("common", "onprem", "saas", "includes")
 INCLUDE_LANGUAGES: tuple = ("de", "en")
+EXCLUDE_ARTICLES: tuple = (
+    "check_",
+    "draft_",
+    "cma_",
+    "legacy_",
+    ".",
+    "internal_",
+    "missing",
+    "index",
+    "deprecated_",
+    "training_",
+    "global_attr",
+    "featured_",
+    "landingpage",
+    "most_",
+    "recently_",
+)
 
 
 class DocsSrcPaths(BaseModel):
@@ -51,7 +68,7 @@ class Box(BaseModel):
     top: str = "┌" + "─" * size + "┐\n"
     separator: str = "├" + "─" * size + "┤\n"
     bottom: str = "└" + "─" * size + "┘\n"
-    borders: str = "\033[500D|\033[{}C|\n".format(size)
+    borders: str = f"\033[500D|\033[{size}C|\n"
 
 
 class BoxColors(BaseModel):
@@ -67,8 +84,8 @@ class BoxColors(BaseModel):
     white: str = bold + "\033[37m"
     bg_red: str = "\033[41m"
     bg_blue: str = "\033[44m"
-    clean: str = bold + "\033[32m"
-    dirty: str = bold + "\033[31m"
+    clean: str = green
+    dirty: str = red
 
 
 class BoxText(BaseModel):
@@ -84,7 +101,9 @@ class BoxText(BaseModel):
         + "{colors.normal}{box.borders}"
         + "|{box.borders}"
     )
-    docs_type_header: str = "| -------- {colors.bold}{type} --------{box.borders}"
+    docs_type_header: str = (
+        "| -------- {colors.cyan}{type}{colors.normal} --------{box.borders}"
+    )
     header: str = (
         "| {colors.bold}{article.name}{colors.normal} "
         + "\033[500D|\033[50C{color}{article.state}{colors.normal}"
@@ -95,7 +114,7 @@ class BoxText(BaseModel):
     commit_details: str = (
         "{colors.magenta}{commit_id} "
         + "{colors.blue}{commit_date} {colors.yellow}{commit_author}"
-        + "\033[500D|\033[50C {colors.normal}{commit_message}{box.borders}"
+        + "\033[500D|\033[49C {colors.normal}{commit_message}{box.borders}"
     )
     hint_last_full_translation: str = (
         " - last full translation: {last_full_translation}"
@@ -108,26 +127,6 @@ BASIC_LINE_PARAMETERS: dict[str, BoxColors | Box] = {
     "colors": BoxColors(),
     "box": Box(),
 }
-
-
-class Exclude(BaseModel):
-    article_starts: tuple = (
-        "check_",
-        "draft_",
-        "cma_",
-        "legacy_",
-        ".",
-        "internal_",
-        "missing",
-        "index",
-        "deprecated_",
-        "training_",
-        "global_attr",
-        "featured_",
-        "landingpage",
-        "most_",
-        "recently_",
-    )
 
 
 class CommitProperties(BaseModel):
@@ -182,7 +181,7 @@ class ColorizedOutput:
         self._line(Box().separator)
 
     def summary(self, data, complete):
-        for article_name, properties in data.items():
+        for article_name, properties in sorted(data.items()):
             if properties.state == "clean" and not complete:
                 continue
             self._line(
@@ -337,7 +336,9 @@ class ArticleDatabase:
 
     def _get_all_files(self, language_path, docs_type):
         for article in listdir(language_path):
-            if not article.endswith(ASCIIDOC_EXTENSION):
+            if not article.endswith(ASCIIDOC_EXTENSION) or article.startswith(
+                EXCLUDE_ARTICLES
+            ):
                 continue
             article_name = article.replace(ASCIIDOC_EXTENSION, "")
             self.article_list[docs_type][article_name] = Article(
