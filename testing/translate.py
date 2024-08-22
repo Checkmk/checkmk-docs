@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from os import listdir
 from sys import argv, stdout, exit
 from subprocess import check_output
+import textwrap
 from typing import Any
 import argparse
 import git
@@ -121,6 +122,10 @@ class BoxText(BaseModel):
     )
     hint_never_marked: str = " - Never marked as translated"
     hint_dirty_commits: str = " - {dirty_commit_count} commits are untranslated"
+    missing_translation_markers_header: str = (
+        "| {colors.bold}Articles without translation marker:{colors.normal}{box.borders}"
+    )
+    missing_translation_markers_articles: str = "| {articles}{box.borders}"
 
 
 BASIC_LINE_PARAMETERS: dict[str, BoxColors | Box] = {
@@ -180,6 +185,17 @@ class ColorizedOutput:
         )
         self._line(Box().separator)
 
+    def _missing_translation_marker_articles(self, missing):
+        if len(missing) == 0:
+            self._line("No articles without translation marker")
+        missing_text = textwrap.wrap(", ".join(missing), Box().size)
+        self._line(BoxText().missing_translation_markers_header)
+        for text in missing_text:
+            self._line(
+                BoxText().missing_translation_markers_articles,
+                additional_parameters={"articles": text},
+            )
+
     def summary(self, data, complete):
         for article_name, properties in sorted(data.items()):
             if properties.state == "clean" and not complete:
@@ -192,7 +208,6 @@ class ColorizedOutput:
                 },
             )
             self._line(Box().separator)
-        self._line(Box().bottom)
 
     def details(self, article):
         text = BoxText()
@@ -227,12 +242,17 @@ class ColorizedOutput:
                 )
             self._line(box.separator)
 
-    def all_summary(self, data, complete=False):
+    def all_summary(self, db, complete=False):
+        data = db.article_list
         for docs_type in INCLUDE_DOCS_TYPES:
             if not data.get(docs_type):
                 continue
             self._docs_type_header(docs_type)
             self.summary(data[docs_type], complete)
+            self._missing_translation_marker_articles(
+                db.articles_without_translation_marker.get(docs_type, [])
+            )
+            self._line(Box().bottom)
 
     def details_for_all_docs_type(self, data, article_name):
         for docs_type in INCLUDE_DOCS_TYPES:
@@ -333,6 +353,7 @@ class ArticleDatabase:
     def __init__(self):
         self.src_path = DocsSrcPaths().base
         self.article_list = {}
+        self.articles_without_translation_marker = {}
 
     def _get_all_files(self, language_path, docs_type):
         for article in listdir(language_path):
@@ -437,6 +458,13 @@ class ArticleDatabase:
                         }
                     )
 
+    def get_articles_without_translation_marker(self):
+        for docs_type, articles in self.article_list.items():
+            self.articles_without_translation_marker.setdefault(docs_type, [])
+            for name, properties in articles.items():
+                if properties.last_full_translation == DEFAULT_DATE:
+                    self.articles_without_translation_marker[docs_type].append(name)
+
 
 def parse_arguments(argv):
     """Usage: translate [ARTICLE [COMMIT-NR]]"""
@@ -483,6 +511,7 @@ def _prepare_data(db: ArticleDatabase, git: GitCommits):
     git.get_translated_marker(db.article_list)
     git.get_article_commits(db.article_list)
     db.get_diff()
+    db.get_articles_without_translation_marker()
 
 
 WRITE = ColorizedOutput()
@@ -503,12 +532,12 @@ def main():
         # get all articles from all types
         db.get_all_articles()
         _prepare_data(db, git)
-        WRITE.all_summary(db.article_list, complete=opts.complete)
+        WRITE.all_summary(db, complete=opts.complete)
     elif article == "all":
         # get all articles from specific type
         db.get_all_articles(docs_type)
         _prepare_data(db, git)
-        WRITE.all_summary(db.article_list, complete=opts.complete)
+        WRITE.all_summary(db, complete=opts.complete)
     elif docs_type == "all":
         # get specific article from all types
         db.get_article(article)
