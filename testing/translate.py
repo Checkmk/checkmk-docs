@@ -91,39 +91,56 @@ class BoxColors(BaseModel):
 
 class BoxText(BaseModel):
     de: str = (
-        "| {colors.bg_red}{colors.black} "
-        + "⚒ {colors.yellow}Deutsch{colors.black} ⚒ "
+        "| {colors.bg_red}{colors.black} ⚒ "
+        + "{colors.yellow}Deutsch"
+        + "{colors.black} ⚒ "
         + "{colors.normal}{box.borders}"
         + "|{box.borders}"
     )
     en: str = (
-        "| {colors.bg_blue}{colors.white} "
-        + "✭ {colors.white}English{colors.white} ✭ "
+        "| {colors.bg_blue}{colors.white} ✭ "
+        + "{colors.white}English"
+        + "{colors.white} ✭ "
         + "{colors.normal}{box.borders}"
         + "|{box.borders}"
     )
     docs_type_header: str = (
-        "| -------- {colors.cyan}{type}{colors.normal} --------{box.borders}"
+        "| {colors.bold}-------- "
+        + "{colors.cyan}{type}{colors.normal} "
+        + "{colors.bold}--------"
+        + "{colors.normal}{box.borders}"
     )
-    header: str = (
+    summary_header: str = (
         "| {colors.bold}{article.name}{colors.normal} "
-        + "\033[500D|\033[50C{color}{article.state}{colors.normal}"
-        + "{colors.bold}{article.hint}{colors.normal}{box.borders}"
+        + "\033[500D|\033[50C"
+        + "{color}{article.state}{colors.normal}"
+        + "{colors.bold}{article.hint}"
+        + "{colors.normal}{box.borders}"
+    )
+    all_clean: str = (
+        "| All articles are so fresh and so clean{box.borders}{box.separator}"
     )
     commit_clean: str = "| {colors.green}c "
     commit_dirty: str = "| {colors.red}d "
     commit_details: str = (
         "{colors.magenta}{commit_id} "
-        + "{colors.blue}{commit_date} {colors.yellow}{commit_author}"
-        + "\033[500D|\033[49C {colors.normal}{commit_message}{box.borders}"
+        + "{colors.blue}{commit_date} "
+        + "{colors.yellow}{commit_author}"
+        + "\033[500D|\033[49C "
+        + "{colors.normal}{commit_message}"
+        + "{colors.normal}{box.borders}"
     )
     hint_last_full_translation: str = (
-        " - last full translation: {last_full_translation}"
+        " - last full translation: " + "{last_full_translation}"
     )
     hint_never_marked: str = " - Never marked as translated"
     hint_dirty_commits: str = " - {dirty_commit_count} commits are untranslated"
+    no_missing_translation_markers: str = (
+        "| No articles without translation marker{box.borders}"
+    )
     missing_translation_markers_header: str = (
-        "| {colors.bold}Articles without translation marker:{colors.normal}{box.borders}"
+        "| {colors.bold}Articles without translation marker:"
+        + "{colors.normal}{box.borders}"
     )
     missing_translation_markers_articles: str = "| {articles}{box.borders}"
 
@@ -187,7 +204,8 @@ class ColorizedOutput:
 
     def _missing_translation_marker_articles(self, missing):
         if len(missing) == 0:
-            self._line("No articles without translation marker")
+            self._line(BoxText().no_missing_translation_markers)
+            return
         missing_text = textwrap.wrap(", ".join(missing), Box().size)
         self._line(BoxText().missing_translation_markers_header)
         for text in missing_text:
@@ -197,17 +215,21 @@ class ColorizedOutput:
             )
 
     def summary(self, data, complete):
+        all_clean = True
         for article_name, properties in sorted(data.items()):
             if properties.state == "clean" and not complete:
                 continue
+            all_clean = False
             self._line(
-                BoxText().header,
+                BoxText().summary_header,
                 additional_parameters={
                     "color": self._get_color_str(properties.state),
                     "article": properties,
                 },
             )
             self._line(Box().separator)
+        if all_clean:
+            self._line(BoxText().all_clean)
 
     def details(self, article):
         text = BoxText()
@@ -215,7 +237,7 @@ class ColorizedOutput:
         msg_length = box.size - 39
         self._line(box.top)
         self._line(
-            text.header,
+            text.summary_header,
             additional_parameters={
                 "color": self._get_color_str(article.state),
                 "article": article,
@@ -284,6 +306,7 @@ class GitCommits:
         return filepath[1:]
 
     def get_translated_marker(self, article_list, path: str = DOCSSRCPATHS.base):
+        logging.info("Fetching translation marker in git history")
         commits = DOCSSRCPATHS.docs_root.iter_commits(
             self.default_branch, paths=path, grep=TRANSLATE_REGEX
         )
@@ -338,8 +361,10 @@ class GitCommits:
             article.commit_msgs[language].append(summary.lower())
 
     def get_article_commits(self, article_list):
+        logging.info("Fetching commits of articles")
         for docs_type, articles in article_list.items():
             for article_name, article_properties in articles.items():
+                logging.debug(f"Fetching commits for {article_name}")
                 base_dir = f"{DOCSSRCPATHS.docs_root.working_dir}/src/{docs_type}"
                 for lang in INCLUDE_LANGUAGES:
                     self._get_commits_of_file(
@@ -466,7 +491,7 @@ class ArticleDatabase:
                     self.articles_without_translation_marker[docs_type].append(name)
 
 
-def parse_arguments(argv):
+def _parse_arguments(argv):
     """Usage: translate [ARTICLE [COMMIT-NR]]"""
     parser = argparse.ArgumentParser(description=__doc__)
 
@@ -514,15 +539,20 @@ def _prepare_data(db: ArticleDatabase, git: GitCommits):
     db.get_articles_without_translation_marker()
 
 
+def _set_logging(verbosity):
+    if verbosity:
+        logging.basicConfig(level=VERBOSITY.get(verbosity, 2), format=LOGFORMAT)
+    else:
+        logging.basicConfig(level=VERBOSITY[0], format=LOGFORMAT)
+
+
 WRITE = ColorizedOutput()
 
 
 def main():
-    opts = parse_arguments(argv[1:])
-    if opts.verbose:
-        logging.basicConfig(level=VERBOSITY.get(opts.verbose, 2), format=LOGFORMAT)
-    else:
-        logging.basicConfig(level=VERBOSITY[0], format=LOGFORMAT)
+    opts = _parse_arguments(argv[1:])
+    _set_logging(opts.verbose)
+
     article = opts.article
     docs_type = opts.docs_type
     git = GitCommits()
