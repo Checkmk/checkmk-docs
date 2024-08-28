@@ -514,7 +514,7 @@ def _parse_arguments(argv):
         "--docs-type",
         default="all",
         help="The type of docs that will be build. "
-        + "Valid values are: common, onprem, saas, includes, all_types",
+        + "Valid values are: common, onprem, saas, includes, all",
     )
     parser.add_argument(
         "-v",
@@ -526,14 +526,14 @@ def _parse_arguments(argv):
         "-w",
         "--width",
         default=85,
-        help="Adjust the width to use more of your screen. Default is set to 85 characters",
+        help="Adjust the width to use more of your screen. Default is set to 120 characters",
     )
     parser.add_argument(
         "-c",
         "--complete",
         action="store_true",
         default=False,
-        help="Only usable when listing summaries and not specific articles",
+        help="Lists all articles in summaries and all commits in details",
     )
 
     return parser.parse_args(argv)
