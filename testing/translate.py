@@ -174,6 +174,7 @@ class Article(BaseModel):
     name: str = ""
     hint: str = ""
     state: str = "clean"
+    complete: bool = False
     dirty_commit_count: int = 0
     last_full_translation: int = DEFAULT_DATE
     commits_by_language: dict = {"de": [], "en": []}
@@ -343,9 +344,12 @@ class GitCommits:
                 )
 
     def _get_commits_of_file(self, article: Article, path, language):
-        raw = DOCSSRCPATHS.docs_repo.log(
-            f"--since={article.last_full_translation}", self.pretty_git_log, "--", path
+        since = (
+            f"--since={article.last_full_translation}"
+            if not article.complete
+            else "--since=10 years ago"
         )
+        raw = DOCSSRCPATHS.docs_repo.log(since, self.pretty_git_log, "--", path)
         raw_list = raw.replace(NEWLINE, "").split(self.pretty_split_four)
         for entry in raw_list:
             if not entry:
@@ -381,6 +385,7 @@ class ArticleDatabase:
         self.src_path = DocsSrcPaths().base
         self.article_list = {}
         self.articles_without_translation_marker = {}
+        self.complete = False
 
     def _get_all_files(self, language_path, docs_type):
         for article in listdir(language_path):
@@ -399,7 +404,7 @@ class ArticleDatabase:
                 continue
             article_name = article_file.replace(ASCIIDOC_EXTENSION, "")
             self.article_list[docs_type][article_name] = Article(
-                docs_type=docs_type, name=article_name
+                docs_type=docs_type, name=article_name, complete=self.complete
             )
 
     def _get_all_languages(self, type_path, docs_type):
@@ -572,11 +577,13 @@ def main():
         WRITE.all_summary(db, complete=opts.complete)
     elif docs_type == "all":
         # get specific article from all types
+        db.complete = opts.complete
         db.get_article(article)
         _prepare_data(db, git)
         WRITE.details_for_all_docs_type(db.article_list, article)
     else:
         # get specific article from specific type
+        db.complete = opts.complete
         db.get_article(article, docs_type)
         _prepare_data(db, git)
         WRITE.details_for_docs_type(db.article_list, article, docs_type)
