@@ -138,6 +138,7 @@ class BoxText(BaseModel):
     )
     summary_header: str = (
         "| {colors.bold}{article.name}{colors.normal} "
+        + "(Since: {article.commits_since}) "
         + "\033[500D|\033[50C"
         + "{color}{article.state}{colors.normal}"
         + "{colors.bold}{article.hint}"
@@ -203,6 +204,7 @@ class Article(BaseModel):
     complete: bool = False
     legacy: bool = False
     dirty_commit_count: int = 0
+    commits_since: int = DEFAULT_DATE
     last_full_translation: int = DEFAULT_DATE
     commits_by_language: dict = {"de": [], "en": []}
     commit_ids: dict[str, list] = {"de": [], "en": []}
@@ -217,8 +219,8 @@ class GitCommits:
         self.pretty_git_log = "--pretty=format:%an||%ct||%H||%s||||"
         self.pretty_split_four = "||||"
         self.pretty_split_two = "||"
-        self.default_since = "--since=10 years ago"
-        self.custom_since = "--since={custom}"
+        self.default_since = 1409294383
+        self.since = "--since={since}"
         self.default_src_dir = f"{DOCSSRCPATHS.docs_root.working_dir}/src/"
 
     def _split_path_to_variables(self, file: str) -> list | tuple:
@@ -267,12 +269,12 @@ class GitCommits:
     def _get_commits_of_file(
         self, article: Article, path: str, language: str, legacy_path: bool = False
     ):
-        since = (
-            self.default_since
-            if article.complete or article.legacy
-            else self.custom_since.format(custom=article.last_full_translation)
+        raw = DOCSSRCPATHS.docs_repo.log(
+            self.since.format(since=article.commits_since),
+            self.pretty_git_log,
+            "--",
+            path,
         )
-        raw = DOCSSRCPATHS.docs_repo.log(since, self.pretty_git_log, "--", path)
         raw_list = raw.replace(NEWLINE, "").split(self.pretty_split_four)
         for entry in raw_list:
             if not entry:
@@ -298,6 +300,11 @@ class GitCommits:
             for article_name, article_properties in articles.items():
                 logging.debug(f"Fetching commits for {article_name}")
                 base_dir = f"{self.default_src_dir}{docs_type}"
+                article_properties.commits_since = (
+                    self.default_since
+                    if article_properties.complete or article_properties.legacy
+                    else article_properties.last_full_translation
+                )
                 for lang in LANGUAGES.include:
                     file_path = f"{lang}/{article_name}{ASCIIDOC_EXTENSION}"
                     if legacy:
@@ -443,6 +450,9 @@ class ColorizedOutput:
     def _get_color_str(self, state: str):
         return BoxColors().model_dump().get(state)
 
+    def _get_hr_timestamp(self, timestamp):
+        return datetime.fromtimestamp(timestamp).strftime(DATEFORMAT_HUMAN_READABLE)
+
     def _docs_type_header(self, docs_type: str) -> None:
         self._line(Box().top)
         self._line(
@@ -469,6 +479,7 @@ class ColorizedOutput:
             if properties.state == "clean" and not complete:
                 continue
             all_clean = False
+            properties.commits_since = self._get_hr_timestamp(properties.commits_since)
             self._line(
                 BoxText().summary_header,
                 additional_parameters={
@@ -484,6 +495,7 @@ class ColorizedOutput:
         text: BoxText = BoxText()
         box: Box = Box()
         msg_length: int = box.size - 50
+        article.commits_since = self._get_hr_timestamp(article.commits_since)
         self._line(box.top)
         self._line(
             text.summary_header,
@@ -506,9 +518,7 @@ class ColorizedOutput:
                     prefix + text.commit_details,
                     additional_parameters={
                         "commit_id": commit.commit_id,
-                        "commit_date": datetime.fromtimestamp(
-                            commit.properties.date
-                        ).strftime(DATEFORMAT_HUMAN_READABLE),
+                        "commit_date": self._get_hr_timestamp(commit.properties.date),
                         "commit_author": commit.properties.author,
                         "commit_message": commit.properties.msg[:msg_length],
                     },
