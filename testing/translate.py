@@ -80,6 +80,9 @@ class DocsSrcPaths(BaseModel):
     docs_root: Any = git.Repo("./", search_parent_directories=True)
     docs_repo: Any = git.Git(docs_root.working_dir)
     base: str = f"{docs_root.working_dir}/src"
+    default_branch: str = (
+        check_output(CURRENT_BRANCH, shell=True).decode(UTF8).strip(NEWLINE)
+    )
 
 
 LANGUAGES = Languages()
@@ -209,9 +212,6 @@ def _get_hr_timestamp(timestamp):
 
 class GitCommits:
     def __init__(self):
-        self.default_branch = (
-            check_output(CURRENT_BRANCH, shell=True).decode(UTF8).strip(NEWLINE)
-        )
         self.pretty_git_log = "--pretty=format:%an||%ct||%H||%s||||"
         self.pretty_split_four = "||||"
         self.pretty_split_two = "||"
@@ -231,7 +231,7 @@ class GitCommits:
     ):
         logging.info("Fetching translation marker in git history")
         commits = DOCSSRCPATHS.docs_root.iter_commits(
-            self.default_branch, paths=path, grep=TRANSLATE_REGEX
+            DOCSSRCPATHS.default_branch, paths=path, grep=TRANSLATE_REGEX
         )
 
         for commit in commits:
@@ -456,6 +456,17 @@ class ColorizedOutput:
         )
         self._line(self.box.separator)
 
+    def _docs_summary_header(self, article: Article):
+        article.commits_since = _get_hr_timestamp(article.commits_since)
+        self._line(
+            BoxText().summary_header,
+            additional_parameters={
+                "color": self._get_color_str(article.state),
+                "article": article,
+            },
+        )
+        self._line(self.box.separator)
+
     def _missing_translation_marker_articles(self, missing: list[str]):
         if len(missing) == 0:
             self._line(BoxText().no_missing_translation_markers)
@@ -470,35 +481,19 @@ class ColorizedOutput:
 
     def _article_summary(self, data: dict[str, Article], complete: bool = False):
         all_clean = True
-        for article_name, properties in sorted(data.items()):
-            if properties.state == "clean" and not complete:
+        for article_name, article in sorted(data.items()):
+            if article.state == "clean" and not complete:
                 continue
             all_clean = False
-            properties.commits_since = _get_hr_timestamp(properties.commits_since)
-            self._line(
-                BoxText().summary_header,
-                additional_parameters={
-                    "color": self._get_color_str(properties.state),
-                    "article": properties,
-                },
-            )
-            self._line(self.box.separator)
+            self._docs_summary_header(article)
         if all_clean:
             self._line(BoxText().all_clean)
 
     def _article_details(self, article: Article):
         text: BoxText = BoxText()
         msg_length: int = self.box.size - 50
-        article.commits_since = _get_hr_timestamp(article.commits_since)
         self._line(self.box.top)
-        self._line(
-            text.summary_header,
-            additional_parameters={
-                "color": self._get_color_str(article.state),
-                "article": article,
-            },
-        )
-        self._line(self.box.separator)
+        self._docs_summary_header(article)
         for lang, commits in article.commits_by_language.items():
             self._line(str(text.model_dump().get(lang)))
             for commit in commits:
@@ -519,27 +514,38 @@ class ColorizedOutput:
                 )
             self._line(self.box.separator)
 
+    def _wrapper(
+        self,
+        data: dict[str, dict[str, Article]],
+        article_name: str | None = None,
+        complete: bool = False,
+        missing_translation: dict[str, list] = {},
+    ):
+        for docs_type in INCLUDE_DOCS_TYPES:
+            if not data.get(docs_type):
+                continue
+
+            self._docs_type_header(docs_type)
+            if article_name:
+                properties = data[docs_type][article_name]
+                self._article_details(properties)
+            else:
+                self._article_summary(data[docs_type], complete=complete)
+                self._missing_translation_marker_articles(
+                    missing_translation.get(docs_type, [])
+                )
+                self._line(self.box.bottom)
+
     def summary(self, db: ArticleDatabase):
         data = db.article_list
-        complete = db.complete
-        for docs_type in INCLUDE_DOCS_TYPES:
-            if not data.get(docs_type):
-                continue
-            self._docs_type_header(docs_type)
-            self._article_summary(data[docs_type], complete=complete)
-            self._missing_translation_marker_articles(
-                db.articles_without_translation_marker.get(docs_type, [])
-            )
-            self._line(self.box.bottom)
+        self._wrapper(
+            data,
+            complete=db.complete,
+            missing_translation=db.articles_without_translation_marker,
+        )
 
     def details(self, data: dict[str, dict[str, Article]], article_name: str):
-        for docs_type in INCLUDE_DOCS_TYPES:
-            if not data.get(docs_type):
-                continue
-            article = data[docs_type][article_name]
-            logging.info(f"Writing output for {article}")
-            self._docs_type_header(docs_type)
-            self._article_details(article)
+        self._wrapper(data, article_name=article_name)
 
 
 def _parse_arguments(argv: list) -> argparse.Namespace:
