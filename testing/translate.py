@@ -350,7 +350,7 @@ class ArticleDatabase:
                 continue
             self._get_file(f"{type_path}/{language}", docs_type, article)
 
-    def get_all_articles(self, specific_docs_type: str | None = None):
+    def get_all_articles(self, specific_docs_type: str | None):
         for docs_type in listdir(self.src_path):
             if docs_type not in INCLUDE_DOCS_TYPES:
                 continue
@@ -359,7 +359,7 @@ class ArticleDatabase:
             self.article_list.setdefault(docs_type, {})
             self._get_all_languages(f"{self.src_path}/{docs_type}", docs_type)
 
-    def get_article(self, article: str, specific_docs_type: str | None = None):
+    def get_article(self, article: str, specific_docs_type: str | None):
         for docs_type in listdir(self.src_path):
             if docs_type not in INCLUDE_DOCS_TYPES:
                 continue
@@ -459,7 +459,7 @@ class ColorizedOutput:
                 additional_parameters={"articles": text},
             )
 
-    def summary(self, data: dict[str, Article], complete: bool = False):
+    def _article_summary(self, data: dict[str, Article], complete: bool = False):
         all_clean = True
         for article_name, properties in sorted(data.items()):
             if properties.state == "clean" and not complete:
@@ -476,7 +476,7 @@ class ColorizedOutput:
         if all_clean:
             self._line(BoxText().all_clean)
 
-    def details(self, article: Article):
+    def _article_details(self, article: Article):
         text: BoxText = BoxText()
         box: Box = Box()
         msg_length: int = box.size - 50
@@ -513,36 +513,34 @@ class ColorizedOutput:
                 )
             self._line(box.separator)
 
-    def all_summary(self, db: ArticleDatabase):
+    def summary(self, db: ArticleDatabase):
         data = db.article_list
         complete = db.complete
         for docs_type in INCLUDE_DOCS_TYPES:
             if not data.get(docs_type):
                 continue
             self._docs_type_header(docs_type)
-            self.summary(data[docs_type], complete=complete)
+            self._article_summary(data[docs_type], complete=complete)
             self._missing_translation_marker_articles(
                 db.articles_without_translation_marker.get(docs_type, [])
             )
             self._line(Box().bottom)
 
-    def details_for_all_docs_type(
-        self, data: dict[str, dict[str, Article]], article_name: str
-    ):
+    def details(self, data: dict[str, dict[str, Article]], article_name: str):
         for docs_type in INCLUDE_DOCS_TYPES:
             if not data.get(docs_type):
                 continue
             article = data[docs_type][article_name]
             logging.info(f"Writing output for {article}")
             self._docs_type_header(docs_type)
-            self.details(article)
+            self._article_details(article)
 
-    def details_for_docs_type(
-        self, data: dict[str, dict[str, Article]], article_name: str, docs_type: str
-    ):
-        article = data[docs_type][article_name]
-        self._docs_type_header(docs_type)
-        self.details(article)
+    # def details_for_docs_type(
+    #    self, data: dict[str, dict[str, Article]], article_name: str, docs_type: str
+    # ):
+    #    article = data[docs_type][article_name]
+    #    self._docs_type_header(docs_type)
+    #    self.details(article)
 
 
 def _parse_arguments(argv: list) -> argparse.Namespace:
@@ -558,7 +556,7 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
     parser.add_argument(
         "-t",
         "--docs-type",
-        default="all",
+        default=None,
         help="The type of docs that will be build. "
         + "Valid values are: common, onprem, saas, includes, all",
     )
@@ -606,32 +604,18 @@ def main():
     opts = _parse_arguments(argv[1:])
     _set_logging(opts.verbose)
 
-    article = opts.article
-    docs_type = opts.docs_type
     git = GitCommits()
     db = ArticleDatabase(complete=opts.complete)
 
-    if article == ALL_ARTICLES and docs_type == ALL_DOCS_TYPES:
-        # get all articles from all types
-        db.get_all_articles()
+    if opts.article == ALL_ARTICLES:
+        db.get_all_articles(opts.docs_type)
         _prepare_data(db, git)
-        WRITE.all_summary(db)
-    elif article == ALL_ARTICLES:
-        # get all articles from specific type
-        db.get_all_articles(docs_type)
-        _prepare_data(db, git)
-        WRITE.all_summary(db)
-    elif docs_type == ALL_DOCS_TYPES:
-        # get specific article from all types
-        db.get_article(article)
-        _prepare_data(db, git)
-        WRITE.details_for_all_docs_type(db.article_list, article)
+        WRITE.summary(db)
     else:
-        # get specific article from specific type
-        db.get_article(article, docs_type)
+        db.get_article(opts.article, opts.docs_type)
         _prepare_data(db, git)
-        WRITE.details_for_docs_type(db.article_list, article, docs_type)
+        WRITE.details(db.article_list, opts.article)
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()
