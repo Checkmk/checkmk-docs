@@ -6,6 +6,7 @@ from datetime import datetime
 import logging
 from pydantic import BaseModel
 from os import listdir
+import shutil
 from sys import argv, stdout
 from subprocess import check_output
 import textwrap
@@ -87,7 +88,7 @@ DOCSSRCPATHS = DocsSrcPaths()
 
 
 class Box(BaseModel):
-    size: int = 120
+    size: int = shutil.get_terminal_size().columns - 2
     top: str = "┌" + "─" * size + "┐\n"
     separator: str = "├" + "─" * size + "┤\n"
     bottom: str = "└" + "─" * size + "┘\n"
