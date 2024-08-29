@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 from pydantic import BaseModel
 from os import listdir
-from sys import argv, stdout, exit
+from sys import argv, stdout
 from subprocess import check_output
 import textwrap
 from typing import Any
