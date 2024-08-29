@@ -170,10 +170,8 @@ class BoxText(BaseModel):
     )
     hint_never_marked: str = " - Never marked as translated"
     hint_dirty_commits: str = " - {dirty_commit_count} commits are untranslated"
-    no_missing_translation_markers: str = (
-        "| No articles without translation marker{box.borders}"
-    )
-    missing_translation_markers_header: str = (
+    no_missing_markers: str = "| No articles without translation marker{box.borders}"
+    missing_markers_header: str = (
         "| {colors.bold}Articles without translation marker:"
         + "{colors.normal}{box.borders}"
     )
@@ -433,8 +431,9 @@ class ArticleDatabase:
 
 class ColorizedOutput:
     def __init__(self):
-        self.box = BASIC_LINE_PARAMETERS["box"]
-        self.colors = BASIC_LINE_PARAMETERS["colors"]
+        self.box: Box = BASIC_LINE_PARAMETERS["box"]
+        self.colors: BoxColors = BASIC_LINE_PARAMETERS["colors"]
+        self.box_text: BoxText = BoxText()
 
     @staticmethod
     def _line(line: str, additional_parameters: dict = {}) -> None:
@@ -451,7 +450,7 @@ class ColorizedOutput:
     def _docs_type_header(self, docs_type: str) -> None:
         self._line(self.box.top)
         self._line(
-            BoxText().docs_type_header,
+            self.box_text.docs_type_header,
             additional_parameters={"type": docs_type.upper()},
         )
         self._line(self.box.separator)
@@ -459,7 +458,7 @@ class ColorizedOutput:
     def _docs_summary_header(self, article: Article):
         article.commits_since = _get_hr_timestamp(article.commits_since)
         self._line(
-            BoxText().summary_header,
+            self.box_text.summary_header,
             additional_parameters={
                 "color": self._get_color_str(article.state),
                 "article": article,
@@ -469,13 +468,13 @@ class ColorizedOutput:
 
     def _missing_translation_marker_articles(self, missing: list[str]):
         if len(missing) == 0:
-            self._line(BoxText().no_missing_translation_markers)
+            self._line(self.box_text.no_missing_markers)
             return
         missing_text = textwrap.wrap(", ".join(missing), self.box.size)
-        self._line(BoxText().missing_translation_markers_header)
+        self._line(self.box_text.missing_markers_header)
         for text in missing_text:
             self._line(
-                BoxText().missing_translation_markers_articles,
+                self.box_text.missing_translation_markers_articles,
                 additional_parameters={"articles": text},
             )
 
@@ -487,24 +486,23 @@ class ColorizedOutput:
             all_clean = False
             self._docs_summary_header(article)
         if all_clean:
-            self._line(BoxText().all_clean)
+            self._line(self.box_text.all_clean)
 
     def _article_details(self, article: Article):
-        text: BoxText = BoxText()
         msg_length: int = self.box.size - 50
         self._line(self.box.top)
         self._docs_summary_header(article)
         for lang, commits in article.commits_by_language.items():
-            self._line(str(text.model_dump().get(lang)))
+            self._line(str(self.box_text.model_dump().get(lang)))
             for commit in commits:
                 if commit.properties.state == STATES.clean:
-                    prefix = text.commit_clean
+                    prefix = self.box_text.commit_clean
                 elif commit.properties.state == STATES.ignored:
-                    prefix = text.commit_ignored
+                    prefix = self.box_text.commit_ignored
                 else:
-                    prefix = text.commit_dirty
+                    prefix = self.box_text.commit_dirty
                 self._line(
-                    prefix + text.commit_details,
+                    prefix + self.box_text.commit_details,
                     additional_parameters={
                         "commit_id": commit.commit_id,
                         "commit_date": _get_hr_timestamp(commit.properties.date),
