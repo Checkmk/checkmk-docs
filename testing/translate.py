@@ -537,13 +537,6 @@ class ColorizedOutput:
             self._docs_type_header(docs_type)
             self._article_details(article)
 
-    # def details_for_docs_type(
-    #    self, data: dict[str, dict[str, Article]], article_name: str, docs_type: str
-    # ):
-    #    article = data[docs_type][article_name]
-    #    self._docs_type_header(docs_type)
-    #    self.details(article)
-
 
 def _parse_arguments(argv: list) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
