@@ -148,8 +148,7 @@ class BoxText(BaseModel):
     )
     commit_clean: str = "| {colors.green}c "
     commit_dirty: str = "| {colors.red}d "
-    commit_overwritten: str = "| {colors.normal}- "
-    commit_legacy: str = "| {colors.normal}l "
+    commit_ignored: str = "| {colors.normal}- "
     commit_details: str = (
         "{colors.magenta}{commit_id} "
         + "{colors.blue}{commit_date} "
@@ -202,6 +201,7 @@ class Article(BaseModel):
     hint: str = ""
     state: str = "clean"
     complete: bool = False
+    legacy: bool = False
     dirty_commit_count: int = 0
     last_full_translation: int = DEFAULT_DATE
     commits_by_language: dict = {"de": [], "en": []}
@@ -268,9 +268,9 @@ class GitCommits:
         self, article: Article, path: str, language: str, legacy_path: bool = False
     ):
         since = (
-            self.custom_since.format(custom=article.last_full_translation)
-            if not article.complete
-            else self.default_since
+            self.default_since
+            if article.complete or article.legacy
+            else self.custom_since.format(custom=article.last_full_translation)
         )
         raw = DOCSSRCPATHS.docs_repo.log(since, self.pretty_git_log, "--", path)
         raw_list = raw.replace(NEWLINE, "").split(self.pretty_split_four)
@@ -292,7 +292,7 @@ class GitCommits:
             article.commit_ids[language].append(id[:6])
             article.commit_msgs[language].append(summary.lower())
 
-    def get_article_commits(self, article_list: dict[str, dict[str, Article]]):
+    def get_article_commits(self, article_list: dict[str, dict[str, Article]], legacy):
         logging.info("Fetching commits of articles")
         for docs_type, articles in article_list.items():
             for article_name, article_properties in articles.items():
@@ -300,25 +300,29 @@ class GitCommits:
                 base_dir = f"{self.default_src_dir}{docs_type}"
                 for lang in LANGUAGES.include:
                     file_path = f"{lang}/{article_name}{ASCIIDOC_EXTENSION}"
+                    if legacy:
+                        self._get_commits_of_file(
+                            article_properties,
+                            f"{DOCSSRCPATHS.docs_root.working_dir}/{file_path}",
+                            lang,
+                            legacy_path=True,
+                        )
+                        continue
                     self._get_commits_of_file(
                         article_properties,
                         f"{base_dir}/{file_path}",
                         lang,
                     )
-                    self._get_commits_of_file(
-                        article_properties,
-                        f"{DOCSSRCPATHS.docs_root.working_dir}/{file_path}",
-                        lang,
-                        legacy_path=True,
-                    )
 
 
 class ArticleDatabase:
-    def __init__(self, complete: bool):
+    def __init__(self, complete: bool, legacy: bool, evaluate: bool):
         self.src_path = DocsSrcPaths().base
         self.article_list: dict[str, dict[str, Article]] = {}
         self.articles_without_translation_marker: dict[str, list] = {}
-        self.complete = complete
+        self.complete: bool = complete
+        self.legacy: bool = legacy
+        self.evaluate: bool = evaluate
 
     def _get_all_files(self, language_path: str, docs_type: str):
         for article in listdir(language_path):
@@ -335,7 +339,7 @@ class ArticleDatabase:
                 continue
             article_name = article_file.replace(ASCIIDOC_EXTENSION, "")
             self.article_list[docs_type][article_name] = Article(
-                name=article_name, complete=self.complete
+                name=article_name, complete=self.complete, legacy=self.legacy
             )
 
     def _get_all_languages(self, type_path: str, docs_type: str):
@@ -371,10 +375,10 @@ class ArticleDatabase:
     def _check_commits(self, article: Article, check: LangComparision) -> str:
         language_state = STATES.clean
         for commit in article.commits_by_language[check.src]:
-            if commit.properties.legacy_path:
-                commit.properties.state = STATES.legacy
-                continue
-            elif commit.properties.date < article.last_full_translation:
+            if (
+                commit.properties.date < article.last_full_translation
+                and not self.evaluate
+            ):
                 commit.properties.state = STATES.ignored
                 continue
 
@@ -495,9 +499,7 @@ class ColorizedOutput:
                 if commit.properties.state == STATES.clean:
                     prefix = text.commit_clean
                 elif commit.properties.state == STATES.ignored:
-                    prefix = text.commit_overwritten
-                elif commit.properties.state == STATES.legacy:
-                    prefix = text.commit_legacy
+                    prefix = text.commit_ignored
                 else:
                     prefix = text.commit_dirty
                 self._line(
@@ -579,13 +581,27 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
         default=False,
         help="Lists all articles in summaries and all commits in details",
     )
+    parser.add_argument(
+        "-l",
+        "--legacy",
+        action="store_true",
+        default=False,
+        help="Uses legacy paths instead of new directory structure",
+    )
+    parser.add_argument(
+        "-e",
+        "--evaluate",
+        action="store_true",
+        default=False,
+        help="Evaluate commits prio to last full translation",
+    )
 
     return parser.parse_args(argv)
 
 
 def _prepare_data(db: ArticleDatabase, git: GitCommits):
     git.get_translated_marker(db.article_list)
-    git.get_article_commits(db.article_list)
+    git.get_article_commits(db.article_list, db.legacy)
     db.get_diff()
     db.get_articles_without_translation_marker()
 
@@ -605,7 +621,9 @@ def main():
     _set_logging(opts.verbose)
 
     git = GitCommits()
-    db = ArticleDatabase(complete=opts.complete)
+    db = ArticleDatabase(
+        complete=opts.complete, legacy=opts.legacy, evaluate=opts.evaluate
+    )
 
     if opts.article == ALL_ARTICLES:
         db.get_all_articles(opts.docs_type)
