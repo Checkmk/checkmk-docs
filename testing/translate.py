@@ -211,6 +211,10 @@ class Article(BaseModel):
     commit_msgs: dict[str, list] = {"de": [], "en": []}
 
 
+def _get_hr_timestamp(timestamp):
+    return datetime.fromtimestamp(timestamp).strftime(DATEFORMAT_HUMAN_READABLE)
+
+
 class GitCommits:
     def __init__(self):
         self.default_branch = (
@@ -421,9 +425,9 @@ class ArticleDatabase:
                 else:
                     properties.hint = BoxText().hint_last_full_translation.format(
                         **{
-                            "last_full_translation": datetime.fromtimestamp(
+                            "last_full_translation": _get_hr_timestamp(
                                 properties.last_full_translation
-                            ).strftime(DATEFORMAT_HUMAN_READABLE)
+                            )
                         }
                     )
 
@@ -449,9 +453,6 @@ class ColorizedOutput:
 
     def _get_color_str(self, state: str):
         return BoxColors().model_dump().get(state)
-
-    def _get_hr_timestamp(self, timestamp):
-        return datetime.fromtimestamp(timestamp).strftime(DATEFORMAT_HUMAN_READABLE)
 
     def _docs_type_header(self, docs_type: str) -> None:
         self._line(Box().top)
@@ -479,7 +480,7 @@ class ColorizedOutput:
             if properties.state == "clean" and not complete:
                 continue
             all_clean = False
-            properties.commits_since = self._get_hr_timestamp(properties.commits_since)
+            properties.commits_since = _get_hr_timestamp(properties.commits_since)
             self._line(
                 BoxText().summary_header,
                 additional_parameters={
@@ -495,7 +496,7 @@ class ColorizedOutput:
         text: BoxText = BoxText()
         box: Box = Box()
         msg_length: int = box.size - 50
-        article.commits_since = self._get_hr_timestamp(article.commits_since)
+        article.commits_since = _get_hr_timestamp(article.commits_since)
         self._line(box.top)
         self._line(
             text.summary_header,
@@ -518,7 +519,7 @@ class ColorizedOutput:
                     prefix + text.commit_details,
                     additional_parameters={
                         "commit_id": commit.commit_id,
-                        "commit_date": self._get_hr_timestamp(commit.properties.date),
+                        "commit_date": _get_hr_timestamp(commit.properties.date),
                         "commit_author": commit.properties.author,
                         "commit_message": commit.properties.msg[:msg_length],
                     },
