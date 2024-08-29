@@ -36,7 +36,6 @@ LOGFORMAT = "%(asctime)s Zeile %(lineno)s %(funcName)s %(levelname)s: %(message)
 ASCIIDOC_EXTENSION: str = ".asciidoc"
 CURRENT_BRANCH: str = "git branch --show-current"
 INCLUDE_DOCS_TYPES: tuple = ("common", "onprem", "saas", "includes")
-ALL_DOCS_TYPES: str = "all"
 ALL_ARTICLES: str = "all"
 EXCLUDE_ARTICLES: tuple = (
     "check_",
@@ -74,14 +73,12 @@ class States(BaseModel):
     dirty: str = "dirty"
     clean: str = "clean"
     ignored: str = "ignored"
-    legacy: str = "legacy"
 
 
 class DocsSrcPaths(BaseModel):
     docs_root: Any = git.Repo("./", search_parent_directories=True)
     docs_repo: Any = git.Git(docs_root.working_dir)
     base: str = f"{docs_root.working_dir}/src"
-    legacy: str = docs_repo
 
 
 LANGUAGES = Languages()
@@ -91,7 +88,6 @@ DOCSSRCPATHS = DocsSrcPaths()
 
 class Box(BaseModel):
     size: int = 120
-    half_size: float = size / 2
     top: str = "┌" + "─" * size + "┐\n"
     separator: str = "├" + "─" * size + "┤\n"
     bottom: str = "└" + "─" * size + "┘\n"
@@ -113,6 +109,12 @@ class BoxColors(BaseModel):
     bg_blue: str = "\033[44m"
     clean: str = green
     dirty: str = red
+
+
+BASIC_LINE_PARAMETERS: dict[str, Any] = {
+    "colors": BoxColors(),
+    "box": Box(),
+}
 
 
 class BoxText(BaseModel):
@@ -173,28 +175,16 @@ class BoxText(BaseModel):
     missing_translation_markers_articles: str = "| {articles}{box.borders}"
 
 
-BASIC_LINE_PARAMETERS: dict[str, BoxColors | Box] = {
-    "colors": BoxColors(),
-    "box": Box(),
-}
-
-
 class CommitProperties(BaseModel):
     date: int = DEFAULT_DATE
     author: str = ""
     msg: str = ""
     state: str = "clean"
-    legacy_path: bool = False
 
 
 class ArticleCommit(BaseModel):
     commit_id: str = ""
     properties: CommitProperties = CommitProperties()
-
-
-class CommitsByLanguage(BaseModel):
-    de: list[ArticleCommit] = []
-    en: list[ArticleCommit] = []
 
 
 class Article(BaseModel):
@@ -227,11 +217,12 @@ class GitCommits:
         self.since = "--since={since}"
         self.default_src_dir = f"{DOCSSRCPATHS.docs_root.working_dir}/src/"
 
-    def _split_path_to_variables(self, file: str) -> list | tuple:
+    @staticmethod
+    def _split_path_to_variables(file: str) -> tuple:
         filepath = file.split("/")
         if len(filepath) == 2:  # old path structure
             return None, filepath[0], filepath[1]
-        return filepath[1:]
+        return tuple(filepath[1:])
 
     def get_translated_marker(
         self, article_list: dict[str, dict[str, Article]], path: str = DOCSSRCPATHS.base
@@ -291,7 +282,6 @@ class GitCommits:
                         date=date,
                         author=name,
                         msg=str(summary).lower(),
-                        legacy_path=legacy_path,
                     ),
                 )
             )
@@ -440,10 +430,12 @@ class ArticleDatabase:
 
 
 class ColorizedOutput:
-    def __init__(self, box_size: int = 120):
-        Box.size = box_size
+    def __init__(self):
+        self.box = BASIC_LINE_PARAMETERS["box"]
+        self.colors = BASIC_LINE_PARAMETERS["colors"]
 
-    def _line(self, line: str, additional_parameters: dict = {}) -> None:
+    @staticmethod
+    def _line(line: str, additional_parameters: dict = {}) -> None:
         stdout.write(
             line.format(
                 **additional_parameters,
@@ -452,21 +444,21 @@ class ColorizedOutput:
         )
 
     def _get_color_str(self, state: str):
-        return BoxColors().model_dump().get(state)
+        return self.colors.model_dump().get(state)
 
     def _docs_type_header(self, docs_type: str) -> None:
-        self._line(Box().top)
+        self._line(self.box.top)
         self._line(
             BoxText().docs_type_header,
             additional_parameters={"type": docs_type.upper()},
         )
-        self._line(Box().separator)
+        self._line(self.box.separator)
 
     def _missing_translation_marker_articles(self, missing: list[str]):
         if len(missing) == 0:
             self._line(BoxText().no_missing_translation_markers)
             return
-        missing_text = textwrap.wrap(", ".join(missing), Box().size)
+        missing_text = textwrap.wrap(", ".join(missing), self.box.size)
         self._line(BoxText().missing_translation_markers_header)
         for text in missing_text:
             self._line(
@@ -488,16 +480,15 @@ class ColorizedOutput:
                     "article": properties,
                 },
             )
-            self._line(Box().separator)
+            self._line(self.box.separator)
         if all_clean:
             self._line(BoxText().all_clean)
 
     def _article_details(self, article: Article):
         text: BoxText = BoxText()
-        box: Box = Box()
-        msg_length: int = box.size - 50
+        msg_length: int = self.box.size - 50
         article.commits_since = _get_hr_timestamp(article.commits_since)
-        self._line(box.top)
+        self._line(self.box.top)
         self._line(
             text.summary_header,
             additional_parameters={
@@ -505,7 +496,7 @@ class ColorizedOutput:
                 "article": article,
             },
         )
-        self._line(box.separator)
+        self._line(self.box.separator)
         for lang, commits in article.commits_by_language.items():
             self._line(str(text.model_dump().get(lang)))
             for commit in commits:
@@ -524,7 +515,7 @@ class ColorizedOutput:
                         "commit_message": commit.properties.msg[:msg_length],
                     },
                 )
-            self._line(box.separator)
+            self._line(self.box.separator)
 
     def summary(self, db: ArticleDatabase):
         data = db.article_list
@@ -537,7 +528,7 @@ class ColorizedOutput:
             self._missing_translation_marker_articles(
                 db.articles_without_translation_marker.get(docs_type, [])
             )
-            self._line(Box().bottom)
+            self._line(self.box.bottom)
 
     def details(self, data: dict[str, dict[str, Article]], article_name: str):
         for docs_type in INCLUDE_DOCS_TYPES:
@@ -555,7 +546,7 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
     parser.add_argument(
         "article",
         type=str,
-        default="all",
+        default=ALL_ARTICLES,
         help="Article name to analyze",
         nargs="?",
     )
@@ -571,12 +562,6 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
         "--verbose",
         action="count",
         help="Activate with single and increase by specifying multiple times",
-    )
-    parser.add_argument(
-        "-w",
-        "--width",
-        default=120,
-        help="Adjust the width to use more of your screen. Default is set to 120 characters",
     )
     parser.add_argument(
         "-c",
