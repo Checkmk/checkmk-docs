@@ -74,6 +74,7 @@ class States(BaseModel):
     dirty: str = "dirty"
     clean: str = "clean"
     ignored: str = "ignored"
+    legacy: str = "legacy"
 
 
 class DocsSrcPaths(BaseModel):
@@ -148,6 +149,7 @@ class BoxText(BaseModel):
     commit_clean: str = "| {colors.green}c "
     commit_dirty: str = "| {colors.red}d "
     commit_overwritten: str = "| {colors.normal}- "
+    commit_legacy: str = "| {colors.normal}l "
     commit_details: str = (
         "{colors.magenta}{commit_id} "
         + "{colors.blue}{commit_date} "
@@ -182,6 +184,7 @@ class CommitProperties(BaseModel):
     author: str = ""
     msg: str = ""
     state: str = "clean"
+    legacy_path: bool = False
 
 
 class ArticleCommit(BaseModel):
@@ -261,7 +264,9 @@ class GitCommits:
                     f"article properties after change: {article_properties.model_dump()}"
                 )
 
-    def _get_commits_of_file(self, article: Article, path: str, language: str):
+    def _get_commits_of_file(
+        self, article: Article, path: str, language: str, legacy_path: bool = False
+    ):
         since = (
             self.custom_since.format(custom=article.last_full_translation)
             if not article.complete
@@ -277,7 +282,10 @@ class GitCommits:
                 ArticleCommit(
                     commit_id=id[:6],
                     properties=CommitProperties(
-                        date=date, author=name, msg=str(summary).lower()
+                        date=date,
+                        author=name,
+                        msg=str(summary).lower(),
+                        legacy_path=legacy_path,
                     ),
                 )
             )
@@ -291,10 +299,17 @@ class GitCommits:
                 logging.debug(f"Fetching commits for {article_name}")
                 base_dir = f"{self.default_src_dir}{docs_type}"
                 for lang in LANGUAGES.include:
+                    file_path = f"{lang}/{article_name}{ASCIIDOC_EXTENSION}"
                     self._get_commits_of_file(
                         article_properties,
-                        f"{base_dir}/{lang}/{article_name}{ASCIIDOC_EXTENSION}",
+                        f"{base_dir}/{file_path}",
                         lang,
+                    )
+                    self._get_commits_of_file(
+                        article_properties,
+                        f"{DOCSSRCPATHS.docs_root.working_dir}/{file_path}",
+                        lang,
+                        legacy_path=True,
                     )
 
 
@@ -356,7 +371,10 @@ class ArticleDatabase:
     def _check_commits(self, article: Article, check: LangComparision) -> str:
         language_state = STATES.clean
         for commit in article.commits_by_language[check.src]:
-            if commit.properties.date < article.last_full_translation:
+            if commit.properties.legacy_path:
+                commit.properties.state = STATES.legacy
+                continue
+            elif commit.properties.date < article.last_full_translation:
                 commit.properties.state = STATES.ignored
                 continue
 
@@ -461,7 +479,7 @@ class ColorizedOutput:
     def details(self, article: Article):
         text: BoxText = BoxText()
         box: Box = Box()
-        msg_length: int = box.size - 39
+        msg_length: int = box.size - 50
         self._line(box.top)
         self._line(
             text.summary_header,
@@ -478,6 +496,8 @@ class ColorizedOutput:
                     prefix = text.commit_clean
                 elif commit.properties.state == STATES.ignored:
                     prefix = text.commit_overwritten
+                elif commit.properties.state == STATES.legacy:
+                    prefix = text.commit_legacy
                 else:
                     prefix = text.commit_dirty
                 self._line(
@@ -551,7 +571,7 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
     parser.add_argument(
         "-w",
         "--width",
-        default=85,
+        default=120,
         help="Adjust the width to use more of your screen. Default is set to 120 characters",
     )
     parser.add_argument(
