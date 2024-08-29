@@ -89,6 +89,7 @@ DOCSSRCPATHS = DocsSrcPaths()
 
 class Box(BaseModel):
     size: int = shutil.get_terminal_size().columns - 2
+    size_fourty: int = max(int(size * 0.4), 49)
     top: str = "┌" + "─" * size + "┐\n"
     separator: str = "├" + "─" * size + "┤\n"
     bottom: str = "└" + "─" * size + "┘\n"
@@ -142,7 +143,7 @@ class BoxText(BaseModel):
     summary_header: str = (
         "| {colors.bold}{article.name}{colors.normal} "
         + "(Since: {article.commits_since}) "
-        + "\033[500D|\033[50C"
+        + "\033[500D|\033[{box.size_fourty}C "
         + "{color}{article.state}{colors.normal}"
         + "{colors.bold}{article.hint}"
         + "{colors.normal}{box.borders}"
