@@ -13,7 +13,7 @@ from cmk.rulesets.v1 import Label, Title
 from cmk.rulesets.v1.form_specs import BooleanChoice, DefaultValue, DictElement, Dictionary, Float, LevelDirection, SimpleLevels
 from cmk.rulesets.v1.rule_specs import CheckParameters, HostAndItemCondition, Topic
 
-def _parameter_form() -> Dictionary:
+def _parameter_form():
     return Dictionary(
         elements = {
             "hosts_up_lower": DictElement(
