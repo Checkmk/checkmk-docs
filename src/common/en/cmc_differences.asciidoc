@@ -2,7 +2,7 @@
 // IGNORE % Jörg Linge lt site_name
 include::global_attr.adoc[]
 = Special characteristics of the CMC
-:revdate: 2023-06-01
+:revdate: draft
 :title: Special characteristics of the CMC
 :description: The {CMK} Micro Core (CMC) differs in some details from other Nagios-compatible cores. These are described in detail here.
 
@@ -26,6 +26,7 @@ It has further interesting advantages of which you should be aware -- the most i
 The details on this can be found in the article on the xref:cmc_migration#[migration to the CMC].
 
 
+// start proofreading
 [#smartping]
 == Smart Ping -- Intelligent host checks
 
@@ -37,23 +38,25 @@ Furthermore, these can form a backlog for quite a long time if a host is not rea
 
 By contrast, CMC runs host checks -- unless otherwise configured -- using a procedure called _Smart Ping_.
 _Smart Ping_ relies on an internal component called `icmpsender`, which has its own ping implementation.
-Since {CMK} with CMC does not rely on an external binary, there is no need to spawn a new process for each ping packet sent, thus dramatically decreasing the resources overhead.
+Since {CMK} with CMC does not rely on an external binary, there is no need to spawn a new process for each ping packet sent.
 Additionally the default behavior of `icmpsender` differs from its Nagios counterpart.
-Instead of multiple packets in rapid series that are waited upon, `icmpsender` sends only _a single_ ICMP packet per host once every n-seconds interval (defaults to 6 seconds, configurable via the [.guihint]#Normal check interval for host checks# rule set).
-This behavior drastically reduces the amount of traffic going through the cable.
-// MFS: Removed, since no details on number of hosts and exact configuration are mentioned.
-//, which is benchmarked to be up to 45 MBit/sec! 
-The responses to the pings are not explicitly waited-for.
-There is an auxiliary process called `icmpreceiver` which is responsible for this.
+Instead of multiple packets in rapid series that are waited upon, `icmpsender` sends only _one_ ICMP packet per host every n-seconds (defaults to 6 seconds, configurable via the [.guihint]#Normal check interval for host checks# rule set).
+This behavior drastically reduces resource consumption and data traffic.
 
-CMC's `icmpreceiver` component is responsible for marking a host as being {UP} or {DOWN}.
-It considers incoming ping packets from a host to be successful host checks, thus marking it as being {UP}. 
+The responses to the pings are not explicitly waited-for.
+CMC's `icmpreceiver` component is responsible for deciding whether the status of a host is {UP} or {DOWN}.
+It considers incoming ping packets from a host as a successful host check and thus marks the host as {UP}. 
 If no packet is received from a host within a defined time, this host will be flagged as {DOWN}.
-This timeout time is predefined at 15 seconds (2.5 intervals) and can also be altered per host via the [.guihint]#Settings for host checks via Smart PING# rule set.
+The timeout is preset to 15 seconds (2.5 intervals) and can be changed per host with the [.guihint]#Settings for host checks via Smart PING# rule set.
+
 The `icmpreceiver` component also listens to TCP SYN (synchronization) and RST (reset) packets coming from a host.
-If it receives such packages, the host is considered to be {UP}.
+When it receives such packets, the host is considered {UP}.
 This mechanism can lead to flapping states of hosts in infrastructures where ICMP traffic is not allowed but TCP traffic is.
-Note: `icmpreceiver` will ignore any SNMP packet because SNMP does not communicate using TCP, relying on UDP instead.
+
+[TIP]
+====
+`icmpreceiver` will ignore any SNMP packet because SNMP does not communicate via TCP but UDP.
+====
 
 
 [#no_on-demand_host_checks]
@@ -61,20 +64,21 @@ Note: `icmpreceiver` will ignore any SNMP packet because SNMP does not communica
 
 Host checks not only serve to trigger notifications in the case of a total host failure, but also to suppress xref:notifications#state_host[notifications of service problems] during the host's down time. 
 Service problems can arise and not be responsibility of the service itself, but rather of a failure condition of the host.
-It can happen that a host is actually down even if its last known state in Checkmk is {UP} as per the last host check result.
-In such condition multiple service checks could returns problems that depend on the hosts down state, resulting in the bad behavior of sending a notification.
+It can happen that a host is actually {DOWN} even if its last known status in {CMK} is {UP} as per the last host check result.
+In such condition multiple service checks could returns problems that depend on the hosts {DOWN} status, resulting in sending service notifications -- erroneously.
 It is therefore important to determine a host's condition first, in the event of a service problem.
 
-The CMC solves this problem very simply: 
-if a service problem arises and the host is in an {UP} state, CMC will wait for the next host check. 
-Due to the interval being very short at only (by default) six seconds, there is only a negligible delay to a notification -- if the host is still {UP} and therefore the notification needs to be sent for the service.
+The CMC solves this problem very simply:
+if a service problem arises and the host is in an {UP} status, CMC will wait for the next host check. 
+Due to the interval being very short at only (by default) 6 seconds, there is only a negligible delay to a notification -- if the host is still {UP} and therefore the notification needs to be sent for the service.
 
 As an example, let's take the case of a `check_http` plug-in delivering a {CRIT} status, due to a queried web server being unavailable.
-In this situation, _following the start_ of the service check a TCP RST packet (_connection refused_) will be received from this server, which is listened for by the `icmpreceiver` component.
+In this situation, _following the start_ of the service check a TCP RST packet (_connection refused_) will be received from this server by the `icmpreceiver` component.
 The CMC therefore knows for certain that the host itself is {UP} and it can thus send the notification without delay.
 
 The same principle is utilized when calculating network outages if xref:notifications#parents[parent hosts] have been defined.
 Here as well notifications will at times be delayed briefly in order to wait for a verified status.
+// end proofreading
 
 
 === The advantages
@@ -133,23 +137,30 @@ In this way, the execution of active checks (e.g. `check_http`) -- whose runtime
 The CMC goes a significant step further however -- because in a {CMK} environment active checks are rather an exception.
 Here {CMK}-based checks -- in which only a single fork per host and interval is required -- are primarily used. 
 
-To optimize the execution of these checks, the CMC maintains two other types of auxiliary processes: the *{CMK} fetchers* and the *{CMK} checkers:* 
+To optimize the execution of these checks, the CMC maintains two other types of auxiliary processes: the *{CMK} fetchers* and the *{CMK} checkers*.
+
 
 ==== The {CMK} fetchers
+
 retrieve the required information from the monitored hosts, i.e. the data from the [.guihint]#Check_MK# and [.guihint]#Check_MK Discovery# services. 
 The fetchers thus take over the network communication with the {CMK} agents, SNMP agents and the xref:glossar#special_agent[special agents.]  
-Gathering this information takes some time, but with regularly less than 50 MByte per process only a relatively little memory,
+Gathering this information takes some time, but with regularly less than 50 megabytes per process only a relatively little memory,
 so many of these processes can be configured without problems.
 Keep in mind that the processes can be partially or not at all swapped out and thus must always be kept in physical memory.
 The limiting factor here is the available memory in the {CMK} server. 
 
-*Note:* The mentioned 50 MByte are an estimate for basic orientation.
+[TIP]
+====
+The mentioned 50 megabytes are an estimate for basic orientation.
 The actual value may be higher on specific circumstances -- e.g. because IPMI has been configured on the xref:hosts_setup#management_board[Management board].
+====
+
 
 ==== The {CMK} checkers
+
 analyze and evaluate the information collected by the {CMK} fetchers and generate the check results for the services. 
-The checkers need a lot of memory because they must have the checkmk configuration with them. 
-A checker process occupies at least about 90 MByte -- however, a multiple of this may be necessary, depending on how the checks are configured. 
+The checkers need a lot of memory because they must have the {CMK} configuration with them. 
+A checker process occupies at least about 90 megabytes -- however, a multiple of this may be necessary, depending on how the checks are configured. 
 On the other hand, the checkers do not cause any network load and are very fast in execution.
 The number of checkers should only be as large as your {CMK} server can process in parallel. 
 As a rule, this number corresponds to the number of cores in your server. 
@@ -197,7 +208,10 @@ In addition, all auxiliary processes are initialized in parallel when the CMC is
 The [.guihint]#Core statistics# snap-in shows you not only the usage, but also the _latency_. 
 For these values, the simple rule applies: the lower, the better -- and 0 seconds is therefore best.
 
-*Note:* You can also display the values shown in the snap-in for your site in the details of the [.guihint]#OMD <site_name> performance# service.
+[TIP]
+====
+You can also display the values shown in the snap-in for your site in the details of the [.guihint]#OMD <site_name> performance# service.
+====
 
 As an alternative to the [.guihint]#Core statistics# snap-in, you can also have your xref:analyze_configuration#[configuration analyzed by {CMK}], with [.guihint]#Setup > Maintenance > Analyze configuration#. 
 The advantage: Here you get an immediate evaluation from {CMK} how the state of the auxiliary processes is. 
@@ -223,7 +237,7 @@ The option for this can be found under [.guihint]#Global settings > Monitoring C
 == Processing of performance data
 
 An important function of {CMK} is the xref:graphing#[processing of measurement data], such as CPU utilization, and its retention for a long time period. 
-In {CRE}, link:http://docs.pnp4nagios.org/[PNP4Nagios^] from Jörg Linge is used for this, 
+In {CRE}, link:https://github.com/pnp4nagios[PNP4Nagios^] is used for this, 
 which in turn is based on the link:https://oss.oetiker.ch/rrdtool/[RRDtool^].
 
 The software performs two functions:
