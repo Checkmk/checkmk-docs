@@ -336,7 +336,7 @@ class ArticleDatabase:
 
     def _get_file(self, language_path: str, docs_type: str, article: str):
         for article_file in listdir(language_path):
-            if not article_file.startswith(article):
+            if article_file != f"{article}{ASCIIDOC_EXTENSION}":
                 continue
             article_name = article_file.replace(ASCIIDOC_EXTENSION, "")
             self.article_list[docs_type][article_name] = Article(
