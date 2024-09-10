@@ -553,7 +553,9 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
         "article",
         type=str,
         default=ALL_ARTICLES,
-        help="Article name to analyze",
+        help="Limits the output to a specific article and lists commits related to this article. "
+        + "All articles are evaluated and listed in an overview summary if the call is argument "
+        + "is not used.",
         nargs="?",
     )
     parser.add_argument(
@@ -561,34 +563,34 @@ def _parse_arguments(argv: list) -> argparse.Namespace:
         "--docs-type",
         default=None,
         help="The type of docs that will be build. "
-        + "Valid values are: common, onprem, saas, includes, all",
+        + "Valid values are: common, onprem, saas, includes",
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="count",
-        help="Activate with single and increase by specifying multiple times",
+        help="Activate with single and increase by specifying multiple times.",
     )
     parser.add_argument(
         "-c",
         "--complete",
         action="store_true",
         default=False,
-        help="Lists all articles in summaries and all commits in details",
+        help="Lists all articles in summaries or all commits in article details.",
     )
     parser.add_argument(
         "-l",
         "--legacy",
         action="store_true",
         default=False,
-        help="Uses legacy paths instead of new directory structure",
+        help="Uses legacy paths instead of new directory structure. Only useful in combination with an article.",
     )
     parser.add_argument(
         "-e",
         "--evaluate",
         action="store_true",
         default=False,
-        help="Evaluate commits prio to last full translation",
+        help="Evaluate commits prio to last full translation. Only useful in combination with an article.",
     )
 
     return parser.parse_args(argv)
