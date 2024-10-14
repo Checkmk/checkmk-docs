@@ -3,20 +3,23 @@
 # This might(!) be an indicator, that the content is not in sync.
 # Of course, this can also be an indicator, that one version still contains a ton of comments...
 # This script can certainly be improved.
-FILES="../de/*.asciidoc"
-for f in $FILES;
+GERMAN_FILES="../src/*/de/*.asciidoc"
+for de in $GERMAN_FILES;
 do
-	FILE=$(basename -- $f)
-	SIZE1=$(stat -c%s ../de/$FILE)
-	if [ -f ../en/$FILE ]; then
-		SIZE2=$(stat -c%s ../en/$FILE)
-		PERC=$(bc <<< "scale=4; ($SIZE1 - $SIZE2)/$SIZE1 * 100")
-		if (( $(echo "$PERC > 15" | bc -l) ))
-		then
-			printf "$FILE: $PERC %%\n"
-		fi
-	else
-		printf "\n$FILE only exists in german\n\n"
-	fi
+	en="${de/\/de\//\/en\/}"
+	SIZE1=$(stat -c%s $de)
+	if [ -f $en ]; then
+                SIZE2=$(stat -c%s $en)
+                PERC=$(bc <<< "scale=4; ($SIZE1 - $SIZE2)/$SIZE1 * 100")
+                if (( $(echo "$PERC > 15" | bc -l) ))
+                then
+                        printf "$de: $PERC %%\n"
+                fi
+        else
+                printf "\n$de only exists in german\n\n"
+        fi
+
+
 
 done
+
