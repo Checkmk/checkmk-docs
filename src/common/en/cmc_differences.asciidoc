@@ -8,25 +8,34 @@ include::global_attr.adoc[]
 
 {related-start}
 xref:cmc#[The {CMK} micro core (CMC)]
+ifdef::onprem[]
 xref:cmc_migration#[Migration to the CMC]
 xref:cmc_files#[CMC files and directories]
+endif::[]
 {related-end}
 
 
+[#special_features]
 == The {CMK} Micro Core's special features
 
-In comparison with Nagios, the xref:cmc#[CMC]'s most significant advantages are its higher performance and faster reaction times.
+ifdef::onprem[]
+The most significant advantages of xref:cmc#[CMC] are its higher performance and faster response times compared to the monitoring core of the open-source project Nagios,
+endif::[]
+ifdef::saas[]
+The most significant advantages of xref:cmc#[CMC] are its higher performance and faster response times compared to the monitoring core of the open-source project Nagios, which is used in {RE}, the freely available on-premises edition of {CMK}.
+endif::[]
 It has further interesting advantages of which you should be aware -- the most important of which are:
 
 * Smart Ping -- Intelligent host checks
 * Auxiliary processes Check helper, {CMK} fetcher and {CMK} checker
 * Initial Scheduling
 * Processing of performance data
+ifdef::onprem[]
 * A couple of Nagios' functions are not used, or are achieved using a different procedure in the CMC.
 The details on this can be found in the article on the xref:cmc_migration#[migration to the CMC].
+endif::[]
 
 
-// start proofreading
 [#smartping]
 == Smart Ping -- Intelligent host checks
 
@@ -40,12 +49,12 @@ By contrast, CMC runs host checks -- unless otherwise configured -- using a proc
 _Smart Ping_ relies on an internal component called `icmpsender`, which has its own ping implementation.
 Since {CMK} with CMC does not rely on an external binary, there is no need to spawn a new process for each ping packet sent.
 Additionally the default behavior of `icmpsender` differs from its Nagios counterpart.
-Instead of multiple packets in rapid series that are waited upon, `icmpsender` sends only _one_ ICMP packet per host every n-seconds (defaults to 6 seconds, configurable via the [.guihint]#Normal check interval for host checks# rule set).
+Instead of multiple packets in rapid series that are waited upon, `icmpsender` sends only _one_ ICMP packet per host every n-seconds (the default is 6 seconds, configurable via the [.guihint]#Normal check interval for host checks# rule set).
 This behavior drastically reduces resource consumption and data traffic.
 
 The responses to the pings are not explicitly waited-for.
-CMC's `icmpreceiver` component is responsible for deciding whether the state of a host is {UP} or {DOWN}.
-It considers incoming ping packets from a host as a successful host check and thus marks the host as {UP}. 
+The CMC's `icmpreceiver` component is responsible for deciding whether the state of a host is {UP} or {DOWN}.
+The CMC treats incoming ping packets from a host as a successful host check and thus marks the host as {UP}. 
 If no packet is received from a host within a defined time, this host will be flagged as {DOWN}.
 The timeout is preset to 15 seconds (2.5 intervals) and can be changed per host with the [.guihint]#Settings for host checks via Smart PING# rule set.
 
@@ -53,20 +62,22 @@ The `icmpreceiver` component also listens to TCP SYN (synchronization) and RST (
 When it receives such packets, the host is considered {UP}.
 This mechanism can lead to flapping states of hosts in infrastructures where ICMP traffic is not allowed but TCP traffic is.
 
+ifdef::onprem[]
 [TIP]
 ====
-`icmpreceiver` will ignore any SNMP packet because SNMP does not communicate via TCP but UDP.
+`icmpreceiver` will ignore any SNMP packet because SNMP does not communicate via TCP but instead via UDP.
 ====
+endif::[]
 
 
 [#no_on-demand_host_checks]
 === No on-demand host checks
 
-Host checks not only serve to trigger notifications in the case of a total host failure, but also to suppress xref:notifications#state_host[notifications of service problems] during the host's down time. 
-Service problems can arise and not be responsibility of the service itself, but rather of a failure condition of the host.
+Host checks not only serve to trigger notifications in the case of a total host failure, but also to suppress xref:notifications#state_host[notifications of service problems] during a host's planned downtime. 
+Service problems can arise and not be the responsibility of the service itself, but rather of a failure condition of the host.
 It can happen that a host is actually {DOWN} even if its last known state in {CMK} is {UP} as per the last host check result.
 In such condition multiple service checks could returns problems that depend on the hosts {DOWN} state, resulting in sending service notifications -- erroneously.
-It is therefore important to determine a host's condition first, in the event of a service problem.
+In the event of a service problem it is therefore important to first determine the condition of the service's host.
 
 The CMC solves this problem very simply:
 if a service problem arises and the host is in an {UP} state, CMC will wait for the next host check. 
@@ -78,7 +89,6 @@ The CMC therefore knows for certain that the host itself is {UP} and it can thus
 
 The same principle is utilized when calculating network outages if xref:notifications#parents[parent hosts] have been defined.
 Here as well notifications will at times be delayed briefly in order to wait for a verified state.
-// end proofreading
 
 
 === The advantages
@@ -100,7 +110,7 @@ On hosts where these are required you can simply set up an xref:glossar#active_c
 In practice, not all hosts are checkable by ping. 
 For these cases other methods in CMC can also be used for the host check, e.g., a TCP connection. 
 Because these are generally exceptions they have no negative impact on the overall performance.
-The rule set here is [.guihint]#Host Check Command#.
+The rule set here is [.guihint]#Host check command#.
 
 
 === Problems with firewalls
@@ -109,7 +119,7 @@ There are firewalls that answer TCP connection packets to inaccessible hosts wit
 The trick is that the firewall is not permitted to register itself as the sender of this packet, rather the target host's IP address must be specified.
 Smart Ping will view this packet as a sign of life and incorrectly assume that the target host is accessible.
 
-In such a (rare) situation, via [.guihint]#Global settings > Monitoring Core > Tuning of Smart PING# you have the possibility of activating the [.guihint]#Ignore TCP RST packets when determining host state# option.
+In such a (rare) situation, via [.guihint]#Global settings > Monitoring core > Tuning of Smart PING# you have the possibility of activating the [.guihint]#Ignore TCP RST packets when determining host state# option.
 Or, with `check_icmp` you can select a conventional ping as a host check for the affected hosts.
 
 
@@ -140,53 +150,52 @@ Here {CMK}-based checks -- in which only a single fork per host and interval is 
 To optimize the execution of these checks, the CMC maintains two other types of auxiliary processes: the *{CMK} fetchers* and the *{CMK} checkers*.
 
 
+[#fetcher]
 ==== The {CMK} fetchers
 
-retrieve the required information from the monitored hosts, i.e. the data from the [.guihint]#Check_MK# and [.guihint]#Check_MK Discovery# services. 
+The {CMK} fetchers retrieve the required information from the monitored hosts, i.e. the data from the [.guihint]#Check_MK# and [.guihint]#Check_MK Discovery# services.
+ifdef::onprem[]
 The fetchers thus take over the network communication with the {CMK} agents, SNMP agents and the xref:glossar#special_agent[special agents.]  
-Gathering this information takes some time, but with regularly less than 50 megabytes per process only a relatively little memory,
-so many of these processes can be configured without problems.
+endif::[]
+ifdef::saas[]
+The fetchers thus take over the network communication with the {CMK} agents and the xref:glossar#special_agent[special agents.]  
+endif::[]
+Gathering this information takes some time, but with typically less than 50 megabytes required per process -- which is relatively little memory --
+multiple processes can be configured without problems.
 Keep in mind that the processes can be partially or not at all swapped out and thus must always be kept in physical memory.
 The limiting factor here is the available memory in the {CMK} server. 
 
 [TIP]
 ====
-The mentioned 50 megabytes are an estimate for basic orientation.
-The actual value may be higher on specific circumstances -- e.g. because IPMI has been configured on the xref:hosts_setup#management_board[Management board].
+The 50 megabytes mentioned above are an estimate for basic orientation.
+The actual value may be higher under specific circumstances -- e.g. because IPMI has been configured on the xref:hosts_setup#management_board[management board].
 ====
 
 
+[#checker]
 ==== The {CMK} checkers
 
-analyze and evaluate the information collected by the {CMK} fetchers and generate the check results for the services. 
-The checkers need a lot of memory because they must have the {CMK} configuration with them. 
+The {CMK} checkers analyze and evaluate the information collected by the {CMK} fetchers and generate the check results for the services. 
+The checkers need a lot of memory because they must include the {CMK} configuration. 
 A checker process occupies at least about 90 megabytes -- however, a multiple of this may be necessary, depending on how the checks are configured. 
-On the other hand, the checkers do not cause any network load and are very fast in execution.
+On the other hand, the checkers do not generate any network load and execute very quickly.
 The number of checkers should only be as large as your {CMK} server can process in parallel. 
 As a rule, this number corresponds to the number of cores in your server. 
 Since the checkers are not IO-bound, they are most effective if each checker has its own core.
 
-The division of the two different 'collect' and 'execute' tasks between {CMK} fetcher and {CMK} checker exists since {CMK} version {v20}. 
-Before, there was only _one_ auxiliary process type that was responsible for both -- the so-called {CMK} helpers.
+The division of the two different 'collect' and 'execute' tasks between the {CMK} fetcher and the {CMK} checker exists since {CMK} version {v20}. 
+Previously there was only _one_ auxiliary process type that was responsible for both -- the so-called {CMK} helpers.
 
-////
-Each {CMK} helper could run a parallel {CMK} check for a host.
-These {CMK} helpers remained permanently active and thus provided a significant improvement in performance because the time-consuming creation of new processes could be dispensed with.
-In comparison to the combination 'Nagios and {CMK}' this had the very pleasant consequence that the CPU time required for a check run was reduced by a factor of about 15! 
-In larger installations, however, many {CMK} helpers were needed for many hosts to be monitored, which then had a high memory footprint,
-because each {CMK} helper held the entire {CMK} configuration in memory. 
-////
-
-With the fetcher/checker model, both tasks can now be split between two separate pools of processes: 
+With the fetcher/checker model, both tasks are now divided into two separate pools of processes:
 retrieving information from the network with many small fetcher processes and the computationally-intensive checking with a few large checker processes. 
 As a result, a CMC uses up to four times less memory for the same performance (checks per second)!
 
 
+ifdef::onprem[]
 [#numbers]
 === Setting the number of auxiliary processes correctly
 
-By default, 5 check helpers, 13 {CMK} fetchers and 4 {CMK} checkers are started.
-These values are set under [.guihint]#Global settings > Monitoring Core# and can be customized by you:
+The number of check helpers (_active checks_), {CMK} fetchers and {CMK} checkers started by default are defined under [.guihint]#Global settings > Monitoring core# and can be customized by you:
 
 image::cmc_differences_global_settings_monitoring_core.png[alt="List of global settings for the CMC's auxiliary processes."]
 
@@ -214,30 +223,30 @@ You can also display the values shown in the snap-in for your site in the detail
 ====
 
 As an alternative to the [.guihint]#Core statistics# snap-in, you can also have your xref:analyze_configuration#[configuration analyzed by {CMK}], with [.guihint]#Setup > Maintenance > Analyze configuration#. 
-The advantage: Here you get an immediate evaluation from {CMK} how the state of the auxiliary processes is. 
-Very handy is: 
-If one of the auxiliary processes is not {OK}, you can open from the help text the corresponding [.guihint]#Global settings# option to change the value.
+The advantage here is that you get an immediate evaluation from {CMK} of the state of the auxiliary processes. 
+It is very handy that if one of the auxiliary processes is not {OK}, from the help text you can open the corresponding [.guihint]#Global settings# option to change the process's value.
+endif::[]
 
 
 == Initial scheduling
 
 During scheduling it is defined which checks should be run at what times.
 Nagios has implemented numerous procedures that should ensure that the checks are regularly distributed over the interval. 
-It will likewise attempt to distribute the queries to be run on an individual target system uniformly over the interval.
+Nagios will likewise attempt to distribute the queries to be run uniformly on an individual target system over the interval.
 
 The CMC has its own, simpler procedure for this purpose. 
 This takes into account that {CMK} already contacts a host once per interval. 
 Furthermore, the CMC ensures that new checks are _immediately_ executed and not distributed over several minutes. 
 This is very convenient for the user since a new host will be queried as soon as the configuration has been activated. 
 In order to avoid a large number of new checks causing a load spike, new checks whose number exceeds a definable limit can be distributed over the entire interval.
-The option for this can be found under [.guihint]#Global settings > Monitoring Core > Initial Scheduling#.
+The option for this can be found under [.guihint]#Global settings > Monitoring core > Initial scheduling#.
 
 
 [#metrics]
 == Processing of performance data
 
 An important function of {CMK} is the xref:graphing#[processing of measurement data], such as CPU utilization, and its retention for a long time period. 
-In {CRE}, link:https://github.com/pnp4nagios[PNP4Nagios^] is used for this, 
+In {RE}, link:https://github.com/pnp4nagios[PNP4Nagios^] is used for this, 
 which in turn is based on the link:https://oss.oetiker.ch/rrdtool/[RRDtool^].
 
 The software performs two functions:
@@ -247,21 +256,21 @@ The software performs two functions:
 
 In a Nagios core operation the function mentioned in point *1.* above is quite a long process.
 Depending on the method, spool files, Perl scripts and an auxiliary process (`npcd`) written in C is used.
-Finally, slightly converted data is written to the RRD cache daemon's Unix socket.
+Finally, partly converted data is written to the RRD cache daemon's Unix socket.
 
 The CMC shortens this chain by writing _directly_ to the RRD cache daemon -- all intermediate steps are dispensed with. 
 Parsing, and converting the data to the RRDtool's format is performed directly in C++.
-This method is possible and sensible nowadays as the RRD cache daemon has already implemented its own very efficient spooling, and with the aid of journal files this
-means that no data is lost in the case of a system crash.
+This method is possible and sensible nowadays as the RRD cache daemon has already implemented its own very efficient spooling, and with the aid of journal files this means that no data is lost in the event of a system crash.
 
 The advantages:
 
 * Reduced Disk-I/O and CPU load
 * Simpler implementation with markedly more stability
 
+ifdef::onprem[]
 The installation of new RRDs is performed by the CMC with a further helper, activated by `cmk --create-rrd`.
-This creates files optionally compatible with PNP, or with the new {CMK} format (only for new installations).
+This optionally creates files compatible with PNP, or with the new {CMK} format (only for new installations).
 A switch from Nagios to CMC has no effect on existing RRD files -- these will be seamlessly carried-over and will continue to be maintained.
 
 In the commercial editions the graphic display of the data in the GUI is handled directly by {CMK}'s GUI itself, so that no PNP4Nagios component is involved.
-
+endif::[]
