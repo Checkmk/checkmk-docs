@@ -1,0 +1,1682 @@
+// -*- coding: utf-8 -*-
+// IGNORE % → ➤
+// NONASCII ö …​
+include::global_attr.adoc[]
+= Notifications
+:revdate: 2025-02-12
+:title: Notifications - via Email, SMS, ticket system and more
+:description: To configure notifications, the time, method and group of recipients are essential. Learn here how to implement your requirements in {CMK}.
+
+{related-start}
+xref:basics_ackn#[Acknowledging problems]
+xref:commands#[Commands]
+xref:wato_user#[Users, roles and permissions]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+[{image-left}]
+image::notifications_large_icon_notifications.png[alt="Notification icon.",width=80]
+
+In {CMK}, notification means that users are actively informed in the case of problems or other events in the monitoring.
+This is most commonly achieved using emails.
+However, there are also many other methods, such as sending SMS or forwarding to a ticket system.
+{CMK} provides a simple interface for writing scripts for your own notification methods.
+
+The starting point for any notification to a user is an event reported by the monitoring core.
+ifdef::saas[]
+We call this a *monitoring event*.
+endif::[]
+ifdef::onprem[]
+We call this a *monitoring event* in this article to avoid confusion with the events processed by the xref:ec#[Event Console].
+endif::[]
+A monitoring event is always related to a particular host or service.
+Possible types of monitoring events are:
+
+* A change of state, e.g. {OK} → {WARN}
+* The change between a steady and an icon:icon_flapping[alt="Icon indicating a flapping state."] unsteady (_flapping_) state.
+* The start or end of a icon:icon_downtime[alt="Icon indicating a scheduled downtime for services."] xref:basics_downtimes#[scheduled downtime].
+* The icon:icon_ack[alt="Icon indicating acknowledgment."] xref:basics_ackn#[acknowledgment of a problem] by a user.
+* A notification manually triggered by a icon:icon_commands[alt="Icon indicating a command."] xref:commands#[command].
+ifdef::onprem[]
+* The execution of an icon:icon_alert_handlers[alt="Icon of an alert handler."] xref:alert_handlers#[alert handler].
+* An event passed for notification from the icon:icon_event_console[alt="Event Console icon."] xref:ec#[Event Console].
+endif::[]
+
+{CMK} utilizes a rule-based system that allows you to create user notifications from these monitoring events -- and this can also be used to implement very demanding requirements.
+A simple notification by email -- which is entirely satisfactory in many cases -- is nonetheless quick to set up.
+
+
+[#notify_or_not]
+== To notify, or not (yet) to notify?
+
+Notifications are basically optional, and {CMK} can still be used efficiently without them.
+Some large organizations have a sort of control panel in which an operations team has the {CMK} interface constantly under observation, and thus additional notifications are unnecessary.
+If your {CMK} environment is still under construction, it should be considered that notifications will only be of help to your colleagues when no -- or only occasional -- *false alarms* (false positives) are produced.
+One first needs to come to grips with the threshold values and all other settings, so that all states are {OK} / {UP} -- or in other words: everything is *‘green’*.
+
+Acceptance of the new monitoring will quickly fade if every day the inbox is flooded with hundreds of useless emails.
+
+The following procedure has been proven to be effective for the fine-tuning of notifications:
+
+*Step 1*: Fine-tune the monitoring, on the one hand, by fixing any actual problems newly uncovered by {CMK} and, on the other hand, by eliminating false alarms.
+Do this until everything is ‘normally’ {OK} / {UP}.
+See the xref:intro_finetune#filesystems[Beginner's guide] for some recommendations for reducing typical false alarms.
+
+*Step 2*: Next switch the notifications to be active only for yourself.
+Reduce the ‘static’ caused by sporadic, short duration problems.
+To do this, adjust further threshold values, use xref:predictive_monitoring#[predictive monitoring] if necessary, increase the xref:repeated_check_attempts[number of check attempts] or try xref:delaying[delayed notifications].
+And of course if genuine problems are responsible, attempt to get these under control.
+
+*Step 3*: Once your own inbox is tolerably peaceful, activate the notifications for your colleagues.
+Create efficient contact groups so that each contact only receives notifications relevant to them.
+
+These procedures will result in a system which provides relevant information that assists in reducing outages.
+
+
+[#simple_mail]
+== Simple notifications by email
+
+An email notification sent by {CMK} in HTML format looks something like this:
+
+[{image-border}]
+image::html_notification.png[alt="A notification by email."]
+
+As can be seen in the example, the email also contains the current xref:graphing#[readings] for the affected service.
+
+Before you receive such an email from {CMK}, a few preparations are necessary, as are described below.
+
+
+=== Prerequisites
+
+In the default {CMK} configuration, a user will receive notifications per email when the following prerequisites have been satisfied:
+
+ifdef::onprem[]
+* The {CMK} server has a functioning xref:smtp[setup for sending emails].
+* An email address is configured for the xref:wato_user#user_config[user].
+endif::[]
+* The user is a member of a xref:wato_user#contact_groups[contact group], and is therefore a contact.
+* A monitoring event occurs on a host or service assigned to this contact group, which triggers a notification.
+
+
+ifdef::onprem[]
+[#smtp]
+=== Setting up mail dispatching in Linux
+
+For the successful sending of emails, your {CMK} server must have a functioning SMTP-server configuration.
+Depending on your Linux distribution, this could utilize, for example, Postfix, Qmail, Exim, or Nullmailer.
+The configuration will be implemented with your Linux distribution’s resources.
+
+The configuration is generally confined to registering a ‘smarthost’ (also known as an SMTP relay server) to which all emails will be directed.
+This will then be your firm’s internal SMTP mail server.
+As a rule smarthosts don’t require authentication in a LAN -- which makes matters simple.
+In some distributions the smarthost will be queried during the installation.
+With the {CMK} appliance one can configure the smarthost conveniently via the xref:appliance_usage#cma_webconf_system_settings[web interface].
+
+You can test the sending of emails easily with the `mail` command on the command line.
+Because there are numerous different implementations for this command under Linux, for standardization {CMK} provides the version from the link:https://heirloom.sourceforge.net/mailx.html[Heirloom mailx^] project directly in the site user’s search path (as `~/bin/mail`).
+The corresponding configuration file is `~/etc/mail.rc`.
+The best way to test this is as a site user, since the notification scripts will later run with the same permissions.
+
+The email’s content is read from the standard input, the subject specified with `-s`, and the recipient’s address simply appended as an argument to the end of the command line:
+
+[{shell-raw}]
+----
+{c-omd} echo "content" | mail -s test-subject harry.hirsch@example.com
+----
+
+The email should be delivered without delay.
+If this doesn’t work, information can be found in the SMTP server’s log file in the `/var/log` directory (see xref:maillog[files and directories]).
+endif::[]
+
+
+ifdef::onprem[]
+=== Email address and contact groups
+
+A user’s email address and contact groups are defined in the xref:wato_user#user_config[user administration]:
+
+image::notifications_add_user.png[alt="Dialog for entering email address and selecting contact groups."]
+endif::[]
+
+ifdef::saas[]
+=== Contact groups
+
+A user’s contact groups are defined in the xref:wato_user#user_config[user administration]:
+
+image::notifications_edit_user_saas.png[alt="Dialog for selecting contact groups."]
+endif::[]
+
+In a freshly-generated {CMK} site, initially there is only the [.guihint]#Everything# contact group.
+Members of this group are automatically responsible for *all* hosts and services, and will be notified of every relevant monitoring event by email.
+
+
+[#ticketsystem]
+ifdef::onprem[]
+=== Special cases: Ticket system, messenger and event engine
+
+Instead of email or SMS, you can also send notifications to a ticket system (such as Jira or ServiceNow), a messenger (Slack, Mattermost) or an event engine (Event Console).
+endif::[]
+
+ifdef::saas[]
+=== Special cases: Ticket system and messenger
+
+Instead of email or SMS, you can also send notifications to a ticket system (such as Jira or ServiceNow) or a messenger (Slack, Mattermost).
+endif::[]
+There is a separate xref:notification_method[notification method] for each of these special cases, which can be selected in the notification rule.
+However, you must note the following two points when creating the rule:
+
+include::include_ticketsystem.asciidoc[]
+
+
+[#notification_testing]
+=== Testing notification rules
+
+For testing notification rules, {CMK} offers a smart tool with [.guihint]#Test notifications#.
+You can use it to simulate a notification for a host or service and recognize which of your notification rules are effective.
+In addition to the simulation, you can also have the notification sent.
+
+The quickest way to access the notification test is via [.guihint]#Setup > Events > Notifications# and the [.guihint]#Test notifications# button.
+In addition, there are other options for calling from some views in Monitoring (service list and service details) and in the Setup (host properties), in each case in the menu [.guihint]#Host > Test notifications#.
+
+image::notifications_test.png[alt="Dialog for defining the properties of the simulated notification."]
+
+First, click on one of the two buttons to decide whether the notification is for a [.guihint]#Host# or a [.guihint]#Service#.
+Then select which host or service it should be.
+You can add a description of the event to [.guihint]#Plugin output#.
+As the event you can select a state change or the start of a xref:glossar#scheduled_downtime[scheduled downtime].
+Use the [.guihint]#Send out notification# checkbox to specify whether the notification is only simulated or actually sent.
+
+Finally, under [.guihint]#Advanced condition simulation# there are two further options with which you can define the time and number of notifications.
+This allows you to test notification rules that only apply during a certain period (e.g. outside of business hours) or that start an xref:repeat_escalate[escalation] after a specified number of repeated notifications.
+
+Click on [.guihint]#Test notifications# to start the test -- and also the dispatch, if you have selected this option.
+The [.guihint]#Test notifications# dialog is hidden and the results are shown:
+
+image::notifications_test_results1.png[alt="The summary of the simulation results."]
+
+First comes the summary.
+Under [.guihint]#Analysis results# you can see how many notification rules apply and how many notifications result from them.
+If you have selected _Send out notification_, the corresponding message `Notifications have been sent` is displayed here.
+This must then immediately lead to an email for this problem.
+
+The line below summarizes the notifications generated from your entries.
+By clicking on the icon:icon_toggle_context[alt="Icon for displaying the notification context."] icon, you can show the notification context.
+This allows you to see the environment variables and their values that are valid in the context of this notification. 
+
+The following two sections then show more details:
+
+image::notifications_test_results2.png[alt="The details of the simulation results."]
+
+Under [.guihint]#Resulting notifications# you can see to whom and how notifications are sent.
+You will also receive this information about the simulation if you have _not_ selected to send the notification.
+
+Under [.guihint]#Global notification rules# the notification rules are listed, which are presented in more detail in the xref:rules[next chapter].
+At this point, only the first column of the table is important, which uses icons to indicate which of the rules apply icon:icon_checkmark[alt="Symbol for displaying a positive status."] and which do not icon:icon_hyphen[alt="Symbol for displaying a negative status."].
+In the example, the first rule does not apply because it evaluates state changes of hosts, but the event is a state change of a service.
+
+[TIP]
+====
+As usual, you can continue to trigger notifications directly via the GUI as an alternative to testing notifications via simulation, e.g. with the [.guihint]#Send custom notification# and [.guihint]#Fake check results# xref:commands#[commands].
+====
+
+
+[#finetuning]
+=== Fine-tuning HTML email
+
+When sending HTML emails, you may wish to add additional information or flexibly define a reply address ([.guihint]#Reply to#) to a specific contact for any queries.
+For this, there is the [.guihint]#Setup > Services > Service monitoring rules > Parameters for HTML Email# rule, and in xref:notifications.html#notification_rule[notification rules] the HTML email notification method.
+With these rules you can add a number of parameters such as response address, additional fields with details or free text formatted as HTML.
+
+Note that in the [.guihint]#Add HTML section above table (e.g. title, description...)# field, for security reasons only a small set of HTML tags is allowed.
+These are:
+
+[cols="10,25,~",options="header"]
+|===
+|Tag |Function |Tips
+|`a` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/a[Anchor/Link^] |Permitted when combined with the `href` (mandatory) and `target` (optional) attributes. Links must either contain relative paths (i.e. start with `./` or `../`) or use one of the URL schemes `http`, `https` or `mailto`. We do not recommend using relative paths because of the very different handling by email clients.
+|`h1` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/h1[Heading 1^] |
+|`h2` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/h2[Heading 2^] |
+|`b` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/b[Bring Attention (usually bold)^] |
+|`tt` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/tt[Teletype (monospaced font)^] |Deprecated. Do not use this tag!
+|`i` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/i[Idiomatic (usually italic)^] |
+|`u` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/u[Unarticulated Annotation (usually underlined)^] |
+|`br` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/br[Break (Line Break)^] |
+|`nobr` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/nobr[Non-Breaking Text^] |Deprecated. Do not use this tag!
+|`pre` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/pre[Preformatted^] |Spaces and indentations are preserved.
+|`sup` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/sup[Superscript^] |
+|`p`  |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/p[Paragraph^] |
+|`hr` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/hr[Thematic Break (Horizontal Rule)^] |
+|`li` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/li[List Item^] |Use only within the following lists `ul` and `ol`.
+|`ul` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/ul[Unordered List^] |
+|`ol` |link:https://developer.mozilla.org/en-US/docs/Web/HTML/Element/ol[Ordered List^] |
+|===
+
+As usual with all rules in {CMK}, a very finely granulated application is possible, so that you can individualize a detailed set of notifications to hosts and services as required.
+
+
+[#rules]
+== Controlling notifications with rules
+
+=== The principle
+
+{CMK} is configured ‘by default’ so that when a monitoring event occurs a notification email is sent to every xref:wato_user#contact_groups[contact] for the affected host or service.
+This is certainly initially sensible, but in practice many further requirements arise, for example:
+
+* The suppression of specific, less useful notifications
+* The ‘subscription’ to notifications from services for which one is not a contact
+* A notification can be sent by email, SMS or pager, depending on the time of day
+* The escalation of problems when no xref:basics_ackn#[acknowledgment] has been received beyond a certain time limit
+* The option of NO notification for the {WARN} or {UNKNOWN} states
+* and much more{nbsp}...
+
+{CMK} provides you with maximum flexibility in implementing such requirements via its rule-based mechanism.
+You enter the configuration with [.guihint]#Setup > Events > Notifications#.
+
+ifdef::onprem[]
+[TIP]
+====
+When you call up the [.guihint]#Notification configuration# page for the first time, you will see a warning about the non-configured _"fallback email address"_.
+You can ignore this warning for the moment.
+We will go into this xref:fallback[below].
+====
+endif::[]
+
+In the notification configuration, you manage the *chain of notification rules,* which determine _who_ should be notified and _how_.
+When any monitoring event occurs this rule chain will be run through from _top to bottom_.
+Each rule has a condition that decides whether the rule actually applies to the situation in question.
+
+If the condition is satisfied the rule determines two things:
+
+* A selection of contacts (_Who_ should be notified?).
+* A notification method (_How_ to notify?), e.g. HTML email, and optionally, additional parameters for the chosen method.
+
+*Important:* In contrast to the xref:wato_rules#[rules] for hosts and services, here the evaluation also continues after the applicable rule has been satisfied.
+Subsequent rules can add further notifications.
+Notifications generated by preceding rules can also be xref:cancel[deleted].
+
+The end result of the rule evaluation will be table with a structure something like this:
+
+[cols="30,30,~",options="header"]
+|===
+|Who (contact) |How (method) |Parameters for the method
+|Harry Hirsch |Email |`Reply-To: \linux.group@example.com`
+|Bruno Weizenkeim |Email |`Reply-To: \linux.group@example.com`
+|Bruno Weizenkeim |SMS |
+|===
+
+Now, for each entry in this table the xref:scripts[notification script] which actually executes the user notification appropriate to the method will be invoked.
+
+
+ifdef::onprem[]
+=== Predefined rule
+
+If you have a freshly-installed {CMK}, precisely one rule will have been predefined:
+
+image::notifications_default_rule.png[alt="List with the predefined notification rule."]
+endif::[]
+
+ifdef::saas[]
+=== Predefined rules
+
+If you have a freshly-installed {CMK}, precisely two rules will have been predefined:
+
+image::notifications_default_rules_saas.png[alt="List with the predefined notification rules.",width=97%]
+endif::[]
+
+Such a rule is structured as follows:
+
+[cols="30,~"]
+|===
+ifdef::onprem[]
+|Condition |All status changes of hosts to {DOWN} and {UP}, and of services to {CRIT}, {WARN} and {OK}.
+endif::[]
+ifdef::saas[]
+|Condition |All status changes of hosts to {DOWN}, {UP} and {UNREACH}, and of services to {CRIT} and {UNKNOWN}, among others.
+endif::[]
+|Method |Sends an email in HTML format (with embedded metric graphs).
+|Contact |All contacts of the affected host/service.
+|===
+
+As usual, you can edit the rule icon:icon_edit[], clone (copy) it icon:icon_clone[], delete it icon:icon_delete[alt="Icon to delete."], or create a new rule.
+Once you have more than a single rule, you can change their processing order by dragging and dropping them with the icon:icon_drag[] icon.
+
+[TIP]
+====
+Changes to notification rules do *not* require activation of the changes,
+rather they take effect immediately.
+====
+
+
+[#notification_rule]
+=== Structure of the notification rules
+
+In the following, we present the general structure of the notification rules with the definitions of general properties, methods, contacts and conditions.
+
+
+==== General properties
+
+As with all rules in {CMK}, here you can include a description and a commentary for the rule, or even temporarily deactivate the rule.
+
+image::notifications_rule_part1.png[alt="Rule with the option to enable disabling of notifications by users."]
+
+The option [.guihint]#Overriding by users# is activated by default.
+It allows users to 'unsubscribe' from notifications generated by this rule.
+We show how to do this with the xref:personal[custom notifications].
+
+
+[#notification_method]
+==== Notification method
+
+The notification method specifies the technique to be used for sending the notification., e.g. with HTML email.
+
+image::notifications_rule_part2.png[alt="Rule with notification method options."]
+
+Each method is realized using a script.
+ifdef::onprem[]
+{CMK} includes a number of xref:includedscripts[scripts].
+You can also quite easily write your xref:scripts[custom scripts] in any desired programming language in order to implement special notifications -- for example, to redirect a notification to your own ticket system.
+endif::[]
+ifdef::saas[]
+{CMK} includes a number of xref:scripts[scripts].
+endif::[]
+
+A method can include parameters -- such as allowing the method that sends ASCII and HTML emails to explicitly set the sender’s address (`From:`) for example.
+
+Before making settings directly in the notification rule, one should know that parameters for the notification methods can also be specified via xref:wato_rules#[rules] for hosts and services:
+Under [.guihint]#Setup > Services > Service monitoring rules#, in the [.guihint]#Notifications# section, you will find a rule set for each notification method, which you can use to define the same settings -- and as usual, can be dependent on the host or service.
+
+Parameter definitions in notification rules enable these settings to be varied in individual cases.
+So you can, for example, define a global subject for your email, but also define an alternative subject with an individual notification rule.
+
+Instead of parameters you can also select [.guihint]#Cancel previous notifications# –
+with which all of this method’s notifications from prior rules will be deleted.
+For more on this, see the topic xref:cancel[deleting notifications].
+
+[TIP]
+====
+For many notification methods for forwarding to other systems, you will find more detailed information in separate articles.
+he list of articles can be found in the chapter on
+ifdef::onprem[]
+xref:includedscripts[notification scripts].
+endif::[]
+ifdef::saas[]
+xref:scripts[notification scripts].
+endif::[]
+====
+
+
+==== Selecting contacts
+
+The most common procedure is for notifications to be sent to all users who have been registered as a xref:wato_user#add_host_to_contact_group[contact] for the respective host/service.
+This is the ‘normal’ and logical procedure, since it is also via the contacts that it is defined which objects each user receives in their GUI display -- in effect those objects for which the user is responsible.
+
+You can tick several options in the contact selection and thus extend the notification to more contacts:
+
+image::notifications_rule_part3.png[alt="Rule with contact selection options."]
+
+{CMK} will automatically delete duplicate contacts.
+In order for the rule to make sense at least one selection must be made.
+
+The two [.guihint]#Restrict by...# options function somewhat differently.
+Here the contacts selected with the other options will again be _restricted_.
+With these you can also create an AND-operator between contact groups, for example, to enable notifications to be sent to all contacts who are members of both the `Linux` and `Data center` groups.
+
+By entering [.guihint]#Explicit email addresses# you can notify persons who are not in fact nominated as users in {CMK}.
+This of course only makes sense when used in the notification method that actually sends emails.
+
+If, in the chosen method, you have selected [.guihint]#Cancel previous notifications#, the notifications will only be deleted for the contact selected here.
+
+[TIP]
+====
+When using
+ifdef::onprem[]
+a ticket system, a messenger or an event engine
+endif::[]
+ifdef::saas[]
+a ticket system or a messenger
+endif::[]
+as notification method, you should also observe the notes on these xref:ticketsystem[special cases].
+====
+
+
+[#rule_conditions]
+==== Conditions
+
+Conditions determine when a rule will be used. For comprehension it is important to remember that the source is always a monitoring event on a concrete host or service.
+
+The conditions address
+
+* the object's static attributes – e.g., whether the service name contains the `/tmp` text,
+* with the current state or the change of the state, e.g. whether the service has just changed from {OK} to {CRIT},
+* or with completely different things, e.g., whether the 'working time'xref:glossar#time_period[time period] is currently active.
+
+There are two important points to consider when setting the conditions:
+
+. If no conditions have been defined the rule will take effect for *every* monitoring event.
+. As soon as you select even a single condition, the rule takes effect only if *all* conditions are met.
+All selected conditions are linked with AND.
+There is only one exception to this important rule, which we will discuss later and not consider now.
+
+This means that you should pay very close attention to whether the conditions you have chosen can be met at the same time so that a notification is triggered for the desired case. 
+
+Let's say you want a notification to be triggered when a monitoring event occurs for a service starting with the name `NTP` on a host in the [.guihint]#Main# folder:
+
+image::notifications_rule_part4.png[alt="Rule containing the conditions for creating a notification."]
+
+Suppose further that this condition is now *extended* by also notifying all state changes of a host to the {DOWN} state:
+
+image::notifications_rule_part4_match_host_types.png[alt="Rule with extended conditions for creating a notification."]
+
+The result of this notification rule with the three single conditions is that *never* a notification will occur, because no monitoring event will contain the state change of a host *and* the service name with `NTP`.
+
+The following note is repeated in this User guide from time to time. However, in connection with the configuration of your notifications, it should be emphasized again:
+Show the context-sensitive help with [.guihint]#Help > Show inline help# to get details about the effect of the various conditions.
+The following excerpt from the context-sensitive help for the [.guihint]#Match services# option illustrates the behavior very well: "_Note: Host notifications will never match this rule, if this option is being used._"
+
+
+[discrete]
+==== The exception to the AND operation
+
+Only if a monitoring event satisfies all configured conditions, the notification rule will apply. 
+As mentioned above, there is one important exception to this general rule: for the [.guihint]#Match host event type# and [.guihint]#Match service event type# conditions:
+
+image::notifications_rule_part4_match_event_types.png[alt="The conditions 'Match host event type' and 'Match service event type'."]
+
+Should you select *only* [.guihint]#Match host event type#, the rule will match no single service event. 
+Similarly, this applies to the selection of [.guihint]#Match service event type# and host events. 
+Should you activate *both* conditions however, the rule will match if the event type is activated in *any* of the two checkbox lists.
+In this exceptional case these conditions will thus not be linked with a logical ‘AND’, but rather with an ‘OR’.
+In this way you can simply administer host and service notifications with a single rule.
+
+A further tip regarding the [.guihint]#Match contacts# and [.guihint]#Match contact groups# conditions:
+
+image::notifications_rule_part4_contacts.png[alt="The conditions 'Match contacts' and 'Match contact groups'."]
+
+The condition checked here is whether the host/service in question has a certain contact assignment.
+This can be used to implement functions such as "Host notifications in the contact group Linux should never be sent by SMS".
+This has nothing to do with the contact selection described above.
+
+
+[#cancel]
+=== Canceling notifications
+
+As already mentioned in the selection of the notification method, you will also find the selection option [.guihint]#Cancel previous notifications#.
+In order to be able to understand the functioning of such a rule, it is best to visualize the notification table.
+Assuming the processing of the rules for a concrete monitoring event is partly complete, and that due to a number of rules the following three notifications have been triggered:
+
+[cols=2,options="header"]
+|===
+|Who (contact) |How (method)
+|Harry Hirsch |Email
+|Bruno Weizenkeim |Email
+|Bruno Weizenkeim |SMS
+|===
+
+Now comes a next rule with the [.guihint]#SMS# method and the [.guihint]#Cancel previous notifications# selection.
+The contact selection chooses the 'Windows' group, in which Bruno Weizenkeim is a member.
+As a result of this rule, the entry 'Bruno Weizenkeim / SMS' is removed from the table, which then looks like this:
+
+[cols=2,options="header"]
+|===
+|Who (contact) |How (method)
+|Harry Hirsch |Email
+|Bruno Weizenkeim |Email
+|===
+
+Should a subsequent rule again define an SMS notification for Bruno, then this rule will have priority and the SMS will be added anew to the table.
+
+To summarize:
+
+* Rules can suppress (delete) specific notifications.
+* Deletion rules must come after the rules that create the notifications.
+* A deletion rule does not actually ‘delete’ a preceding rule, rather it suppresses the notifications that are generated by (possibly multiple) preceding rules.
+* Subsequent rules can reinstate the previously suppressed notifications.
+
+
+ifdef::onprem[]
+[#fallback]
+=== What happens if no rule is applicable?
+
+One who configures can also make errors.
+One possible error in the notification configuration could be that a critical monitoring problem is discovered, but not a single notification rule takes effect.
+
+To protect you from such a case, {CMK} offers the setting [.guihint]#Fallback email address for notifications#.
+This can be found under [.guihint]#Setup > General > Global settings# in the section [.guihint]#Notifications#.
+Enter an email address here.
+This email address will then receive notifications for which no notification rule applies.
+
+*Note:* Alternatively, you can also make a user the recipient in his xref:wato_user.html#user_config_notifications[personal settings]. 
+The email address stored with the user is used as the fallback address.
+
+The fallback address will however only be used if *no rule* applies, not when no
+notification has been triggered! As we showed in the previous chapter, the
+explicit suppression of notifications is desired -- it is not a configuration
+error.
+
+The entry of a fallback address will be ‘recommended’ on the [.guihint]#Notification configuration# page with an onscreen warning:
+
+image::notifications_warning_fallback_email.png[alt="Warning that no fallback email address is stored."]
+
+If - for whatever reason - you only want to get rid of the warning, but at the same time do *not* want to receive emails at the fallback address, first enter a fallback address anyhow and then create a new rule as the _first rule_, which deletes all previous notifications.
+This rule is ineffective on the notification configuration, as no notifications have been created here yet.
+But with this you can ensure that at least one rule will always apply, thus allowing this warning to be eliminated.
+
+We explicitly advise against this approach, as you may overlook gaps in your rule chain.
+endif::[]
+
+
+[#personal]
+== Custom notifications
+
+=== Overview
+
+A useful feature in {CMK}’s notification system is the one with which users -- even without administrator rights -- can customize notifications.
+Users can:
+
+* Add notifications they would not otherwise receive (‘subscribe’)
+* Delete notifications they would otherwise receive (if not restricted)
+* Customize notification parameters
+* Completely disable their notifications altogether
+
+
+=== Custom notification rules
+
+The entry point from the user's point of view is the xref:user_interface#user_menu[User menu], and there the entry [.guihint]#Notification rules#.
+On the [.guihint]#Your personal notification rules# page, a new rule can be created with [.guihint]#Add rule#.
+
+Custom rules are structured like the normal rules -- with one difference: they do not contain a contact selection.
+The user himself is automatically selected as the contact.
+This means that a user can only add or delete notifications for himself.
+
+However, the user can only delete notifications if the [.guihint]#allow users to deactivate this notification# option is activated in the rule that creates them:
+
+image::notifications_rule_part1.png[alt="Rule with the option to enable disabling of notifications by users."]
+
+In the order of notification rules, the custom rules always come _after_ the global rules and so can adjust the notification table that has been generated so far.
+So, except for the deletion blocking just described, the global rules always apply as the default setting that can be customized by the user.
+
+ifdef::onprem[]
+If you want to prevent customization altogether, you can revoke the xref:wato_user#roles[permission] [.guihint]#General Permissions > Edit personal notification settings# of the `user` role.
+endif::[]
+
+As an administrator, you can display all user rules by selecting [.guihint]#Setup > Events >Notifications#, and then the [.guihint]#Display > Show user rules# menu entry:
+
+image::notifications_show_user_roles.png[alt="List of user rules from an administrator's point of view."]
+
+After the global rules, the user rules are listed, which you can also edit with icon:icon_edit[].
+
+
+=== Temporarily disabling notifications
+
+ifdef::onprem[]
+The complete disabling of notifications by a user is protected with the xref:wato_user#roles[permission] [.guihint]#General Permissions > Disable all personal notifications#, which is set to `no` for the user role `user` by default.
+A user will only see the corresponding checkboxes in his personal settings if you explicitly assign this right to the `user` role:
+
+image::notifications_edit_profile_disable.png[alt="Personal setting to temporarily disable notifications."]
+
+As an administrator with access to the user’s personal settings, you can carry out disablement actions on the user’s behalf -- even if the permission as described above is not present.
+You can find this setting under [.guihint]#Setup > Users > Users# and then in the properties of the user profile.
+endif::[]
+
+ifdef::saas[]
+As an administrator with access to the user’s personal settings, you can carry out disablement actions on the user’s behalf.
+You can find this setting under [.guihint]#Setup > Users > Users# and then in the properties of the user profile as [.guihint]#Personal settings > Disable notifications#.
+endif::[]
+
+With this, for example, you can very quickly silence a holidaying colleague's notifications -- without needing to alter the actual configuration.
+
+
+[#conditions]
+== When notifications are generated and how to deal with them
+
+=== Introduction
+
+A large part of the {CMK} notification system’s complexity is due to its numerous tuning options, with which unimportant notifications can be avoided.
+Most of these will be situations in which notifications are already being delayed or suppressed when they occur.
+Additionally, the monitoring core has a built-in intelligence that suppresses certain notifications by default.
+We would like to address all of these aspects in this chapter.
+
+
+=== Scheduled downtimes
+
+[{image-left}]
+image::notifications_large_icon_downtime.png[alt="Scheduled downtime icon.",width=50]
+
+When a host or service is in a xref:glossar#scheduled_downtime[scheduled downtime] the object’s notifications will be suppressed.
+This is – alongside a correct evaluation of availabilities -- the most important reason for the actual provision of downtimes in monitoring.
+The following details are relevant to this:
+
+* If a host is flagged as having a scheduled downtime, then all of its services will also be automatically in scheduled downtime – without an explicit entry for them needing to be entered.
+* Should an object enter a problem state _during_ a scheduled downtime, when the downtime ends as planned this problem will be retroactively notified precisely at the end of the downtime.
+* The beginning and the end of a scheduled downtime is itself a monitoring event which will be notified.
+
+
+=== Notification periods
+
+[{image-left}]
+image::notifications_large_icon_outofnot.png[alt="Icon of an inactive notification period.",width=50]
+
+You can define a notification period for each host and service during configuration.
+This is a xref:glossar#time_period[time period] which defines the time frame within which the notification should be constrained.
+
+The configuration is performed using the [.guihint]#Monitoring Configuration > Notification period for hosts#, or respectively the [.guihint]#Notification period for services# rule set, which you can quickly find via the xref:user_interface#search_setup[search in Setup menu].
+An object that is not currently in a notification period will be flagged with a gray pause icon icon:icon_outofnot[alt="Icon of an inactive notification period."].
+
+Monitoring events for an object that is not currently in its notification period will not be notified.
+Such notifications will be ‘reissued’ when the notification period is again active – if the host/service is still in a problem state.
+Only the latest state will be notified even if multiple changes to the object’s state have occurred during the time outside the notification period.
+
+Incidentally, in the notification rules it is also possible to restrict a notification to a specific time period.
+In this way you can _additionally_ restrict the time ranges.
+However, notifications that have been discarded due to a rule with time conditions will *not* automatically be repeated later!
+
+
+[#state_host]
+=== The state of the host on which a service is running
+
+If a host has completely failed, or is at least inaccessible to the monitoring, then obviously its services can no longer be monitored.
+xref:active_checks#[Active checks] will then as a rule register {CRIT} or {UNKNOWN}, since these will be actively attempting to access the host and will thereby run into an error.
+In such a situation all other checks -- thus the great majority -- will be omitted and will thus remain in their old state.
+These will be flagged with the [.guihint]#stale# time icon icon:icon_stale[].
+
+It would naturally be very cumbersome if all active checks in such a state were to notify their problems.
+For example, if a web server is not reachable – and this has already been notified – it would not be very helpful to additionally generate an email for every single one of its dependent HTTP services.
+
+To minimize such situations, as a basic principle the monitoring core only generates notifications for services if the host is in the {UP} state.
+This is also the reason why host accessibility is separately verified.
+If not otherwise configured, this verification will be achieved with a xref:cmc_differences.html#smartping[Smart Ping] or ping.
+
+ifdef::onprem[]
+{cre-only}
+If you are using {RE} (or one of the commercial editions with a Nagios core), in isolated cases it can nonetheless occur that a host problem
+generates a notification for an active service.
+The reason for this is that Nagios regards the results of host checks as still being valid for a short time into the future.
+If even only a few seconds have elapsed between the last successful ping to the server and the next active check, Nagios can still assess the host as {UP} even though it is in fact {DOWN}.
+In contrast, the xref:cmc#[{CMK} Micro Core (CMC)] will hold the service notification in a ‘standby’ mode until the host state has been verified, thus reliably minimizing undesired notifications.
+endif::[]
+
+
+[#parents]
+=== Parent hosts
+
+Imagine that an important network router to a company location with hundreds of hosts fails.
+All of its hosts will then be unavailable to the monitoring and become {DOWN}.
+Hundreds of notifications will therefore be triggered.
+Not good.
+
+In order to avoid such problems the router can be defined as a xref:hosts_structure#parents[parent host] for its hosts.
+If there are redundant hosts, multiple parents can also be defined.
+As soon as all parents enter a {DOWN} state, the hosts that are no longer reachable will be flagged with the {UNREACH} state and their notifications will be suppressed.
+The problem with the router itself will of course still be notified.
+
+ifdef::onprem[]
+{cee-only}
+By the way, the CMC operates internally in a slightly different manner to Nagios.
+endif::[]
+In order to reduce false alarms, but still process genuine notifications, the xref:cmc#[CMC] pays very close attention to the exact times of the relevant host checks.
+If a host check fails the core will wait for the result of the host check on the parent host before generating a notification.
+This wait is asynchronous and has no effect on the general monitoring.
+Notifications from hosts can thereby be subject to minimal delays.
+
+
+=== Disabling notifications using rules
+
+With the [.guihint]#Enable/disable notifications for hosts#, or respectively, the [.guihint]#Enable/disable notifications for services# rule sets you can specify hosts and services for which generally no notifications are to be issued.
+As mentioned above the core then suppresses notifications.
+A subsequent notification rule that ‘subscribes’ to notifications for such services will be ineffective, as the notifications are simply not generated.
+
+
+=== Disabling notifications using commands
+
+[{image-left}]
+image::notifications_large_icon_notif_man_disabled.png[alt="Icon of a disabled notification.",width=50]
+
+It is also possible to temporarily disable notifications for individual hosts or services via a xref:commands.html[command].
+
+However, this requires that the xref:wato_user#roles[permission] [.guihint]#Commands on host and services > Enable/disable notifications# is assigned to the user role. By default, this is not the case for *any* role.
+
+With the assigned permission, you can disable (and later enable) notifications from hosts and services with the [.guihint]#Commands > Notifications# command:
+
+image::notifications_commands_disable.png[alt="Command to enable and disable notifications."]
+
+Such hosts or services will then be marked with an icon:icon_notif_man_disabled[] icon.
+
+Since commands -- in contrast to rules -- require neither configuration permissions nor an xref:wato#activate_changes[activate changes], they can be a quick workaround for reacting promptly to a situation.
+
+*Important:* In contrast to icon:icon_downtime[] scheduled downtimes, disabled notifications have no influence on the xref:availability#[availability] evaluations.
+If during an unplanned outage you really only want to disable the notifications without wishing to distort the availability statistics,
+you should not register a scheduled downtime!
+
+
+[#global]
+=== Disabling notifications globally
+
+In the [.guihint]#Master control# snap-in in the sidebar you will find a master switch for [.guihint]#Notifications#:
+
+image::notifications_master_control.png[alt="Master control snap-in.",width=50%]
+
+This switch is incredibly useful if you plan to make bigger system changes, during which an error could under the circumstances force many services into a {CRIT} state.
+You can use the switch to avoid upsetting your colleagues with a flood of useless emails.
+Remember to re-enable the notifications when you are finished.
+
+ifdef::onprem[]
+Each site in a xref:distributed_monitoring#[distributed monitoring] has one of these switches.
+Switching off the central site’s notifications still allows remote sites to activate notifications -- even though these are directed to and delivered from the central site.
+endif::[]
+
+*Important:* Notifications that would have been triggered during the time when notifications were disabled will *not* be repeated later when they are re-enabled.
+
+
+[#delaying]
+=== Delaying notifications
+
+You may possibly have services that occasionally enter a problem state for short periods, but the stops are very brief and are not critical for you.
+In such cases notifications are very annoying, but are easily suppressed.
+The [.guihint]#Delay host notifications# and [.guihint]#Delay service notifications# rule sets serve this situation.
+
+You specify a time in minutes here -- and a notification will be delayed until this time has expired.
+Should the {OK} / {UP} state occurs again before then, no notification will be triggered.
+Naturally this also means that the notification of a _genuine_ problem will be delayed.
+
+Obviously even better than delaying notifications would be the elimination of the actual cause of the sporadic problems -- but that is of course another story...
+
+
+[#repeated_check_attempts]
+=== Repeated check attempts
+
+Another very similar method for delaying notifications is to allow multiple check attempts when a service enters a problem state.
+This is achieved with the [.guihint]#Maximum number of check attempts for hosts#, or respectively, the [.guihint]#Maximum number of check attempts for service# rule set.
+
+If you set a value of `3` here, for example, a check with a {CRIT} result will at first not trigger a notification.
+This is referred to as a {CRIT} _soft state_.
+The _hard state_ remains {OK}.
+Only if three successive attempts return a not-{OK}-state will the service switch to the hard state and a notification be triggered.
+
+In contrast to delayed notifications, here you have the option of defining views so that such problems are not displayed.
+A xref:bi#[BI aggregate] can also be constructed so that only hard states are included -- not soft ones.
+
+
+[#flapping]
+=== Flapping hosts and services
+
+[{image-left}]
+image::notifications_large_icon_flapping.png[alt="Icon indicating flapping state.",width=50]
+
+When a host or service frequently changes its state over a short time it is regarded as _flapping_.
+This is an actual state.
+The principle here is the reduction of excessive notifications during phases when a service is not (quite) running stably.
+Such phases can also be specially evaluated in the xref:availability#[availability statistics].
+
+Flapping objects are marked with the icon:icon_flapping[alt="Icon indicating flapping state."] icon.
+As long as an object is flapping, successive state changes trigger no further notifications.
+A notification will however be triggered whenever the object enters or leaves the flapping state.
+
+The system’s recognition of flapping can be influenced in the following ways:
+
+* The [.guihint]#Master control# has a main switch for controlling the detection of flapping ([.guihint]#Flap Detection#).
+* You can exclude objects from detection by using the [.guihint]#Enable/disable flapping detection for hosts#, or respectively, the [.guihint]#Enable/disable flapping detection for services# rule set.
+ifdef::onprem[]
+* In the commercial editions, using 
+endif::[]
+ifdef::saas[]
+* Using 
+endif::[]
+[.guihint]#Global settings > Monitoring core > Tuning of flap detection# you can define the parameters for flapping detection and set them to be more or less sensitive:
+
+image::notifications_tuning_flap_detection.png[alt="Global settings for flap detection handling."]
+
+Show the context sensitive help with [.guihint]#Help > Show inline help# for details on the customizable values.
+
+
+[#repeat_escalate]
+=== Periodically-repeated notifications and escalation
+
+For some systems, it can make sense not to leave it to a single notification when a problem persists over a longer time frame, for example, for hosts whose xref:glossar#host_tag[host tag] [.guihint]#Criticality# is set to [.guihint]#Business critical#.
+
+
+==== Set up periodically-repeated notifications
+
+{CMK} can be set up so that successive notifications are issued at fixed intervals, until either the problem has been icon:icon_ack[alt="Icon to indicate acknowledgment."] xref:basics_ackn#[acknowledged] or solved.
+
+The setting for this can be found in the [.guihint]#Periodic notifications during host problems#, or respectively, the [.guihint]#Periodic notifications during service problems# rule set:
+
+image::notifications_periodic.png[alt="Rule for periodically-repeated notifications."]
+
+Once this option is active, for a persistent problem, {CMK} will trigger regular notifications at the configured intervals.
+These notifications will receive an incrementing number beginning with 1 (for the initial notification).
+
+Periodic notifications are not only useful for reminding about a problem (and _annoying_ the operator), they also provide a basis for _escalations_ 
+-- meaning that after a defined time a notification can be escalated to other recipients.
+
+
+==== Set up escalations and understand them
+
+To set up an escalation, create an additional notification rule which uses the [.guihint]#Restrict to notification number# condition.
+
+image::notifications_escalation.png[alt="Rule for setting the frequency of notifications."]
+
+If you enter 3 to 99999 as the range for the sequential number, this rule takes effect from the third notification.
+The escalation can then be performed either by selecting another method, (e.g., SMS), or it can notify other persons (contact selection).
+
+With the [.guihint]#Throttle periodic notifications# option, after a given time the rate of notification repetition can be reduced so that, for example, in the beginning an email can be sent every hour, and later this can be reduced to one email per day.
+
+With multiple notification rules, you can build an escalation model.
+But how will this escalation then function in practice?
+Who is notified and when?
+Here is an example, implemented with one rule for periodically repeated notifications as well as three notification rules:
+For example:
+
+* In the event of a problem being detected in a service, a notification in the form of an email will be triggered every 60 minutes until the problem is either resolved or acknowledged.
+* Notifications one to five go to the two people responsible for the service.
+* Notifications six to ten are also sent to the relevant team leader.
+* From notification eleven on, a daily mail goes to the company management instead.
+
+At 9 o'clock in the morning, a problem occurs at the facility.
+The two responsible employees are notified of the problem but do not respond (for whatever reason).
+So at 10, 11, 12 and at 1 p.m. they each receive new emails.
+From the sixth notification at 2 p.m., the team leader now also receives an email -- nevertheless, the problem still does not change.
+At 3, 4, 5 and 6 p.m., further emails are sent to the team members and the team leader.
+
+At 7 p.m., the third escalation level takes effect:
+From now on, no more e-mails are sent to the team members or the team leader.
+Instead, the company management now receives an email every day at 7 p.m. until the problem is resolved.
+
+As soon as the problem has been fixed and the service in {CMK} goes back to {OK}, an 'all clear' is automatically sent to the last notified group of people:
+So in the example above, if the problem is fixed before 2 p.m., to the two team members; if the problem is fixed between 2 and 7 p.m., to the team members and the team leader; and after 7 p.m., only to the company management.
+
+
+[#path]
+== The path of a notification from beginning to end
+
+
+[#history]
+=== The notification history
+
+To get started, we will show you how to view the history of notifications at the host and service level in {CMK} to be able to track the notification process.
+
+A monitoring event that causes {CMK} to trigger a notification is, for example, the change of state of a service.
+You can manually trigger this state change with the [.guihint]#Fake check results# xref:commands#[command] for testing purposes.
+
+For a notification test, you can move a service from the {OK} state to {CRIT} in this way.
+If you now display the notifications for this service on the service details page with [.guihint]#Service > Service notifications#, you will see the following entries:
+
+image::notifications_list.png[alt="List of accumulated notifications for a service."]
+
+The most recent entry is at the top of the list. However, the first entry is at the bottom, so let's look at the individual entries from bottom to top:
+
+. The monitoring core logs the monitoring event of the state change.
+The icon:icon_alert_crit[] icon in the 1st column indicates the state ({CRIT} in the example).
+
+. The monitoring core generates a icon:icon_alert_cmk_notify[] _raw notification_.
+This is passed by the core to the notification module, which performs the evaluation of the applicable notification rules.
+
+. The evaluation of the rules results in a icon:icon_alert_notify[] _user notification_ to the user `hh` with the method `mail`.
+
+. The icon:icon_alert_notify_result[] _notification result_ shows that the email was successfully handed over to the SMTP server for delivery.
+
+To help in the correct understanding of the contexts for all of the various setting options and basic conditions, and to enable an accurate problem diagnosis when a notification appears or does not appear as expected, here we will describe all of the details of the notification process including all of the components involved.
+
+[TIP]
+====
+The notification history that we have shown above for a service can also be displayed for a host: on the host details page in the [.guihint]#Host# menu for the host itself ([.guihint]#Notifications of host# menu item) and also for the host with all its services ([.guihint]#Notifications of host & services#).
+====
+
+
+=== The components
+
+The following components are involved in the {CMK} notification system:
+
+ifdef::onprem[]
+[cols="30,~,25",options="header"]
+|===
+|Component |Function |Log file
+|Nagios |The monitoring core in {CRE} that detects monitoring events and generates raw notifications. |`~/var/log/nagios.log +
+~/var/nagios/debug.log`
+|xref:cmc#[{CMK} Micro Core (CMC)] |The monitoring core in the commercial editions that performs the same function as Nagios in {RE}. |`~/var/log/cmc.log`
+|Notification module |Processes the notification rules in order to create a user notification from a raw notification. It calls up the notification scripts. |`~/var/log/notify.log`
+|Notification spooler (commercial editions only) |Asynchronous delivery of notifications, and centralized notifications in distributed environments. |`~/var/log/mknotifyd.log`
+|Notification script |For every notification method there is a script which processes the actual delivery (e.g., generates and sends an HTML email). |`~/var/log/notify.log`
+|===
+endif::[]
+
+ifdef::saas[]
+[cols="30,~",options="header"]
+|===
+|Component |Function 
+|xref:cmc#[{CMK} Micro Core (CMC)] |The monitoring core that detects monitoring events and generates raw notifications.
+|Notification module |Processes the notification rules in order to create a user notification from a raw notification.
+It calls up the notification scripts.
+|Notification script |For every notification method there is a script which processes the actual delivery (e.g., generates and sends an HTML email).
+|===
+endif::[]
+
+
+=== The monitoring core
+
+==== Raw notifications
+
+As described above, every notification begins with a monitoring event in the monitoring core.
+If all conditions have been satisfied and a ‘green light’ for a notification can be given, the core generates a _raw notification_ to the internal `check-mk-notify` help contact.
+The raw notification doesn’t yet contain details of the actual contacts or of the notification method.
+
+The raw notification looks like this in the service’s notification history:
+
+image::notifications_raw.png[alt="A raw notification in the notification history."]
+
+* The icon is a icon:icon_alert_cmk_notify[] light-gray loudspeaker
+* `check-mk-notify` is given as the contact.
+* `check-mk-notify` is given as the notification command.
+
+The raw notification then passes to the {CMK} notification module, which processes the notification rules.
+ifdef::onprem[]
+This module is called up as an external program by Nagios (`cmk --notify`).
+endif::[]
+The CMC keeps the module on standby as a permanent auxiliary process (_notification helper_), thus reducing process-creation and saving machine time.
+
+
+ifdef::onprem[]
+==== Error diagnosis in the Nagios monitoring core
+
+{cre-only}
+The Nagios core used in {CRE} logs all monitoring events to `~/var/log/nagios.log`.
+This file is simultaneously the location where it stores the notification history -- which is also queried using the
+GUI if, for example, you wish to see a host’s or service’s notifications.
+
+More interesting however are the messages you find in the `~/var/nagios/debug.log` file which you receive if you set the `debug_level`
+variable to `32` in `etc/nagios/nagios.d/logging.cfg`.
+
+Following a core restart{nbsp}...
+
+[{shell}]
+----
+{c-omd} omd restart nagios
+----
+
+&#8230; you will find useful information on the reasons notifications were created or suppressed:
+
+.~/var/nagios/debug.log
+[{file}]
+----
+[1592405483.152931] [032.0] [pid=18122] ** Service Notification Attempt ** Host: 'localhost', Service: 'backup4', Type: 0, Options: 0, Current State: 2, Last Notification: Wed Jun 17 16:24:06 2020
+[1592405483.152941] [032.0] [pid=18122] Notification viability test passed.
+[1592405485.285985] [032.0] [pid=18122] 1 contacts were notified.  Next possible notification time: Wed Jun 17 16:51:23 2020
+[1592405485.286013] [032.0] [pid=18122] 1 contacts were notified.
+----
+
+
+==== Error diagnosis in the CMC monitoring core
+
+{cee-only}
+In the commercial editions you can find a protocol from the monitoring core in the `~/var/log/cmc.log` log file.
+In the standard installation this file contains no information regarding notifications.
+You can however activate a very detailed logging function with [.guihint]#Global settings > Monitoring Core > Logging of the notification mechanics.#
+The core will then provide information on why -- or why not (yet) -- a monitoring event prompts it to pass a notification to the notification system:
+
+[{shell}]
+----
+{c-omd} tail -f var/log/cmc.log
++2021-08-26 16:12:37 [5] [core 27532] Executing external command: PROCESS_SERVICE_CHECK_RESULT;mysrv;CPU load;1;test
++2021-08-26 16:12:43 [5] [core 27532] Executing external command: LOG;SERVICE NOTIFICATION: hh;mysrv;CPU load;WARNING;mail;test
++2021-08-26 16:12:52 [5] [core 27532] Executing external command: LOG;SERVICE NOTIFICATION RESULT: hh;mysrv;CPU load;OK;mail;success 250 - b'2.0.0 Ok: queued as 482477F567B';success 250 - b'2.0.0 Ok: queued as 482477F567B'
+----
+
+*Note:* Turning on logging to notifications can generate a lot of messages.
+It is however useful when one later asks why a notification was _not_ generated in a particular situation.
+endif::[]
+
+
+[#rule_analysis]
+=== Rule evaluation by the notification module
+
+Once the core has generated a raw notification, this runs through the chain of notification rules – resulting in a table of notifications.
+Alongside the data from the raw notification, every notification contains the following additional information:
+
+* The contact to be notified
+* The notification method
+* The parameters for this method
+
+In a synchronous delivery, for every entry in the table an appropriate xref:scripts[notification script] will now be executed.
+ifdef::onprem[]
+In an xref:async[asynchronous delivery] a notification will be passed as a file to the notification spooler.
+endif::[]
+
+
+==== Analysis of the rule chain
+
+When you create more complex rule regimes the question of which rules will apply to a specific notification will certainly come up.
+For this {CMK} provides a built-in analysis function on the [.guihint]#Notifications configuration# page, which you can reach with the [.guihint]#Display > Show analysis# menu item.
+
+In the analysis mode, by default the last ten raw notifications generated by the system and processed through the rules will be displayed:
+
+image::notifications_analysis.png[alt="List of the last 10 raw notifications in analysis mode."]
+
+Should you need to analyze a larger number of raw notifications, you can easily increase the number stored for analysis via [.guihint]#Global settings > Notifications > Store notifications for rule analysis#:
+
+image::notifications_storenotifications.png[alt="Global setting for the number of raw notifications displayed."]
+
+For each of these raw notifications three actions will be available to you:
+
+[cols="10,~"]
+|===
+
+|icon:icon_analyze[alt="Icon to test the rule chain."] |Tests the rule chain, in which every rule will be checked if all conditions for the rule have been satisfied for the selected monitoring event. The resulting table of notifications will be displayed with the rules.
+|icon:icon_toggle_context[alt="Icon to display the notification context."] |Displays the complete notification context.
+|icon:icon_reload_cmk[alt="Raw notification reload icon."] |Repeats this raw notification as if it has just appeared. Otherwise the display is the same as in the analysis. With this you can not only check the rule’s conditions, but also test how a notification looks visually.
+|===
+
+
+==== Error diagnosis
+
+If you have performed the rule chain test (icon:icon_analyze[alt="for testing the rule chain."]), you can see which rules icon:icon_test_green[alt="Symbol in green".] have been applied or icon:icon_test_grey[alt="Symbol in gray".] have not been applied to a monitoring event:
+
+image::notifications_test_rules.png[alt="List of applied and not applied rules."]
+
+If a rule was not applied, move the mouse over the gray circle to see the hint (mouse-over text):
+
+image::notifications_mouseover.png[alt="Hint when a rule has not been applied.",width=72%]
+
+However, this mouse-over text uses abbreviations for the causes a rule was not applied.
+These refer to the [.guihint]#Match host event type# or [.guihint]#Match service event type# xref:rule_conditions[conditions] of the rule.
+
+[cols="10,33,~",options="header"]
+|===
+3+|Host event types
+|*Abbreviation* |*Meaning* |*Description*
+|`rd` |UP ➤ DOWN |Host state changed from {UP} to {DOWN}
+|`ru` |UP ➤ UNREACHABLE |Host state changed from {UP} to {UNREACH}
+|`dr` |DOWN ➤ UP |Host state changed from {DOWN} to {UP}
+|`du` |DOWN ➤ UNREACHABLE |Host state changed from {DOWN} to {UNREACH}
+|`ud` |UNREACHABLE ➤ DOWN |Host state changed from {UNREACH} to {DOWN}
+|`ur` |UNREACHABLE ➤ UP |Host state changed from {UNREACH} to {UP}
+|`?r` |any ➤ UP |Host state changed from any state to {UP}
+|`?d` |any ➤ DOWN |Host state changed from any state to {DOWN}
+|`?u` |any ➤ UNREACHABLE |Host state changed from any state to {UNREACH}
+|`f` |Start or end of flapping state |
+|`s` |Start or end of a scheduled downtime|
+|`x` |Acknowledgment of problem|
+|`as` |Alert handler execution, successful |
+|`af` |Alert handler execution, failed |
+|===
+
+[cols="10,33,~",options="header"]
+|===
+3+|Service event types
+|*Abbreviation* |*Meaning* |*Description*
+|`rw` |OK ➤ WARN |Service state changed from {OK} to {WARN}
+|`rr` |OK ➤ OK |Service state changed from {OK} to {OK}
+|`rc` |OK ➤ CRIT |Service state changed from {OK} to {CRIT}
+|`ru` |OK ➤ UNKNOWN |Service state changed from {OK} to {UNKNOWN}
+|`wr` |WARN ➤ OK |Service state changed from {WARN} to {OK}
+|`wc` |WARN ➤ CRIT |Service state changed from {WARN} to {CRIT}
+|`wu` |WARN ➤ UNKNOWN |Service state changed from {WARN} to {UNKNOWN}
+|`cr` |CRIT ➤ OK |Service state changed from {CRIT} to {OK}
+|`cw` |CRIT ➤ WARN |Service state changed from {CRIT} to {WARN}
+|`cu` |CRIT ➤ UNKNOWN |Service state changed from {CRIT} to {UNKNOWN}
+|`ur` |UNKNOWN ➤ OK |Service state changed from {UNKNOWN} to {OK}
+|`uw` |UNKNOWN ➤ WARN |Service state changed from {UNKNOWN} to {WARN}
+|`uc` |UNKNOWN ➤ CRIT |Service state changed from {UNKNOWN} to {CRIT}
+|`?r` |any ➤ OK |Service state changed from any state to {OK}
+|`?w` |any ➤ WARN |Service state changed from any state to {WARN}
+|`?c` |any ➤ CRIT |Service state changed from any state to {CRIT}
+|`?u` |any ➤ UNKNOWN |Service state changed from any state to {UNKNOWN}
+|===
+
+Based on these hints you can check and revise your rules.
+
+ifdef::onprem[]
+Another important diagnostic option is the log file `~/var/log/notify.log`.
+During tests with the notifications, the popular command `tail -f` is useful for this:
+
+[{shell}]
+----
+{c-omd} tail -f var/log/notify.log
+2021-08-26 17:11:58,914 [20] [cmk.base.notify] Analysing notification (mysrv;Temperature Zone 7) context with 71 variables
+2021-08-26 17:11:58,915 [20] [cmk.base.notify] Global rule 'Notify all contacts of a host/service via HTML email'...
+2021-08-26 17:11:58,915 [20] [cmk.base.notify]  -> matches!
+2021-08-26 17:11:58,915 [20] [cmk.base.notify]    - adding notification of hh via mail
+2021-08-26 17:11:58,916 [20] [cmk.base.notify] Executing 1 notifications:
+2021-08-26 17:11:58,916 [20] [cmk.base.notify]   * would notify hh via mail, parameters: smtp, graphs_per_notification, notifications_with_graphs, bulk: no
+----
+
+With [.guihint]#Global settings > Notifications > Notification log level# you can control the comprehensiveness of the notifications in three levels.
+Set this to [.guihint]#Full dump of all variables and command#, and in the log file you will find a complete listing of all of the variables available to the xref:scripts[notification script]:
+
+image::notifications_log_level.png[alt="Global setting to specify the log level."]
+
+For example, the list will appear like this (extract):
+
+.~/var/log/notify.log
+[{file}]
+----
+2021-08-26 17:24:54,709 [10] [cmk.base.notify] Raw context:
+                    CONTACTS=hh
+                    HOSTACKAUTHOR=
+                    HOSTACKCOMMENT=
+                    HOSTADDRESS=127.0.0.1
+                    HOSTALIAS=localhost
+                    HOSTATTEMPT=1
+                    HOSTCHECKCOMMAND=check-mk-host-smart
+----
+endif::[]
+
+
+ifdef::onprem[]
+[#async]
+=== Asynchronous delivery via the notification spooler
+
+{cee-only}
+A powerful supplementary function of the commercial editions is the _notification spooler_.
+This enables an asynchronous delivery of notifications.
+What does asynchronous mean in this context?
+
+* Synchronous delivery:
+The notification module waits until the notification script has finished executing.
+If this takes a long time to execute, more notifications will pile up.
+If monitoring is stopped, these notifications are lost.
+In addition, if many notifications are generated over a short period of time, a backlog may build up to the core, causing the monitoring to stall.
+
+* Asynchronous delivery:
+Every notification will be saved to a spool file under `~/var/check_mk/notify/spool`.
+No jam can build up.
+If the monitoring is stopped the spool files will be retained and notifications can later be delivered correctly
+The notification spooler takes over the processing of the spool files.
+
+A synchronous delivery is then feasible if the notification script runs quickly, and above all can’t lead to some sort of timeout. With notification methods that access existing spoolers that is a given.
+Spool services from the system can be used particularly with email and SMS.
+The notification script passes a file to the spooler — with this procedure no wait state can occur.
+
+When using the xref:syncsmtp[traceable delivery via SMTP] or other scripts which establish network connections, you should *always* employ asynchronous delivery.
+This also applies to scripts that send text messages (SMS) via HTTP over the internet.
+The timeouts when building a connection to a network service can take up to several minutes, causing a jam as described above.
+
+The good news is that asynchronous delivery is enabled by default in {CMK}.
+For one thing, the notification spooler (`mknotifyd`) is also started when the site is started, which you can check with the following command:
+
+[{shell}]
+----
+{c-omd} omd status mknotifyd
+mknotifyd:      [green]#running#
+-----------------------
+Overall state:  [green]#running#
+----
+
+On the other hand, asynchronous delivery ([.guihint]#Asynchronous local delivery by notification spooler#) is selected in [.guihint]#Global settings > Notifications > Notification Spooling#:
+
+image::notifications_spooling.png[alt="Global setting for the notification spooler delivery method."]
+
+
+==== Error diagnosis
+
+The notification spooler maintains its own log file: `~/var/log/mknotifyd.log`.
+This possesses three log levels which can be set  under [.guihint]#Global settings > Notifications > Notification Spooler Configuration# with the [.guihint]#Verbosity of logging# parameter.
+In the middle level, [.guihint]#Verbose logging (i.e. spooled notifications),# the processing of the spool files can be seen:
+
+.~/var/log/mknotifyd.log
+[{file}]
+----
+2021-08-26 18:05:02,928 [15] [cmk.mknotifyd] processing spoolfile: /omd/sites/mysite/var/check_mk/notify/spool/dad64e2e-b3ac-4493-9490-8be969a96d8d
+2021-08-26 18:05:02,928 [20] [cmk.mknotifyd] running cmk --notify --log-to-stdout spoolfile /omd/sites/mysite/var/check_mk/notify/spool/dad64e2e-b3ac-4493-9490-8be969a96d8d
+2021-08-26 18:05:05,848 [20] [cmk.mknotifyd] got exit code 0
+2021-08-26 18:05:05,850 [20] [cmk.mknotifyd] processing spoolfile dad64e2e-b3ac-4493-9490-8be969a96d8d successful: success 250 - b'2.0.0 Ok: queued as 1D4FF7F58F9'
+2021-08-26 18:05:05,850 [20] [cmk.mknotifyd] sending command LOG;SERVICE NOTIFICATION RESULT: hh;mysrv;CPU load;OK;mail;success 250 - b'2.0.0 Ok: queued as 1D4FF7F58F9';success 250 - b'2.0.0 Ok: queued as 1D4FF7F58F9'
+----
+endif::[]
+
+
+[#bulk]
+== Bulk notifications
+
+=== Overview
+
+Everyone who works with monitoring has experienced an isolated problem setting off a veritable flood of (successive) notifications.
+The principle of the xref:parents[parent hosts] is a way of reducing these under specific circumstances, but unfortunately it doesn’t help in all cases.
+
+You can take an example from the {CMK} project itself:
+Once each day we build {CMK} installation packages for every supported Linux distribution.
+Our own {CMK} monitoring is set up so that we have a service that is then only {OK} if the right number of packages have been correctly constructed.
+It can occasionally happen that a general error in the software hampers the packaging, causing 43 services to go into a {CRIT} state simultaneously.
+
+We have configured the notifications in such a way that in such a case only a single email listing all 43 notifications in sequence will be sent.
+This is naturally clearer than 43 single emails, and it also reduces the risk that ‘in the heat of the battle’ one misses a 44th email belonging to quite another problem.
+
+The mode of operation of this _bulk notification_ is very simple.
+When a notification occurs, at first it will be held back for a short time.
+Subsequent notifications that occur during this time will be immediately added into the same email.
+This collecting can be defined _for each rule_.
+So, for example, during the day you can operate with individual emails, but overnight with a bulk notification.
+If a bulk notification is activated you will generally be offered the following options:
+
+image::notifications_bulk.png[alt="Notification rule with bulk notification options."]
+
+The waiting time can be configured as desired.
+In many cases one minute suffices as by then at the latest all related problems should have appeared.
+You can of course set a longer time, but that will result in a fundamental delay to the notifications.
+
+Since it naturally makes no sense to throw everything into a single pot, you can specify which groups of problems should be notified collectively.
+The [.guihint]#Host# option is very commonly used -- this ensures that only notifications from the same host are bundled.
+
+Here are a few additional facts about bulk notifications:
+
+* If the bundling is activated in a rule, the activation can be deactivated by a subsequent rule – and vice versa.
+* The bulk notification always takes place per contact. Each contact has their own 'private collection pot' in effect.
+* You can limit the size of the pot ([.guihint]#Maximum bulk size#). Once the maximum is reached the bulk notification will immediately be sent.
+
+
+=== Bulk notifications and time periods
+
+What happens when a notification is within the notification period, but the bulk notification that contains it -- and which comes somewhat later -- is outside the notification period?
+The reverse situation is also possible...
+
+Here a very simple principle applies:
+all configurations that restrict notifications to time periods are valid only *for the actual notification*.
+The subsequent bulk notification will always be delivered *independently* of all time periods.
+
+
+ifdef::onprem[]
+[#syncsmtp]
+== Traceable delivery per SMTP
+
+=== Email is not reliable
+
+{cee-only}
+Monitoring is only useful when one can rely on it.
+This requires that notifications are received _reliably_ and _promptly_.
+Unfortunately email delivery is not completely ideal however.
+The dispatch is usually processed by passing the email to the local SMTP server.
+This attempts to deliver the email autonomously and asynchronously.
+
+With a temporary error (e.g., a case where the receiving SMTP server is not reachable) the email will be put into a queue and a later a new attempt will be made.
+This ‘later’ will as a rule be after 15-30 minutes.
+By then the notification could be far too late!
+
+If the email really can’t be delivered the SMTP server creates a nice error message in its log file and attempts to generate an error email to the ‘sender’.
+But the monitoring system is not a real sender and also cannot receive emails.
+It follows that such errors simply disappear and notifications are then absent.
+
+*Important:* Traceable notifications are not available for xref:bulk[bulk notifications]!
+
+
+=== Using SMTP on a direct connection enables error analysis
+
+The commercial editions provide the possibility of a _traceable_ delivery via SMTP.
+This it intentionally does without the help of the local mail server.
+Instead {CMK} itself sends the email to your smarthost via SMTP, and then it evaluates the SMTP response itself.
+
+In this way, not only are SMTP errors treated intelligently, but a correct delivery is also precisely documented.
+It is a bit like a registered letter:
+{CMK} receives a receipt from the SMTP smarthost (receiving server) verifying that the email has been accepted -- including a mail ID.
+
+
+=== Synchronous delivery for HTML emails
+
+You can select and configure the traceable delivery via SMTP for the notification method HTML email by entering the smarthost (with name and port number) and the access data and encryption method:
+
+image::notifications_enable_sync_smtp.png[alt="Notification rule with synchronous email delivery options."]
+
+In the history of the service concerned, you can then track the delivery exactly.
+Here is an example in which a service -- for testing purposes -- was manually set to {CRIT}.
+The screenshot below shows the notifications for this service, which you can display on the service details page with [.guihint]#Service > Service Notifications#:
+
+image::notifications_smtp_success.png[alt="List of accumulated notifications for a successful email delivery."]
+
+Here you will see the four individual steps in the chronological sequence from bottom to top, as we have already presented them in the chapter on xref:history[notification history].
+The important difference is that now you can see in the icon:icon_alert_notify_result[] topmost entry that the email was successfully delivered to the smarthost and its response is `success`.
+
+You can also follow the individual steps in the `notify.log` file.
+The following lines belong to the last step and contain the response of the SMTP server:
+
+.~/var/log/notify.log
+[{file}]
+----
+2021-08-26 10:02:22,016 [20] [cmk.base.notify] Got spool file d3b417a5 (mysrv;CPU load) for local delivery via mail
+2021-08-26 10:02:22,017 [20] [cmk.base.notify]      executing /omd/sites/mysite/share/check_mk/notifications/mail
+2021-08-26 10:02:29,538 [20] [cmk.base.notify]      Output: success 250 - b'2.0.0 Ok: queued as 1BE667EE7D6'
+----
+
+The Message-ID `1BE667EE7D6`  will appear in the smarthost’s log file.
+There -- if you are concerned -- you can investigate where the email has gotten to.
+In any case you can prove that, and when, the email was correctly sent from {CMK}.
+
+Let us repeat the test from above, but this time with a falsely-configured password for the SMTP transfer to the smarthost.
+Here you can see in plain text the SMTP error message `Error: authentication failed` from the smarthost:
+
+image::notifications_smtp_failed.png[alt="List of accumulated notifications for a failed email delivery."]
+
+What can be done about failed notifications?
+Again, notifying by email is apparently not a good solution.
+Instead {CMK} shows a clear warning with red background color in the xref:user_interface#overview[Overview]:
+
+image::notifications_overview_failed.png[alt="Display of failed notifications in the 'Overview' snap-in.",width=50%]
+
+Here you can:
+
+* Click on the text [.guihint]#... failed notifications# for a list of the failed deliveries.
+* Click on the icon:icon_delete[alt="Icon to delete."] icon to confirm these messages and remove the notice by clicking on icon:icon_confirm[alt="Icon to confirm."] [.guihint]#Confirm# in the overview that opens.
+
+*Important:* Note that direct delivery per SMTP in error situations can lead to a notification script running for a very long time and lead to a timeout.
+For this reason you are strongly advised to use the notification spooler and to select an xref:async[asynchronous delivery] of notifications.
+
+The conduct with repeatable errors (such as an SMTP timeout) can be defined with [.guihint]#Global settings > Notifications > Notification spooler configuration# per notification method:
+
+image::notifications_plugin_timing_settings.png[alt="Global timer setting for a notification method."]
+
+Alongside an optional timeout (the default is 1 minute) and a maximum number of retries, it can also be defined whether the script is permitted to run multiply in parallel and thus send multiple notifications ([.guihint]#Maximum concurrent executions#).
+If the notification script is very slow a parallel execution can make sense -- however the script must be so-programmed that multiple executions run cleanly (and, for example, that the script doesn’t reserve certain data for itself).
+
+A multiple, parallel delivery over SMTP is unproblematic since the target server can manage multiple parallel connections.
+This is certainly not the case when delivering directly from SMS via a modem without an additional spooler, and here one should stick with the setting 1.
+
+
+=== SMS and other notification methods
+
+A synchronous delivery including error messages and traceability has to date only been implemented for HTML emails.
+How one can return an error status in a self-written notification script can be found in the chapter on xref:scripts[writing your own scripts].
+endif::[]
+
+
+ifdef::onprem[]
+[#distributed]
+== Notifications in distributed systems
+
+In distributed environments -- i.e., those with more than a single {CMK} site -- the question arises of what to do with notifications generated on remote sites.
+In such a situation there are basically two possibilities:
+
+. Local delivery
+. Central delivery on the central site (commercial editions only)
+
+Detailed information on this subject can be found in the article on xref:distributed_monitoring#notifications[distributed monitoring].
+endif::[]
+
+
+[#scripts]
+== Notification scripts
+
+ifdef::onprem[]
+=== The principle
+
+Notification can occur in manifold and individual ways.
+Typical examples are:
+
+* Transfer of notifications to a ticket, or external notification system
+* The sending of an SMS over various internet services
+* Automated telephone calls
+* Forwarding to a higher, umbrella monitoring system
+
+For this reason {CMK} provides a very simple interface which enables you to write your own notification scripts.
+These can be written in any Linux-supported programming language -- even though Shell, Perl and Python together have 95{nbsp}% of the ‘market’.
+
+The xref:includedscripts[standard scripts included] with {CMK} can be found in `~/share/check_mk/notifications`.
+This directory is a component of the software and is not intended to be changed.
+Instead, save your own scripts in `~/local/share/check_mk/notifications`.
+Ensure that your scripts are executable  (`chmod +x`).
+They will then be found automatically and made available for selection in the notification rules.
+
+Should you wish to customize a standard script, simply copy it from `~/share/check_mk/notifications` to `~/local/share/check_mk/notifications` and there make your changes in the copy.
+If you retain the original name, your script will be substituted automatically for the standard version and no changes will need to be made to the existing notification rules.
+
+Some more sample scripts are included with the software in `~/share/doc/check_mk/treasures/notifications`.
+You can use these as templates for customization.
+The configuration will generally take place directly in the script -- tips covering this can be found there in the comments.
+
+In the case of a notification your script will be called up with the site user’s permissions.
+In *environment variables*, (those that begin with `NOTIFY_`), it will receive all of the information about the affected host/service, the monitoring event, the contacts to be notified, and the parameters specified in the notification rule.
+
+Texts that the script writes to the *standard output* (with `print`, `echo`, etc.), appear in the notification module's log file `~/var/log/notify.log`.
+
+
+=== Traceable notifications
+
+Notification scripts have the option of using an exit code to communicate whether a replicable or final error has occurred:
+
+[cols="25,~",options="header"]
+|===
+|Exit code |Function
+|`0` |The script was successfully executed.
+|`1` |A temporary error has occurred. The execution should after a short wait be repeatedly reattempted, up until the configured maximum number of attempts has been reached. Example: an HTTP connection cannot be established with an SMS service.
+|`2` and higher |A final error has occurred. The notification will not be reattempted. A notification error will be displayed in the GUI. The error will be displayed in the host’s/service’s history. Example: the SMS service records an 'invalid authentication' error.
+|===
+
+Additionally, in all cases the standard output from the notification script, together with the status will be entered into the host’s/service’s notification history and will therefore be visible in the GUI.
+
+*Important:* Traceable notifications are not available for xref:bulk[bulk notifications]!
+
+{cee-only}
+The treatment of notification errors from the user’s point of view will be explained in the chapter on xref:syncsmtp[traceable delivery via SMTP].
+
+
+[#example]
+=== A simple sample script
+
+As an example you can create a script that writes all of the information about the notification to a file.
+The coding language is the Bash Linux shell:
+
+.~/local/share/check_mk/notifications/foobar
+[{file}]
+----
+#!/bin/bash
+# Foobar Teleprompter
+
+env | grep NOTIFY_ | sort > $OMD_ROOT/tmp/foobar.out
+echo "Successfully written $OMD_ROOT/tmp/foobar.out"
+exit 0
+----
+
+Then make the script executable:
+
+[{shell}]
+----
+{c-omd} chmod +x local/share/check_mk/notifications/foobar
+----
+
+Here are a couple of explanations concerning the script:
+
+* In the first line is a `#!` and the path to the script language’s interpreter (here `/bin/bash`).
+* In the second line after the comment character `#` is a *title* for the script. As a rule this will be shown when selecting the notification method.
+* The `env` command will output all environment variables received by the script.
+* With `grep NOTIFY_` the {CMK} variables will be filtered out{nbsp}...
+* &#8230; and sorted alphabetically with `sort`.
+* `&gt; $OMD_ROOT/tmp/foobar.out` writes the result to the `~/tmp/foobar.out` file within the site directory.
+* The `exit 0` would actually be superfluous in this location since the shell always takes the exit code from the last command. Here this is `echo` and is always successful -- but explicit is always better.
+
+
+[#example_test]
+=== Testing the sample script
+
+So that the script will be used you must define it as a method in a notification rule.
+Self-written scripts have no parameter declaration, therefore all of the checkboxes such as those offered, for example, in the [.guihint]#HTML Email# method, will be missing.
+Instead you can enter a list of texts as parameters that can be available as `NOTIFY_PARAMETER_1`, `NOTIFY_PARAMETER_2`, etc, to the script.
+For a test provide the parameters `Fröhn`, `Klabuster` and `Feinbein`:
+
+image::notifications_method_foobar.png[alt="Rule with selection of sample script as notification method."]
+
+Now to test, set the service `CPU load` on the host `myserver` to {CRIT} -- with the [.guihint]#Fake check results# xref:commands#[command].
+In the log file of the notification module `~/var/log/notify.log` you then see the execution of the script including parameters and the generated spool file.:
+
+.~/var/log/notify.log
+[{file}]
+----
+2021-08-25 13:01:23,887 [20] [cmk.base.notify] Executing 1 notifications:
+2021-08-25 13:01:23,887 [20] [cmk.base.notify]   * notifying hh via foobar, parameters: Fröhn, Klabuster, Feinbein, bulk: no
+2021-08-25 13:01:23,887 [20] [cmk.base.notify] Creating spoolfile: /omd/sites/mysite/var/check_mk/notify/spool/e1b5398c-6920-445a-888e-f17e7633de60
+----
+
+The file `~/tmp/foobar.out` will now contain an alphabetic list of all {CMK} environment variables that include information concerning the notification.
+Here you can orient yourself with which values are available to your script.
+Here are the first ten lines:
+
+[{shell}]
+----
+{c-omd} head tmp/foobar.out
+NOTIFY_ALERTHANDLERNAME=debug
+NOTIFY_ALERTHANDLEROUTPUT=Arguments:
+NOTIFY_ALERTHANDLERSHORTSTATE=OK
+NOTIFY_ALERTHANDLERSTATE=OK
+NOTIFY_CONTACTALIAS=Harry Hirsch
+pass:[NOTIFY_CONTACTEMAIL=harryhirsch@example.com]
+NOTIFY_CONTACTNAME=hh
+NOTIFY_CONTACTPAGER=
+NOTIFY_CONTACTS=hh
+NOTIFY_DATE=2021-08-25
+----
+
+The parameters can also be found:
+
+[{shell}]
+----
+{c-omd} grep PARAMETER tmp/foobar.out
+NOTIFY_PARAMETERS=Fröhn Klabuster Feinbein
+NOTIFY_PARAMETER_1=Fröhn
+NOTIFY_PARAMETER_2=Klabuster
+NOTIFY_PARAMETER_3=Feinbein
+----
+
+
+[#environment_variables]
+=== Environment variables
+
+In the above example you have seen a number of environment variables that will be passed to the script.
+Precisely which variables are available depends on the type of notification, the {CMK} version and edition and the monitoring core used (xref:cmc#[CMC] or Nagios).
+Alongside the trick with the `env` command there are two further ways of getting a complete list of all variables:
+
+* Changing up the log level for `notify.log` via [.guihint]#Global settings > Notifications > Notification log level#.
+* For notifications per [.guihint]#HTML Email# there is a checkbox [.guihint]#Information to be displayed in the email body# with the [.guihint]#Complete variable list (for testing)# option.
+
+Below is a list of the most important variables:
+
+[cols="40,~"},options="header"]
+|===
+|Environment variable |Meaning
+|`OMD_ROOT` |Home directory of the site, e.g., `/omd/sites/mysite`.
+|`OMD_SITE` |Site name, e.g., `mysite`.
+|`NOTIFY_WHAT` |For host notifications, the word `HOST`, otherwise `SERVICE`. With these you can make your script so intelligent that it logs useful information in both cases.
+|`NOTIFY_CONTACTNAME` |User name (login) of the contact.
+|`NOTIFY_CONTACTEMAIL` |The email address of the contact.
+|`NOTIFY_CONTACTPAGER` |Entry in the [.guihint]#Pager# field in the contact’s user profile. Since the field is not generally reserved for a specific purpose, you can simply use it for each user in order to save information required for notifications.
+|`NOTIFY_DATE` |Date of the notification in ISO-8601-Format, e.g., `2021-08-25`.
+|`NOTIFY_LONGDATETIME` |Date and time in the non-localized Linux system’s default display, e.g., `Wed Aug 25 15:18:58 CEST 2021`.
+|`NOTIFY_SHORTDATETIME` |Date and time in ISO-Format, e.g. `2021-08-25 15:18:58`
+|`NOTIFY_HOSTNAME` |Name of the affected host.
+|`NOTIFY_HOSTOUTPUT` |Output of the host check's check plug-in, e.g., `Packet received via smart PING`. This output is only relevant for host notifications, but is also present in service notifications.
+|`NOTIFY_HOSTSTATE` |One of the words: `UP`, `DOWN` or `UNREACH`
+|`NOTIFY_NOTIFICATIONTYPE` |Notification type as described in the xref:intro[introduction to this article]. This will be expressed by one of the following words: +
+`PROBLEM`: Normal host or service problem +
+`RECOVERY`: Host/Service is again {UP} / {OK} +
+`ACKNOWLEDGEMENT (...)`: xref:basics_ackn#[Acknowledgment] of a problem +
+`FLAPPINGSTART`: Host/service has begun flapping +
+`FLAPPINGSTOP`:- Flapping has ended +
+`DOWNTIMESTART`: Start of a xref:basics_downtimes#[scheduled downtime] +
+`DOWNTIMEEND`: Normal end of a downtime +
+`DOWNTIMECANCELLED`: Premature interruption of a downtime +
+`CUSTOM`: Notification issued by a manual xref:commands#[command] +
+`ALERTHANDLER (...)`: xref:alert_handlers#[Alert handler] execution (only commercial editions) +
+For types with `(...)`, the brackets contain additional information on the notification’s type.
+|`NOTIFY_PARAMETERS` |All of the script’s parameters separated by blanks.
+|`NOTIFY_PARAMETER_1` |The script’s first parameter.
+|`NOTIFY_PARAMETER_2` |The script’s second parameter, etc.
+|`NOTIFY_SERVICEDESC` |Name of the service concerned. This variable is not present in host notifications.
+|`NOTIFY_SERVICEOUTPUT` |Output of the service check’s check plug-in (not for host notifications)
+|`NOTIFY_SERVICESTATE` |One of the words: `OK`, `WARN`, `CRIT` or `UNKNOWN`
+|===
+
+
+=== Bulk notifications
+
+If your script should support xref:bulk[bulk notifications], it will need to be specially prepared, since the script must deliver _multiple notifications simultaneously_.
+For this reason a delivery using environment variables also doesn’t function practicably.
+
+Give your script a name in the _third line_ in the header as below --
+the notification module will then send the notifications through the _standard input_:
+
+.~/local/share/check_mk/notifications/mybulk
+[{file}]
+----
+#!/bin/bash
+# My Bulk Notification
+# Bulk: yes
+----
+
+Through the standard input the script will receive blocks of variables.
+Each line has the form: `NAME=VALUE`.
+Blocks are separated by blank lines.
+The ASCII character with the code 1 (`\a`) is used to represent _newlines_ within the text.
+
+The first block contains a list of general variables (e.g., call parameters).
+Each subsequent block assembles the variables into a notification.
+
+The best recommendation is to try it yourself with a simple test that writes the complete data to a file so that you can see how the data is sent.
+You can use the following notification script for this purpose:
+
+.~/local/share/check_mk/notifications/mybulk
+[{file}]
+----
+#!/bin/bash
+# My Bulk Notification
+# Bulk: yes
+
+cat > $OMD_ROOT/tmp/mybulktest.out
+----
+
+Test the script as xref:example_test[described above] and additionally activate the [.guihint]#Notification Bulking# in the notification rule.
+
+
+[#includedscripts]
+=== Supplied notification scripts
+endif::[]
+
+As delivered, {CMK} already provides a whole range of scripts for connecting to popular and widely used instant messaging services, incident management platforms and ticket systems.
+You can find out how to use these scripts in the following articles:
+
+* xref:notifications_webex#[Cisco Webex Teams]
+* xref:notifications_ilert#[ilert]
+* xref:notifications_jira#[Jira]
+* xref:notifications_mattermost#[Mattermost]
+* xref:notifications_teams#[Microsoft Teams]
+* xref:notifications_pagerduty#[PagerDuty]
+* xref:notifications_pushover#[Pushover]
+* xref:notifications_opsgenie#[Opsgenie]
+* xref:notifications_servicenow#[ServiceNow]
+* xref:notifications_signl4#[SIGNL4]
+* xref:notifications_slack#[Slack]
+* xref:notifications_splunkoncall#[Splunk On-Call]
+
+
+ifdef::onprem[]
+[#files]
+== Files and directories
+
+=== Paths of {CMK}
+
+[cols="50,~",options="header"]
+|===
+|File path |Function
+
+|`~/var/log/cmc.log` |The xref:cmc#[CMC] log file. If notification debugging is activated, here you will find precise information as to why notifications were, or were not generated.
+|`~/var/log/notify.log` |The notification module’s log file.
+|`~/var/log/mkotifyd.log` |The notification spooler’s log file.
+|`~/var/log/mkotifyd.state` |The current state of the notification spooler. This is primarily relevant for xref:distributed_monitoring#notifications[notifications in distributed environments].
+|`~/var/nagios/debug.log` |The Nagios debug log file. Switch on the debug messages in `etc/nagios/nagios.d/logging.cfg` using the `debug_level` variable.
+|`~/var/check_mk/notify/spool/` |Storage location for the spool files to be processed by the notification spooler.
+|`~/var/check_mk/notify/deferred/` |With temporary errors the notification spooler moves the files to here and retries after a couple of minutes.
+|`~/var/check_mk/notify/corrupted/` |Defective spool files will be moved to here.
+|`~/share/check_mk/notifications` |Notification scripts supplied as standard with {CMK}. Make no changes here.
+|`~/local/share/check_mk/notifications` |Storage location for your custom notification scripts. If you wish to customize a standard script, copy it from `~/share/check_mk/notifications` to here, and retain the original file name.
+|`~/share/doc/check_mk/treasures/notifications` |Other notification scripts which you can slightly customize and use.
+|===
+
+
+[#maillog]
+=== SMTP server log files
+
+The SMTP server’s log files are system files and their absolute paths are listed here below.
+Precisely where the log files are stored will depend on your Linux distribution.
+
+[cols="50,~",options="header"]
+|===
+|Path |Function
+|`/var/log/mail.log` |SMTP-server’s log file under Debian and Ubuntu
+|`/var/log/mail` |SMTP-server’s log file under SUSE Linux Enterprise Server (SLES)
+|`/var/log/maillog` |SMTP-server’s log file under Red Hat Enterprise Linux (RHEL)
+|===
+endif::[]
