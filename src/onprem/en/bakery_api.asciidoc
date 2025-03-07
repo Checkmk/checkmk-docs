@@ -2,7 +2,7 @@
 // IGNORE
 include::global_attr.adoc[]
 = The Bakery API
-:revdate: 2024-02-27
+:revdate: 2025-03-07
 :title: The Bakery API 
 :description: The Bakery API provides an interface for extending agent packages in the Agent Bakery, e.g. with agent plug-ins and their configuration. 
 
@@ -25,12 +25,12 @@ All of these 'artifacts' can be described in the Bakery API using a uniform synt
 For example, one real-world application scenario is as follows:
 You read the introduction to xref:devel_intro#[developing extensions for {CMK}] and, inspired by it, wrote your own xref:devel_check_plugins#[agent-based check plug-in] with its associated agent plug-in.
 You then combined these two into a single xref:mkps#[{CMK} extension package (MKP)].
-In the {CMK} exchange, we have stored the MKP link:https://exchange.checkmk.com/p/hello-world[Hello world!^] as a simple template for this example.
+// In the {CMK} exchange, we have stored the MKP link:https://exchange.checkmk.com/p/hello-world[Hello world!^] as a simple template for this example.
 
 Now you want to make the agent plug-in configurable (e.g., enable it to be run only by certain users or on certain hosts) and additionally perform actions when installing or uninstalling the agent package.
 To do this, you can use the Bakery API -- as a packaging and distribution aid, as we will show in this article with an example scenario. 
 This creates two new files, which can then be packaged together with the existing plug-in files to create a new MKP.
-You can also find a thoroughly commented example of this procedure in the {CMK} Exchange: the link:https://exchange.checkmk.com/p/hello-bakery[Hello bakery!^] MKP, which is closely based on the example scenario presented in this article.
+You can also find a thoroughly commented example of this procedure in the {CMK} Exchange: the link:https://exchange.checkmk.com/p/hello-world[Hello world!^] MKP, which is closely based on the example scenario presented in this article.
 
 *Note:* The Bakery API does not provide functions for configuring the Bakery plug-in, i.e. for creating the associated rule set, nor for the _contents_ of the files provided with the plug-in, e.g. the agent plug-ins.
 
@@ -91,9 +91,9 @@ You can find the Bakery API documentation in the versions supported by the {CMK}
 
 We will demonstrate the use of the API with the following sample scenario:
 
-* A plug-in with the name `hello_bakery` is provided for the {CMK} agent.
+* A plug-in with the name `hello_world` is provided for the {CMK} agent.
 
-* The agent plug-in exists in three variants -- for Linux, Solaris and Windows -- and is to be included in the agent packages for these three operating systems as well.The corresponding files are also available and are called `hello_bakery` (for Linux), `hello_bakery.solaris.ksh` (for Solaris) and `hello_bakery.cmd` (for Windows). +
+* The agent plug-in exists in three variants -- for Linux, Solaris and Windows -- and is to be included in the agent packages for these three operating systems as well.The corresponding files are also available and are called `hello_world` (for Linux), `hello_world.solaris.ksh` (for Solaris) and `hello_world.cmd` (for Windows). +
 The Python, shell and CMD scripts are only examples. An agent plug-in can be any file executable on the target system. +
 We are not interested in the actual content of the files in this context.
 The function of agent plug-ins is not the subject of the Bakery API. 
@@ -102,33 +102,147 @@ You can learn more about this in the introduction to xref:devel_check_plugins#[d
 * It should be configurable whether the plug-in's output should be _cached_, i.e. in this case the plug-in will only be executed again by the agent once the configured time has elapsed.
 
 * The plug-in is to be configured in the xref:wato#[Setup menu] via Agent Bakery settings with the variables `user` and `content`. 
-The Linux plug-in reads the configuration from the `hello_bakery.json` configuration file, and the Solaris plug-in reads it from the `hello_bakery.cfg` file.
-The Windows plug-in reads the `hello_bakery.user` and `hello_bakery.content` entries from the YAML configuration file in the Windows agent. +
+The Linux plug-in reads the configuration from the `hello_world.json` configuration file, and the Solaris plug-in reads it from the `hello_world.cfg` file.
+The Windows plug-in reads the `hello_world.user` and `hello_world.content` entries from the YAML configuration file in the Windows agent. +
 In each case, access to these resources must be implemented in the agent plug-in and is not handled by the Bakery API.
 
 * For Linux and Solaris there is an additional program `some_binary`, which should be delivered e.g. a small shell script, to also be able to start the plug-in by a command independently of the {CMK} agent.
 
-* Under Linux and Solaris, after installing the agent, it should be written to the syslog via a package manager routine that `hello_bakery` has been installed. 
-After uninstalling the agent, analogously, it should be written to syslog that `hello_bakery` has been uninstalled. +
+* Under Linux and Solaris, after installing the agent, it should be written to the syslog via a package manager routine that `hello_world` has been installed. 
+After uninstalling the agent, analogously, it should be written to syslog that `hello_world` has been uninstalled. +
 Common under Linux are `postinst` and `prerm` scripts: in the `postinst` script you create for example a cache and start a daemon, in the `prerm` script you can then stop the daemon again and clear the cache. For more information on how to use `maintainer scripts`, see the link:https://www.debian.org/doc/debian-policy/ch-maintainerscripts.html[Debian documentation^].
+
+[#ruleset]
+=== Creating a rule set
+
+For a Bakery plug-in there must be a set of rules for the Setup, with which the plug-in can be configured via the GUI. 
+In the simplest case the rule set only activates a plugin by assigning it to certain hosts.
+The creation of a rule set is not part of the Bakery API.
+You can find an introduction to this topic in the xref:devel_check_plugins#rule_set[developing your own agent-based check plug-ins] article.
+There, also path conventions for storing rule sets are explained.
+
+
+[#minimal_ruleset]
+==== Minimal rule set
+
+An example of such a minimal rule set, which only activates the distribution of a plugin, could look as follows.
+The imported classes here are more extensive than required in order to also cover the extended example.
+The most noticeable difference to the rule set for agent-based check plug-ins is the use of the class `AgentConfig` instead of `CheckParameters`.
+
+.~/local/lib/python3/cmk_addons/plugins/hello_world/rulesets/ruleset_hello_world_bakery.py
+[{python}]
+----
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Shebang only needed for editor!
+
+from cmk.rulesets.v1 import Label, Title, Help
+from cmk.rulesets.v1.form_specs import (
+    BooleanChoice,
+    DefaultValue,
+    DictElement,
+    Dictionary,
+    String,
+    TimeSpan,
+    TimeMagnitude
+)
+from cmk.rulesets.v1.rule_specs import AgentConfig, HostCondition, Topic 
+
+def _parameter_form_bakery():
+    return Dictionary(
+        elements = {}
+    )
+               
+rule_spec_hello_world_bakery = AgentConfig(
+    name = "hello_world",
+    title = Title("Hello bakery!"),
+    topic = Topic.GENERAL,
+    parameter_form = _parameter_form_bakery,
+)
+----
+
+[#extended_ruleset]
+==== Extended rule set
+
+However, in the example scenario, we have specified that an execution interval should be chosen and the two configuration variables `user` and `content` should be set.
+These variables are defined as keys in the `Dictionary`, which is returned by the function specified as `parameter_form`.
+
+.~/local/lib/python3/cmk_addons/plugins/hello_world/rulesets/ruleset_hello_world_bakery.py
+[{python}]
+----
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Shebang only needed for editor!
+
+from cmk.rulesets.v1 import Label, Title, Help
+from cmk.rulesets.v1.form_specs import (
+    BooleanChoice,
+    DefaultValue,
+    DictElement,
+    Dictionary,
+    String,
+    TimeSpan,
+    TimeMagnitude
+)
+from cmk.rulesets.v1.rule_specs import AgentConfig, HostCondition, Topic 
+
+def _parameter_form_bakery():
+    return Dictionary(
+        elements = {
+            "user": DictElement(
+                parameter_form = String(
+                    title = Title("User for example plugin"),
+                )
+            ),
+            "content": DictElement(
+                parameter_form = String(
+                    title = Title("The actual content"),
+                )
+            ),
+            "interval": DictElement(
+                parameter_form = TimeSpan(
+                    title = Title("Run asynchronously"),
+                    label = Label("Interval for collecting data"),
+                    displayed_magnitudes = [TimeMagnitude.SECOND, TimeMagnitude.MINUTE],
+                    prefill = DefaultValue(300.0),
+                )
+            )
+        }
+    )
+
+rule_spec_hello_world_bakery = AgentConfig(
+    name = "hello_world",
+    title = Title("Hello bakery!"),
+    topic = Topic.GENERAL,
+    parameter_form = _parameter_form_bakery,
+)
+----
+
+The GUI resulting from this rule set is shown in the following screenshot:
+
+image::bakeryapi_settings.png[alt="GUI des Regelsatzes zur Konfiguration des Plugins."]
+
+// Die Konfiguration findet über den Namen, unter dem der Regelsatz registriert wird, und dem Präfix `agent_config:` zum Bakery Plugin. 
+// Dabei muss der Regelsatz unter dem gleichen Namen wie das Bakery Plugin registriert werden, jedoch mit dem zusätzlichen Präfix `agent_config:`.
 
 
 [#create_plugin]
 === Creating a plug-in file
 
-The `hello_bakery.py` plug-in file is created in the local part of the site directory structure at `local/lib/check_mk/base/cee/plugins/bakery/`.
+The `hello_world.py` plug-in file is stored in the local part of the site directory structure at `local/lib/check_mk/base/cee/plugins/bakery/`.
 
 A Bakery plug-in is created in the form of a file that is imported as a Python 3 module.
 Therefore, following {CMK} convention, plug-in files also start with the following lines:
 
-.hello_bakery.py
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 ----
 
-Since this is a module, all required names must be imported at the beginning.
+// MFS: umformuliert
+Since this is a module, all required classes and functions must be imported at the beginning.
 
 
 [#access_api]
@@ -137,24 +251,24 @@ Since this is a module, all required names must be imported at the beginning.
 All objects in the Bakery API are available under `cmk.base.cee.plugins.bakery.bakery_api.vX`, where X denotes the API version number, in the example `1`. 
 Since the plug-in file itself is located in the `cmk.base.cee.plugins.bakery` namespace, a relative import from `.bakery_api.v1` will also work:
 
-.hello_bakery.py
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
 from .bakery_api.v1 import (
-   OS,
-   DebStep,
-   RpmStep,
-   SolStep,
-   Plugin,
-   PluginConfig,
-   SystemBinary,
-   Scriptlet,
-   WindowsConfigEntry,
-   register,
-   FileGenerator,
-   ScriptletGenerator,
-   WindowsConfigGenerator,
-   quote_shell_string,
+    OS,
+    DebStep,
+    RpmStep,
+    SolStep,
+    Plugin,
+    PluginConfig,
+    SystemBinary,
+    Scriptlet,
+    WindowsConfigEntry,
+    register,
+    FileGenerator,
+    ScriptletGenerator,
+    WindowsConfigGenerator,
+    quote_shell_string,
 )
 ----
 
@@ -217,19 +331,21 @@ the plug-in's name (`name`) and its functions (`files_function`, `scriptlets_fun
 
 Names for type annotations (`FileGenerator`, `ScriptletGenerator`, `WindowsConfigGenerator`, `WindowsConfigContent`) can optionally be used to identify the type of the function specified, e.g. like this: 
 
+// MFS: Fix indentation
 [{python}]
 ----
 def get_files(conf: dict) -> FileGenerator:
-  	yield Plugin(...)
-  	yield PluginConfig(...)
+    yield Plugin(...)
+    yield PluginConfig(...)
 
 def get_scriptlets(conf: dict) -> ScriptletGenerator:
-  	yield Scriptlet(...)
+    yield Scriptlet(...)
 
 def get_windows_config(conf: dict) -> WindowsConfigGenerator:
-  	content: WindowsConfigContent = conf["some_entry"]
-   yield WindowsGlobalConfigEntry(name="some_name",content=content)
+    content: WindowsConfigContent = conf["some_entry"]
+    yield WindowsGlobalConfigEntry(name="some_name",content=content)
 ----
+
 
 
 [#utilities]
@@ -246,42 +362,45 @@ The following helper functions can be used:
 
 Registering the plug-in with {CMK} with a plug-in name and its functions is accomplished with the `register.bakery_plugin` function:
 
-.hello_bakery.py
-[{file}]
+// MFS: Fix indentation
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
+[{python}]
 ----
 register.bakery_plugin(
-   name="hello_bakery",
-   files_function=get_hello_bakery_plugin_files,
-   scriptlets_function=get_hello_bakery_scriptlets,
-   windows_config_function=get_hello_bakery_windows_config,
+    name = "hello_world",
+    files_function = get_hello_world_plugin_files,
+    scriptlets_function = get_hello_world_scriptlets,
+    windows_config_function = get_hello_world_windows_config,
 )
 ----
 
-The `get_hello_bakery_windows_config`, `get_hello_bakery_scriptlets` and `get_hello_bakery_plugin_files` functions specified here are explained in more detail in the following chapters.
+The `get_hello_world_windows_config`, `get_hello_world_scriptlets` and `get_hello_world_plugin_files` functions specified here are explained in more detail in the following chapters.
 
 
 [#windows_config_function]
 === Configuration for the Windows agent
 
-In our example, the interval for execution must be be defined, and the configuration of the plug-in should be able to be done via two variables:
+In our example, the interval for execution must be be defined, and the configuration of the plug-in should be able to be done via two variables.
+// MFS: hinzugefügt:
+Make sure to define keys and data types as defined in the rule set created above.
 
-.hello_bakery.py
+// MFS: Fix indentation, change to float
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
-class HelloBakeryConfig(TypedDict, total=False):
-   interval: int
-   user: str
-   content: str
+class HelloWorldConfig(TypedDict, total=False):
+    interval: float
+    user: str
+    content: str
 
-def get_hello_bakery_windows_config(conf: HelloBakeryConfig) -> WindowsConfigGenerator:
-   yield WindowsConfigEntry(path=["hello_bakery", "user"], content=conf["user"])
-   yield WindowsConfigEntry(path=["hello_bakery", "content"], content=conf["content"])
-)
+def get_hello_world_windows_config(conf: HelloWorldConfig) -> WindowsConfigGenerator:
+    yield WindowsConfigEntry(path=["hello_world", "user"], content=conf["user"])
+    yield WindowsConfigEntry(path=["hello_world", "content"], content=conf["content"])
 ----
 
-In the `get_hello_bakery_windows_config` function, we use the `conf` argument to access the configuration set via the xref:ruleset[rule set] in the Setup GUI: 
+In the `get_hello_world_windows_config` function, we use the `conf` argument to access the configuration set via the xref:ruleset[rule set] in the Setup GUI: 
 The time interval for re-execution on cached output (`interval`) and the two variables that can be used to configure the plug-in (`user`, `content`).
-Here we assume that the rule set configuration is supplied as a `dict`. Using the `TypedDict` of the class `HelloBakeryConfig` we can set up a standardized access to it.
+Here we assume that the rule set configuration is supplied as a `dict`. Using the `TypedDict` of the class `HelloWorldConfig` we can set up a standardized access to it.
 
 Then `WindowsConfigEntry` is used to specify the entries in the YAML-xref:agent_windows#agent_architecture[Windows agent configuration file] from which the values for `user` and `content` are read.
 
@@ -292,16 +411,20 @@ Then `WindowsConfigEntry` is used to specify the entries in the YAML-xref:agent_
 On Linux and Solaris, syslog messages should be written when installing and uninstalling the agent.
 Here we show only an implementation of the Debian Linux distribution:
 
-.hello_bakery.py
+// MFS: Fix indentation, fix function name, remove priority
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
-def get_hello_bakery_scriptlets(conf: HelloBakeryConfig) -> ScriptletGenerator:
-   installed_lines = ['logger -p local3.info "Installed hello_bakery"']
-   uninstalled_lines = ['logger -p local3.info "Uninstalled hello_bakery"']
-   # Adjust the priority -p according to your needs.
-
-   yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
-   yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
+def get_hello_world_scriptlets(conf: Any) -> ScriptletGenerator:
+    installed_lines = ['logger "Installed hello_world"']
+    uninstalled_lines = ['logger "Uninstalled hello_world"']
+    
+    yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
+    yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
+    # yield Scriptlet(step=RpmStep.POST, lines=installed_lines)
+    # yield Scriptlet(step=RpmStep.POSTUN, lines=uninstalled_lines)
+    # yield Scriptlet(step=SolStep.POSTINSTALL, lines=installed_lines)
+    # yield Scriptlet(step=SolStep.POSTREMOVE, lines=uninstalled_lines)
 ----
 
 First the commands for the syslog messages are defined and then the installation scripts for Debian (`DebStep`) which should be executed after the installation (`POSTINST`) and after the uninstallation (`POSTRM`).
@@ -314,39 +437,43 @@ Therefore, to ensure that all of the commands in the scripts are executed, do no
 [#files_function]
 === The agent plug-in for Linux
 
-The configuration for the Linux agent plug-in looks like this:
+The configuration for the Linux agent plug-in looks like this.
+// MFS: Casting
+Make sure to convert the interval passed to `Integer` since rule set and bakery use different data types.
 
-.hello_bakery.py
+// MFS: Fix indentation
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
-def get_hello_bakery_plugin_files(conf: HelloBakeryConfig) -> FileGenerator:
-   interval = conf.get('interval')
-
-   yield Plugin(
-      base_os=OS.LINUX,
-      source=Path('hello_bakery'),
-      target=Path('hello_bakery'),
-      interval=interval,
-   )
-
-   yield PluginConfig(base_os=OS.LINUX,
-                     lines=_get_linux_cfg_lines(conf['user'], conf['content']),
-                     target=Path('hello_bakery.json'),
-                     include_header=False)
-
-   for base_os in [OS.LINUX]:
-      yield SystemBinary(
-            base_os=base_os,
-            source=Path('some_binary'),
-      )
+def get_hello_world_plugin_files(conf: HelloWorldConfig) -> FileGenerator:
+    interval = conf.get('interval')
+    
+    yield Plugin(
+        base_os = OS.LINUX,
+        source = Path('hello_world'),
+        target = Path('hello_world'),
+        interval = int(interval),
+    )
+    
+    yield PluginConfig(
+        base_os = OS.LINUX,
+        lines = _get_linux_cfg_lines(conf['user'], conf['content']),
+        target = Path('hello_world.json'),
+        include_header = False)
+    
+    for base_os in [OS.LINUX]:
+        yield SystemBinary(
+            base_os = base_os,
+            source = Path('some_binary'),
+        )
 
 def _get_linux_cfg_lines(user: str, content: str) -> List[str]:
-   config = json.dumps({'user': user, 'content': content})
-   return config.split('\n')
+    config = json.dumps({'user': user, 'content': content})
+    return config.split('\n')
 ----
 
-In the `get_hello_bakery_plugin_files` function, first the Python file `hello_bakery` is defined as a `plugin`, i.e. as an executable file to be run by the {CMK} agent as an agent plug-in. 
-Then `PluginConfig` is used to specify the `hello_bakery.json` configuration file to be generated for the Linux agent plug-in with the `user` and `content` entries.
+In the `get_hello_world_plugin_files` function, first the Python file `hello_world` is defined as a `plugin`, i.e. as an executable file to be run by the {CMK} agent as an agent plug-in. 
+Then `PluginConfig` is used to specify the `hello_world.json` configuration file to be generated for the Linux agent plug-in with the `user` and `content` entries.
 
 With the second function `_get_linux_cfg_lines` these lines are written in JSON format.
 Here, the Python dictionary `conf` contains the values set with the xref:ruleset[rule set] of the Setup GUI, which are then packed into a JSON file via a small detour.
@@ -359,7 +486,8 @@ Finally, the additional shell script `some_binary` to be delivered is to be plac
 
 Putting the all of the parts presented so far together -- and completing them -- a plug-in for our xref:example[example scenario] might look like this when finished:
 
-.hello_bakery.py
+// MFS: Fix indentation
+.~/local/lib/check_mk/base/cee/plugins/bakery/hello_world.py
 [{python}]
 ----
 #!/usr/bin/env python3
@@ -370,171 +498,101 @@ from pathlib import Path
 from typing import Iterable, TypedDict, List
 
 from .bakery_api.v1 import (
-   OS,
-   DebStep,
-   RpmStep,
-   SolStep,
-   Plugin,
-   PluginConfig,
-   SystemBinary,
-   Scriptlet,
-   WindowsConfigEntry,
-   register,
-   FileGenerator,
-   ScriptletGenerator,
-   WindowsConfigGenerator,
-   quote_shell_string,
+    OS,
+    DebStep,
+    RpmStep,
+    SolStep,
+    Plugin,
+    PluginConfig,
+    SystemBinary,
+    Scriptlet,
+    WindowsConfigEntry,
+    register,
+    FileGenerator,
+    ScriptletGenerator,
+    WindowsConfigGenerator,
+    quote_shell_string,
 )
 
-class HelloBakeryConfig(TypedDict, total=False):
-   interval: int
-   user: str
-   content: str
+class HelloWorldConfig(TypedDict, total=False):
+    interval: float
+    user: str
+    content: str
 
-def get_hello_bakery_plugin_files(conf: HelloBakeryConfig) -> FileGenerator:
-   interval = conf.get('interval')
+def get_hello_world_plugin_files(conf: HelloWorldConfig) -> FileGenerator:
+    interval = conf.get('interval')
 
-   yield Plugin(
-      base_os=OS.LINUX,
-      source=Path('hello_bakery'),
-      target=Path('hello_bakery'),
-      interval=interval,
-   )
-   yield Plugin(
-      base_os=OS.SOLARIS,
-      source=Path('hello_bakery.solaris.ksh'),
-      target=Path('hello_bakery'),
-      interval=interval,
-   )
-   yield Plugin(
-      base_os=OS.WINDOWS,
-      source=Path('hello_bakery.cmd'),
-      target=Path('hello_bakery.bat'),
-      interval=interval,
-   )
+    yield Plugin(
+        base_os = OS.LINUX,
+        source = Path('hello_world'),
+        target = Path('hello_world'),
+        interval = int(interval),
+    )
+    yield Plugin(
+        base_os  =OS.SOLARIS,
+        source = Path('hello_world.solaris.ksh'),
+        target = Path('hello_world'),
+        interval = int(interval),
+    )
+    yield Plugin(
+        base_os = OS.WINDOWS,
+        source = Path('hello_world.cmd'),
+        target = Path('hello_world.bat'),
+        interval = int(interval),
+    )
 
-   yield PluginConfig(base_os=OS.LINUX,
-                     lines=_get_linux_cfg_lines(conf['user'], conf['content']),
-                     target=Path('hello_bakery.json'),
-                     include_header=False)
-   yield PluginConfig(base_os=OS.SOLARIS,
-                     lines=_get_solaris_cfg_lines(conf['user'], conf['content']),
-                     target=Path('hello_bakery.cfg'),
-                     include_header=True)
+    yield PluginConfig(
+        base_os = OS.LINUX,
+        lines = _get_linux_cfg_lines(conf['user'], conf['content']),
+        target = Path('hello_world.json'),
+        include_header = False
+    )
+    yield PluginConfig(
+        base_os = OS.SOLARIS,
+        lines = _get_solaris_cfg_lines(conf['user'], conf['content']),
+        target = Path('hello_world.cfg'),
+        include_header = True
+    )
 
-   for base_os in [OS.LINUX, OS.SOLARIS]:
-      yield SystemBinary(
-            base_os=base_os,
-            source=Path('some_binary'),
-      )
+    for base_os in [OS.LINUX, OS.SOLARIS]:
+        yield SystemBinary(
+            base_os = base_os,
+            source = Path('some_binary'),
+        )
 
 def _get_linux_cfg_lines(user: str, content: str) -> List[str]:
-   config = json.dumps({'user': user, 'content': content})
-   return config.split('\n')
+    config = json.dumps({'user': user, 'content': content})
+    return config.split('\n')
 
 def _get_solaris_cfg_lines(user: str, content: str) -> List[str]:
-   # To be loaded with 'source' in Solaris shell script
-   return [
-      f'USER={quote_shell_string(user)}',
-      f'CONTENT={quote_shell_string(user)}',
-   ]
+    # To be loaded with 'source' in Solaris shell script
+    return [
+        f'USER={quote_shell_string(user)}',
+        f'CONTENT={quote_shell_string(user)}',
+    ]
 
-def get_hello_bakery_scriptlets(conf: HelloBakeryConfig) -> ScriptletGenerator:
-   installed_lines = ['logger -p local3.info "Installed hello_bakery"']
-   uninstalled_lines = ['logger -p local3.info "Uninstalled hello_bakery"']
+def get_hello_world_scriptlets(conf: HelloWorldConfig) -> ScriptletGenerator:
+    installed_lines = ['logger -p local3.info "Installed hello_world"']
+    uninstalled_lines = ['logger -p local3.info "Uninstalled hello_world"']
+    
+    yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
+    yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
+    yield Scriptlet(step=RpmStep.POST, lines=installed_lines)
+    yield Scriptlet(step=RpmStep.POSTUN, lines=uninstalled_lines)
+    yield Scriptlet(step=SolStep.POSTINSTALL, lines=installed_lines)
+    yield Scriptlet(step=SolStep.POSTREMOVE, lines=uninstalled_lines)
 
-   yield Scriptlet(step=DebStep.POSTINST, lines=installed_lines)
-   yield Scriptlet(step=DebStep.POSTRM, lines=uninstalled_lines)
-   yield Scriptlet(step=RpmStep.POST, lines=installed_lines)
-   yield Scriptlet(step=RpmStep.POSTUN, lines=uninstalled_lines)
-   yield Scriptlet(step=SolStep.POSTINSTALL, lines=installed_lines)
-   yield Scriptlet(step=SolStep.POSTREMOVE, lines=uninstalled_lines)
-
-def get_hello_bakery_windows_config(conf: HelloBakeryConfig) -> WindowsConfigGenerator:
-   yield WindowsConfigEntry(path=["hello_bakery", "user"], content=conf["user"])
-   yield WindowsConfigEntry(path=["hello_bakery", "content"], content=conf["content"])
+def get_hello_world_windows_config(conf: HelloWorldConfig) -> WindowsConfigGenerator:
+    yield WindowsConfigEntry(path=["hello_world", "user"], content=conf["user"])
+    yield WindowsConfigEntry(path=["hello_world", "content"], content=conf["content"])
 
 register.bakery_plugin(
-   name="hello_bakery",
-   files_function=get_hello_bakery_plugin_files,
-   scriptlets_function=get_hello_bakery_scriptlets,
-   windows_config_function=get_hello_bakery_windows_config,
+    name = "hello_world",
+    files_function = get_hello_world_plugin_files,
+    scriptlets_function = get_hello_world_scriptlets,
+    windows_config_function = get_hello_world_windows_config,
 )
 ----
-
-
-[#ruleset]
-=== Creating a rule set
-
-For a Bakery plug-in there must be a set of rules for the Setup, with which the plug-in can be configured via the GUI. 
-In the simplest case this is the activation of the plug-in.
-In the most general case the configuration within the functions `files_function`, `scriptlets_function` and `windows_config_function` can be evaluated arbitrarily and influence the returned xref:artefacts[artifacts], e.g. to write the user name into the configuration.
-To the functions just mentioned, the configuration of the plug-in is available through the `conf` argument.
-
-The required rule set must be specified as a plug-in file and also stored.
-The file name must match the plug-in name and end with the `.py` suffix.
-
-The creation of a rule set is not part of the Bakery API.
-You can find an introduction to this topic in the xref:devel_check_plugins#rule_set[developing your own agent-based check plug-ins] article.
-However, since the rule set is closely related to the Bakery plug-in, we will show a possible implementation accompanying this example scenario:
-
-.hellobakery_bakery.py
-[{python}]
-----
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-from cmk.gui.i18n import _
-from cmk.gui.plugins.wato import (
-   HostRulespec,
-   rulespec_registry,
-)
-from cmk.gui.cee.plugins.wato.agent_bakery.rulespecs.utils import RulespecGroupMonitoringAgentsAgentPlugins
-from cmk.gui.valuespec import (
-   Age,
-   Dictionary,
-   TextAscii,
-)
-
-def _valuespec_hello_bakery():
-   return Dictionary(
-      title=_("Hello bakery! (Linux, Solaris, Windows)"),
-      help=_("This will deploy my example plugin."),
-      elements=[
-         ("user", TextAscii(
-            title=_("User for example plugin"),
-            allow_empty=False,
-         )),
-         ("content", TextAscii(
-            title=_("The actual content"),
-            allow_empty=False,
-         )),
-         ("interval",
-          Age(
-            title=_("Run asynchronously"),
-            label=_("Interval for collecting data"),
-            default_value=300, # default: 5 minutes
-          )),
-      ],
-      optional_keys=["interval"],
-   )
-
-rulespec_registry.register(
-   HostRulespec(
-      group=RulespecGroupMonitoringAgentsAgentPlugins,
-      name="agent_config:hello_bakery",
-      valuespec=_valuespec_hello_bakery,
-   ))
-----
-
-*Important:* The Agent Bakery ignores a definition of `match_type` in the linked rule set and always sets `match_type` to 'first', which means that the first matching rule will be executed.
-
-The GUI resulting from this rule set is shown in the following image:
-
-image::bakeryapi_settings.png[alt="GUI of the rule set used to configure the plug-in."]
-
-The configuration finds its way to the Bakery plug-in via the name under which the rule set is registered and the prefix `agent_config:`. 
-In this case, the rule set must be registered under the same name as the Bakery plug-in, but with the additional prefix `agent_config:`.
 
 
 [#deploy]
@@ -561,10 +619,12 @@ As always, all specifications here are relative to the site's directory (e.g. `/
 [cols="50,~",options="header"]
 |===
 |File path |Description
-|`local/lib/check_mk/base/cee/plugins/bakery/` |Directory for the Bakery plug-in (in our example `hello_bakery.py`).
+|`local/lib/check_mk/base/cee/plugins/bakery/` |Directory for the Bakery plug-in (in our example `hello_world.py`).
 |`local/share/check_mk/agents/plugins/` |Directory for storing the Unix-like agent plug-ins.
 |`local/share/check_mk/agents/windows/plugins` |Directory for storing the Windows agent plug-ins.
 |`local/share/check_mk/agents/` |Directory for included programs or shell scripts for Unix-like operating systems (`some_binary` in the example).
 |`local/share/check_mk/agents/windows/` |Directory for supplied programs or shell scripts for Windows.
-|`local/share/check_mk/web/plugins/wato` |Directory for the rule set files for configuring the agent plug-in (in the example `hellobakery_bakery.py`) and also the associated check plug-in (e.g. for setting thresholds). Therefore, choose meaningful names to be able to tell the files apart. 
+// |`local/share/check_mk/web/plugins/wato` |Directory for the rule set files for configuring the agent plug-in (in the example `hellobakery_bakery.py`) and also the associated check plug-in (e.g. for setting thresholds). Therefore, choose meaningful names to be able to tell the files apart.
+// MFS: Hint for prefix needed added:
+|`local/lib/python3/cmk_addons/plugins/<family_name>/rulesets` |Directory for the rule set files for configuring the agent plug-in (in the example `hellobakery_bakery.py`) and also the associated check plug-in (e.g. for setting thresholds). Therefore, choose meaningful names to be able to tell the files apart. Names of files stored here have to start with `ruleset_`, otherwise {CMK} will ignore those.
 |===
