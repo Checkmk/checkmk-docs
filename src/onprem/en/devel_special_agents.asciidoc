@@ -1,0 +1,675 @@
+// -*- coding: utf-8 -*-
+// IGNORE pre
+// NONASCII °
+include::global_attr.adoc[]
+= Developing special agents
+:revdate: 2025-03-10
+:title: Developing special agents
+:description: Here you will learn how to develop special agents with which you can transfer data from any source into a {CMK} agent output and thus into monitoring.
+
+{related-start}
+xref:devel_intro#[Developing extensions for {CMK}]
+xref:datasource_programs#[Datasource programs]
+xref:wato_monitoringagents#[Monitoring agents]
+xref:wato_services#[Understanding and configuring services]
+xref:cmk_commandline#[{CMK} on the command line]
+xref:mkps#[{CMK} extension packages (MKPs)]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+At this point, we are assuming that you have already familiarized yourself with the basics of xref:datasource_programs#[datasource programs] and xref:special_agents#[special agents] and understand their basic mechanisms.
+Special agents add simple configurability to a datasource program.
+Rules in the Setup are used for this.
+The configurability can affect both the scope and type of data retrieved as well as its pre-processing before it is transferred as agent output to the further processing chain.
+
+Each special agent is an independently executable program without dependencies on {CMK} programming interfaces.
+As with datasource programs, special agents are also called at the usual check interval (usually one minute by default).
+A process is started by the special agent and the agent's output is transferred to the standard output.
+The special agent then terminates.
+This allows you to implement special agents in any programming language.
+However, short-running processes mean that _just-in-time_ compiled languages such as Java are less suitable than compiled languages or fast-starting interpreted languages.
+
+The triggered processes are configured via command line parameters when the special agent is called.
+To do this, you determine how GUI elements such as text input fields or checkboxes are to be mapped to specific parameters.
+
+Code examples created for this article are available in our link:https://github.com/Checkmk/checkmk-docs/tree/2.3.0/examples/devel_special_agents[GitHub repository^] and the finished Open-Meteo special agent is available as link:https://exchange.checkmk.com/p/ometemp[MKP in the {CMK} exchange^].
+
+[#minimal_agent]
+== Creating a 'minimal' special agent
+
+[TIP]
+====
+When developing special agents, you must also ensure that you use the respective site user for the file creation.
+If owners or permissions are not correctly defined, this can lead to problems and incompatibilities.
+====
+
+In contrast to the datasource program, a special agent cannot be located anywhere in the file system.
+It has its specific location in {CMK}'s directory hierarchy.
+In addition, the file name must begin with `agent_`.
+Furthermore, special agents must always be made known to the {CMK} site.
+A minimal, executable special agent therefore requires at least three files: the special agent, the rule configuration and the call configuration.
+
+
+[#prepare_env]
+=== Preparing the environment
+
+As a preparatory step, you should therefore create three directories, all of which are located under `~/local/lib/python3/cmk_addons/plugins/<plug-in_family>`.
+The fourth directory shown in the below example is optional -- it may be used for an agent-based check.
+
+[{shell}]
+----
+{c-omd} mkdir -p local/lib/python3/cmk_addons/plugins/hellospecial/libexec
+{c-omd} mkdir -p local/lib/python3/cmk_addons/plugins/hellospecial/rulesets
+{c-omd} mkdir -p local/lib/python3/cmk_addons/plugins/hellospecial/server_side_calls
+{c-omd} mkdir -p local/lib/python3/cmk_addons/plugins/hellospecial/agent_based
+----
+
+
+[#special_agent]
+=== The special agent
+
+What could be better suited as a minimal special agent than a local check that provides a "Hello World!" service?
+Even a simple shell script that generates two lines of output can do this:
+
+.~/local/lib/python3/cmk_addons/plugins/hellospecial/libexec/agent_hellospecial
+[{shell-raw}]
+----
+#!/bin/bash
+echo '<<<local>>>'
+echo '0 "Hello special" - This static service is always OK'
+----
+
+[TIP]
+====
+This script must not have a file extension.
+====
+
+Do not forget: The file must be made executable:
+
+[{shell}]
+----
+{c-omd} chmod 755 local/lib/python3/cmk_addons/plugins/hellospecial/libexec/agent_hellospecial
+----
+
+This will assign the necessary permissions:
+
+* for the owner of the file (read, write, execute)
+* for the group associated with a file (read, execute)
+* for other users (read, execute).
+
+
+[#rule_config]
+=== Configuring the rule
+
+An absolute minimum rule is now created:
+
+* Title and category are defined.
+* The GUI form for configuration remains empty.
+
+.~/local/lib/python3/cmk_addons/plugins/hellospecial/rulesets/special_agent.py
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed only for editors
+
+from cmk.rulesets.v1.form_specs import Dictionary
+from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic, Help, Title
+
+def _formspec():
+    return Dictionary(
+        title=Title("Hello special!"),
+        help_text=Help("This rule is to demonstrate the minimum special agent."),
+        elements={}
+    )
+
+rule_spec_hellospecial = SpecialAgent(
+    topic=Topic.GENERAL,
+    name="hellospecial",
+    title=Title("Hello special!"),
+    parameter_form=_formspec
+)
+----
+
+The `name` refers to the name of the special agent, which is given the prefix `agent_`.
+An agent configured in this way will be available in [.guihint]#Other integrations#.
+However, its configuration template contains no entries because of the empty `elements={}`.
+
+
+[#call_config]
+=== The call configuration
+
+This configuration combines the special agent to be executed with the settings obtained from the GUI and the default settings.
+These settings now become call parameters.
+The `name` again refers to the name of the special agent, which is given the prefix `agent_`.
+
+.~/local/lib/python3/cmk_addons/plugins/hellospecial/server_side_calls/special_agent.py
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed only for editors
+
+from cmk.server_side_calls.v1 import noop_parser, SpecialAgentConfig, SpecialAgentCommand
+
+def _agent_arguments(params, host_config):
+    yield SpecialAgentCommand(command_arguments=[])
+
+special_agent_hellospecial = SpecialAgentConfig(
+    name="hellospecial",
+    parameter_parser=noop_parser,
+    commands_function=_agent_arguments
+)
+----
+
+This provides the basic requirements for the special agent.
+You can, of course, add further information to these at any time.
+
+
+[#first_test]
+=== The first test
+
+Once the files have been created, restart the site's web server:
+
+[{shell}]
+----
+{c-omd} omd restart apache
+----
+
+If you now open [.guihint]#Setup > Agents > Other integrations#, you should see the new entry [.guihint]#Hello special!# in the [.guihint]#Custom integrations# section.
+
+If this is missing, first check whether you have stored all of the files in the designated location.
+If you are looking for other possible sources of error, in the commercial editions you can do this conveniently via the administration of xref:glossar#mkp[{CMK} extension packages].
+Alternatively, we have listed the most important sources of errors and possible solutions in the xref:detect_errors[Troubleshooting] chapter. 
+
+
+[#complex_example]
+== A more complex example: A complete weather service
+
+A check that never changes its state is -- well -- pretty predictable.
+So we will dare to take the step towards a 'real' special agent that queries a web or REST API and receives an object as a JSON or XML structure in response.
+These are also typical data formats when accessing the APIs of network devices such as SAN devices.
+
+So that you won't need any specific hardware for this exercise, we will use the free API from link:https://open-meteo.com/[Open-Meteo.com^].
+Our goal is to write a complete special agent that is configured with latitude and longitude.
+To keep the exercise simple, the special agent will also interpret the data directly.
+For example, the special agent should assume the {WARN} state for temperatures below 5 degrees Celsius, and the {CRIT} state for temperatures below 0 degrees.
+We abbreviate our check to `ometemp`, the special agent to `agent_ometemp` and so on.
+
+[TIP]
+====
+Open-Meteo allows free use for non-commercial purposes and reserves the right to block IP addresses if there are too many requests.
+The minute-by-minute query of the API is still within tolerable limits.
+Nevertheless, you should not overuse the service, and delete special agent rules that use this service following successful testing.
+Take particular care to ensure that special agent assignment rules created for the test only apply to one host and not to dozens or hundreds!
+====
+
+
+[#env_prep]
+=== Preparing the environment
+
+As in the previous exercise, first create the xref:prepare_env[required directories] -- this time with the name `ometemp` instead of `hellospecial`.
+
+
+[#special_agent2]
+=== The special agent
+
+Now that real data is to be processed, you will also need to give some thought to the programming language and pre-processing, for example.
+Our exercise queries a public API and receives JSON data.
+This could be done in the shell with a `curl` command.
+However, since {CMK} comes with a well-equipped Python, it makes sense to use it.
+
+The next decision involves the processing of the data.
+For example, you can simply pass JSON data through to the agent output or convert it into a table format in the special agent.
+In practice, you will usually decide this depending on your working environment: 
+Has the 'division of labor' been taken into account when developing your check? 
+Does the prepared data simplify the development of the associated xref:devel_check_plugins#[agent-based check plug-in]?
+Or do they even make that superfluous?
+The latter is the case if data can be prepared in such a way that it can be parsed with an existing check plug-in.
+
+Our example simply forwards the JSON response.
+Parsing then takes place in the agent-based check plug-in.
+Longitude and latitude are entered using the command line arguments `--latitude` and `--longitude`.
+To be able to read command line arguments better, we use the `argparse` library.
+Since Open-Meteo supports the latitude and longitude encoded in the URL, a URL with placeholders is sufficient.
+Try this URL in the browser with _your own_ latitude and longitude.
+
+.~/local/lib/python3/cmk_addons/plugins/ometemp/libexec/agent_ometemp
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed this time to find the interpreter!
+
+import requests
+import argparse
+
+url = "https://api.open-meteo.com/v1/forecast?latitude={lat:.4f}&longitude={long:.4f}&current=temperature_2m"
+
+parser = argparse.ArgumentParser("agent_ometemp")
+parser.add_argument(
+    "--latitude",
+    help="Specify the latitude in degrees (decimal notation).",
+    type=float,
+    default=0.0)
+parser.add_argument(
+    "--longitude",
+    help="Specify the longitude in degrees (decimal notation).",
+    type=float,
+    default=0.0)
+args = parser.parse_args()
+
+# print(url.format(lat=args.latitude, long=args.longitude))
+response = requests.get(url.format(lat=args.latitude, long=args.longitude))
+print('<<<ometemp:sep(0)>>>')
+print(response.json())
+----
+
+[TIP]
+====
+Reminder: This script must not have a file extension.
+====
+
+The `ometemp` agent section will only contain the received JSON object.
+Test the special agent by calling it on the command line.
+
+[{shell}]
+----
+{c-omd} ~/local/lib/python3/cmk_addons/plugins/ometemp/libexec/agent_ometemp --latitude 48.1305 --longitude 11.5953
+----
+
+Your output on the command line should now look something like this:
+
+[{shell-raw}]
+----
+<<<ometemp:sep(0)>>>
+{'latitude': 48.14, 'longitude': 11.6, 'generationtime_ms': 0.01728534698486328, 'utc_offset_seconds': 0, 'timezone': 'GMT', 'timezone_abbreviation': 'GMT', 'elevation': 536.0, 'current_units': {'time': 'iso8601', 'interval': 'seconds', 'temperature_2m': '°C'}, 'current': {'time': '2025-01-09T12:45', 'interval': 900, 'temperature_2m': 9.8}}
+----
+
+
+[#rule_config2]
+=== The rule configuration
+
+The next step is the rule configuration for the agent.
+Once completed, this rule will be displayed in [.guihint]#Setup > Agents > Other integrations# in the [.guihint]#Environmental# grouping.
+
+[TIP]
+====
+The headings for the grouping in [.guihint]#Setup > Agents > Other integrations# will be made visible dynamically.
+This means that it will only be possible to see the [.guihint]#Environmental# grouping once the first special agent sorted into it is available.
+A -- non-exhaustive -- overview of the usable groupings can be found under xref:avail_integration[Files and directories] at the end of this article.
+====
+
+.~/local/lib/python3/cmk_addons/plugins/ometemp/rulesets/special_agent.py
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed only for editors
+
+from cmk.rulesets.v1.form_specs import Dictionary, DictElement, Float
+from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic, Help, Title
+
+def _formspec():
+    return Dictionary(
+        title=Title("Open-Meteo temperature"),
+        help_text=Help("This rule is used to showcase a special agent with configuration."),
+        elements={
+            "latitude": DictElement(
+                required=True,
+                parameter_form=Float(
+                    title=Title("Latitude in degrees (decimal notation)"),
+                ),
+            ),
+            "longitude": DictElement(
+                required=True,
+                parameter_form=Float(
+                    title=Title("Longitude in degrees (decimal notation)"),
+                ),
+            ),
+        }
+    )
+
+rule_spec_ometemp = SpecialAgent(
+    topic=Topic.ENVIRONMENTAL,
+    name="ometemp",
+    title=Title("Open-Meteo temperature"),
+    parameter_form=_formspec
+)
+----
+
+With this, the special agent has also been created.
+Next, restart the site's web server:
+
+[{shell}]
+----
+{c-omd} omd restart apache
+----
+
+A rule could now be created based on this special agent with [.guihint]#Add rule: Open-Meteo temperature#.
+This rule will however not do much yet, since it currently only contains the two fields for entering the longitude and latitude.
+
+
+[#use_pwd]
+==== Extension: Using passwords
+
+In many cases a user name and password or an API key are required to access data.
+Separate `formspec` elements are available for managing passwords.
+These allow you to either define passwords ad hoc or to access the xref:password_store#[password store].
+In this example, the following extension to the script created above can be used for this purpose.
+Extend the first line with the additional variables and insert the new program sections:
+
+[{python}]
+----
+from cmk.rulesets.v1.form_specs import Dictionary, DictElement, Float, String, Password, migrate_to_password
+
+def _formspec():
+    return Dictionary(
+        # ...
+        elements={
+            # ...
+            "user": DictElement(
+                required=True,
+                parameter_form=String(
+                    title=Title("User ID for login"),
+                    prefill=DefaultValue("monitoring"),
+                ),
+            ),
+            "password": DictElement(
+                required=True,
+                parameter_form=Password(
+                    title=Title("Password for this user"),
+                    migrate=migrate_to_password,
+                ),
+            ),
+        }
+    )
+----
+
+Do not forget to restart the site's web server after editing (in this case extending) a script.
+
+As the example with Open-Meteo does _not_ require a password, we show the basic handling of passwords here, but do not include them in the API call.
+
+
+[#call_config2]
+=== The call configuration
+
+Next, we extend the new special agent so that it not only contains the longitude and latitude, but also processes these.
+Our ultimate goal is to obtain the current temperature values for our location. 
+The following configuration therefore combines the special agent to be executed with the settings obtained from the GUI -- i.e. from our existing rule section -- and the settings from the standards.
+
+The values for longitude and latitude, which you can usually specify, are now transferred to the dictionary named `params`.
+At the same time, the `host_config` object contains all host-specific settings that are to be used here.
+For example, `host_config.primary_ip_config.address` gives you access to the primary IP address, and `host_config.name` contains the host name.
+
+When transferring to the special agent, note that the call is made via a shell.
+The list of call parameters may therefore only contain strings.
+The settings then become call parameters that end up in the `command_arguments` list.
+
+.~/local/lib/python3/cmk_addons/plugins/ometemp/server_side_calls/special_agent.py
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed only for editors
+
+from cmk.server_side_calls.v1 import noop_parser, SpecialAgentConfig, SpecialAgentCommand
+
+def _agent_arguments(params, host_config):
+    args = [ "--latitude", str(params['latitude']), "--longitude", str(params['longitude']) ]
+    yield SpecialAgentCommand(command_arguments=args)
+
+special_agent_ometemp = SpecialAgentConfig(
+    name="ometemp",
+    parameter_parser=noop_parser,
+    commands_function=_agent_arguments
+)
+----
+
+
+[use_pwd2]
+==== Using passwords
+
+[IMPORTANT]
+====
+The example shown here passes passwords in plain text as command line arguments.
+Without additional security measures, these passwords could be read from the process table, for example.
+This vulnerability can be minimized by changing the entry in the process table when the program is started.
+In Python, for example, this can be done with the link:https://pypi.org/project/setproctitle/[`setproctitle` module^].
+We are currently preparing an even more secure way in which the started program reads the password directly from the password store.
+====
+
+As passwords are stored as an object, access is via that object's `unsafe()` function:
+
+[{python}]
+----
+def _agent_arguments(params, host_config):
+    args = [
+        "--latitude", str(params['latitude']),
+        "--longitude", str(params['longitude']), 
+        "--user", params['user'],
+        "--password", params['password'].unsafe()
+    ]
+    yield SpecialAgentCommand(command_arguments=args)
+----
+
+
+[#check_plugin]
+=== The check plug-in
+
+For the sake of completeness, we also show the agent-based check plug-in here.
+The development of these plug-ins is described in detail in the article on xref:devel_check_plugins#[agent-based check plug-ins].
+
+One difference to the example mentioned in the article is the transfer of the JSON returned from the REST API:
+The check plug-in always receives the agent section as a two-dimensional list (‘list of lists‘) of strings.
+First of all, we use the `itertools` to turn this two-dimensional list into a one-dimensional one.
+We then concatenate this resulting array with spaces, which converts the entire agent section into a single string.
+Finally, we make sure to replace single quotes with double quotes to be able to load the string directly as an object with `json.loads()`.
+
+.~/local/lib/python3/cmk_addons/plugins/ometemp/agent_based/ometemp.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import AgentSection, CheckPlugin, Service, Result, State, Metric, check_levels
+import itertools
+import json
+
+def parse_ometemp(string_table):
+    flatlist = list(itertools.chain.from_iterable(string_table))
+    parsed = json.loads(" ".join(flatlist).replace("'", "\""))
+    return parsed
+
+def discover_ometemp(section):
+    yield Service()
+
+def check_ometemp(section):
+    t = section['current']['temperature_2m']
+    if t < 0.0:
+        yield Result(state=State.CRIT, summary="Brrrrrr!")
+    elif t < 5.0:
+        yield Result(state=State.WARN, summary="It's getting cold...")
+    else:
+        yield Result(state=State.OK, summary="Nice here.")
+    return
+
+agent_section_ometemp = AgentSection(
+    name = "ometemp",
+    parse_function = parse_ometemp,
+)
+
+check_plugin_ometemp = CheckPlugin(
+    name = "ometemp",
+    service_name = "Open Meteo temperature (2m)",
+    discovery_function = discover_ometemp,
+    check_function = check_ometemp,
+)
+----
+
+In combination with this check plug-in, the scripts described in this article for special agents, rule configuration and call configuration should now provide you with a functioning service in {CMK}:
+
+image::devel_special_services.png[alt="View of services including ometemp."]
+
+
+[#detect_errors]
+== Troubleshooting
+
+Even when developing your own special agents, errors and problems can (unfortunately) occur.
+Identifying what has caused an error is just as important as fixing it.
+
+
+[#serv_warn]
+=== Warnings in the host's service overview
+
+If the [.guihint]#Check_MK# service suddenly changes its status to {WARN} or {CRIT} after its special agent has been activated, take a look at its associated [.guihint]#Summary#.
+ 
+image::devel_special_check_mk.png[alt="Error message from the Check_MK service related to its special agent."]
+
+If the [.guihint]#Summary# indicates a connection with the new special agent, check the host properties.
+The [.guihint]#Configured API integrations and Checkmk agent# value must be selected for the [.guihint]#Checkmk agent / API integrations# parameter.
+
+image::devel_special_monitoring_agent.png[alt="Selection of ‘Configured API integrations and Checkmk agent’."]
+
+
+[#incompatibles]
+=== The rule has disappeared or a warning is displayed
+
+If your special agent is not (or no longer) displayed in {CMK} under [.guihint]#Setup > Agents > Other integrations#, there may be an error in the rule configuration (`rulesets/special_agent.py`).
+
+{cee-only} If you are using one of the commercial editions, you may instead see a red warning when trying to edit the rule or create a new one.
+Follow the link to the crash report page.
+The possible cause of the problem will be displayed there.
+
+Then view the error descriptions:
+
+[{shell}]
+----
+{c-omd} tail -f var/log/web.log
+----
+
+For example, you will receive an output like this:
+
+[{shell-raw}]
+----
+2024-12-17 10:15:51,742 [40] [cmk.web 2669118] Error converting to legacy rulespec 'ometemp' : name 'migrate_to_password' is not defined
+----
+
+Check the syntax of your `rulesets/special_agent.py` file.
+Check whether all of the required libraries have been taken into account and all variables have been imported.
+Check whether all indentations are correct and check the entire syntax.
+
+[TIP]
+====
+If your rule was previously visible in {CMK} and -- following a modification to the rule configuration -- has suddenly disappeared, then you will only notice this if you want to adapt existing rules or create new rules.
+The problem will not affect the monitoring of existing services.
+====
+
+[#activate_changes]
+=== Error messages when activating changes
+
+There may also be a problem in the call configuration or in the actual special agent.
+This becomes visible, for example, because a yellow warning is being displayed during [.guihint]#Activate changes#.
+
+Check the file `server_side_calls/special_agent.py` according to the information in the error message.
+If this does not resolve the error, you can search for error messages on the command line again:
+
+[{shell}]
+----
+{c-omd} cmk -d localhost --debug | less
+----
+
+After a moment's patience, you will receive an output similar to the following (here abbreviated for clarity):
+
+[{shell-raw}]
+----
+Traceback (most recent call last):
+  File "/omd/sites/devtest/bin/cmk", line 118, in <module>
+    exit_status = modes.call(mode_name, mode_args, opts, args)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/omd/sites/devtest/lib/python3/cmk/base/modes/__init__.py", line 70, in call
+    return handler(*handler_args)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/omd/sites/devtest/lib/python3/cmk/base/modes/check_mk.py", line 562, in mode_dump_agent
+    for source in sources.make_sources(
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "/omd/sites/devtest/lib/python3/cmk/base/sources/_builder.py", line 407, in make_sources
+    return _Builder(
+           ^^^^^^^^^
+  File "/omd/sites/devtest/lib/python3/cmk/base/sources/_builder.py", line 140, in __init__
+    self._initialize_agent_based()
+  File "/omd/sites/devtest/lib/python3/cmk/base/sources/_builder.py", line 198, in _initialize_agent_based
+    special_agents = tuple(make_special_agents())
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/omd/sites/devtest/lib/python3/cmk/base/sources/_builder.py", line 187, in make_special_agents
+    for agent_data in special_agent.iter_special_agent_commands(agentname, params):
+  File "/omd/sites/devtest/lib/python3/cmk/base/server_side_calls/_special_agents.py", line 139, in iter_special_agent_commands
+    yield from self._iter_commands(special_agent, params)
+  File "/omd/sites/devtest/lib/python3/cmk/base/server_side_calls/_special_agents.py", line 115, in _iter_commands
+    for command in special_agent(processed.value, self.host_config):
+  File "/omd/sites/devtest/local/lib/python3/cmk_addons/plugins/ometemp/server_side_calls/special_agent.py", line 13, in _agent_arguments
+    "--user", params['bulla'],
+              ~~~~~~^^^^^^^^^
+KeyError: 'bulla'
+----
+
+The last lines of the output are particularly interesting:
+In the file `server_side_calls/special_agent.py` an attempt is being made to access a dictionary element `params` that does not exist.
+
+
+[#agent_output]
+=== Verifying agent output
+
+Another source of error may be that the check plug-in is not outputting any data.
+This can also be checked on the command line: 
+
+[{shell}]
+----
+{c-omd} cmk -d localhost --debug | less
+----
+
+If you receive an error message here instead of a string with the current measurement data, use the error message to correct it.
+
+
+[#files]
+== Files and directories
+
+=== Directories
+
+[cols="60,~",options="header"]
+|===
+|File path |Description
+|`~/local/lib/python3/cmk_addons/plugins/` |Base directory for storing plug-in files.
+|`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/libexec/` |Storage location for executable files.
+|`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/rulesets/` |Storage location for rule set files.
+|`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/server_side_calls/` |Storage location for call configuration files.
+|`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/agent_based/` |Storage location for agent-based check plug-ins.
+|`~/share/check_mk/agents/special/` |The standard special agents are installed here.
+|`~/local/share/check_mk/agents/special/` |Storage of the special agents you have modified.
+|`~/local/bin/` |Storage of your own programs or scripts that are to be in the search path and which can be executed directly without specifying a file path. If a program is in both `~/bin/` and `~/local/bin/`, the latter has priority.
+|===
+
+
+[#avail_integration]
+=== Available groupings in [.guihint]#Other integrations#
+
+[cols="50,~",options="header"]
+|===
+|Name |Description
+| `APPLICATIONS` | Application monitoring
+// | `CACHING_MESSAGE_QUEUES` | 
+| `CLOUD` | Cloud monitoring
+| `CONFIGURATION_DEPLOYMENT` | Monitoring of configuration management systems
+| `DATABASES` | Monitoring of databases
+| `GENERAL` | _Everything that doesn't fit somewhere else_
+| `ENVIRONMENTAL` | Monitoring of environment and surroundings
+| `LINUX` | Monitoring of the Linux operating system
+| `NETWORKING` | Network monitoring
+| `MIDDLEWARE` | Monitoring of middleware
+| `NOTIFICATIONS` | Monitoring of notification systems
+| `OPERATING_SYSTEM` | Operating system monitoring in general
+| `PERIPHERALS` | Monitoring of peripheral devices
+| `POWER` | Power supply monitoring
+| `SERVER_HARDWARE` | Monitoring of server hardware
+| `STORAGE` | Monitoring of storage systems
+| `SYNTHETIC_MONITORING` | Synthetic monitoring
+| `VIRTUALIZATION` | Monitoring of virtualization environments
+| `WINDOWS` | Monitoring of the Windows operating system
+|===
