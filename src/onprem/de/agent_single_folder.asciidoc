@@ -1,0 +1,127 @@
+// -*- coding: utf-8 -*-
+// IGNORE
+include::global_attr.adoc[]
+= Unprivilegierte Agentenausführung und alternative Verzeichnishierarchie
+:revdate: draft
+:title: Unprivilegierte Agentenausführung und alternative Verzeichnishierarchie
+:description: {CMK} 2.4.0 bringt neue Mechanismen für die Installation und Ausführung von Linux- und Unix-Agenten mit geringeren Privilegien.
+
+{related-start}
+xref:agent_linux#[Linux überwachen]
+xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus]
+xref:agent_deployment#[Automatische Agenten-Updates]
+{related-end}
+
+[#intro]
+== Einleitung
+
+ifdef::onprem[]
+{cee-only}
+In den kommerziellen Editionen von {CMK}
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+können Sie Agentenpakete so konfigurieren, dass diese innerhalb eines einzigen Verzeichnisses installiert werden und zudem von einem unprivilegierten Nutzer ausgeführt werden.
+Vollständig nutzbar ist dieses Feature zunächst für Linux-Agenten mit Agent Controller.
+Bei Linux ohne Agent Controller, Solaris und AIX ist die Installation in den konfigurierten Pfad umgesetzt, Aufrufkonfiguration und Eigentümerschaft müssen jedoch aus technischen Gründen manuell umgesetzt werden.
+
+[TIP]
+====
+Die hier vorgestellte Funktionalität ist ein _Technical Preview_, also die Vorschau auf ein neues Feature, das bis auf weiteres Wandel und Erweiterung unterworfen sein wird.
+Während dieser Phase ist es möglich, dass Funktionalität nicht nur hinzugefügt, sondern auch so umgebaut wird, dass bereits vorhandene Konfiguration obsolet wird und Sie diese neu erstellen müssen.
+Wir bitten dafür um Verständnis.
+====
+
+[#bakery]
+== Konfiguration der Agentenpakete
+
+Die Konfiguration der Agentenpakete erfolgt in der Agentenbäckerei mit dem Button [guihint]#Agent rules#.
+Hier finden Sie unter [guihint]#Agent rules > Linux/Unix agent options# die Regel [guihint]#Customize agent package (Linux)#.
+
+Passen Sie hier – falls nötig – das Installationsverzeichnis an und bestimmen Sie zunächst, ob Agent Controller und Agent mit Rechten eines unprivilegierten Nutzers ausgeführt werden soll oder wie bei Vanilla-Agentenpaketen der Agent Controller unprivilegiert, das Agentenskript jedoch mit Root-Rechten ausgeführt werden soll.
+
+Zudem können Sie Nutzer und Gruppe bestimmte numerische IDs zuweisen (beachten Sie hier die Konventionen Ihrer Linux-Distribution und möglicherweise vorhandene Limitationen verwendeter Dateisysteme), sowie angeben, dass ein vorhandener Nutzer verwendet oder dieser neu angelegt werden soll.
+
+[TIP]
+====
+Beachten Sie, dass es weder für die mit den Agentenpaketen ausgelieferte Konfiguration, noch die im folgenden Kapitel auf dem Host vorgenommene Konfiguration _die eine_ beste Lösung gibt.
+Alle möglichen und sinnvollen Lösungen orientieren sich an verwendeten Distributionen, Policies in Ihrem Unternehmen und Wartbarkeit.
+====
+
+[#localconfig]
+== Konfiguration auf dem Host im Monitoring
+
+Falls Sie Agentenpakete für unprivilegierte Ausführung konfiguriert haben, kann zusätzliche Konfiguration auf dem Host im Monitoring erforderlich werden.
+
+Aus Sicherheitsgründen bietet ein für unprivilegierte Ausführung konfigurierter Agent einen etwas geringeren Funktionsumfang als ein mit Root-Rechten ausgeführter Agent.
+Um die fehlende Funktionalität verfügbar zu machen, müssen Sie als administrierende Person Methoden finden, die sowohl effektiv sind, als auch mit den Sicherheitsrichtlinien Ihres Unternehmens und den Konventionen der eingesetzten Linux-Distribution oder des genutzten Unix-Derivats vereinbar sind.
+
+[#sudo]
+=== Konfiguration von sudo
+
+Für das Agentenskript auf Linux, Solaris und AIX haben wir eine Wrapper-Funktion hinzugefügt, welche Befehlen, die in der Regel erhöhte Privilegien benötigen, link:https://xkcd.com/149/[`sudo`^] voranstellt.
+Betroffen davon sind in {CMK} {v24} `mdadm` (zum Auslesen des Zustandes verschiedener Software-RAIDs und verschlüsselter Laufwerke), sowie `mailq` (zum Auslesen der E-Mail-Warteschlange des Postfix-MTA).
+
+Beispielkonfigurationen für `sudo` finden Sie in im Unterordner des `default/package/agent/checkmk_agent_sudoers_template` des Installationspfades des Agenten (Standard ist `/opt/checkmk/agent`).
+Sie können benötigte Zeilen in Ihre `/etc/sudoers` übertragen oder die gesamte Datei nach `/etc/sudoers.d` kopieren (nicht empfohlen).
+Passen Sie die Einträge entsprechend an. Beispielsweise sind in einigen Fällen keine Superuser-Rechte für das Auslesen der E-Mail-Warteschlange notwendig und es kann die Nutzerkennung verwendet werden, unter welcher der MTA ausgeführt wird.
+
+[#plugins]
+=== Agenten-Plugins
+
+// MFS: TBD, die Regel "Plug-ins, local checks and MRPE for non-root users" wird bis zum Release auf "sudo" umgebaut sein und damit mit dem unpriv. Agenten funktionieren. Erfordert Änderungen hier.
+An der Ausführung von Agentenplugins haben wir bislang keine Änderungen vorgenommen.
+Dies bedeutet, dass Sie selbst sicherstellen müssen, dass Plugins benötigte Daten liefern.
+Die folgende Liste zeigt mögliche Methoden, 
+
+* Fügen Sie den Nutzer, unter dessen Kennung das Agentenskript ausgeführt wird, einer Gruppe hinzu, die im Monitoring benötigte Daten auslesen kann.
+* Ändern Sie Zugriffsrechte oder Gruppenzuordnung von Gerätedateien (beispielsweise über `udev`-Regeln) so, dass der unprivilegierte Nutzer zugreifen kann.
+* Führen Sie gegebenenfalls Plugins per Cronjob aus und leiten Sie deren Ausgabe in eine xref:spool_directory#[Spool-Datei] um.
+* In wenigen Fällen wird es notwendig sein, die Plugins selbst anzupassen, um aufgerufenen Befehlen `sudo` voran zustellen.
+
+[TIP]
+====
+Vorgenommene Anpassungen an mit {CMK} ausgelieferten Agenten-Plugins können Sie uns gerne zukommen lassen.
+Dies kann über einen link:https://github.com/Checkmk/checkmk/blob/master/CONTRIBUTING.md[Pull-Request^] geschehen, ein Support-Ticket oder Hinweise im link:https://forum.checkmk.com/[Checkmk-Forum^].
+Best Practises für Plugin-Entwickler werden wir dem Artikel zur xref:devel_check_plugins#[Entwicklung agentenbasierter Check-Plugins] nach und nach hinzufügen.
+====
+
+[#updater]
+=== Der Agent Updater
+
+[IMPORTANT]
+====
+Die gegenwärtige Implementierung des Agent Updaters als Agenten-Plugin ist nicht mit der unprivilegierten Ausführung kompatibel.
+Wir arbeiten an notwendigen Änderungen an der Architektur.
+Greifen Sie derweil auf andere Softwareverteilungslösungen zurück.
+====
+
+[#noagentcontroller]
+=== Aufruf ohne Agent Controller
+ 
+Die unprivilegierte Ausführung des Agentenskriptes ist selbstverständlich nicht an den Agent Controller gekoppelt.
+
+[#xinetd]
+==== Xinetd
+
+Die unter `default/package/config/xinetd-service-template.cfg` mitgelieferte und bei deaktiviertem oder inkompatiblen Agent Controller aktivierte Konfigurationsdatei für `xinetd` enthält bereits den per Agentenregel definierten unprivilegierten Nutzer.
+Falls Sie einen anderen Internet Superserver nutzen (beispielsweise den OpenBSD `inetd`), erstellen Sie die Konfiguration entsprechend dessen Dokumentation.
+Beispiele zeigt der Artikel zum xref:agent_linux_legacy#otherinetd[Monitoring von Linux im Legacy Modus].
+
+[#ssh]
+==== Secure Shell
+
+Auch der Aufruf via SSH entspricht dem im Artikel zum xref:agent_linux_legacy#ssh[Monitoring von Linux im Legacy Modus] beschriebenen Vorgehen.
+Lediglich der Pfad zur verwendeten Konfigurationsdatei `.ssh/authorized_keys` und der verwendete Nutzername sind auf den bei Ihnen genutzten unpriveligierten Nutzer anzupassen.
+
+// MFS: ACHTUNG!
+// MFS:
+// MFS: Dieser Kommentar dient als Marker, um Merge-Konflikte zu vermeiden
+// MFS: Bitte drin lassen, so lange mehrere Autoren oberhalb und unterhalb dieses Markers arbeiten.
+// MFS: Vielen Dank für die Rücksichtnahme!
+// MFS:
+// MFS: ACHTUNG!
+
+// [#files]
+// == Dateien und Verzeichnisse
