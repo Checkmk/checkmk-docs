@@ -1,0 +1,134 @@
+// -*- coding: utf-8 -*-
+// IGNORE OpenTelemetryTest gPRC
+include::global_attr.adoc[]
+= OpenTelemetry Metriken im Monitoring verwenden
+:revdate: draft
+:title: OpenTelemetry Metriken in {CMK} verwenden
+:description: {CMK} 2.4.0 führt einen experimentellen Spezialagenten zur Verwendung von OpenTelemetry Metriken ein.
+
+{related-start}
+xref:special_agents#[Spezialagenten]
+xref:dcd#[Dynamische Host-Verwaltung]
+{related-end}
+
+[#intro]
+== Einleitung
+
+In {CE} können Sie OpenTelemetry Metriken empfangen und im Monitoring verarbeiten.
+Hierfür bringt {CMK} einen OpenTelemetry Collector mit.
+Dieser unterstützt die Transportprotokolle _gRPC_ und _HTTP(S)_ als Empfänger in einer Push-Konfiguration.
+Zudem kann er als _Scraper_ Daten von Prometheus-Endpunkten einsammeln (Pull-Konfiguration).
+Empfangene Metriken werden von einem xref:special_agents#[Spezialagenten] minütlich eingesammelt und aggregiert.
+Der Spezialagent wiederum kann xref:dcd#[dynamisch Hosts anlegen lassen] und Ausgaben für Check-Plugins generieren.
+Diese Check-Plugins erstellen Dienste im Monitoring, legen deren Zustand fest und liefern Metriken.
+
+Ganz kurz zusammen gefasst: Drei Komponenten (Collector, DCD und Spezialagent) müssen zusammen spielen, bevor Dienste erkannt und {CMK}-Metriken erzeugt werden können.
+
+include::include_technical_preview.asciidoc[]
+
+[#setup]
+== Einrichtung
+
+[#collector_activation]
+=== OpenTelemetry Collector aktivieren
+
+Zunächst müssen Sie bei gestoppter Instanz den Collector aktivieren.
+Dies erledigen Sie als Instanzbenutzer auf der Kommandozeile im textbasierten Konfigurationsmenü:
+
+[{shell}]
+----
+{c-omd} omd config
+----
+
+Wechseln Sie hier zu `Addons` und aktivieren Sie `OPENTELEMETRY_COLLECTOR`.
+Den Port für das Selbstmonitoring des Collectors müssen Sie nicht abändern, er wird auch bei Nutzung mehrerer Instanzen auf den nächsten freien Port ab 14317 eingestellt.
+
+image::opentelemetry_omd_config.png[]
+
+Starten Sie nach Aktivierung des Collectors die Instanz wieder.
+
+[#collector_configuration]
+=== OpenTelemetry Collector konfigurieren
+
+Rufen Sie [guihint]#Setup > Hosts > OpenTelemetry collector (experimental)# auf und starten Sie mit [guihint]#Add OpenTelemetry collector configuration# die Einrichtung eines neuen Collectors.
+
+Achten Sie auf die folgenden Punkte:
+
+* Für [guihint]#Site restriction# muss wenigstens ein Eintrag von der inaktiven linken Seite auf die aktive rechte Seite verschoben werden. Im Screenshot ist die lokale Instanz die einzig verfügbare.
+* In den Eigenschaften des Collectors [guihint]#OpenTelemetry Collector properties# müssen Sie wenigstens einen der beiden Push-Endpoints (gRPC oder HTTP) oder wenigstens einen Prometheus-Scraper (Pull) einrichten. Unser Screenshot zeigt einen unverschlüsselten, nicht authentifizierten gRPC-Endpoint auf dem Standard-Port 4317 auf allen IPv4-Adressen (`0.0.0.0`).
+* Erstellen Sie wenigstens eine Regel für die [guihint]#Host name computation# – im Beispiel ist die simpelste Möglichkeit ausgewählt, das per OpenTelemetry empfangene Feld `service.name` wird als Host Namen in {CMK} verwendet.
+
+image::opentelemetry_new_collector.png[]
+
+[#dcd]
+=== Dynamische Host-Konfiguration einrichten
+
+Damit automatisch Hosts erstellt werden, muss eine neue [guihint]#Connection# des xref:dcd#[Dynamic Configuration Daemon] erstellt werden.
+Vorbereitend empfehlen wir (zumindest für die ersten Tests) einen eigenen Ordner, in dem sie ausschließlich die automatisch erzeugten OpenTelemetry-Hosts ablegen lassen.
+Die Einrichtung der dynamischen Host-Erzeugung erledigen Sie unter [guihint]#Setup > Hosts > Dynamic host management#.
+
+Nehmen Sie die folgenden Einstellungen vor:
+
+* Setzen Sie den [guihint]#Connector type# auf [guihint]#OpenTelemetry collector data#.
+* Wählen Sie den Zielordner für neue Hosts entsprechend Ihrer Systemumgebung. Im Beispiel verwenden wir [guihint]#OpenTelemetryTest# als Ordnernamen.
+* Setzen Sie die [guihint]#Host attributes# entsprechend Ihrer Systemumgebung. Meist werden die erzeugten Hosts lediglich _virtuelle_ Hosts sein, Sie können folglich ausschließlich Spezialagenten verwenden ([guihint]#Configured API integrations, no Checkmk agent#) und die Einstellungen für IP-Adressen auf [guihint]#No IP# setzen.
+* Für die [guihint]#Service discovery# werden Sie in der Regel den Automatismus ([guihint]#Discover services during creation#) aktivieren wollen.
+
+image::opentelemetry_dcd_connection.png[]
+
+[TIP]
+====
+Nicht so hastig!
+Wenn Sie die in den letzten Schritten vorgenommen Einstellungen gespeichert und die Änderungen aktiviert haben, sammelt der OpenTelemetry Collector Daten und der DCD legt munter Hosts an.
+Die haben aber alle nur zwei Services im Zustand {CRIT}.
+Warten Sie also entweder mit dem Senden von Daten oder der Aktivierung der Änderungen noch ein wenig.
+====
+
+[#special_agent]
+=== Spezialagent konfigurieren
+
+Damit auch {CMK}-Services erzeugt werden, muss wenigstens eine Spezialagentenkonfiguration erstellt werden.
+Die benötigte Regel finden Sie unter [guihint]#Setup > Agents > Other integrations > OpenTelemetry (Experimental)#.
+Entscheiden Sie hier, ob Sie auch den Collector selbst überwachen wollen.
+Bei der Bestimmung der überwachten Hosts ist es naheliegend, den Spezialagenten allen Hosts in dem Ordner zuzuordnen, der im letzten Schritt für die DCD-Konfiguration verwendet wurde.
+
+image::opentelemetry_special_agent.png[]
+
+[#test]
+=== Testdaten an den Collector senden
+
+Vermutlich werden Sie den OpenTelemetry Collector für {CMK} deshalb aufsetzen wollen, weil schon _irgendwo_ in Ihrer IT-Umgebung _irgendetwas_ _irgendwelche_ OpenTelemetry Metriken erzeugt.
+Ist das noch nicht der Fall, oder Sie wollen das Test-Setup schnell ausprobieren, können Sie die link:https://opentelemetry.io/docs/languages/python/getting-started/#metrics[Beispielapplikation Dice Roll^] in der um Metriken erweiterten Variante unter Angabe des {CMK}-Servers als Ziel (hier `198.51.100.42` mit gRPC-Port 4317) starten:
+
+[{shell-raw}]
+----
+{c-user} opentelemetry-instrument --traces_exporter console \
+    --metrics_exporter otlp \
+    --exporter_otlp_metrics_endpoint http://198.51.100.42:4317 \
+    --logs_exporter console \
+    --service_name dice-server \
+    flask run -p 8080
+----
+
+Von dem Zeitpunkt des Sendens der ersten Daten über die Erzeugung der Hosts und die Serviceerkennung bis zur Sichtbarkeit im Monitoring vergehen etwa zwei bis drei Minuten.
+Der folgende Screenshot zeigt die Dienste der _Dice Roll_ Beispielapplikation.
+
+image::opentelemetry_diceserver_services.png[]
+
+[TIP]
+====
+Nur OpenTelemetry-Metriken, die lediglich einen Wert enthalten werden als ein Service mit einer Metrik in {CMK} dargestellt.
+In der Beispiel-Applikation von OpenTelemetry ist die Metrik `dice.rolls` jedoch verschachtelt und erzeugt daher lediglich einen _informativen_ Service, der immer {OK} bleibt.
+Erstellen Sie statt einer verschachtelten zwei "flache" Metriken, um zwei Dienste in {CMK} zu erhalten.
+====
+
+// == Troubleshooting
+
+[#files]
+== Dateien und Verzeichnisse
+
+[cols="50,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`~/tmp/check_mk/otel_collector/self+monitoring/` | Temporäres Verzeichnis, in dem aggregierte Daten des Collectors für die Auswertung durch den Spezialagenten abgelegt werden. Abgelegte Dateien sind im JSON-Format.
+|===
