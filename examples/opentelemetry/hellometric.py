@@ -4,7 +4,7 @@ from opentelemetry import metrics
 from random import randint
 import time
 
-meter = metrics.get_meter("helloworld.meter")
+meter = metrics.get_meter("hellometric.meter")
 gauge = meter.create_gauge(
     name = "hellolevel",
     unit = "%",
