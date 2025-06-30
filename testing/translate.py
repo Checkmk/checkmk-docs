@@ -246,7 +246,9 @@ class GitCommits:
                 if docs_type and docs_type in article_list.keys():
                     if article_properties := article_list[docs_type].get(article_name):
                         logging.debug(
-                            f"article properties before change: {article_properties.model_dump()}"
+#                            model_dump is not compatible with the pydantic version provided by Ubuntu 24.04
+#                            f"article properties before change: {article_properties.model_dump()}"
+                            f"article properties before change: {article_properties.dict()}"
                         )
                         article_translation = article_properties.last_full_translation
                     else:
@@ -258,7 +260,9 @@ class GitCommits:
                     article_translation, commit_date
                 )
                 logging.debug(
-                    f"article properties after change: {article_properties.model_dump()}"
+#                   model_dump is not compatible with the pydantic version provided by Ubuntu 24.04
+#                   f"article properties after change: {article_properties.model_dump()}"
+                   f"article properties after change: {article_properties.dict()}"
                 )
 
     def _get_commits_of_file(
@@ -445,7 +449,8 @@ class ColorizedOutput:
         )
 
     def _get_color_str(self, state: str):
-        return self.colors.model_dump().get(state)
+#        return self.colors.model_dump().get(state)
+        return self.colors.dict().get(state)
 
     def _docs_type_header(self, docs_type: str) -> None:
         self._line(self.box.top)
@@ -493,7 +498,8 @@ class ColorizedOutput:
         self._line(self.box.top)
         self._docs_summary_header(article)
         for lang, commits in article.commits_by_language.items():
-            self._line(str(self.box_text.model_dump().get(lang)))
+#            self._line(str(self.box_text.model_dump().get(lang)))
+            self._line(str(self.box_text.dict().get(lang)))
             for commit in commits:
                 if commit.properties.state == STATES.clean:
                     prefix = self.box_text.commit_clean
