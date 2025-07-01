@@ -3,12 +3,15 @@ require 'unicode_utils'
 
 # Function to normalize text by removing accents for proper sorting
 def normalize_text(text)
-  # NFC -> NFKD normalization, then remove diacritical marks
   UnicodeUtils.nfkd(text).gsub(/\p{Mn}/, '')
 end
 
+# Input/output filenames from command-line arguments or default
+input_file  = ARGV[0] || 'glossary_unsorted.html'
+output_file = ARGV[1] || 'glossary_sorted.html'
+
 # Read the source HTML file
-doc = Nokogiri::HTML(File.read('glossary_unsorted.html'), nil, 'UTF-8')
+doc = Nokogiri::HTML(File.read(input_file), nil, 'UTF-8')
 
 # --- Part 1: Sort the div.sect3 entries in the main section ---
 
@@ -82,6 +85,6 @@ else
 end
 
 # Final save of the sorted file
-File.write('glossary_sorted.html', doc.to_html)
+File.write(output_file, doc.to_html)
 
-puts "Sorted glossary saved to glossary_sorted.html"
+puts "Sorted glossary saved to #{output_file}"
