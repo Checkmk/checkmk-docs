@@ -4,14 +4,15 @@ include::global_attr.adoc[]
 = Monitoring Microsoft SQL Server
 :revdate: draft
 :title: Monitoring Microsoft SQL Server
-:description: With the {CMK} plug-in for Windows and Linux you can fully monitor Microsoft SQL Server.
+:description: With the {CMK} plug-in for Windows and Linux, you can fully monitor Microsoft SQL Server.
 :keywords: mssql, sql, db, database
 
 {related-start}
 link:agent_windows.html[Monitoring Windows]
 link:wato_monitoringagents.html[Monitoring agents]
-link:https://checkmk.com/integrations[Catalog of Check Plug-ins^]
+link:https://checkmk.com/de/integrations[Catalog of Check plug-ins^]
 {related-end}
+
 
 [TIP]
 ====
@@ -328,3 +329,489 @@ ifdef::onprem[]
 |`~/share/check_mk/agents/linux/mk-sql` |The agent plug-in you have to copy to your Linux hosts, in order to monitor MS SQL there.
 |===
 endif::[]
+
+
+////
+//SP: Start of translation - replacementof full existing text
+
+[#intro]
+== Einleitung
+
+{CMK} ermöglicht Ihnen ein umfangreiches Monitoring von [.brand]#Microsoft SQL Server# (im weiteren Verlauf nur noch mit "MSSQL" abgekürzt).
+Eine vollständige Auflistung aller verfügbaren xref:glossar#check_plugin[Check-Plugins] finden Sie in unserem link:https://checkmk.com/de/integrations?tags=mssql[Katalog der Check-Plugins^].
+
+Um die Datenbanken überwachen zu können, benötigen Sie neben dem {CMK}-Agenten zusätzlich noch das xref:glossar#agent_plugin[Agentenplugin] `mk-sql`.
+Dieses Agentenplugin ist ab {CMK} {v23} auch in der Lage, Datenbanken auf entfernten Systemen zu überwachen.
+Zusätzliche Software wird weder auf dem {CMK}- noch auf dem Datenbank-Server benötigt.
+
+Die einzige zwingende Voraussetzung für die Verwendung von `mk-sql` ist, dass in der SQL-Server-Netzwerkkonfiguration das Protokoll TCP/IP aktiviert ist.
+ifdef::onprem[]
+Sollte in Ihrer MSSQL-Server-Umgebung kein TCP/IP zugelassen beziehungsweise erlaubt sein, müssen Sie bis auf Weiteres auf das xref:monitoring_mssql_legacy#[Legacy-Plugin `mssql.vbs`] zurückgreifen.
+endif::[]
+
+
+[#setup_login_windows]
+== Login für die Überwachung einrichten (Windows)
+
+Das Agentenplugin benötigt Zugang zu Ihren MSSQL-Instanzen.
+Im Regelfall steht -- lange bevor das Monitoring-Team kommt -- fest, wie ein solcher Zugang aussehen kann oder darf.
+Im Falle von MSSQL gibt es zwei Möglichkeiten.
+Entweder Sie verwenden ausschließlich den [.guihint]#Windows Authentication mode# oder den Mischbetrieb [.guihint]#SQL Server and Windows Authentication mode#.
+
+
+[#system_user]
+=== Systembenutzer verwenden
+
+Der {CMK}-Agent wird auf Windows-Systemen vom Systembenutzer (`NT AUTHORITY\SYSTEM`) ausgeführt.
+Wenn Sie diesen Systembenutzer auch für das Monitoring von MSSQL verwenden können, müssen Sie nur noch darauf achten, dass dieses Konto (_login_), mindestens Berechtigungen für die folgenden absicherungsfähigen Elemente ([.guihint]#Securables#) besitzt:
+
+* [.guihint]#View server state#
+* [.guihint]#Connect SQL#
+* [.guihint]#Connect any database (optional)#
+
+Die Berechtigung [.guihint]#Connect any database (Verbindung mit beliebiger Datenbank)# ist zwar optional, wird aber in fast allen Szenarien der Überwachung von MSSQL benötigt.
+
+
+
+[#dedicated_login]
+=== Dediziertes Konto für das Monitoring verwenden
+
+Es gibt auch gute Gründe dafür, das Monitoring von MSSQL *nicht* über den Systembenutzer von Windows laufen zu lassen.
+Denkbar sind unter anderem Sicherheitsvorgaben im Unternehmen oder einfach der Wunsch, dedizierte und klar benannte Logins zu haben, deren Sinn und Zweck schon am Namen ablesbar ist.
+
+Selbstverständlich funktioniert das Agentenplugin auch mit solchen Konten (_Logins_).
+
+Die Grundvoraussetzung in MSSQL ist, dass die [.guihint]#Server authentication# auf [.guihint]#SQL Server and Windows Authentication mode# gestellt ist.
+Wenn Sie nicht den Windows-eigenen Systembenutzer verwenden wollen oder können, dürfte diese Voraussetzung zwar bereits erfüllt sein, sie soll aber auch nicht unerwähnt bleiben.
+
+Sollte noch kein entsprechender Benutzer auf Ihrem MSSQL-Server bzw. in Ihrer -Instanz vorhanden sein, so können Sie diesen auf Ihrem Windows-System über das Microsoft SQL Server Management Studio (mit einem beliebigen Benutzernamen) erstellen:
+
+image::monitoring_mssql_new_user.png[alt="Auswahl der Option 'New Login...' in MSSQL.", width=38%]
+
+Dieser Login benötigt die folgenden Berechtigungen:
+
+* [.guihint]#Connect SQL#
+* [.guihint]#Connect any database#
+* [.guihint]#View server state#
+
+Erteilen Sie diese Berechtigungen im [.guihint]#Object Explorer# über [.guihint]#Security > Logins#.
+Öffnen Sie hier die Eigenschaften des Kontos (_login_) und klicken Sie auf [.guihint]#Securables#.
+Unter [.guihint]#Explicit# finden Sie die drei oben genannten Einträge.
+Setzen Sie in der Spalte [.guihint]#Grant# die entsprechenden Haken und bestätigen über [.guihint]#OK#.
+
+image::mssql_permissions.png[alt="Berechtigung 'Connect any database' erteilen."]
+
+Alternativ können Sie den Benutzer und die Berechtigungen auch über die Befehlszeile erzeugen.
+Im folgenden Beispiel wird das für den Benutzer `checkmk` erledigt:
+
+
+[{sql}]
+----
+mssql> USE master;
+      CREATE USER checkmk WITH PASSWORD = 'MyPassword123';
+      GO
+----
+
+und danach:
+
+[{sql}]
+----
+mssql> USE master;
+      GRANT CONNECT SQL TO checkmk;
+      GRANT CONNECT ANY DATABASE TO checkmk;
+      GRANT VIEW SERVER STATE TO checkmk;    
+      GO
+----
+
+
+=== Manuelle Einrichtung der Verbindung
+
+ifdef::onprem[]
+Wenn Sie {CRE} nutzen oder die Agentenbäckerei der kommerziellen Editionen nicht nutzen wollen, richten Sie die Kommunikation manuell ein.
+endif::[]
+ifdef::saas[]
+Wenn Sie die Agentenbäckerei nicht nutzen wollen, richten Sie die Kommunikation manuell ein.
+endif::[]
+
+Für die weitere Beschreibung gehen wir davon aus, dass der Agent für die Windows-Überwachung bereits auf dem Host installiert ist.
+
+
+==== Konfigurationsdatei erstellen
+
+Auf dem Windows-Host legen Sie im unten angegebenen Verzeichnis eine Datei `mk-sql.yml` an:
+
+Bei Verwendung des Systembenutzers genügt:
+
+.C:\ProgramData\checkmk\agent\config\mk-sql.yml
+[{yaml}]
+----
+---
+mssql:
+  main:
+    authentication:
+      username: ''
+      type: integrated
+----
+
+Verwenden Sie stattdessen das xref:dedicated_login[dezidierte Konto für das Monitoring,] so brauchen Sie folgenden Inhalt:
+
+.C:\ProgramData\checkmk\agent\config\mk-sql.yml
+[{yaml}]
+----
+---
+mssql:
+  main:
+    authentication:
+      username: checkmk
+      password: MyPassword123
+      type: sql_server
+----
+
+Sollten Sie auf dem Host mehrere MSSQL-Instanzen mit verschiedenen Benutzernamen und Passwörtern betreiben, erweitern Sie die `yml`-Datei entsprechend um die Angaben zu den Instanzen.
+Ihre `yml`-Datei könnte dann beispielsweise so aussehen:
+
+.C:\ProgramData\checkmk\agent\config\mk-sql.yml
+[{yaml}]
+----
+---
+mssql:
+  main:
+    authentication:
+      username: ""
+      type: integrated
+    instances:
+      - sid: myInstance 1
+        auth:
+          username: myUser1
+          password: "123456"
+          type: sql_server
+      - sid: myInstance 2
+        auth:
+          username: myUser2
+          password: "987654"
+          type: sql_server
+----
+
+
+==== Agentenplugin installieren
+
+Das Agentenplugin `mk-sql.exe` finden Sie in den kommerziellen Editionen unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Related > Windows files# und in {RE} unter [.guihint]#Setup > Agents > Windows.#
+
+.Beispielhafte Darstellung aus {RE}
+image::monitoring_mssql_agentfile.png[alt="Auswahl des Agentenplugins in {CMK}."]
+
+Laden Sie die Datei herunter und legen Sie diese auf dem Windows-Host im Verzeichnis `C:\ProgramData\checkmk\agent\plugins\` ab.
+
+
+==== Services einrichten
+
+Nachdem Sie das Agentenplugin nun installiert und konfiguriert haben, können Sie für diesen Host eine xref:glossar#service_discovery[Service-Erkennung] durchführen.
+Der folgende Screenshot zeigt dabei nur eine Auswahl der auffindbaren Services:
+
+image::monitoring_mssql_discovery.png[alt="Auszug der Service-Erkennung."]
+
+
+[#extended_configuration]
+=== Erweiterte Konfiguration
+
+==== Asynchrone Ausführung des Agentenplugins
+
+Das Agentenplugin für die Überwachung von MSSQL kann -- wie so viele andere -- asynchron ausgeführt werden, um beispielsweise längeren Laufzeiten bei großen MSSQL-Instanzen Rechnung zu tragen.
+
+Um das Agentenplugin unter Windows asynchron auszuführen, passen Sie die Konfiguration des Plugins an und erweitern die Sektion `main` um eine Zeile zu `cache_age`:
+
+.C:\ProgramData\checkmk\agent\config\mk-sql.yml
+[{yaml}]
+----
+mssql:
+  main:
+    authentication:
+      username: myuser
+      password: mypassword
+      type: sql_server
+    cache_age: 300
+----
+
+Eine detaillierte Anleitung zur asynchronen Ausführung von Agentenplugins auf einem Windows-Host finden Sie im Artikel über den xref:agent_windows#customizeexecution[Windows-Agenten.]
+
+
+[#setup_login_linux]
+== Login für die Überwachung einrichten (Linux)
+
+[#system_user_linux]
+=== Benutzer für das Monitoring anlegen
+
+Sie benötigen einen Benutzer, der sich mit Ihrer MSSQL-Instanz verbinden kann.
+Dieser Benutzer benötigt mindestens die folgenden Berechtigungen:
+
+* `Connect SQL`
+* `Connect any database`
+* `View server state`
+
+Abgesehen von diesen Berechtigungen ist es Ihnen bzw. Ihrer Organisation überlassen, wie ein solcher Nutzer erzeugt werden kann oder muss.
+
+
+Zu Testzwecken können Sie einen lokalen Benutzer verwenden.
+Sollte noch kein entsprechender Benutzer auf Ihrem MSSQL-Server bzw. in Ihrer -Instanz vorhanden sein, so können Sie diesen auf Ihrem Linux-System über die Befehlszeile erstellen:
+
+Im folgenden Beispiel wird das für den Benutzer `checkmk` erledigt:
+
+[{sql}]
+----
+sudo adduser --system checkmk --ingroup sudo
+----
+Folgen Sie den Aufforderungen zur Passwortvergabe etc.
+
+
+//SK: Nochmal einmal kurz nachspielen.
+
+Danach:
+
+[{sql}]
+----
+mssql> USE master;
+      GRANT CONNECT SQL TO checkmk;
+      GRANT CONNECT ANY DATABASE TO checkmk;
+      GRANT VIEW SERVER STATE TO checkmk;    
+      GO
+----
+
+
+=== Manuelle Einrichtung der Verbindung
+
+ifdef::onprem[]
+Wenn Sie {CRE} nutzen oder die Agentenbäckerei der kommerziellen Editionen nicht nutzen wollen, richten Sie die Kommunikation manuell ein.
+endif::[]
+ifdef::saas[]
+Wenn Sie die Agentenbäckerei nicht nutzen wollen, richten Sie die Kommunikation manuell ein.
+endif::[]
+
+Für die weitere Beschreibung gehen wir davon aus, dass der Agent für die Linux-Überwachung bereits auf dem Host installiert ist.
+
+
+==== Konfigurationsdatei erstellen
+
+Auf dem Linux-Host legen Sie im unten angegebenen Verzeichnis eine Datei `mk-sql.yml` an:
+
+./etc/check_mk/mk-sql.yml
+[{yaml}]
+----
+---
+mssql:
+  main:
+    authentication:
+      username: checkmk
+      password: checkmkPW
+      type: sql_server
+----
+
+
+Sollten Sie auf dem Host mehrere MSSQL-Instanzen mit verschiedenen Benutzernamen und Passwörtern betreiben, erweitern Sie die `yml`-Datei entsprechend um die Angaben zu den Instanzen.
+Ihre `yml`-Datei könnte dann beispielsweise so aussehen:
+
+./etc/check_mk/mk-sql.yml
+[{yaml}]
+----
+---
+mssql:
+  main:
+    authentication:
+      username: checkmk
+      password: checkmkPW
+      type: sql_server
+    instances:
+    - sid: myInstance1
+      auth:
+        username: myUser1
+        password: 123456
+        type: sql_server
+    - sid: myInstance2
+      auth:
+        username: myUser2
+        password: 987654
+        type: sql_server
+----
+
+
+==== Agentenplugin installieren
+
+Das Agentenplugin `mk-sql` finden Sie in den kommerziellen Editionen unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Related > Linux, Solaris, AIX files# und in {RE} unter [.guihint]#Setup > Agents > Linux.#
+
+.Beispielhafte Darstellung aus {RE}
+image::monitoring_mssql_agentfile_linux.png[alt="Auswahl des Agentenplugins in {CMK}."]
+
+Laden Sie die Datei herunter und legen Sie diese auf dem Linux-Host im Verzeichnis `~/usr/lib/check_mk_agent/plugins/mk-sql` ab.
+
+==== Services einrichten
+
+Nachdem Sie das Agentenplugin nun installiert und konfiguriert haben, können Sie für diesen Host eine xref:glossar#service_discovery[Service-Erkennung] durchführen.
+Der folgende Screenshot zeigt dabei nur eine Auswahl der auffindbaren Services:
+
+image::monitoring_mssql_discovery.png[alt="Auszug der Service-Erkennung."]
+
+
+[#extended_configuration_linux]
+=== Erweiterte Konfiguration
+
+==== Asynchrone Ausführung des Agentenplugins
+
+Das Agentenplugin für die Überwachung von MSSQL kann -- wie so viele andere -- asynchron ausgeführt werden, um beispielsweise längeren Laufzeiten bei großen MSSQL-Instanzen Rechnung zu tragen.
+
+Um das Agentenplugin unter Linux asynchron auszuführen, passen Sie die Konfiguration des Agenten an und erweitern die Sektion `main` um eine Zeile zu `cache_age`:
+
+./etc/check_mk/mk-sql.yml
+[{yaml}]
+----
+mssql:
+  main:
+    authentication:
+      username: myuser
+      password: mypassword
+      type: sql_server
+    cache_age: 300
+----
+
+Eine detaillierte Anleitung zur asynchronen Ausführung von Agentenplugins auf einem Linux-Host finden Sie im Artikel über den xref:agent_linux#async_plugins[Linux-Agenten.]
+
+
+== Weitere Konfiguration in {CMK}
+
+=== Schwellwerte konfigurieren
+
+==== Verbindungen überwachen
+
+Für die Auslastung der durch MSSQL vorgegebenen maximalen Anzahl an gleichzeitigen Verbindungen können Sie eigene Schwellwerte vorgeben, da diese viel stärker als bei anderen Services vom Aufbau Ihrer MSSQL-Instanz abhängig sind.
+Die Einrichtung entsprechender Schwellwerte lässt sich mit einer Regel aus dem Regelsatz [.guihint]#MSSQL Connections# im Handumdrehen bewerkstelligen.
+
+image::monitoring_mssql_connections.png[alt="Einstellung der oberen Schwellwerte für aktive Verbindungen."]
+
+
+==== Dateigrößen überwachen
+
+Auch für die Größe einzelner Dateien in MSSQL können Sie Schwellwerte festlegen.
+Dazu verwenden Sie den Regelsatz [.guihint]#MSSQL datafile sizes.#
+
+image::monitoring_mssql_size_datafile.png[alt="Einstellung der genutzten Dateigrößen."]
+
+
+[#bakery]
+== Konfiguration über die Agentenbäckerei
+
+ifdef::onprem[]
+{cee-only}
+Die Einrichtung wird in den kommerziellen Editionen mittels der xref:glossar#agent_bakery[Agentenbäckerei] sehr vereinfacht,
+endif::[]
+ifdef::saas[]
+Die Einrichtung wird in {CE} (SaaS) mittels der xref:glossar#agent_bakery[Agentenbäckerei] sehr vereinfacht,
+endif::[]
+da Syntaxfehler in den Konfigurationsdateien vermieden werden und Anpassungen an sich verändernde Umgebungen einfach bewerkstelligt werden können.
+Der wesentliche Unterschied zu einer manuellen Installation ist, dass Sie nur noch dann auf dem MSSQL-Host auf der Kommandozeile arbeiten müssen, wenn Sie spezielle MSSQL-spezifische Konfigurationen vornehmen möchten.
+
+Für die erste Einrichtung reicht es, wenn Sie eine entsprechende Regel in der Agentenbäckerei anlegen.
+Sie finden den Regelsatz unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules.#
+In dem Suchfeld können Sie dann nach `mssql` suchen:
+
+image::monitoring_mssql_bakery_ruleset_search.png[alt="Die Regel 'Microsoft SQL Server (Linux, Windows)' in den Agentenregeln."]
+
+=== Einrichtung der Agentenregel (Windows)
+
+Je nachdem, wie sich das Agentenplugin an Ihrem MSSQL-Server anmelden darf (siehe xref:setup_login_windows[Login für die Überwachung einrichten]), wählen Sie unter [.guihint]#Authentication# nun die entsprechende Option aus.
+Nutzen Sie den Systembenutzer (`NT AUTHORITY\SYSTEM`), belassen Sie die Auswahl bei [.guihint]#Local Integrated Authentication (Windows)#.
+
+image::monitoring_mssql_bakery_new.png[alt="Mögliche Einstellungen für den MSSQL Server in der Agentenbäckerei."]
+
+Verwenden Sie stattdessen die _SQL Server Authentication,_ wählen Sie hier die Option [.guihint]#SQL Database User Credentials,# geben zusätzlich den [.guihint]#Login name# (siehe xref:#dedicated_login[Dediziertes Konto für das Monitoring verwenden]) im Feld [.guihint]#User# ein und fügen das zugehörige [.guihint]#Password# hinzu.
+
+Sollten Sie auf dem Host mehrere MSSQL-Instanzen mit verschiedenen Benutzernamen und Passwörtern betreiben, wählen Sie die Option [.guihint]#Custom instances#.
+Über [.guihint]#Add new element# gelangen Sie zu den Angaben für die erste -- und danach jede weitere -- Instanz, die überwacht werden soll.
+Tragen Sie hier, analog zur obigen Beschreibung, die Zugriffsdaten je Instanz ein.
+
+image::monitoring_mssql_bakery_more.png[alt="Mehrere MSSQL-Instanzen in der Bakery-Regel."]
+
+
+=== Einrichtung der Agentenregel (Linux)
+
+Wählen Sie unter [.guihint]#Authentication# die Option [.guihint]#SQL database user credentials#.
+
+image::monitoring_mssql_bakery_unix.png[alt="Mögliche Einstellungen für den MSSQL Server in der Agentenbäckerei."]
+
+Geben Sie dann den [.guihint]#Login name# im Feld [.guihint]#User# ein und fügen Sie das zugehörige [.guihint]#Password# hinzu.
+Ergänzen Sie für die [.guihint]#Connection# den [.guihint]#Host name#.
+
+Sollten Sie auf dem Host mehrere MSSQL-Instanzen mit verschiedenen Benutzernamen und Passwörtern betreiben, wählen Sie die Option [.guihint]#Custom instances#.
+Über [.guihint]#Add new element# gelangen Sie zu den Angaben für die erste -- und danach jede weitere -- Instanz, die überwacht werden soll.
+Tragen Sie hier, analog zur obigen Beschreibung, die Zugriffsdaten je Instanz ein.
+
+image::monitoring_mssql_bakery_more.png[alt="Mehrere MSSQL-Instanzen in der Bakery-Regel."]
+
+
+=== Weitere Optionen
+
+Mit den soeben vorgenommenen Einstellungen kreieren Sie zunächst einen einfachen Agenten zur Überwachung Ihrer MSSQL-Instanz, die sich direkt auf dem Host befindet.
+Alle verfügbaren Daten werden direkt in {CMK} ausgewertet und für den Standardfall sollte dies bereits genügen.
+Haben Sie eine komplexere MSSQL-Welt in Ihrem Unternehmen, so gibt es jedoch weitere Optionen, sowohl für die Überwachung der Datenbank auf dem gleichen Host als auch für die Überwachung auf einem entfernten Host.
+Diese sind prinzipiell für beide Verbindungstypen gleich.
+
+
+[cols="30,~", options="header"]
+|===
+|Option |Funktion
+|[.guihint]#Connection# |Brauchen Sie für die allgemeine Verbindung zum MSSQL-Server spezifischere Verbindungsdaten, so können Sie diese hier angeben.
+|[.guihint]#Data to collect (Sections)# |Hier können Sie abschnittsweise einschränken, welche Daten eingesammelt werden sollen bzw. ob diese synchron oder asynchron gesammelt werden sollen.
+|[.guihint]#Cache age for asynchronous checks# |Für die zuvor festgelegten asynchronen Checks können Sie den Caching-Zeitraum in Sekunden ändern.
+|Map data to specific host (Piggyback) |xref:glossar#piggyback[Piggyback]-Daten können -- unabhängig von der eigentlichen Quelle -- einem Host zugeordnet werden. So lassen sich zum Beispiel die SQL-Informationen von den Daten des zugrundeliegenden Windows-Servers trennen.
+|[.guihint]#Discovery mode of databases# |Einstellungen für die Suche in der Instanz.
+|[.guihint]#Custom instances# |Ergänzend zu den allgemeinen Vorgaben zum Zugriff auf Ihren MSSQL-Server, können Sie hier für spezifische Instanzen eigene Einstellungen setzen.
+|[.guihint]#Options# |Die maximale Anzahl an parallelen SQL-Server-Verbindungen kann hier eingestellt werden.
+|===
+
+
+
+[#diagnostic]
+== Diagnosemöglichkeiten
+
+
+
+=== Mögliche Fehler und Fehlermeldungen
+
+==== Fehlermeldung: Failed to gather SQL Server instances
+
+Prüfen Sie, ob die TCP/IP-Verbindung konfiguriert ist und funktioniert.
+
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Auf dem MSSQL-Host (Windows)
+
+[cols="55,~",options="header"]
+|===
+|Pfad |Verwendung
+|`C:\ProgramData\checkmk\agent\plugins\` |Verzeichnis zur Ablage der Agentenplugins.
+|`C:\ProgramData\checkmk\agent\config\mk-sql.yml` |Konfigurationsdatei für das Agentenplugin.
+|===
+
+
+=== Auf dem MSSQL-Host (Linux)
+
+[cols="55,~",options="header"]
+|===
+|Pfad |Verwendung
+|`/usr/lib/check_mk_agent/plugins/` |Verzeichnis zur Ablage der Agentenplugins.
+|`/etc/check_mk/mk-sql.yml` |Konfigurationsdatei für das Agentenplugin.
+|===
+
+ifdef::onprem[]
+=== Auf dem {CMK}-Server
+
+[cols="55,~",options="header"]
+|===
+|Pfad |Verwendung
+|`~/share/check_mk/agents/windowss/mk-sql.exe` |Das Agentenplugin, das Sie auf Ihre Windows-Hosts kopieren müssen, um MSSQL dort zu überwachen.
+|`~/share/check_mk/agents/linux/mk-sql` |Das Agentenplugin, das Sie auf Ihre Linux-Hosts kopieren müssen, um MSSQL dort zu überwachen.
+|===
+endif::[]
+
+//SP: End of translation
+////
