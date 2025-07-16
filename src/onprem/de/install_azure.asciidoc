@@ -2,7 +2,7 @@
 // IGNORE % Benachrichtigungs p2
 include::global_attr.adoc[]
 = Installation aus dem Azure Marketplace
-:revdate: 2025-06-16
+:revdate: 2025-07-16
 :title: Installation aus dem Azure Marketplace
 :description: {CMK} bietet ein (fast) schlüsselfertiges Image im Azure Marketplace. In diesem Artikel erfahren Sie, wie Sie die Einrichtung abschließen.
 
@@ -12,171 +12,10 @@ xref:install_packages#[Grundsätzliches zur Installation von {CMK}]
 xref:update#[Updates und Upgrades]
 {related-end}
 
-
-[#welcome]
-== Willkommen bei {CMK} für Azure
-// TK Evtl. mit azure_logo.png wie in monitoring_azure?
-
-Egal, ob Sie bereits langjähriger Nutzer von {CMK} sind, oder erst mit der Verfügbarkeit fertiger Images im Marketplace von Microsoft Azure zu uns gefunden haben, Sie finden in diesem Handbuchartikel alle Ressourcen, um das vorbereitete VM Image zum für Ihre Bedürfnisse passenden Monitoring zu vervollständigen.
-// TK: Ressourcen? Besser: Informationen?
-
-Wenn Sie neu bei {CMK} sind, empfehlen wir die vorbereitende Lektüre unseres xref:intro_setup#[Leitfadens für Einsteiger].
-Vorkonfigurierte VM Images kürzen zwar viele Punkte bei der Installation ab, doch Kenntnis fundamentaler Konzepte, wie das der xref:glossar#site[Instanzen], hilft bei der Einrichtung.
-
-[TIP]
+[IMPORTANT]
 ====
-Leider stecken wir derzeit in der Azure-Bürokratie fest und können keine Images mit vorinstalliertem {CMK} {v23} bereitstellen.
-Die neuesten Images, die im Microsoft Azure Marketplace verfügbar sind, basieren noch auf {v22}.
-Sie können diese Images verwenden und sie unmittelbar nach Bereitstellung auf {v23} xref:update#[aktualisieren].
-Eine einfachere Lösung ist jedoch die Verwendung eines Ubuntu 24.04 Vanilla-Images und die xref:install_packages_debian#[Durchführung der Installation] dort.
+Images mit vorinstalliertem {CMK} {v23} waren nie verfügbar und werden nie verfügbar sein.
+Falls Sie ein Image mit {v22} gebucht haben, dann beachten Sie bitte die Hinweise zum 
+xref:update#[Hinweise zum Update], die  xref:update_major#[detaillierten Informationen zum Update auf {v23}] und gegebenenfalls die xref:release_upgrade#[Hinweise zum Linux-Upgrade auf dem Checkmk-Server].
+Falls Sie ein Image neu buchen wollen, wählen Sie bitte im Versionsmenü die neueste stabile {CMK}-Version aus.
 ====
-
-[#basics]
-=== Grundsätzliches
-
-Falls Sie Azure-Nutzer sind, hatten Sie schon immer die Möglichkeit, ein im Marketplace link:https://learn.microsoft.com/de-de/azure/virtual-machines/linux/quick-create-portal?tabs=ubuntu[vorhandenes Ubuntu-Image^] mit {CMK} zu versehen und so "Monitoring in der Cloud" einzurichten.
-{CMK} {v22} geht den nächsten Schritt und bietet link:https://azuremarketplace.microsoft.com/de-de/marketplace/apps/tribe29gmbh1665582614827.checkmk003?tab=Overview[ein vorinstalliertes Image^] auf Basis von Ubuntu 22.04 _(Jammy Jellyfish)_, bei denen alle Abhängigkeiten bereits erfüllt sind.
-Hierbei kommt ausschließlich die xref:cce#[{CE}] zum Einsatz.
-Diese befindet sich mit dem Einrichten der ersten Instanz im 30 Tage währenden Lizenzstatus "Trial", in dem keine Einschränkungen gelten.
-Nach Ablauf des Testzeitraums kann {CMK} mit bis zu 750 überwachten Services auf einer einzigen Instanz ohne Subskription weiter genutzt werden.
-Sollen mehr Services überwacht werden, benötigen Sie einen xref:license#license_cce[Lizenzschlüssel.]
-
-Generell ist die Einrichtung ein wenig aufwendiger als beispielsweise beim xref:introduction_docker#[Docker-Image], schließlich muss das bereitgestellte Image verschiedene Einsatzszenarien abdecken:
-
-* Setup mit einer einzigen Instanz _(single site setup)_ auf einem Server in verschiedenster Skalierung
-* Zentralinstanz im verteilten Monitoring
-* Remote-Instanz im verteilten Monitoring
-* Mischbetrieb von produktiver Instanz und Instanz(en) zum Testen auf einem Host
-
-Aus diesem Grund enthält das Azure-Image weder eine vorbereitete Instanz, noch E-Mail- oder Firewall-Konfiguration.
-
-In diesem Artikel führen wir Sie durch das komplette Setup.
-Wo Hintergrundinformationen sinnvoll sind, verlinken wir in detaillierte Artikel des Handbuchs.
-
-
-[#preparation]
-== Vorbereitung
-
-Neben der Dimensionierung von RAM, Prozessor und virtueller Festplatte sollten Sie sich Gedanken um den Speicherort von Backups machen.
-{CMK} unterstützt von Haus aus die Objektspeicher von Azure, daneben können Backups in Dateisystempfaden abgelegt werden, was Sicherungen auf SMB- oder WebDAV-Mounts ermöglicht oder den regelmäßigen Transfer per `rsync` erlaubt.
-
-
-[#ssh_keys]
-=== SSH-Schlüssel erstellen
-
-Da Azure derzeit link:https://learn.microsoft.com/de-de/azure/virtual-machines/linux/mac-create-ssh-keys[keine ED25519 oder ECDSA Schlüssel unterstützt^], werden Sie für das erste Login auf der virtuellen Maschine ein RSA-Schlüsselpärchen erstellen, dessen öffentlichen Schlüssel (_public key_) Sie beim Anlegen der VM hochladen.
-// TK: Der Source-Text ist nicht ganz passend, da im Linkziel erklärt wird, wie ein RSA-Schlüsselpaar erstellt wird. Aber akzeptabel wg. Konsistenz zu AWS.
-Alternativ können Sie Azure das Schlüsselpaar erstellen lassen.
-Vergessen Sie in diesem Fall nicht, den privaten Schlüssel im Laufe des Bestellverfahrens herunterzuladen. 
-
-
-[#ports]
-=== Benötigte Ports ermitteln
-
-// Standardmäßig öffnet {CMK} Ports nur sparsam und nach expliziter Aktivierung benötigter Komponenten.
-// Dennoch kann es sinnvoll sein, die verwendeten Ports weiter – zum Beispiel auf bestimmte IP-Adressen – einzuschränken.
-
-In einer {CMK}-Konfiguration mit einer einzigen Instanz _(single site setup)_, in der Hosts auch im Push-Modus Daten zur {CMK}-Instanz schicken, müssen die folgenden Ports des {CMK}-Servers erreichbar sein:
-
-* Von den Hosts im Monitoring aus: Port 80/443 (HTTP/HTTPS, während der Agentenregistrierung) und Port 8000 (Agent Receiver, dauerhaft)
-* Für die Verwaltung per Browser und REST-API: Port 80/443 (HTTP/HTTPS)
-
-Die Freigaben dieser Ports sind in unseren [.guihint]#Inbound port rules# bereits vorbereitet.
-Für bestmögliche Sicherheit sollten Sie den Zugriff im Reiter [.guihint]#Networking# weiter einschränken.
-
-Konsultieren Sie unsere Übersicht xref:ports#[aller verwendeten Ports], falls Sie ein verteiltes Monitoring aufsetzen oder beispielsweise Statusabfragen über die xref:glossar#livestatus[Livestatus]-Schnittstelle vornehmen wollen.
-
-
-[#book_vm]
-=== Image im Marketplace buchen
-
-// _TBD:_ Was kann wie konfiguriert werden?
-
-// Die vorgeschlagenen Parameter der kleinsten empfohlenen virtuellen Maschinen sind in typischen Einsatzszenarien für eine hohe dreistellige Zahl überwachter Hosts ausreichend.
-// Diese Zahl kann höher ausfallen, wenn auf sehr effiziente Checks und Agentenplugins geachtet wird oder niedriger, wenn aufwendige Spezialagenten genutzt werden.
-// Steht von vornherein fest, dass eine deutlich höhere Zahl an Services überwacht werden soll, können Sie die virtuelle Hardware entsprechend großzügiger dimensionieren.
-
-Die folgenden VM-Instanzen stellen eine Empfehlung zur Dimensionierung dar für die Zahl der zu überwachenden Services.
-Beachten Sie beim Ordern der Instanz, die Option [.guihint]#burstable# zu deaktivieren.
-// TK: weil?
-
-[cols="17,17,17,17,~",options="header"]
-|===
-|Typ |CPU Cores |RAM (GB) |SSD (GB) |{CMK}-Services
-//|`B2S` |2 |4 |8 |3 000
-|`B4MS` |4 |16 |32 |12 000
-|`B8MS` |8 |32 |64 |30 000
-|`B12MS`  |12 |48 |96 |60 000
-|===
-// TK: Warum fehlen die letzten beiden in den Empfehlungen auf Azure?
-
-Kalkulationsgrundlage für die Dimensionierung sind ca. 15{nbsp}% der Services durch xref:glossar#special_agent[Spezialagenten] und xref:glossar#active_check[aktive Checks,] sowie 25 oder mehr Services pro regulärem Host, der Daten per Agent im xref:glossar#push_mode[Push-Modus] liefert.
-Unter Umständen sind deutlich mehr Services in einem rein synthetischen Monitoring (primär Spezialagenten liefern Daten) möglich.
-// TK: Unter Umständen sind deutlich mehr Services in einem rein synthetischen Monitoring möglich, in dem primär Spezialagenten Daten liefern. 
-Bei Verwendung von Agenten im xref:glossar#pull_mode[Pull-Modus] ist die angegebene Zahl an Services möglicherweise nur durch konsequente Optimierung zu erreichen.
-
-Die Dimensionierung des Festplattenplatzes basiert auf Erfahrungen typischer Windows- und Linux-Serverumgebungen.
-Bringen viele Dienste eine große Zahl an Metriken mit, kann ein größerer Speicherplatzbedarf entstehen.
-
-
-[#book_backup]
-=== Backup-Speicher buchen
-
-Wegen der günstigen Traffic-Kosten raten wir zur Nutzung des _Azure Blob Storage_.
-Für die Kalkulation des benötigten Speicherplatzes lesen Sie die xref:graphing#rrds[Hinweise zum RRD Datenformat.]
-Als Faustregel für die Kalkulation eines vollständigen Backups gilt, dass die _Round Robin Databases_ nach 10 Tagen etwas mehr als ein Drittel ihrer maximalen Größe erreicht haben.
-Das bedeutet, nach dieser Zeit ist es sinnvoll, die Größe des gebuchten Backup-Speichers noch einmal zu überprüfen.
-
-
-// MFS: Gemeinsamer Teil
-include::include_common_aws_azure.asciidoc[]
-
-
-[#aftermath]
-== Nachbereitung
-
-[#backup]
-=== Backup einrichten
-
-// _TBD:_ Details, Screenshot.
-
-{CMK} bietet eine komfortable xref:backup#[Backup-Funktion], die Sie unter [.guihint]#Setup > Maintenance > Backups  > Backup targets# konfigurieren.
-Mit [.guihint]#Add backup target# fügen Sie einen Speicherort hinzu.
-Hier bietet es sich an, wegen des schnellen und günstigen Transfers als [.guihint]#Destination# den [.guihint]#Azure Blob Storage# zu wählen.
-
-Neben den müssen Sie einen Ordnerpfad angeben, in dem die Zwischenspeicherung des Archivs vorgenommen wird, bevor dieses in den Objektspeicher kopiert wird.
-Dies kann unter `/tmp` sein.
-Falls Ihre Azure VM unter `/mnt` ein flüchtiges _(ephemeral)_ Laufwerk bereitstellt, können Sie auch hier ein Verzeichnis als Zwischenspeicher erstellen:
-
-[{shell}]
-----
-{c-ubuntu} sudo mkdir -p /mnt/backup/mysite
-----
-
-Damit der Instanzbenutzer in dieses Verzeichnis schreiben kann, müssen sie es ihm übereignen:
-
-[{shell}]
-----
-{c-ubuntu} sudo chown mysite:mysite /mnt/backup/mysite
-----
-
-
-[#restore]
-==== Vorgehen beim Restore
-
-Das xref:backup#backup_restore[Restore eines Backups] muss immer auf exakt derselben Version von {CMK} erfolgen wie dessen Erstellung.
-Soll ein Backup dazu dienen, auf einen anderen Typ der virtuellen Maschine, zu einem anderen Cloud-Anbieter oder von einer _On Premise Installation_ in die Cloud (oder andersherum) umzuziehen, aktualisieren Sie _vor_ dem finalen Backup und dem Umzug auf das höchste verfügbare Patchlevel von {CMK}.
-
-Für das Restore eines Backups gilt damit:
-
-. Installieren Sie auf dem Zielsystem exakt die Version von {CMK}, mit der das Backup erstellt wurde.
-. Erstellen Sie mit `omd create` eine Monitoring-Instanz, die denselben Instanznamen wie das Ursprungssystem nutzt.
-. Geben Sie das Backup-Ziel an und laden Sie den Backup-Schlüssel hoch.
-. Führen Sie das eigentliche Restore durch.
-
-
-[#monitoring_azure]
-== Azure überwachen
-
-{CMK} bietet nicht nur die Verfügbarkeit als Azure-Image, sondern auch umfangreiche Möglichkeiten der xref:monitoring_azure#[Überwachung Ihrer Azure-Infrastruktur.]
-Selbst wenn {CMK} Ihr erstes oder einziges Azure-Projekt sein sollte, lohnt bereits die Überwachung der Leistung der virtuellen Maschine, des Zustand der Backup-Vaults und der Höhe der anfallenden Kosten.
