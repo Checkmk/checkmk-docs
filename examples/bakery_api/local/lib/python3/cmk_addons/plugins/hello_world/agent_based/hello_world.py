@@ -33,7 +33,7 @@ def check_hello_world(params, section):
     # If you want to define a default graph, look here:
     # ~/local/share/check_mk/web/plugins/metrics/helloworld_metric.py
     # 
-    # Everyone loves perf-o-meters, so take the next step and build one!
+    # Everyone loves Perf-O-Meters, so take the next step and build one!
     #
     # ~/local/share/check_mk/web/plugins/perfometer/helloworld_perfometer.py
     yield Metric(name="hellolevel", value=section.get("value"), boundaries=(0.0, 100.0))

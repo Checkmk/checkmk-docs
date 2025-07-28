@@ -6,14 +6,14 @@
 # Reference for details:
 # https://docs.checkmk.com/latest/en/devel_check_plugins.html
 #
-# Configuration for a simple perf-o-meter that displays percentage
+# Configuration for a simple Perf-O-Meter that displays percentage
 
 from cmk.graphing.v1 import Title
 from cmk.graphing.v1.graphs import Graph, MinimalRange
 from cmk.graphing.v1.metrics import Color, DecimalNotation, Metric, Unit
 from cmk.graphing.v1.perfometers import Closed, FocusRange, Open, Perfometer
 
-# Just create the most simple perf-o-meter displaying only one linear value.
+# Just create the most simple Perf-O-Meter displaying only one linear value.
 # We use the variable "hellolevel" as reference. Since output ranges from 0
 # to 100 we just use the full range.
 
