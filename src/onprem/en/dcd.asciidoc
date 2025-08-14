@@ -1,10 +1,10 @@
 // -*- coding: utf-8 -*-
 // IGNORE Opentelemetry
 // NONASCII ’
-// SKIPCOMMITS 
+// SKIPCOMMITS 2025-08-12
 include::global_attr.adoc[]
 = Dynamic host management
-:revdate: draft
+:revdate: 2025-08-12
 :title: Dynamic host management - Managing dynamic infrastructures
 :description: {CMK} can manage volatile infrastructures by dynamically adding and deleting hosts in a fully-automated procedure. 
 
@@ -13,449 +13,12 @@ xref:piggyback#[The piggyback mechanism]
 {related-end}
 
 
-// This block replaces the following text
-// start translation
-////
-
-[#intro]
-== Einleitung
-
-In Cloud- und Containerumgebungen ist es immer öfter der Fall, dass zu überwachende Hosts automatisch entstehen und vergehen.
-Die Konfiguration des Monitorings hier aktuell zu halten, ist manuell nicht mehr sinnvoll möglich.
-Aber auch klassische Infrastrukturen wie z.B. VMware-Cluster können sehr dynamisch sein, und selbst wenn eine manuelle Pflege hier noch möglich ist, ist sie doch auf jeden Fall lästig.
-
-ifdef::onprem[]
-{cee-only}
-Die kommerziellen Editionen von {CMK} unterstützen Sie
-endif::[]
-ifdef::saas[]
-{CE} (SaaS) unterstützt Sie 
-endif::[]
-bei diesem Thema mit einem smarten Werkzeug: der dynamischen Host-Verwaltung (_dynamic host management_).
-Die dynamische Host-Verwaltung nutzt dabei Informationen aus der Überwachung von Amazon Web Services (AWS), Microsoft Azure, Kubernetes, VMware ESXi und anderen Quellen, um vollautomatisch Hosts in das Monitoring aufzunehmen -- und auch wieder zu löschen.
-
-Die dynamische Host-Verwaltung ist dabei generisch gehalten und nicht auf das Anlegen von Hosts beschränkt.
-Sie bildet die Grundlage für künftige Erweiterungen von {CMK}, welche dynamisch die Konfiguration anpassen.
-Zu diesem Zweck arbeitet die dynamische Host-Verwaltung mit Verbindungen (_connections_).
-Jede Verbindung kann aus einer ganz bestimmten Art von Quelle Informationen holen und hat dazu ihre eigene spezifische Konfiguration.
-
-Die Software-Komponente für die dynamische Host-Verwaltung ist der Dynamic Configuration Daemon (DCD).
-Die Software-Architektur des DCD wurde in {CMK} {v24} komplett überarbeitet, um den Anforderungen von großen, hochdynamischen Umgebungen gerecht zu werden und eine stabile und sichere Verarbeitung zu gewährleisten.
-Dabei wird nunmehr die Sammlung der Informationen aus den konfigurierten Verbindungen entkoppelt von den daraus resultierenden Konfigurationsänderungen in {CMK}.
-Die anstehenden Konfigurationsänderungen werden in Warteschlangen organisiert und in Zyklen sequentiell abgearbeitet.
-Dies garantiert eine stabile und sichere Verarbeitung.
-Mit den Host-Manager-Einstellungen werden Ihnen Optionen angeboten, um die Verarbeitungszyklen anzupassen.
-Mehr dazu steht im Kapitel xref:configuration[Konfiguration.]
-
-
-[#connection_types]
-== Verbindungstypen
-
-Durch die Einrichtung einer Verbindung in der dynamischen Host-Verwaltung können Sie Hosts automatisch ins Monitoring aufnehmen und auch wieder löschen lassen, um so immer zeitnah die Realität abzubilden.
-Dazu analysiert die dynamische Host-Verwaltung die vorhandenen Daten, vergleicht, welche der Hosts bereits in der xref:glossar#configuration_environment[Konfigurationsumgebung] vorhanden sind
-und legt die fehlenden Hosts neu an bzw. löscht inzwischen weggefallene.
-Anschließend wird auf den Hosts (optional) eine xref:glossar#service_discovery[Service-Erkennung] durchgeführt und abschließend die xref:glossar#activate_changes[Änderungen aktiviert], damit der aktuelle Zustand in der xref:glossar#monitoring_environment[Monitoring-Umgebung] sichtbar ist.
-
-
-[#connection_piggyback]
-=== Piggyback-Verbindung
-
-Mit der Piggyback-Verbindung werden -- wenig überraschend -- xref:glossar#piggyback[Piggyback]-Daten ausgewertet.
-Dieser Verbindungstyp ist in {CMK} universell einsetzbar, denn der Piggyback-Mechanismus wird von {CMK} in allen Situationen verwendet,
-wo die Abfrage eines Hosts (meist per xref:glossar#special_agent[Spezialagent]) Daten zu anderen Hosts liefert (meist virtuelle Maschinen oder Cloud-Objekte).
-
-{CMK} nutzt Piggyback zum Beispiel bei der Überwachung von xref:monitoring_proxmox#[Proxmox], xref:monitoring_docker#[Docker], xref:monitoring_vmware#[VMware ESXi] und den _Hyperscalern_ xref:monitoring_aws#[AWS], xref:monitoring_azure#[Azure] und xref:monitoring_gcp#[GCP.]
-In allen diesen Fällen werden beim Monitoring automatisch Daten zu anderen Hosts, z.B. den virtuellen Maschinen (VM), geholt, die nicht direkt per Netzwerk angesprochen werden und auf denen auch kein {CMK}-Agent laufen *muss.*
-Solche Hosts können Sie automatisch ins Monitoring aufnehmen und auch wieder löschen lassen.
-Dabei sind automatisch erstellte Hosts trotzdem für Sie in der Setup-GUI editierbar.
-
-Um eine Piggyback-Verbindung zu nutzen, benötigen Sie als einzige Voraussetzung Piggyback-Daten.
-Diese haben Sie immer dann, wenn Sie das Monitoring für AWS, Azure und Co. so aufgesetzt haben, wie es diesem Handbuch beschrieben ist.
-
-ifdef::onprem[]
-Sie können die Präsenz von Piggyback-Daten auch leicht auf der Kommandozeile überprüfen, denn diese Daten werden von {CMK} im Verzeichnis `~/tmp/check_mk/piggyback` angelegt:
-
-[{shell}]
-----
-{c-omd} ls tmp/check_mk/piggyback
-myvm01/  myvm02/  myvm03/
-----
-
-Wenn dieses Verzeichnis nicht leer ist, dann wurden in dieser Instanz Piggyback-Daten erzeugt.
-endif::[]
-
-
-ifdef::onprem[]
-[#connection_opentelemetry]
-=== OpenTelemetry-Verbindung
-
-{cee-only}
-{CMK} {v24} bietet ab {CCE}, d. h. für {CE} und {ME}, eine experimentelle Unterstützung für die Verarbeitung von link:https://opentelemetry.io/[OpenTelemetry^]-Metriken.
-Dafür sammelt in {CMK} ein OpenTelemetry-Kollektor Metrikdaten, die der Kollektor per OpenTelemetry Protocol (OTLP) erhält oder über einen Prometheus-Endpunkt abruft.
-Bei der Konfiguration des Kollektors werden außerdem Regeln aufgestellt, um aus den Daten Host-Namen für {CMK} zu erzeugen.
-Fertig konfiguriert legt der Kollektor los, sammelt die Daten und legt sie in der {CMK}-Instanz ab mit Dateinamen, die den Host-Namen entsprechen.
-
-Die Einrichtung von OpenTelemetry einschließlich des OpenTelemetry-Kollektors wird im Artikel xref:opentelemetry#[OpenTelemetry-Metriken überwachen] beschrieben.
-
-Die OpenTelemetry-Daten sind in der Instanz immer dann verfügbar, wenn der OpenTelemetry-Kollektor korrekt aufgesetzt wurde.
-Sie können das auf der Kommandozeile überprüfen, denn die OpenTelemetry-Daten werden im Verzeichnis `~/tmp/check_mk/otel_collector` angelegt:
-
-[{shell}]
-----
-{c-omd} ls tmp/check_mk/otel_collector
-myotelapp01  myotelapp02  myotelapp03
-----
-
-Wenn dieses Verzeichnis nicht leer ist, dann wurden in dieser Instanz OpenTelemetry-Daten erzeugt.
-endif::[]
-
-
-[#setup_dcd]
-== Verbindung einrichten
-
-Öffnen Sie die Seite der dynamischen Host-Verwaltung mit [.guihint]#Setup > Hosts > Dynamic host management:#
-
-image::dcd_connections_empty.png[alt="Die Seite 'Dynamic host management' mit leerer Verbindungsliste."]
-
-Legen Sie mit icon:icon_new[alt="Symbol zum Erstellen eines neuen Objekts."] [.guihint]#Add connection# eine neue Verbindung an.
-
-
-[#general_properties]
-=== Allgemeine Eigenschaften
-
-Der erste Teil der Konfiguration sind die [.guihint]#General properties#:
-
-image::dcd_connection_general.png[alt="Allgemeine Eigenschaften beim Hinzufügen einer neuen Verbindung."]
-
-Hier vergeben Sie, wie so oft, eine eindeutige ID dieser Verbindung und einen Titel.
-
-Unter [.guihint]#Site# müssen Sie die {CMK}-xref:glossar#site[Instanz] auswählen, auf der die Daten anfallen.
-Mit „anfallen“ ist hier gemeint, auf welcher Instanz Daten unterhalb des Verzeichnisses `~/tmp/check_mk` für den jeweiligen Verbindungstyp abgelegt werden.
-Die Ablage der Daten erledigt in den meisten Fällen ein Spezialagent.
-
-Da die Daten immer nur lokal auf einer bestimmten Instanz verarbeitet werden können, muss die Verbindung eben dieser Instanz zugeordnet werden.
-In einem verteilten Monitoring mit zentralem Setup müssen Sie hier also die Instanz angeben, auf der die Daten - seien es Piggyback-Daten oder Daten aus anderen Quellen - anfallen und im Anschluss verarbeitet werden sollen.
-Hier bestimmen Sie also *nicht*, auf welcher Instanz die Hosts angelegt werden sollen.
-Das legen Sie gleich in den [.guihint]#Host attributes to set# fest und zwar mit dem Host-Attribut [.guihint]#Basic settings: Monitored on site.#
-
-
-[#connection_properties_piggyback]
-=== Eigenschaften einer Piggyback-Verbindung
-
-Der zweite Teil sind die Verbindungseigenschaften ([.guihint]#Connection properties#).
-Da es hier einiges zu konfigurieren gibt, nehmen wir uns die Optionen Stück für Stück vor.
-
-image::dcd_connection_pb_01.png[alt="Erster Teil der Eigenschaften einer Piggyback-Verbindung zu Quell-Host und Synchronisierungsintervall."]
-
-Für eine xref:connection_piggyback[Piggyback-Verbindung] wählen Sie [.guihint]#Piggyback data# als [.guihint]#Connector type# aus.
-
-Mit [.guihint]#Restrict source hosts# können Sie diese Verbindung auf bestimmte Hosts als Quellen einschränken.
-Das sind in der Regel die Hosts, für die jeweils ein Spezialagent eingerichtet wurde.
-Nur für diese Hosts wird die dynamische Host-Verwaltung aktiv.
-Die Einschränkung erfolgt in dem zugehörigen Eingabefeld, dessen Inhalt als xref:regexes#[regulärer Ausdruck] interpretiert wird.
-Wenn Sie das erste Eingabefeld editiert haben, wird automatisch das nächste geöffnet, das heißt, Sie können mehrere reguläre Ausdrucke festlegen.
-
-Mit dem [.guihint]#Sync interval# bestimmen Sie, wie oft die Verbindung nach neuen Hosts suchen soll.
-Wenn Sie den regulären Check-Zeitraum von einer Minute beibehalten haben, macht es keinen Sinn, das wesentlich öfter zu machen,
-da ja maximal einmal pro Minute eine Änderung der Daten stattfinden kann.
-In dynamischeren Umgebungen können Sie sowohl Check-Zeitraum als auch Verbindungsintervall auch auf deutlich kleinere Werte einstellen.
-Dies hat allerdings auch eine höhere CPU-Auslastung auf dem {CMK}-Server zur Folge.
-
-Unter [.guihint]#Piggyback creation options# muss mindestens ein Eintrag existieren.
-Mit [.guihint]#Add new entry# können Sie auch weitere hinzufügen:
-
-image::dcd_connection_pb_02.png[alt="Zweiter Teil der Eigenschaften einer Piggyback-Verbindung zu den automatisch erstellten Hosts."]
-
-Hier geht es um die Eigenschaften der automatisch erzeugten Hosts, für die Sie zwei wichtige Dinge festlegen können:
-In welchem Ordner die Hosts erzeugt werden sollen ([.guihint]#Create hosts in#) und welche Host-Attribute gesetzt werden sollen.
-Vier wichtige Attribute sind dabei voreingestellt, welche für Piggybacked-Host meistens sinnvoll sind:
-
-. Kein Monitoring per SNMP.
-. Kein {CMK}-Agent auf dem Host selbst (Daten kommen ja per Piggyback).
-. Piggyback-Daten werden immer erwartet (und es gibt einen Fehler, wenn diese fehlen).
-. Die Hosts haben keine IP-Adresse.
-
-Wenn Sie die Piggyback-Daten auf einer anderen Instanz nutzen wollen, so aktivieren Sie mit [.guihint]#Add attribute# zusätzlich die Option [.guihint]#Basic settings: Monitored on site# und geben dahinter die gewünschte Instanz an.
-
-Nur wenn Sie die Checkbox bei [.guihint]#Delete vanished hosts# aktivieren, werden Hosts auch wieder gelöscht, wenn Sie in Ihrer dynamischen Umgebung verschwunden sind.
-Möchten Sie nicht automatisch alle Piggybacked-Hosts anlegen, so können Sie das mit der Option [.guihint]#Only add matching hosts# mit einem xref:regexes#[regulären Ausdruck] einschränken.
-
-Im dritten und letzte Teil der Verbindungseigenschaften können Sie durch Aktivieren der Checkbox bei [.guihint]#Service discovery# festlegen, dass auf den automatisch erzeugten Hosts eine xref:glossar#service_discovery[Service-Erkennung] durchgeführt wird:
-
-image::dcd_connection_pb_03.png[alt="Dritter Teil der Eigenschaften einer Piggyback-Verbindung zum automatischen Löschen der Hosts."]
-
-[#host_delete_options]
-Die restlichen drei Optionen beeinflussen das Löschen der automatisch erstellten Hosts, ein Thema, das in einem xref:automatic_deletion_of_hosts[eigenen Kapitel] noch detailliert erläutert wird.
-
-Die Option [.guihint]#Prevent host deletion after initialization# betrifft einen kompletten Neustart des {CMK}-Servers selbst.
-Denn in dieser Situation fehlen erst einmal die Daten von allen Hosts, bis diese zum ersten Mal abgefragt wurden.
-Um ein sinnloses Löschen und Wiedererscheinen von Hosts zu vermeiden (welches auch mit wiederholten Benachrichtigungen zu schon bekannten Problemen einhergeht),
-wird standardmäßig in den ersten 10 Minuten auf ein Löschen generell verzichtet.
-Diese Zeit können Sie hier einstellen.
-
-Die Option [.guihint]#Validity of missing data# behandelt den Fall, dass ein Host, aufgrund dessen Monitoring-Daten etliche Hosts automatisch angelegt wurden, keine Piggyback-Daten mehr liefert.
-Das kann z.B. der Fall sein, wenn ein Zugriff auf AWS und Co. nicht mehr funktioniert.
-Oder natürlich auch, wenn Sie den Spezialagenten aus der Konfiguration entfernt haben.
-Die automatisch erzeugten Hosts bleiben dann noch die eingestellte Zeit im System, bevor sie aus der Setup-GUI gelöscht werden.
-
-Die Option [.guihint]#Validity of outdated data# ist ähnlich, behandelt aber den Fall, dass schon noch Daten kommen, allerdings für manche Hosts nicht mehr.
-Das ist der normale Fall wenn z.B. virtuelle Maschinen oder Cloud-Dienste nicht mehr vorhanden sind.
-Wenn Sie möchten, dass die entsprechenden Objekte aus {CMK} dann zeitnah verschwinden, dann setzen Sie hier eine entsprechend kurze Zeitspanne.
-
-
-ifdef::onprem[]
-[#connection_properties_opentelemetry]
-=== Eigenschaften einer OpenTelemetry-Verbindung
-
-Die Optionen bei der Erstellung einer Piggyback- und OpenTelemetry-Verbindung, die ab {CE} eingerichtet werden kann, sind nahezu identisch.
-Daher werden die Eigenschaften einer OpenTelemetry-Verbindung im Schnelldurchlauf vorgestellt.
-
-image::dcd_connection_ot_01.png[alt="Eigenschaften einer OpenTelemetry-Verbindung."]
-
-Für eine xref:connection_opentelemetry[OpenTelemetry-Verbindung] wählen Sie [.guihint]#Opentelemetry collector data# als [.guihint]#Connector type# aus.
-
-Mit [.guihint]#Sync interval# bestimmen Sie, wie oft die Verbindung nach neuen Hosts suchen soll.
-
-Unter [.guihint]#Open telemetry hosts creation options# legen Sie fest, in welchem Ordner die Hosts erzeugt werden sollen ([.guihint]#Create hosts in#) und welche Host-Attribute gesetzt werden sollen.
-Zwei Attribute sind dabei voreingestellt:
-
-. Ausschließlich per API-Integrationen gelieferte Daten werden für das Monitoring herangezogen.
-. Die Hosts haben keine IP-Adresse.
-
-Nur wenn Sie die Checkbox unter [.guihint]#Delete vanished hosts# aktivieren, werden Hosts auch wieder gelöscht, wenn Sie in Ihrer dynamischen Umgebung verschwunden sind.
-Möchten Sie nicht automatisch alle Hosts anlegen lassen, so können Sie das mit der Option [.guihint]#Only add matching hosts# mit einem xref:regexes#[regulären Ausdruck] einschränken.
-
-Durch Aktivieren der Checkbox bei [.guihint]#Service discovery# legen Sie fest, dass auf den automatisch erzeugten Hosts eine xref:glossar#service_discovery[Service-Erkennung] durchgeführt wird.
-Dies führt allerdings nur dann zum gewünschten Ergebnis, wenn der xref:opentelemetry#special_agent[Spezialagent für OpenTelemetry] eingerichtet ist.
-
-Die beiden letzten Optionen [.guihint]#Prevent host deletion after initialization# und [.guihint]#Validity of outdated data# beeinflussen das Löschen der automatisch erstellten Hosts.
-Diese Optionen wirken so, wie es bei der xref:host_delete_options[Piggyback-Verbindung] beschrieben ist.
-Das Löschen der automatisch erstellten Hosts wird in einem xref:automatic_deletion_of_hosts[eigenen Kapitel] detailliert erläutert.
-endif::[]
-
-
-[#connection_save]
-=== Verbindung speichern
-
-Nachdem Sie gespeichert haben, erscheint die Verbindung in der Verbindungsliste.
-Sie kann aber erst ausgeführt werden, wenn Sie die Änderungen aktiviert haben.
-Erst dadurch nimmt die Verbindung ihren Dienst auf.
-
-Lassen Sie sich daher nicht von der Meldung irritieren, welche zunächst nach dem Speichern in der [.guihint]#Status#-Spalte erscheint: +
-`Connection 'my_connection' isn't found: consider activating changes`
-
-
-[#connection_activate]
-=== Verbindung aktivieren
-
-Nach dem Speichern der Verbindungseigenschaften und einem Aktivieren der Änderungen nimmt die Verbindung automatisch ihren Betrieb auf.
-Wenn für diese Verbindung bereits Daten vorliegen, und Sie die Erzeugung der entsprechenden Hosts erwarten, werden Sie bereits nach kurzer Zeit in der Liste unter [.guihint]#Recent processing cycles# einen entsprechenden Eintrag sehen, der etwa so aussehen könnte:
-
-image::dcd_recent_processing_cycles.png[alt="Liste der sogenannten Processing cycles"]
-
-Im Beispielbild können Sie sehen, dass dieser Durchlauf beinahe fertig ist und an dessen Ende mindestens 50 Hosts erzeugt werden.
-Wenn Sie diese Seite kurz darauf neu laden, sind diese Änderungen wahrscheinlich bereits von der dynamischen Host-Verwaltung automatisch aktiviert worden.
-
-Der Durchlauf aus dem obigen Beispiel, sieht dann so aus:
-
-image::dcd_recent_processing_cycles_complete.png[alt="Die Liste der recent processing cycles, nachdem Hosts in Monitoring aufgenommen wurden."]
-
-Die neuen Hosts sind dann bereits im Monitoring und werden regelmäßig überwacht.
-
-Die Liste [.guihint]#Recent processing cycles# wird die Durchläufe, die auch tatsächlich Änderungen herbeigeführt haben, für einen längeren Zeitraum anzeigen.
-Durchläufe der Verbindung, die zu keinen Änderungen geführt haben, werden hingegen nach wenigen Sekunden ausgeblendet.
-Wenn Sie diese dennoch sehen möchten, können Sie in der Zeile der jeweiligen Verbindung auf den Knopf icon:icon_dcd_history[alt="Symbol der Ausführungshistorie."] xref:execution_history[Ausführungshistorie] klicken.
-
-
-[#actions]
-=== Aktionen für eine Verbindung
-
-Für jede Verbindung zeigt die Verbindungsliste in der Spalte [.guihint]#Actions# Symbole, um Aktionen auszuführen:
-
-image::dcd_connection_list.png[alt="Tabelle der Verbindungen mit einem Eintrag."]
-
-Einige der folgenden Symbole werden nur für eine aktivierte Verbindung angezeigt:
-
-[cols="10,~"]
-|===
-|Symbol |Aktion 
-
-|icon:icon_edit[alt="Symbol für das Bearbeiten."]
-|Öffnet die Verbindung zum Bearbeiten.
-
-|icon:icon_clone[alt="Symbol für das Klonen."]
-|Klont die Verbindung und öffnet sie zum Bearbeiten.
-
-|icon:icon_host[alt="Symbol eines Hosts."]
-|Zeigt eine Liste der von dieser Verbindung erzeugten Hosts.
-
-|icon:icon_dcd_history[alt="Symbol der Ausführungshistorie."]
-|Zeigt die xref:execution_history[Ausführungshistorie] der Verbindung.
-
-|icon:icon_dcd_connections[alt="Symbol für den Zustand der dynamischen Host-Verwaltung."]
-|Zeigt den Zustand der dynamischen Host-Verwaltung, d.h. die aktuellen Bearbeitungszyklen.
-
-|icon:icon_dcd_execute[alt="Symbol für die Ausführung einer Verbindung der dynamischen Host-Verwaltung."]
-|Führt die Verbindung aus, ohne auf den nächsten Bearbeitungszyklus zu warten.
-
-|icon:icon_export_rule[alt="Symbol für den Export der Verbindung."]
-|Zeigt, wie die Verbindung mit der {CMK} xref:rest_api#[REST-API] erstellt werden kann.
-
-|icon:icon_delete[alt="Symbol für das Löschen."]
-|Löscht die Verbindung nach Rückfrage.
-|===
-
-
-[#automatic_deletion_of_hosts]
-== Automatisch Hosts löschen lassen
-
-Wie oben erwähnt, können Sie Hosts, die es „nicht mehr gibt“, von der dynamischen Host-Verwaltung automatisch aus dem Monitoring löschen lassen.
-Das klingt erst einmal sehr logisch.
-Was _genau_ das „nicht mehr gibt“ allerdings bedeutet, ist auf den zweiten Blick doch etwas komplexer, da es verschiedene Fälle zu betrachten gibt.
-
-Wir gehen in folgender Übersicht davon aus, dass Sie für die Verbindung die Option bei [.guihint]#Delete vanished hosts# aktiviert haben.
-Denn sonst werden grundsätzlich nie Hosts automatisch gelöscht.
-
-[cols="30,~",options="header"]
-|===
-|Situation |Was geschieht? 
-
-|Eine Verbindung wird entfernt.
-|Wenn Sie eine Verbindung stilllegen (mit [.guihint]#do not activate this connection# in den [.guihint]#General properties#) oder ganz löschen, bleiben alle Hosts, die durch diese Verbindung erzeugt wurden, erhalten.
-Bei Bedarf müssen Sie diese von Hand löschen.
-
-|Ein Piggyback-Host wird nicht mehr überwacht.
-|Wenn Sie einen Piggyback-Host, über den Sie Ihre Cloud- oder Containerumgebung überwachen, aus dem Monitoring löschen, erzeugt dieser natürlich keine Piggyback-Daten mehr.
-In diesem Fall werden die automatisch erzeugten Piggybacked-Hosts standardmäßig _nach einer Stunde_ automatisch gelöscht.
-Den Zeitraum können Sie mit der Option [.guihint]#Validity of missing data# anpassen.
-
-|Ein Piggybacked-Host ist nicht erreichbar.
-|Wenn Ihre Cloud-Umgebung mal nicht erreichbar ist, und der Service [.guihint]#Check_MK,# der diese abfragt, auf {CRIT} geht, so bleiben die automatisch erzeugten Hosts _auf unbestimmte Zeit_ im Monitoring.
-Hier gibt es keinen einstündigen Timeout!
-
-|Ein automatisch erstellter Host ist nicht mehr in den Daten enthalten.
-|Das ist quasi der Normalfall in einer Cloud-/Containerumgebung.
-In diesem Fall wird der Host standardmäßig nach einer Minute automatisch gelöscht.
-Den Zeitraum können Sie mit der Option [.guihint]#Validity of outdated data# anpassen.
-
-|Der {CMK}-Server selbst ist gestoppt.
-|Ein Stoppen des ganzen Monitorings führt zwar dazu, dass Daten veralten, aber natürlich werden bestehende Hosts deswegen _nicht_ gelöscht.
-Das gleiche gilt, wenn der {CMK}-Server neu gebootet wird (wodurch vorübergehend alle Daten verloren gehen, da diese in der RAM-Disk liegen).
-|===
-
-Beachten Sie, dass es mit der Regel [.guihint]#Automatic host removal# für alle Hosts die Möglichkeit gibt, diese xref:hosts_setup#hosts_autoremove[automatisch löschen zu lassen.]
-Beide Optionen zum _Lifecycle Management_ arbeiten unabhängig voneinander, d.h. ein Host wird gelöscht, wenn eine der beiden Voraussetzungen erfüllt ist.
-
-
-[#configuration]
-== Konfiguration
-
-Mit den Host-Manager-Einstellungen können Sie die Verarbeitungszyklen der dynamischen Host-Verwaltung anpassen.
-Sie erreichen den Dialog über [.guihint]#Setup > Hosts > Dynamic host management > Host manager settings:# 
-
-.Die Standardeinstellungen der [.guihint]#Host manager settings#
-image::dcd_host_manager.png[alt="Dialog der Host-Manager-Einstellungen."]
-
-Die Voreinstellungen sind hier bereits so gewählt, dass Sie auch in größeren und äußerst dynamischen Umgebungen gut funktionieren sollten.
-Wenn in Ihrer Umgebung allerdings minütlich viele Veränderungen anfallen, dann erzeugen diese auf Ihrem {CMK}-Server eine gewisse Last.
-Um diese Last besser steuern zu können, wurden die [.guihint]#Host manager settings# mit {CMK} {v24} eingeführt.
-
-Was die einzelnen Optionen genau tun, ist bereits sehr detailliert in der xref:user_interface#inline_help[Inline-Hilfe] beschrieben und wird deswegen an dieser Stelle nicht wiederholt.
-Im Folgenden beschreiben wir die drei Bereiche und was deren Funktion ist.
-
-Im [.guihint]#Host processing# geht es darum, in den verfügbaren Daten die Host-spezifischen Daten zu finden und zuzuordnen.
-Hier wird also beispielsweise die Frage beantwortet, ob ggf. neue Daten gefunden wurden und ob für diese auch Hosts angelegt werden sollen.
-Wenn hier regelmäßig sehr viele derartige Entscheidungen getroffen werden müssen, kann es sinnvoll sein, die Pausen zwischen den Durchläufen zu erhöhen, um der Abarbeitung von Warteschlangen genügend Zeit einzuräumen.
-
-Die Aktion [.guihint]#Activate changes# kennen Sie als {CMK}-Administrator vermutlich schon sehr gut.
-Hier geht es darum, wie und wann die dynamische Host-Verwaltung Änderungen aktivieren soll und wie lang Sie dafür maximal brauchen darf.
-
-Auch die [.guihint]#Service discovery# an sich wird kein großes Geheimnis mehr für Sie sein.
-In der dynamischen Host-Verwaltung können allerdings - je nach überwachter Umgebung - schon mal ein paar mehr Host auf eine Bulk-Erkennung warten.
-Beachten Sie auch hier die ausführliche Inline-Hilfe, um bei Verzögerungen im Ablauf der dynamischen Host-Verwaltung rechtzeitig und zielgerichtet eingreifen zu können.
-
-Die letzte Option im Bunde ([.guihint]#Do not monitor hosts without discovered services#) wurde eingeführt, um einen Sonderfall abfangen zu können.
-Sie wird im Grunde nur gebraucht, wenn des Öfteren Änderungen forciert aktiviert werden, ohne dass zuvor eine Service-Erkennung durchgeführt werden konnte.
-Die Option sollte mit Bedacht aktiviert werden.
-Wenn diese allerdings nötig ist, *kann* dies ein Indikator dafür sein, dass die vorherigen Optionen nicht optimal eingestellt sind, oder aber, dass der {CMK}-Server mit der durch die dynamische Host-Verwaltung erzeugten Last nicht mehr zurecht kommt. 
-
-
-[#diagnosis]
-== Diagnose
-
-[#execution_history]
-=== Ausführungshistorie
-
-Wenn Sie dem DCD bei der Arbeit zusehen möchten, finden Sie in der Liste der Verbindungen bei jedem Eintrag das Symbol icon:icon_dcd_history[].
-Dieses führt Sie zur Ausführungshistorie:
-
-image::dcd_execution_history.png[alt="Ausführungshistorie bei Suche und Anlegen neuer Hosts."]
-
-Sollte aus irgendwelchen Gründen die Erstellung eines Hosts fehlschlagen, sehen Sie dies in der Ausführungshistorie.
-
-
-ifdef::onprem[]
-=== Log-Datei des DCD
-
-Die Log-Datei des DCD ist `~/var/log/dcd.log`.
-Hier ist ein Beispiel, welches zur vorherigen Abbildung passt:
-
-.~/var/log/dcd.log
-[{file}]
-----
-2021-11-10 14:45:22,916 [20] [cmk.dcd] ---------------------------------------------------
-2021-11-10 14:45:22,916 [20] [cmk.dcd] Dynamic Configuration Daemon (2.0.0p14) starting (Site: mysite, PID: 7450)...
-2021-11-10 14:45:22,917 [20] [cmk.dcd.ConnectionManager] Initializing 0 connections
-2021-11-10 14:45:22,918 [20] [cmk.dcd.ConnectionManager] Initialized all connections
-2021-11-10 14:45:22,943 [20] [cmk.dcd.CommandManager] Starting up
-2021-11-10 15:10:58,271 [20] [cmk.dcd.Manager] Reloading configuration
-2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initializing 1 connections
-2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initializing connection 'piggy01'
-2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initialized all connections
-2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Starting new connections
-2021-11-10 15:10:58,272 [20] [cmk.dcd.piggy01] Starting up
-2021-11-10 15:10:58,273 [20] [cmk.dcd.ConnectionManager] Started all connections
-----
-endif::[]
-
-
-ifdef::onprem[]
-[#files]
-== Dateien und Verzeichnisse
-
-[cols="30,~",options="header"]
-|===
-|Pfad |Bedeutung 
-|`~/tmp/check_mk/piggyback` |Hier entstehen Piggyback-Daten. Für jeden in den Piggyback-Daten enthaltenen Piggybacked-Host entsteht ein Verzeichnis.
-|`~/tmp/check_mk/otel_collector` |Hier entstehen OpenTelemetry-Daten. Für jeden Host wird ein Unterverzeichnis erstellt. Die dort erstellten Dateien sind im JSON-Format.
-|`~/var/log/dcd.log` |Log-Datei des Dynamic Configuration Daemon (DCD).
-|===
-endif::[]
-////
-// end translation
-
-
-
-
-// delete from here
-
-[TIP]
-====
-This article still shows the status of version {v23}. It is currently being prepared for publication - with the changes of version {v24}. +
-Please be patient. Thank you! +
-By the way, the https://docs.checkmk.com/2.4.0/de/dcd.html[German version] of this article has already been updated -- if that is an alternative for you.
-====
-
-
 [#intro]
 == Introduction
 
-[{image-left}]
-image::dcd_large_icon_dcd_connections.png[alt="Dynamic host management icon.",width=100%]
-
-It is becoming increasingly common in cloud and container environments that hosts to be monitored can not only be generated but also expire automatically.
-Keeping up to date with the monitoring's configuration in such an environment is no longer possible manually.
-Classic infrastructures such as for example, VMware clusters can also be very dynamic, and even if manual care is still possible it is in any case cumbersome.
+In cloud and container environments it is becoming increasingly common that hosts being monitored appear and disappear automatically.  
+Keeping the monitoring configuration up to date manually is no longer a viable option.  
+However, even classic infrastructures such as VMware clusters can be very dynamic, and even if manual maintenance is not feasible here, it is still possible to keep the configuration up to date manually.
 
 ifdef::onprem[]
 {cee-only}
@@ -464,270 +27,377 @@ endif::[]
 ifdef::saas[]
 {CE} (SaaS) supports you 
 endif::[]
-in this process with a smart tool the _Dynamic Configuration Daemon_ or _DCD_ for short.
-The dynamic host management means that, based on information from monitoring
-xref:monitoring_aws#[AWS], xref:monitoring_azure#[Azure], xref:monitoring_kubernetes#[Kubernetes], xref:monitoring_vmware#[VMware]
-and other sources, hosts can be added to, and removed from the monitoring in a fully-automated procedure.
+with a smart tool: dynamic host management.
+Dynamic host management uses information from monitoring Amazon Web Services (AWS), Microsoft Azure, Kubernetes, VMware ESXi, and other sources to automatically add hosts to monitoring — as well as deleting them when they are no longer needed.
 
-The DCD is very generic, and is not limited only to host creation.
-The DCD forms the basis for future extensions of {CMK} which will dynamically adjust the configuration.
-This can also mean the management of users, for example.
-For this purpose the DCD works with _connections_.
-Each connection can get information from a very specific type of source, and has its own specific configuration.
+Dynamic host management is generic and not limited to the creation of hosts.
+It forms the basis for future extensions of {CMK} that will dynamically adjust the configuration.
+For this purpose dynamic host management works with _connections_.
+Each connection can retrieve information from a specific type of source and has its own specific configuration for this purpose.
 
-With special connections, it will become even easier in the future, to automatically take hosts into {CMK} from an existing CMDB.
-
-
-[#manage_hosts]
-== Managing hosts with the DCD
-
-=== The piggyback connection
-
-Currently, the DCD from {CMK} is only equipped with a single connection:
-the one used for xref:glossar#piggyback[piggyback data].
-This is very universal, since the piggyback mechanism is used by {CMK} in all situations
-where the query from a host (usually by xref:glossar#special_agent[special agent]) provides data of other hosts (usually virtual machines or cloud objects).
-
-Here are a couple of examples in which {CMK} uses piggyback in the monitoring:
-
-* xref:monitoring_aws#[Amazon Web Services (AWS)]
-* xref:monitoring_azure#[Microsoft Azure]
-* xref:monitoring_gcp#[Google Cloud Platform (GCP)]
-* xref:monitoring_kubernetes#[Kubernetes]
-* xref:monitoring_docker#[Docker]
-* xref:monitoring_vmware#[VMware ESXi]
-
-In all of these cases the monitoring automatically retrieves data from other hosts (for example, the VMs)
-which are not contacted directly via the network and on which also no {CMK} agent needs to run.
-With the DCD you can add and also remove such hosts automatically in the monitoring so as to always reflect the real situation in a timely manner.
-
-To do this the DCD analyzes the existing piggyback data and compares it to the hosts which already exist in the Setup,
-and then re-creates any missing hosts, or respectively, removes redundant ones.
-There are hosts which are automatically created by the DCD but which are still editable for you in the Setup-GUI.
+The Dynamic Configuration Daemon (DCD) is the software component which provides the dynamic host management. The software architecture of the DCD has been completely redesigned in {CMK} {v24} to meet the requirements of large, highly dynamic environments and ensure stable and secure processing.
+The collection of information from the configured connections is now decoupled from the resulting configuration changes in {CMK}.
+Pending configuration changes are organized in queues and processed sequentially in cycles, which guarantees stable and secure processing.
+The host manager settings provide you with options for customizing the processing cycles.
+For more information, see the xref:configuration[Configuration] chapter.
 
 
-[#user_automation]
-=== The automation user
+[#connection_types]
+== Connection types
 
-By default, the xref:glossar#automation_user[automation user] exists in {CMK}.
-This user is created by {CMK} to enable automated fetches.
-An existing automation user is also mandatory for dynamic host management.
-
-If, for whatever reason, you have deleted or changed this user in your system, you have to establish another user with automated access to the REST API.
-In this case, open the  [.guihint]#Connection to the REST API# global setting in [.guihint]#Setup > General > Global settings > Dynamic configuration#.
-
-image::dcd_connection_RESTAPI.png[alt="Selecting a user for the REST API."]
-
-Here you can enter a different user and their access data (name, password) instead of the automation user selected by default.
-As soon as you have saved the changes with icon:icon_save[alt=Icon for saving.”] [.guihint]#Save#, the selected user is used to access the REST-API and you can continue with the dynamic host management.
+By setting up a connection in dynamic host management, you can automatically add hosts to monitoring and also automatically delete them again, so that you always have a real-time picture of the situation.
+To do this, dynamic host management analyzes the existing data, compares which hosts are already present in the xref:glossar#configuration_environment[configuration environment] and creates any missing hosts or deletes those that are no longer present.
+Subsequently, a xref:glossar#service_discovery[service discovery] is (optionally) performed on the hosts, and finally the xref:glossar#activate_changes[changes are activated] so that the current status can be seen in the xref:glossar#monitoring_environment[monitoring environment].
 
 
-[#setup_dcd]
-=== Setting-up dynamic host management
+[#connection_piggyback]
+=== Piggyback connection
 
-==== Is piggyback data present?
+The piggyback connection is used to evaluate -- unsurprisingly -- xref:glossar#piggyback[piggyback] data.
+This connection type can be used universally in {CMK}, because the piggyback mechanism is used by {CMK} in all situations
+where a query to a host (usually via a xref:glossar#special_agent[special agent]) provides data about other hosts (usually virtual machines or cloud objects).
 
-The only requirement to be able to use the DCD is to have piggyback data.
-You will always have this data if you have correctly set up the monitoring of AWS, Azure and Co.
+{CMK} uses piggyback, for example, to monitor xref:monitoring_proxmox#[Proxmox], xref:monitoring_docker#[Docker], xref:monitoring_vmware#[VMware ESXi], and the _hyperscalers_ xref:monitoring_aws#[AWS], xref:monitoring_azure#[Azure], and xref:monitoring_gcp#[GCP].
+In all of these cases, monitoring automatically retrieves data from other hosts, such as virtual machines (VM), that are not directly accessible via the network and on which no {CMK} agent *needs* to be running.
+You can automatically include such hosts in the monitoring and also delete them again.
+Automatically-created hosts can still be manually edited in the [.guihint]#Setup# GUI.
+
+The only requirement for using a piggyback connection is piggyback data.
+You will always have this if you have set up monitoring for AWS, Azure, and others as described in this User Guide.
 
 ifdef::onprem[]
-You can easily verify that via the command line as well, because the piggyback data from {CMK} will have been created in the `~/tmp/check_mk/piggyback` directory:
+You can also easily check the presence of piggyback data on the command line, as this data is created by {CMK} in the `~/tmp/check_mk/piggyback/` directory:  
 
 [{shell}]
 ----
 {c-omd} ls tmp/check_mk/piggyback
-myvm01  myvm02  myvm03
+myvm01/  myvm02/  myvm03/
 ----
 
 If this directory is not empty, piggyback data has been generated in this site.
 endif::[]
 
 
-==== General connection settings
+ifdef::onprem[]
+[#connection_opentelemetry]
+=== OpenTelemetry connection
 
-The [.guihint]#Setup > Hosts > Dynamic host management# menu entry brings you to the host management respectively its connections:
+{cee-only}
+{CMK} {v24} offers experimental support for processing link:https://opentelemetry.io/[OpenTelemetry^] metrics starting with {CCE}, i.e., for {CE} and {ME}.
+To do this an OpenTelemetry collector in {CMK} gathers metric data that the collector receives via the OpenTelemetry Protocol (OTLP) or retrieves via a Prometheus endpoint.
+When configuring the collector, rules are also set up to generate host names for {CMK} from the data. 
+Once configured the collector starts gathering the data and stores it in the {CMK} site with file names that correspond to the host names.
 
-image::dcd_connections_empty.png[alt="The 'Dynamic host management' page with empty connection list."]
+The setup of OpenTelemetry, including the OpenTelemetry collector, is described in the xref:opentelemetry#[Monitoring OpenTelemetry metrics] article.
 
-Create a new connection with icon:icon_new[] [.guihint]#Add connection#.
-The first part of the configuration is the [.guihint]#General properties#:
+The OpenTelemetry data is always available in the site if the OpenTelemetry collector has been set up correctly. This can be checked via the command line, as the OpenTelemetry data is stored in the `~/tmp/check_mk/otel_collector/` directory:
 
-image::dcd_connection_general.png[alt="General properties when adding a new connection."]
+[{shell}]
+----
+{c-omd} ls tmp/check_mk/otel_collector
+myotelapp01  myotelapp02  myotelapp03
+----
 
-Here you assign, as so often, a unique ID and a title for this connection.
-Also important is the selection of the {CMK} site on which this connection should run.
-Because piggyback data is always processed locally, the connection must always be assigned to a specific site.
+If this directory is not empty, OpenTelemetry data has been generated in this site.
+endif::[]
 
 
-==== Properties of the connection
+[#setup_dcd]
+== Setting up a connection
 
-The second part is the [.guihint]#Connection properties#:
+Open the dynamic host management page with [.guihint]#Setup > Hosts > Dynamic host management#:
 
-image::dcd_connection_properties.png[alt="Connection settings in detail."]
+image::dcd_connections_empty.png[alt=“The ‘Dynamic host management’ page with an empty connection list.”]
 
-The connection type [.guihint]#Piggyback data# is already preselected here (and is currently the only one possible).
+Create a new connection using icon:icon_new[alt=“Icon for creating a new object.”] [.guihint]#Add connection#.
 
-The [.guihint]#Sync interval# determines how often the connection should search for new hosts.
-If you keep the regular check interval of one minute, it makes no sense to do that much more often,
-since a piggyback data change can take place once a minute at most.
-In very dynamic environments you can use both check interval as well as the connection interval set to much lower values.
-However this also results in a higher CPU utilization on the {CMK} server.
 
-Now it is important to add under [.guihint]#Piggyback creation options# at least one element ([.guihint]#Add new element#).
-This will take you to the settings for automatically created hosts:
+[#general_properties]
+=== General properties
 
-image::dcd_connection_properties_2.png[alt="Folder where hosts are created and data sources used for this."]
+The first part of the configuration is the [.guihint]#General properties#:  
 
-Here you can specify two important things: In which folder the hosts should be created (here for example [.guihint]#AWS Cloud 02#),
-and which host attributes should be set (for the latter you must have xref:intro_gui#show_less_more[Show more mode] enabled)).
-Four important attributes are preset which are mostly applicable for piggybacked hosts:
+image::dcd_connection_general.png[alt=“General properties when adding a new connection.”]  
+
+As is often the case, here you assign a unique ID and a title to this connection.
+
+Under [.guihint]#Site#, you must select the {CMK} xref:glossar#site[site] where the data is generated.
+'Generated' here refers to the site where data is stored in the `~/tmp/check_mk/` directory for the respective connection type.
+In most cases, a special agent handles the storage of the data.
+
+Since data can only ever be processed locally on a specific site, the connection must be assigned to that site.
+In a xref:glossar#central_setup[distributed monitoring with central setup], you must therefore specify the site on which the data -- whether piggyback data or data from other sources -- is to be collected and subsequently processed.
+Here, you do *not* determine on which site the hosts are to be created. You specify this in the [.guihint]#Host attributes to set# using the [.guihint]#Basic settings: Monitored on site# host attribute.
+The connection is then assigned to the host.
+
+
+[#connection_properties_piggyback]
+=== Properties of a piggyback connection
+
+The second part is the connection properties ([.guihint]#Connection properties#).
+Since there is quite a bit to configure here, we will go through the options one by one.
+
+image::dcd_connection_pb_01.png[alt=“First part of the properties of a piggyback connection to the source host and synchronization interval.”]
+
+For a xref:connection_piggyback[piggyback connection], select [.guihint]#Piggyback data# as the [.guihint]#Connector type#.
+
+With [.guihint]#Restrict source hosts#, you can restrict this connection to specific hosts as sources.
+These are usually the hosts for which a special agent has been set up.
+Dynamic host management is only active for these hosts.
+The restriction is made in the corresponding input field, whose content is interpreted as a xref:regexes#[regular expression].
+Once you have edited the first input field, the next one will open automatically, meaning you can specify multiple regular expressions.
+
+With the [.guihint]#Sync interval#, you can determine how often the connection should search for new hosts.
+If you have kept the regular check interval of one minute, there is no point in doing this much more frequently, as data can only change once per minute at most.
+In more dynamic environments, you can set both the check interval and the connection interval to significantly smaller values.
+However, this also results in higher CPU usage on the {CMK} server.
+
+At least one entry must exist under [.guihint]#Piggyback creation options#.
+You can also add more using [.guihint]#Add new entry#:
+
+image::dcd_connection_pb_02.png[alt=“Second part of the properties of a piggyback connection to the automatically created hosts.”]
+
+This section deals with the properties of automatically generated hosts, for which you can specify two important things:
+The folder in which the hosts are to be created ([.guihint]#Create hosts in#) and which host attributes are to be set.
+Four important attributes are preset, which are usually useful for piggybacked hosts:
 
 . No monitoring via SNMP.
 . No {CMK} agent on the host itself (data comes via piggyback).
-. Piggyback data is always expected (and there is an error if it is missing).
+. Piggyback data is always expected (and an error occurs if it is missing).
 . The hosts do not have an IP address.
 
-*Important:* Only if you enable [.guihint]#Delete vanished hosts# will hosts be deleted when they disappear from your dynamic environment.
+If you want to use the piggyback data on another site, activate the [.guihint]#Add attribute# option and then the [.guihint]#Basic settings: Monitored on site# option and specify the desired site.
 
-If you do not want to automatically create all hosts, you can do this by restricting the [.guihint]#Only add matching hosts# option with a xref:regexes#[regular expression].
-*Important:* here we mean the hosts that are being _created_, and _not_ the hosts you have set up to monitor AWS, for example.
+Only if you activate the checkbox at [.guihint]#Delete vanished hosts# will hosts be deleted again if they have disappeared in your dynamic environment.
+If you do not want to automatically create all piggybacked hosts, you can restrict this with the option [.guihint]#Only add matching hosts# with an xref:regexes#[regular expression].
 
-The latter can be achieved with the [.guihint]#Restrict source hosts# option.
-This refers to the names of the hosts that _generate_ piggyback data.
+In the third and final part of the connection properties, you can specify that a  xref:glossar#service_discovery[service discovery] is performed on the automatically generated hosts by activating the checkbox at [.guihint]#Service discovery#:
 
-
-==== Activate changes
-
-Two further options deal with the automatic activation of changes – for the case that hosts really have been created or removed,
-since only then will they appear in the monitoring.
-
-If xref:wato#activate_changes[activate changes] takes a long time on your site, you can use [.guihint]#Group "Activate changes"# to make sure
-that it does not start immediately with each new host, but rather once a few hosts have been ‘collected’.
-
-Furthermore, you can also completely stop the automatic activation of changes for specified times during the day -- for example, for the times when your monitoring system is being actively looked-after.
-Because if the DCD activates changes, all other changes that you or a colleague have just made will also become active!
-
-After saving the connection appears in the list.
-It can however not yet run before you have activated the changes
--- only then does it start functioning.
-So therefore do not be irritated by the message which appears right after saving: +
-`Failed to get the status from DCD (The connection 'piggy01' does not exist)` 
+image::dcd_connection_pb_03.png[alt=“Third part of the properties of a piggyback connection for automatically deleting hosts.”]
 
 
-[#start_connection]
-== Starting the connection
+[#host_delete_options]
+The remaining three options affect the deletion of automatically created hosts, a topic that is explained in detail in a xref:automatic_deletion_of_hosts[separate chapter].
 
-=== The first activation
+The option [.guihint]#Prevent host deletion after initialization# affects a complete restart of the {CMK} server itself.
+In this situation, the data from all hosts will initially be missing until they have been queried for the first time.
+To avoid unnecessary deletion and reappearance of hosts (which is also accompanied by repeated notifications of already known problems), deletion is generally not performed during the first 10 minutes by default.
+You can set this time here.
 
-After saving the connection properties, and following an activate changes, the connection will automatically start its operation.
-This can go so quickly that right after activating the changes you will immediately see how hosts are being created in monitoring:
+The option [.guihint]#Validity of missing data# deals with the case where a host, based on whose monitoring data several hosts were automatically created, no longer provides piggyback data.
+This can be the case, for example, if access to AWS and Co. no longer works.
+Or, of course, if you have removed the special agent from the configuration.
+The automatically generated hosts will then remain in the system for the set time before being deleted from the [.guihint]#Setup# GUI.
 
-image::dcd_pending_changes.png[alt="List of pending changes immediately before automatic transfer to monitoring."]
-
-If you reload this page shortly afterwards, these changes will probably have already disappeared, because they were automatically activated by the DCD.
-The new hosts are already in the monitoring and will be regularly monitored.
-
-
-[#automatic_deletion_of_hosts]
-== Automatic deletion of hosts
-
-=== When are hosts being deleted?
-
-As mentioned above, you can of course allow hosts which ‘no longer exist’ to be deleted automatically from monitoring by the DCD.
-That sounds at first very logical. What _exactly_ is meant by ‘no longer exists’
-is however at second glance a bit more complex, as there are several situations to be considered.
-In the following overview we assume that you have enabled the delete option 
--- since otherwise hosts will never be removed automatically.
-
-[cols="30,~"]
-|===
-|Situation |What happens? 
-
-|A DCD connection is removed.
-|If you shut down a DCD connection ([.guihint]#do not activate this dynamic configuration connection#), or remove it altogether, all hosts created by this connection are preserved.
-If necessary you must delete them by hand.
-
-|A piggybacked host will no longer be monitored.
-|If you remove the host from which you monitor your cloud or container environment from monitoring, it will of course generate no further piggyback data.
-In this case the automatically-generated hosts will _after one hour_ be automatically deleted.
-
-|A piggybacked host cannot be contacted.
-|If your cloud environment is unreachable and the [.guihint]#Check_MK# service requesting it goes to {CRIT}, the generated hosts will remain in monitoring _indefinitely_.
-There is no one-hour timeout here!
-
-|The {CMK} server itself is stopped.
-|Stopping all monitoring will cause piggyback data to become obsolete, but of course this will _not_ result in created hosts being deleted.
-The same applies if the {CMK} server is rebooted (which causes a temporarily loss of all piggyback data since these are in the RAM).
-
-|A host is no longer in the piggyback data.
-|This is a normal situation:
-A host in a cloud/container environment has disappeared.
-In this case it will be _immediately_ removed from monitoring.
-|===
-
-Note that with the [.guihint]#Automatic host removal# rule, there is an option for all hosts to have them xref:hosts_setup#hosts_autoremove[automatically removed].
-Both options for _lifecycle management_ work independently of each other, i.e. a host is removed if one of the two conditions is met.
-
-
-=== Configuration options
-
-In addition to the question of whether hosts should be removed automatically at all, in the connection properties there are three more options 
-that affect the deletion -- options which we skipped discussing earlier:
-
-image::dcd_deletion_tuning.png[alt="Fine tuning to automatically delete hosts."]
-
-The first setting – [.guihint]#Prevent host deletion right after initialization# – affects a complete reboot of the {CMK} server itself.
-In this situation piggyback data for all hosts will at first be missing until the hosts are queried for the first time.
-To avoid the senseless deletion and reappearance of hosts (which is also accompanied by repeated notifications for known problems),
-deletions will by default be generally waived during the first 10 minutes.
-This time limit can be customized here.
-
-The [.guihint]#Validity of missing data# option handles the situation where a host, whose monitoring data created several hosts automatically, returns no piggyback data.
-This can be the case, e.g. when access to AWS and Co. has stopped working.
-Or also of course if you have removed the special agent from the configuration.
-The automatically-generated hosts will remain for the set time in the system before being removed from the Setup.
-
-The [.guihint]#Validity of outdated data# option is similar, but treats the case that even if piggyback data is being received, but not from some hosts.
-This is the normal case if, e.g. virtual machines or cloud services are no longer available.
-If you want the corresponding objects to disappear from {CMK} in a timely manner, then set a correspondingly short time span here.
-
-
-[#diagnosis]
-== Diagnoses
-
-=== Execution history
-
-If you want to watch the DCD at work, for each entry in the list of connections you will find the icon:icon_dcd_history[] icon.
-This takes you to the execution history:
-
-image::dcd_execution_history.png[alt="Execution history when searching and creating new hosts."]
-
-If for some reason the creation of a host fails, you will see this in the execution history.
-
-
-=== Audit log
-
-With [.guihint]#Setup > General > Audit log# you open a page with the list of all changes that have been made in the Setup GUI -- regardless of whether they have already been activated or not.
-Look for entries from the `automation` user or the user that you have authorized instead (see the xref:user_automation[The automation user] section).
-The DCD works under this user account and generates changes there
--- so here you can follow which hosts the DCD has created or removed, and when.
+The option [.guihint]#Validity of outdated data# is similar, but deals with the case where data is still coming in, but no longer for some hosts.
+This is the normal case when, for example, virtual machines or cloud services are no longer available.
+If you want the corresponding objects to disappear from {CMK} promptly, set a correspondingly short time period here.
 
 
 ifdef::onprem[]
-=== DCD log file
+[#connection_properties_opentelemetry]
+=== Properties of an OpenTelemetry connection
 
-The DCD's log file is `~/var/log/dcd.log`.
-Here is an example which fits the previous image:
+The options for creating a piggyback and OpenTelemetry connection, which can be set up from {CE} onwards, are almost identical.
+We will therefore provide a quick overview of the properties of an OpenTelemetry connection.
+
+image::dcd_connection_ot_01.png[alt=“Properties of an OpenTelemetry connection.”]
+
+For an xref:connection_opentelemetry[OpenTelemetry connection], select [.guihint]#Opentelemetry collector data# as the [.guihint]#Connector type#.
+
+Use [.guihint]#Sync interval# to determine how often the connection should search for new hosts.
+
+Under [.guihint]#Open telemetry hosts creation options#, specify the folder in which the hosts should be created ([.guihint]#Create hosts in#) and which host attributes should be set.
+Two attributes are preset:.
+
+. Only data delivered via API integrations is used for monitoring.
+. The hosts do not have an IP address.
+
+Only if you activate the checkbox under [.guihint]#Delete vanished hosts# will hosts be deleted again if they have disappeared in your dynamic environment.
+If you do not want to have all hosts created automatically, you can restrict this with the option [.guihint]#Only add matching hosts# with a xref:regexes#[regular expression].
+
+By checking the box at [.guihint]#Service discovery#, you specify that xref:glossar#service_discovery[service discovery] is performed on the automatically generated hosts.
+However, this only leads to the desired result if xref:opentelemetry#special_agent[special agent for OpenTelemetry] is set up.
+
+The last two options, [.guihint]#Prevent host deletion after initialization#, and [.guihint]#Validity of outdated data# affect the deletion of automatically created hosts.
+These options work as described in the xref:host_delete_options[piggyback connection] section.
+The deletion of automatically created hosts is explained in detail in a xref:automatic_deletion_of_hosts[separate chapter].
+endif::[]
+
+
+[#connection_save]
+=== Saving the connection
+
+Once saved, the connection will appear in the connection list. 
+However, it can only be executed after the changes have been activated. 
+Only then will the connection start working. 
+
+Therefore, do not be confused by the message that initially appears in the [.guihint]#Status# column after saving: +
+`Connection 'my_connection' isn't found: consider activating changes`
+
+
+[#connection_activate]
+=== Activating the connection
+
+After saving the connection properties and activating the changes, the connection will automatically start operating.
+If data is already available for this connection and you are expecting the corresponding hosts to be generated, you will soon see a corresponding entry in the list under [.guihint]#Recent processing cycles#, which might look something like this:
+
+image::dcd_recent_processing_cycles.png[alt=“List of so-called processing cycles”]
+
+In the example image, you can see that this run is almost complete and that at least 50 hosts will be created at the end.
+If you refresh this page shortly afterwards, these changes will probably already have been automatically activated by dynamic host management. 
+The result from processing the above example will then look like this:  
+
+image::dcd_recent_processing_cycles_complete.png[alt=“The list of recent processing cycles after hosts have been added to monitoring.”]  
+
+The new hosts will then already be in monitoring and will be monitored regularly.  
+
+The [.guihint]#Recent processing cycles# list will display the cycles over a longer period of time that have actually resulted in changes.  
+Cycles of the connection that have not resulted in any changes will be hidden after a few seconds.  
+If you still want to see these, you can click on the icon:icon_dcd_history[alt="Icon of the execution history."] xref:execution_history[Execution history] button in the line of each respective connection. 
+
+
+[#actions]
+=== Actions for a connection
+
+For each connection, the connection list in the [.guihint]#Actions# column displays icons for performing actions:
+
+image::dcd_connection_list.png[alt=“Table of connections with one entry.”]
+
+Some of the following icons are only displayed for an activated connection:
+
+[cols="10,~"]
+|===
+|Icon |Action
+
+|icon:icon_edit[alt=“Icon for editing.”]
+|Opens the connection for editing.
+
+|icon:icon_clone[alt=“Icon for cloning.”]
+|Clones the connection and opens it for editing.
+
+|icon:icon_host[alt="Icon of a host."]
+|Displays a list of hosts created by this connection.
+
+|icon:icon_dcd_history[alt="Icon of the execution history."]
+|Displays the xref:execution_history[execution history] for the connection.
+
+|icon:icon_dcd_connections[alt="Icon of the dynamic host management state."]
+|Displays the status of dynamic host management, i.e., the current processing cycles.
+
+|icon:icon_dcd_execute[alt="Icon for the execution of a dynamic host management connection."]
+|Executes the connection without waiting for the next processing cycle.
+
+|icon:icon_export_rule[alt="Icon of the connection export."]
+|Shows how the connection can be created with the {CMK} xref:rest_api#[REST API].
+
+|icon:icon_delete[alt=“Icon for deleting.”]
+|Deletes the connection after confirmation.
+|===
+
+
+[#automatic_deletion_of_hosts]
+== Automatically deleting hosts
+
+As mentioned above, hosts that 'no longer exist' can be automatically deleted from the monitoring by the dynamic host management.  
+At first glance, this sounds very logical, however, exactly what 'no longer exists' means is a little more complex when one thinks about it, as there are various alternative cases to consider.
+
+In the following overview we will assume that you have activated the option at [.guihint]#Delete vanished hosts# for the connection.
+Otherwise, hosts will never be deleted automatically.
+
+[cols="30,~",options="header"]
+|===
+|Situation |What happens?
+
+|A connection is removed.
+|If you deactivate a connection (with [.guihint]#do not activate this connection# in the [.guihint]#General properties#) or delete it completely, all hosts created by this connection are retained.
+If necessary, you must delete them manually.
+
+|A piggyback host is no longer monitored.
+|If you delete a piggyback host that you use to monitor your cloud or container environment from monitoring, it will of course no longer generate piggyback data.
+In this case, the automatically generated piggybacked hosts are by default automatically deleted _after one hour._
+You can adjust this period using the [.guihint]#Validity of missing data# option.
+
+|A piggybacked host is not reachable.
+|If your cloud environment is unavailable and the [.guihint]#Check_MK# service that queries it goes to {CRIT}, the automatically generated hosts remain in monitoring _indefinitely_.
+There is no one-hour timeout here!
+
+|An automatically created host is no longer included in the data.
+|This is pretty much the norm in a cloud/container environment.
+In this case, by default the host is automatically deleted after one minute.
+You can adjust the time period using the [.guihint]#Validity of outdated data# option.
+
+|The {CMK} server itself is stopped.
+|Stopping all monitoring does cause data to become outdated, but existing hosts are of course _not_ deleted as a result.
+The same applies when the {CMK} server is rebooted (which temporarily causes all data to be lost, as it is stored in the RAM disk).
+|===
+
+Note that with the [.guihint]#Automatic host removal# rule, it is possible for all hosts to be xref:hosts_setup#hosts_autoremove[automatically deleted].
+Both options for _lifecycle management_ work independently of each other, i.e., a host is deleted if one of the two conditions is met.
+
+
+[#configuration]
+== Configuration
+
+The host manager settings allow you to customize the processing cycles of dynamic host management.
+You can access the dialog via [.guihint]#Setup > Hosts > Dynamic host management > Host manager settings#:
+
+.The default settings for the [.guihint]#Host manager settings#
+image::dcd_host_manager.png[alt=“Host manager settings dialog.”]
+
+The default settings here are already selected so that they should work well even in larger and extremely dynamic environments.
+However, if your environment undergoes many changes every minute, these will create a certain load on your {CMK} server.
+To better control this load, the [.guihint]#Host manager settings# were introduced with {CMK} {v24}.
+
+What the individual options do exactly is already described in great detail in the xref:user_interface#inline_help[inline help] and will therefore not be repeated here.
+In the following, we describe the three areas and what their functions are.
+
+[.guihint]#Host processing# involves finding and assigning host-specific data from the available data.
+This answers questions such as whether new data has been found and whether hosts should be created for this data.
+If a large number of such decisions have to be made regularly, it may be useful to increase the pauses between runs to allow sufficient time for queues to be processed.
+
+As a {CMK} administrator, you are probably already very familiar with the [.guihint]#Activate changes# function.
+This action determines how and when dynamic host management should activate changes and how long it can take to do so.
+
+Even [.guihint]#Service discovery# itself will no longer be a big mystery to you.
+However, depending on the environment being monitored, a few more hosts may be waiting for bulk discovery in dynamic host management.
+Refer to the detailed inline help in such a situation so that you can intervene in a timely and targeted manner in the event of any delays in the dynamic host management process.
+
+The last option in the group ([.guihint]#Do not monitor hosts without discovered services#) was introduced to handle a special situation.
+It is basically only required if pending changes are frequently forced without prior service discovery.
+This option should be activated with caution.
+However, if it is necessary, this *may* be an indicator that the previous options have not been optimally configured, or that the {CMK} server can no longer cope with the load generated by the dynamic host management.
+
+
+[#diagnosis]
+== Diagnosis
+
+[#execution_history]
+=== Execution history
+
+If you want to watch the DCD at work, you will find the icon:icon_dcd_history[alt="Icon of the execution history."] icon in the list of connections for each entry,
+which will take you to the execution history:
+
+image::dcd_execution_history.png[alt=“Execution history for searching and creating new hosts.”]
+
+If, for any reason, the creation of a host fails, this will be visible in the execution history.
+
+
+ifdef::onprem[]
+=== The DCD log file
+
+The DCD log file is `~/var/log/dcd.log`.
+Here is an example that matches the previous illustration:
 
 .~/var/log/dcd.log
 [{file}]
 ----
 2021-11-10 14:45:22,916 [20] [cmk.dcd] ---------------------------------------------------
 2021-11-10 14:45:22,916 [20] [cmk.dcd] Dynamic Configuration Daemon (2.0.0p14) starting (Site: mysite, PID: 7450)...
-2021-11-10 14:45:22,917 [20] [cmk.dcd.ConnectionManager] Initializing 0 connections
-2021-11-10 14:45:22,918 [20] [cmk.dcd.ConnectionManager] Initialized all connections
-2021-11-10 14:45:22,943 [20] [cmk.dcd.CommandManager] Starting up
-2021-11-10 15:10:58,271 [20] [cmk.dcd.Manager] Reloading configuration
+2021-11-10 14:45:22.917 [20] [cmk.dcd.ConnectionManager] Initializing 0 connections
+2021-11-10 14:45:22.918 [20] [cmk.dcd.ConnectionManager] Initialized all connections
+2021-11-10 14:45:22.943 [20] [cmk.dcd.CommandManager] Starting up
+2021-11-10 15:10:58.271 [20] [cmk.dcd.Manager] Reloading configuration
 2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initializing 1 connections
 2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initializing connection 'piggy01'
 2021-11-10 15:10:58,272 [20] [cmk.dcd.ConnectionManager] Initialized all connections
@@ -744,10 +414,9 @@ ifdef::onprem[]
 
 [cols="30,~",options="header"]
 |===
-|Path |Function 
-
-|`~/tmp/check_mk/piggyback` |Piggyback data is created here. A directory is created for each piggybacked host included in the piggyback data.
-|`~/var/log/dcd.log` |The log file for the Dynamic Configuration Daemon (DCD).
+|File path |Function 
+|`~/tmp/check_mk/piggyback/` |This is where piggyback data is generated. A subdirectory is created for each piggybacked host contained in the piggyback data.
+|`~/tmp/check_mk/otel_collector/` |This is where OpenTelemetry data is generated. A subdirectory is created for each host. The files created there are in JSON format.
+|`~/var/log/dcd.log` |Log file of the Dynamic Configuration Daemon (DCD).
 |===
 endif::[]
-// delete to here
