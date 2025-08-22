@@ -13,6 +13,7 @@ import textwrap
 from typing import Any
 import argparse
 import git
+from importlib.metadata import version
 
 TRANSLATE_REGEX: str = r"^translated\|^content-sync\|^content_sync"
 DEFAULT_DATE: int = (
@@ -246,9 +247,7 @@ class GitCommits:
                 if docs_type and docs_type in article_list.keys():
                     if article_properties := article_list[docs_type].get(article_name):
                         logging.debug(
-#                            model_dump is not compatible with the pydantic version provided by Ubuntu 24.04
-#                            f"article properties before change: {article_properties.model_dump()}"
-                            f"article properties before change: {article_properties.dict()}"
+                           f"article properties before change: {article_properties.model_dump()}"
                         )
                         article_translation = article_properties.last_full_translation
                     else:
@@ -260,9 +259,7 @@ class GitCommits:
                     article_translation, commit_date
                 )
                 logging.debug(
-#                   model_dump is not compatible with the pydantic version provided by Ubuntu 24.04
-#                   f"article properties after change: {article_properties.model_dump()}"
-                   f"article properties after change: {article_properties.dict()}"
+                  f"article properties after change: {article_properties.model_dump()}"
                 )
 
     def _get_commits_of_file(
@@ -449,8 +446,7 @@ class ColorizedOutput:
         )
 
     def _get_color_str(self, state: str):
-#        return self.colors.model_dump().get(state)
-        return self.colors.dict().get(state)
+       return self.colors.model_dump().get(state)
 
     def _docs_type_header(self, docs_type: str) -> None:
         self._line(self.box.top)
@@ -498,8 +494,7 @@ class ColorizedOutput:
         self._line(self.box.top)
         self._docs_summary_header(article)
         for lang, commits in article.commits_by_language.items():
-#            self._line(str(self.box_text.model_dump().get(lang)))
-            self._line(str(self.box_text.dict().get(lang)))
+            self._line(str(self.box_text.model_dump().get(lang)))
             for commit in commits:
                 if commit.properties.state == STATES.clean:
                     prefix = self.box_text.commit_clean
@@ -551,6 +546,15 @@ class ColorizedOutput:
     def details(self, data: dict[str, dict[str, Article]], article_name: str):
         self._wrapper(data, article_name=article_name)
 
+def _check_pydantic_version():
+    pydantic_version = version("pydantic")
+    pydantic_version_major = int(pydantic_version.split(".")[0])
+    if pydantic_version_major < 2:
+        logging.error("Your python environment uses pydantic version {}. ".format(
+            version("pydantic"))
+            + "In order to run this script successfully, please update pydantic "
+            + "to version 2.x or higher. ")
+        exit(1)
 
 def _parse_arguments(argv: list) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -622,6 +626,7 @@ WRITE = ColorizedOutput()
 def main():
     opts = _parse_arguments(argv[1:])
     _set_logging(opts.verbose)
+    _check_pydantic_version()
 
     git = GitCommits()
     db = ArticleDatabase(
