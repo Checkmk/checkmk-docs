@@ -1,6 +1,6 @@
 // -*- coding: utf-8 -*-
 // NO-LUNR
-// IGNORE sekündlich echtzeitüberwachte echtzeitüberwachten nachgehalten cpu Pre
+// IGNORE sekündlich echtzeitüberwachte echtzeitüberwachten nachgehalten cpu Pre winperf WinPerf 0m 1m Zoomstufen @ sekündliche nachhalten
 include::global_attr.adoc[]
 = Echtzeit-Checks (Real-time Checks)
 :title: Echtzeit-Checks (Real-time Checks)
@@ -12,6 +12,22 @@ include::global_attr.adoc[]
 [#intro]
 == Einleitung
 
+{CMK} überwacht Hosts standardmäßig in einem Intervall von einer Minute.
+Die Wahl eines Abfrageintervalls ist eine Art Balanceakt zwischen Genauigkeit und Performance:
+würde der {CMK}-Server alle Services von allen überwachten Hosts ständig abfragen, würde das zu einer enormen Netzwerk-Last und einem beachtlichen Bedarf an Speicherplatz für die übermittelten Monitoring-Daten führen.
+Auf der anderen Seite wäre eine Überwachung in deutlich _größeren_ Intervallen möglicherweise nicht mehr aussagekräftig, weil etwa Zustandsänderungen von Hosts und Services im Monitoring nicht mehr sichtbar wären.
+
+{cce-only}
+Für den Fall, dass Sie bestimmte Services besonders engmaschig überwachen möchten, bieten kommerzielle Editionen von {CMK} Echtzeit-Checks an.
+Mit diesen Checks können Sie Daten über eine kleine Auswahl von Services separat von der regulären Agenten-Ausgabe sekündlich an den {CMK}-Server schicken.
+Die Echtzeit-Daten werden in Form von UDP-Paketen direkt vom Host zum {CMK}-Server geschickt.
+Aktuell sind Echtzeit-Checks nur für Linux-Hosts und Windows-Hosts verfügbar.
+
+Dieser Artikel beschreibt, sie Sie Echtzeit-Checks für Linux- oder Windows-Hosts einrichten und nutzen.
+Im xref:#rtc_sections[einfachsten Fall] lassen Sie eine Auswahl von Agenten-Sektionen als Echtzeit-Checks einmal pro Sekunde abfragen.
+Für xref:#rtc_plugins[komplexere Szenarien] haben Sie die Möglichkeit, Plugins im Rahmen der Echtzeit-Checks auszuführen.
+
+[#rtc_sections]
 == Echtzeit-Check für einen Host einrichten
 
 Um Echtzeitdaten über geeignete Services eines Hosts abzufragen, sind Änderungen in Ihrer {CMK}-Instanz und in der Agentenkonfiguration auf dem Host nötig.
@@ -26,16 +42,21 @@ Als Default steht diese Einstellung auf Port 6559.
 
 image::real_time_checks_enable.png[]
 
+[#rule_rtc]
 ==== Agentenregel anlegen
 
 Bisher haben Sie dem Monitoring-Kern zwar erlaubt, Echtzeit-Checks zu verarbeiten, aber Sie haben noch nicht konfiguriert, _wie_ Ihr Agent die Echtzeit-Checks ausführen soll.
 Dieser Schritt folgt jetzt.
 
 Unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules# finden Sie die Regel [.guihint]#Real-time Checks#.
-Indem Sie eine solche Regel anlegen, spezifizieren Sie, welche Services von welchen Host mit Echtzeit-Checks überwacht werden sollen.
+Mit dieser Regel spezifizieren Sie, welche Services von welchen Host mit Echtzeit-Checks überwacht werden sollen.
+Ein Überwachungsintervall von einer Sekunde ist nicht für jede Art von Service sinnvoll.
+Deshalb stehen unter [.guihint]#Sections to send# nur drei Services zur Auswahl:
 
-Beispielhaft wird im Folgenden eine Echtzeit-Überwachung für die Services [.guihint]#CPU load# und [.guihint]#Memory# für einen Host namens `myhost` eingerichtet.
-Dieser Host ist ein Linux-Client und wird bereits mit dem xref:agent_linux#install[Linux-Agenten] überwacht.
+* [.guihint]#mem# für den Service [.guihint]#Memory# (verfügbar für Linux- und Windows-Hosts)
+* [.guihint]#cpu# für den Service [.guihint]#CPU load# (verfügbar für Linux-Hosts)
+* [.guihint]#winperf# für den Service [.guihint]#WinPerf# (verfügbar für Windows-Hosts)
+// ES: TODO
 
 // ES: Screenshot ganzer Kasten "Real-time checks"
 
@@ -45,16 +66,17 @@ Eine Nutzung von Echtzeit-Checks ohne Verschlüsselung ist ebenfalls möglich.
 Hierfür wählen Sie [.guihint]#No encryption (send plaintext)#.
 
 Zuletzt wählen Sie noch unter [.guihint]#Sections to send# diejenigen Sektionen aus, die in den Echtzeit-Check-Paketen gesendet werden sollen.
-Die Sektion [.guihint]#mem# enthält Informationen über den Service [.guihint]#Memory#.
-Die Sektion [.guihint]#cpu# enthält Informationen über den Service [.guihint]#CPU load#.
-// ES: Info zur Sektion winperf_processor ergänzen
+Beispielhaft wird hier eine Echtzeit-Überwachung für die Services [.guihint]#CPU load# und [.guihint]#Memory# für einen Host namens `myhost` eingerichtet.
+Dieser Host ist ein Linux-Client und wird bereits mit dem xref:agent_linux#install[Linux-Agenten] überwacht.
+Die Echtzeit-Daten werden hier mit dem Secret `mysecret` verschlüsselt.
 
 Im Bereich [.guihint]#Conditions# für die Regel können Sie noch angeben, für welche Hosts die Regel greifen soll.
 Für das Beispiel wurde der explizite Host `myhost` angegeben.
 
+[#configure_rrds]
 ==== Round-Robin-Datenbanken konfigurieren
 
-Die schönsten Echtzeit-Daten sind nichts wert, wenn sie nicht dargestellt und nachgehalten werden können.
+Wenn Sie Echtzeit-Daten über die gewählten Services erheben, möchten Sie sie wahrscheinlich auch darstellen und nachhalten.
 Das zu ermöglichen, ist der nächste Schritt.
 
 Das normale Check-Intervall für Services, die mit dem aktiven {CMK}-Check überwacht werden, ist auf eine Minute eingestellt.
@@ -67,25 +89,142 @@ Die Aufgabe dieser Regel ist es, für genau diejenigen Services, die im Echtzeit
 ====
 Es ist äußerst wichtig, dass Sie in der Regel genau spezifizieren, für welche Hosts und Services sie gelten soll!
 RRDs, die pro Sekunde einen Wert aufnehmen, brauchen mehr Speicherplatz als die Standard-RRDs, die nur einen Wert pro Minute speichern.
+Überlegen Sie auch gut, wie lange Sie die sekündlich abgerufenen Werte in Ihren RRDs nachhalten wollen bzw. müssen.
 ====
 
 // ES: Screenshot von der fertig ausgefüllten Regel einfügen
 
 Geben Sie unter [.guihint]#Step (precision)# 1 ein, damit die sekündlich eintreffenden Daten zu echtzeitüberwachten Services abgespeichert werden können.
-// Wählen Sie dann als Verdichtungsphasen unter [.guihint]#RRA configuration# beispielsweise die folgenden Werte:
+Wählen Sie dann als Verdichtungsphasen unter [.guihint]#RRA configuration# beispielsweise die folgenden Werte:
 
-// ES: siehe Werk #8350
+[cols=2]
+|===
+|Genauigkeit von 1 Sekunde für 4 Stunden |[.guihint]#Number of steps aggregated into one data point# -- 1
+
+[.guihint]#Number of data points# -- 14400
+|Genauigkeit von 1 Minute für 2 Tage |[.guihint]#Number of steps aggregated into one data point# -- 60
+
+[.guihint]#Number of data points# -- 2880
+|Genauigkeit von 5 Minuten für 10 Tage |[.guihint]#Number of steps aggregated into one data point# -- 300
+
+[.guihint]#Number of data points# -- 2880
+|Genauigkeit von 30 Minuten für 90 Tage |[.guihint]#Number of steps aggregated into one data point# -- 1800
+
+[.guihint]#Number of data points# -- 4320
+|Genauigkeit von 6 Stunden für 4 Jahre |[.guihint]#Number of steps aggregated into one data point# -- 21600
+
+[.guihint]#Number of data points# -- 5840
+|===
+
+Beim Verdichten der historischen Werte haben Sie verschiedene Möglichkeiten, die gespeicherten Werte zu aggregieren. Unter [.guihint]#Consolidation functions# wählen Sie zwischen [.guihint]#Minimum#, [.guihint]#Maximum# und [.guihint]#Average#.
+
+// ES: activate changes, cmk-convert-rrds ausführen
 
 === Agentenkonfiguration auf dem Host
 
+Ihre Instanz ist jetzt in der Lage, Werte zu den ausgewählten Services in einem Intervall von einer Sekunde zu verarbeiten.
+Als nächstes sorgen Sie auf der Host-Seite dafür, dass die relevanten Werte auch tatsächlich sekündlich bereitgestellt werden.
+
+[#bakery]
 ==== Konfiguration mit der Agent Bakery
+
+Wenn Sie die xref:wato_monitoringagents#bakery[Agentenbäckerei] nutzen, ist Ihre xref:#rule_rtc[eben angelegte Regel] [.guihint]#Real-time checks# alles, was Sie für die Konfiguration des Agenten auf dem Host brauchen.
+Sie können jetzt den Agenten neu backen und dann auf den Host bringen.
+Anhand der eingestellten Werte in der Regel [.guihint]#Real-time checks# wird automatisch eine Konfigurationsdatei auf dem überwachten Host angelegt, deren Inhalt Ihren Einstellungen in der Regel entspricht.
 
 ==== Manuelle Konfiguration
 
+Falls Sie die Agentenbäckerei nicht nutzen, können Sie auf dem überwachten Host manuell eine Konfigurationsdatei für die Echtzeit-Checks anlegen.
+Diese Datei heißt `real_time_checks.cfg` und muss im Verzeichnis `/etc/check_mk/` hinterlegt werden.
+Der Inhalt der Datei muss analog zu den Einstellungen in Ihrer Regel [.guihint]#Real-time checks# sein.
+Das folgende Beispiel legt die Werte genau so fest, wie sie auch in der Regel in der {CMK}-Instanz definiert wurden:
+
+* Für die Verschlüsselung wird das Secret `mysecret` verwendet.
+* Die Sektionen `mem` und `cpu` werden versendet.
+* Die Daten werden zum UDP-Port 6559 des {CMK}-Servers geschickt.
+* Für die Echtzeit-Checks gilt ein Timeout von 90 Sekunden.
+
+// ES: Unterschiede Linux/Windows beschreiben
+./etc/check_mk/real_time_checks.cfg
+[{file}]
+----
+RTC_SECRET='mysecret'
+RTC_SECTIONS=""
+RTC_SECTIONS+="mem "
+RTC_SECTIONS+="cpu "
+RTC_PORT=6559
+RTC_TIMEOUT=90
+----
+
 === Echtzeit-Daten anzeigen
 
-==== Graphen
+Ihre {CMK}-Instanz lauscht sekündlich nach Echtzeit-Daten für die ausgewählten Services.
+Ihr überwachter Host sendet sekündlich genau diese Echtzeit-Daten.
+Sie können jetzt überprüfen, ob die eingerichteten Echtzeit-Checks aktiv sind und tatsächlich im gewünschten Intervall Daten senden.
+
+In der Übersicht aller Services für Ihren Linux-Host können Sie in der Spalte [.guihint]#Checked# sehen, wann jeder Service zuletzt geprüft wurde.
+Nach erfolgreicher Einrichtung ist dieser Wert für diejenigen Services, die in Ihrer Regel für Echtzeit-Checks enthalten sind, zu jedem Zeitpunkt sehr gering.
+
+[TIP]
+====
+Echtzeit-Checks versprechen eine sekündliche Abfrage der Werte für bestimmte Services.
+Da diese Werte über UDP verschickt werden, kann es aber passieren, dass einzelne Pakete verloren gehen und dadurch Lücken in der Abdeckung entstehen.
+Es ist also zu erwarten, dass auch ein Service mit einer "Echtzeit-Überwachung" Werte haben kann, die mehrere Sekunden alt sind.
+====
+
+In der Detailansicht für einen echtzeitüberwachten Service können Sie einen Blick auf den Graph werfen.
+Der Graph spiegelt wider, welche Werte für den gewählten Service in der Round-Robin-Datenbank gespeichert sind.
+In der Standardeinstellung wurde der Graph mit einer Auflösung von einer Minute dargestellt.
+Da Sie die Auflösung für die RRDs für die Echtzeit-Checks xref:#configure_rrds[angepasst haben], zeigt der Graph für einen echtzeitüberwachten Service jetzt eine höhere Auflösung.
+Die Auflösung wird in der oberen rechten Ecke des Graphen als Legende angezeigt.
+Bei Echtzeit-Checks steht hier nicht wie sonst "@{nbsp}1m", sondern jetzt "@{nbsp}0m".
+
+Die höhere Auflösung im Graph können Sie auch am Verlauf der Kurve erkennen.
+Bei hohen Zoomstufen erscheinen minütlich aktualisierte Werte wie Treppenstufen, während höher aufgelöste Werte logischerweise zu einem Kurvenverlauf mit mehr Zwischenwerten führen.
+
+Falls die gewünschten Services noch nicht in einem Intervall von etwa einer Sekunde aktualisiert werden, lohnt sich ein Blick auf die ausgehenden UDP-Pakete vom überwachten Host.
+So finden Sie heraus, ob die Daten überhaupt verschickt werden.
+Lassen Sie sich zum Beispiel in der Befehlszeile auf dem Host alle ausgehenden UDP-Pakete zu Port 6559 anzeigen:
+
+[{shell}]
+----
+{c-root} tcpdump -i any udp and port 6559
+tcpdump -i any udp and port 6559
+tcpdump: data link type LINUX_SLL2
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on any, link-type LINUX_SLL2 (Linux cooked v2), snapshot length 262144 bytes
+11:02:36.183697 lo    In  IP myhost.45511 > mysite.6559: UDP, length 60
+11:02:36.187156 lo    In  IP myhost.44748 > mysite.6559: UDP, length 1553
+11:02:37.204604 lo    In  IP myhost.60556 > mysite.6559: UDP, length 60
+11:02:37.208046 lo    In  IP myhost.36956 > mysite.6559: UDP, length 1553
+11:02:38.235158 lo    In  IP myhost.60617 > mysite.6559: UDP, length 60
+11:02:38.241064 lo    In  IP myhost.59500 > mysite.6559: UDP, length 1553
+11:02:39.259191 lo    In  IP myhost.34332 > mysite.6559: UDP, length 60
+11:02:39.262413 lo    In  IP myhost.48522 > mysite.6559: UDP, length 1553
+11:02:40.278537 lo    In  IP myhost.59218 > mysite.6559: UDP, length 60
+11:02:40.281656 lo    In  IP myhost.35263 > mysite.6559: UDP, length 1553
+^C
+10 packets captured
+20 packets received by filter
+0 packets dropped by kernel
+----
+
+// ES: in der Ausgabe anderes Interface statt lo einfügen?
+
+In der Beispielausgabe ist zu erkennen, dass etwa im Abstand von einer Sekunde immer wieder jeweils zwei Pakete an den {CMK}-Server gesendet werden: eines mit einer Länge von 60 und eines mit einer Länge von 1553.
+Die genaue Größe der Pakete ist variabel.
+Sie hängt unter anderem davon ab, ob Sie die Pakete verschlüsselt oder unverschlüsselt versenden und davon, welche tatsächlichen Werte in den gewählten Sektionen stehen.
+Den Inhalt der UDP-Pakete können Sie bei Bedarf mit einem Netzwerk-Analysewerkzeug einsehen.
 
 ==== Benachrichtigungen für echtzeitüberwachte Services
 
+Eine Echtzeit-Überwachung für Services ist genau dann nützlich, wenn sekündliche Aktualisierungen für Sie einen konkreten Mehrwert haben.
+Beispielsweise können Sie im Nachhinein genauer zuordnen, zu welchem Zeitpunkt Lastspitzen aufgetreten sind.
+
+Ein anderer Nutzen von Echtzeit-Checks ist es, dass Sie schnell reagieren können, wenn die gewählten Services ihren Zustand wechseln.
+Hierfür kann es wichtig sein, dass Benachrichtigungen auch in Echtzeit ausgelöst werden.
+
+// austesten, wie Benachrichtigungen in Echtzeit funktionieren
+
+[#rtc_plugins]
 == Plugins in Echtzeit-Checks ausführen
