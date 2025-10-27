@@ -175,7 +175,7 @@ include::global_attr.adoc[]
         for file in extracted_file_blocks[file_type]:
             outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
             for block in extracted_file_blocks[file_type][file]:
-                block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block)
+                block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
                 outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
 
 for code_type in extracted_code_blocks:
@@ -192,5 +192,5 @@ include::global_attr.adoc[]
         for file in extracted_code_blocks[code_type]:
             outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
             for block in extracted_code_blocks[code_type][file]:
-                block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block)
+                block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
                 outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
