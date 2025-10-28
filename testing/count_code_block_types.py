@@ -92,105 +92,194 @@ CODE_BLOCK_PATTERN = re.compile(
     re.VERBOSE
 )
 
+ASTERISKY_COMMAND_PATTERN = re.compile(r"(?<=\n----\n)([^\n]*?\s\*[^*\n]*?\*( [^\n]*?)?)(?=\n)")
+
+WINDOWSY_PROMPT_PATTERN = re.compile(r"(?<=\n)((PS|C:)[^>]*?>([^\n]*?))(?=\n)")
+
+# Attention, this is yet another list that needs to match the list of
+# macros defined in global_attr.adoc.
+LINUXY_PROMPTS = ["c-user",
+                  "c-omd",
+                  "c-local",
+                  "c-remote1",
+                  "c-remote2",
+                  "c-myremote1",
+                  "c-myremote2",
+                  "c-root",
+                  "c-ubuntu"]
+KNOWN_LINUXY_PROMPT_LINE_PATTERN = re.compile(r"(?<=\n)({{({})}})( +?[^\n]*?)?(?=\n)".format("|".join(LINUXY_PROMPTS)))
+
+PYTHON_REPL_PATTERN = re.compile(r"(?<=\n)>>>[^\n]*?(?=\n)")
+
+#################################################################################
+# Helper functions
+##############################################################################
+def add_to_collection(collection_dict, block_type, file, block):
+    if block_type not in collection_dict:
+        collection_dict[block_type] = dict()
+    if file not in collection_dict[block_type]:
+        collection_dict[block_type][file] = []
+    collection_dict[block_type][file].append(block)
+    return collection_dict
 
 #################################################################################
 # Logic starts here
 ##############################################################################
 
-extracted_file_blocks = dict()
-extracted_code_blocks = dict()
+def collect_code_and_file_blocks(verbose=True):
 
-for root, dirs, files in os.walk(SRCDIR):
-    for file in files:
-        f = os.path.join(root, file)
-        if f.endswith(".asciidoc") and "/de/" in f and not file.startswith("file_blocks_") and not file.startswith("code_blocks_"):
-            with open(f, "r", encoding="utf8") as infile:
-                current_file_blocks_count = 0
-                current_code_blocks_count = 0
-                content = infile.read()
-                all_file_blocks = re.finditer(FILE_BLOCK_PATTERN, content)
-                for file_block in all_file_blocks:
-                    current_file_blocks_count += 1
-                    file_block_str = file_block.group().strip()
-                    file_type = re.search(FILE_TYPE_LINE_PATTERN, file_block_str)
-                    if file_type is not None:
-                        # If we encounter a known file type, we grab the type
-                        # from the header line and use it to categorize the block.
-                        file_type_str = file_type.group(2)
-                    else:
-                        # Otherwise, we assign the "uncategorized" type to this block.
-                        file_header_line = re.search(FILE_UNTYPED_LINE_PATTERN, file_block_str)
-                        if file_header_line is not None and file_header_line.group().strip() != "[...]":
-                            file_type_str = "uncategorized"
+    extracted_file_blocks = dict()
+    extracted_code_blocks = dict()
+
+    for root, dirs, files in os.walk(SRCDIR):
+        for file in files:
+            f = os.path.join(root, file)
+            if f.endswith(".asciidoc") and "/de/" in f and not file.startswith("file_blocks_") and not file.startswith("code_blocks_"):
+                with open(f, "r", encoding="utf8") as infile:
+                    current_file_blocks_count = 0
+                    current_code_blocks_count = 0
+                    content = infile.read()
+                    all_file_blocks = re.finditer(FILE_BLOCK_PATTERN, content)
+                    for file_block in all_file_blocks:
+                        current_file_blocks_count += 1
+                        file_block_str = file_block.group().strip()
+                        file_type = re.search(FILE_TYPE_LINE_PATTERN, file_block_str)
+                        if file_type is not None:
+                            # If we encounter a known file type, we grab the type
+                            # from the header line and use it to categorize the block.
+                            file_type_str = file_type.group(2)
                         else:
-                            # We need to catch cases where "[...]" inside file
-                            # blocks is incorrectly identified as a new file block
-                            # header.
-                            # print("Special case!\n{}".format(file_block_str))
-                            file_type_str = "error"
-                            # We ignore these incorrectly-collected blocks and
-                            # move to the next iteration of the for loop.
-                            # Comment out the "continue" command to instead collect
-                            # these blocks in their own list file, with the type
-                            # "error".
-                            continue
+                            # Otherwise, we assign the "uncategorized" type to this block.
+                            file_header_line = re.search(FILE_UNTYPED_LINE_PATTERN, file_block_str)
+                            if file_header_line is not None and file_header_line.group().strip() != "[...]":
+                                file_type_str = "uncategorized"
+                            else:
+                                # We need to catch cases where "[...]" inside file
+                                # blocks is incorrectly identified as a new file block
+                                # header.
+                                # print("Special case!\n{}".format(file_block_str))
+                                file_type_str = "error"
+                                # We ignore these incorrectly-collected blocks and
+                                # move to the next iteration of the for loop.
+                                # Comment out the "continue" command to instead collect
+                                # these blocks in their own list file, with the type
+                                # "error".
+                                continue
+                        extracted_file_blocks = add_to_collection(extracted_file_blocks, file_type_str, f, file_block_str.strip())
 
-                    file_contents = re.split("\n----", file_block_str)[1]
-                    if file_type_str not in extracted_file_blocks:
-                        extracted_file_blocks[file_type_str] = dict()
-                    if f not in extracted_file_blocks[file_type_str]:
-                        extracted_file_blocks[file_type_str][f] = []
-                    extracted_file_blocks[file_type_str][f].append(file_block_str.strip())
+                    all_code_blocks = re.finditer(CODE_BLOCK_PATTERN, content)
+                    for code_block in all_code_blocks:
+                        current_code_blocks_count += 1
+                        code_block_str = code_block.group().strip()
+                        code_type = re.search(CODE_TYPE_LINE_PATTERN, code_block_str).group(2)
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, f, code_block_str.strip())
 
-                all_code_blocks = re.finditer(CODE_BLOCK_PATTERN, content)
-                for code_block in all_code_blocks:
-                    current_code_blocks_count += 1
-                    code_block_str = code_block.group().strip()
-                    code_type = re.search(CODE_TYPE_LINE_PATTERN, code_block_str).group(2)
-                    code_contents = re.split("\n----", code_block_str)[1]
-                    if code_type not in extracted_code_blocks:
-                        extracted_code_blocks[code_type] = dict()
-                    if f not in extracted_code_blocks[code_type]:
-                        extracted_code_blocks[code_type][f] = []
-                    extracted_code_blocks[code_type][f].append(code_block_str.strip())  
-
-                print("Found {} file blocks and {} code blocks in file {}.".format(current_file_blocks_count, current_code_blocks_count, f))
+                    if verbose:
+                        print("Found {} file blocks and {} code blocks in file {}.".format(current_file_blocks_count, current_code_blocks_count, f))
+    print("Collected all recognized code and file blocks from {}.".format(SRCDIR))
+    return extracted_file_blocks, extracted_code_blocks
 
 
 ##############################################################################
 # Write results to outfiles
 ##############################################################################
 
-for file_type in extracted_file_blocks:
-    outpath = OUTPATH_FILES.format(file_type)
-    with open(outpath, "w", encoding="utf8") as outfile:
-        outfile.write("""// -*- coding: utf-8 -*-
+def write_results(extracted_file_blocks, extracted_code_blocks):
+    for file_type in extracted_file_blocks:
+        outpath = OUTPATH_FILES.format(file_type)
+        with open(outpath, "w", encoding="utf8") as outfile:
+            outfile.write("""// -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = {} file blocks extracted from User Guide articles
 :title: {} file blocks extracted from user guide articles
-:description: List of {} file blocks appearing across the user guide. For testing purposes.
+:description: List of {} file blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
+        file_type, file_type, file_type))
+            for file in extracted_file_blocks[file_type]:
+                outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
+                for block in extracted_file_blocks[file_type][file]:
+                    block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
+                    outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
+        print("Wrote file blocks of type '{}' to '{}'.".format(file_type, outpath))
 
-
-""".format(file_type, file_type, file_type))
-        for file in extracted_file_blocks[file_type]:
-            outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
-            for block in extracted_file_blocks[file_type][file]:
-                block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
-                outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
-
-for code_type in extracted_code_blocks:
-    outpath = OUTPATH_CODES.format(code_type)
-    with open(outpath, "w", encoding="utf8") as outfile:
-        outfile.write("""// -*- coding: utf-8 -*-
+    for code_type in extracted_code_blocks:
+        outpath = OUTPATH_CODES.format(code_type)
+        with open(outpath, "w", encoding="utf8") as outfile:
+            outfile.write("""// -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = {} code blocks extracted from User Guide articles
 :title: {} code blocks extracted from user guide articles
-:description: List of {} code blocks appearing across the user guide. For testing purposes.
+:description: List of {} code blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
+        code_type, code_type, code_type))
+            for file in extracted_code_blocks[code_type]:
+                outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
+                for block in extracted_code_blocks[code_type][file]:
+                    block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
+                    outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
+        print("Wrote code blocks of type '{}' to '{}'.".format(code_type, outpath))
 
+###############################################################################
+# Identify complicated blocks that need individual scrutiny
+############################################################################### 
+def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
 
-""".format(code_type, code_type, code_type))
-        for file in extracted_code_blocks[code_type]:
-            outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
-            for block in extracted_code_blocks[code_type][file]:
-                block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
-                outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
+    for file in extracted_code_blocks["shell"]:
+        for block in extracted_code_blocks["shell"][file]:
+            code_type = None
+
+            # Handle shell-type boxes that contain Python REPL elements like >>>
+            if re.search(PYTHON_REPL_PATTERN, block):
+                code_type = "shell-contains-python-repl"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                # Handle blocks that contain formatting asterisks and therefore 
+                # should be shell-raw instead
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "shell-needs-shell-raw"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that have prompts without commands following them
+                command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
+                if command_content is None or command_content.strip() == "":
+                    code_type = "shell-prompt-lacks-command"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            # Handle shell boxes without a macro-based prompt
+            else:
+                code_type = "shell-lacks-macro-prompts"
+                # Handle blocks that match a windows-style prompt
+                if re.search(WINDOWSY_PROMPT_PATTERN, block):
+                    code_type = "shell-needs-cmd"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+    
+    for file in extracted_code_blocks["shell-raw"]:
+        for block in extracted_code_blocks["shell-raw"][file]:
+            code_type = None
+
+            # Handle shell-raw-type boxes that contain Python REPL elements like >>>
+            if re.search(PYTHON_REPL_PATTERN, block):
+                code_type = "shell-raw-contains-python-repl"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                
+                # Handle blocks that have prompts without commands following them
+                command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
+                if command_content is None or command_content.strip() == "":
+                    code_type = "shell-raw-prompt-lacks-command"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            # Shell-raw boxes without a macro-based prompt need to be collected and scrutinized
+            else:
+                code_type = "shell-raw-lacks-macro-prompts"
+                # Handle blocks that match a windows-style prompt
+                if re.search(WINDOWSY_PROMPT_PATTERN, block):
+                    code_type = "shell-raw-needs-cmd"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+    return extracted_code_blocks, extracted_file_blocks
+
+if __name__ == "__main__":
+    extracted_file_blocks, extracted_code_blocks = collect_code_and_file_blocks(False)
+    extracted_code_blocks, extracted_file_blocks = collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks)
+    write_results(extracted_file_blocks, extracted_code_blocks)
