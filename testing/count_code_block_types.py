@@ -109,7 +109,7 @@ LINUXY_PROMPTS = ["c-user",
                   "c-ubuntu"]
 KNOWN_LINUXY_PROMPT_LINE_PATTERN = re.compile(r"(?<=\n)({{({})}})( +?[^\n]*?)?(?=\n)".format("|".join(LINUXY_PROMPTS)))
 
-PYTHON_REPL_PATTERN = re.compile(r"(?<=\n)>>>[^\n]*?(?=\n)")
+PYTHON_REPL_PATTERN = re.compile(r"(?<=\n)>>>([^\n]*?)(?=\n)")
 
 #################################################################################
 # Helper functions
@@ -129,7 +129,11 @@ def add_to_collection(collection_dict, block_type, file, block):
 def collect_code_and_file_blocks(verbose=True):
 
     extracted_file_blocks = dict()
-    extracted_code_blocks = dict()
+    extracted_code_blocks = {"shell": dict(),
+                             "shell-raw": dict(),
+                             "powershell": dict(),
+                             "cmd": dict(),
+                             "pycon": dict()}
 
     for root, dirs, files in os.walk(SRCDIR):
         for file in files:
@@ -244,6 +248,12 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                     code_type = "shell-prompt-lacks-command"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
+                # Handle blocks with multiple prompt lines
+                prompt_lines = re.findall(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block)
+                if len(prompt_lines) > 1:
+                    code_type = "shell-multiple-prompt-lines"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
             # Handle shell boxes without a macro-based prompt
             else:
                 code_type = "shell-lacks-macro-prompts"
@@ -272,6 +282,12 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 if command_content is None or command_content.strip() == "":
                     code_type = "shell-raw-prompt-lacks-command"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks with multiple prompt lines
+                prompt_lines = re.findall(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block)
+                if len(prompt_lines) > 1:
+                    code_type = "shell-raw-multiple-prompt-lines"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
             # Shell-raw boxes without a macro-based prompt need to be collected and scrutinized
             else:
@@ -280,6 +296,85 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 if re.search(WINDOWSY_PROMPT_PATTERN, block):
                     code_type = "shell-raw-needs-cmd"
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+    for file in extracted_code_blocks["powershell"]:
+        for block in extracted_code_blocks["powershell"][file]:
+            code_type = None
+
+            # Handle powershell-type boxes that contain Python REPL elements like >>>
+            if re.search(PYTHON_REPL_PATTERN, block):
+                code_type = "powershell-contains-python-repl"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            elif re.search(WINDOWSY_PROMPT_PATTERN, block):
+                # Handle blocks that contain formatting asterisks 
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "powershell-has-asterisks-in-commands"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that have prompts without commands following them
+                # FIXME: See description for the similar case above.
+                command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
+                if command_content is None or command_content.strip() == "":
+                    code_type = "powershell-prompt-lacks-command"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks with multiple prompt lines
+                prompt_lines = re.findall(WINDOWSY_PROMPT_PATTERN, block)
+                if len(prompt_lines) > 1:
+                    code_type = "powershell-multiple-prompt-lines"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+    for file in extracted_code_blocks["cmd"]:
+        for block in extracted_code_blocks["cmd"][file]:
+            code_type = None
+
+            # Handle cmd-type boxes that contain Python REPL elements like >>>
+            if re.search(PYTHON_REPL_PATTERN, block):
+                code_type = "cmd-contains-python-repl"
+                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+            elif re.search(WINDOWSY_PROMPT_PATTERN, block):
+                # Handle blocks that contain formatting asterisks 
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "cmd-has-asterisks-in-commands"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that have prompts without commands following them
+                # FIXME: See description for the similar case above.
+                command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
+                if command_content is None or command_content.strip() == "":
+                    code_type = "cmd-prompt-lacks-command"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks with multiple prompt lines
+                prompt_lines = re.findall(WINDOWSY_PROMPT_PATTERN, block)
+                if len(prompt_lines) > 1:
+                    code_type = "cmd-multiple-prompt-lines"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+    for file in extracted_code_blocks["pycon"]:
+        for block in extracted_code_blocks["pycon"][file]:
+            code_type = None
+
+            # Handle pycon-type boxes that contain Python REPL elements like >>>
+            if re.search(PYTHON_REPL_PATTERN, block):
+                # Handle blocks that contain formatting asterisks 
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "pycon-has-asterisks-in-commands"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that have prompts without commands following them
+                command_content = re.search(PYTHON_REPL_PATTERN, block).group(1)
+                if command_content is None or command_content.strip() == "":
+                    code_type = "pycon-prompt-lacks-command"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks with multiple prompt lines
+                prompt_lines = re.findall(PYTHON_REPL_PATTERN, block)
+                if len(prompt_lines) > 1:
+                    code_type = "pycon-multiple-prompt-lines"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
     return extracted_code_blocks, extracted_file_blocks
 
