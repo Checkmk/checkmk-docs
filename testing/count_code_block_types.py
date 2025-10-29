@@ -231,11 +231,11 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 code_type = "shell-contains-python-repl"
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
-            if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+            elif re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
                 # Handle blocks that contain formatting asterisks and therefore 
                 # should be shell-raw instead
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
-                    code_type = "shell-needs-shell-raw"
+                    code_type = "shell-has-asterisks-in-commands"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
                 # Handle blocks that have prompts without commands following them
@@ -261,8 +261,12 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 code_type = "shell-raw-contains-python-repl"
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
-            if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
-                
+            elif re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                # Handle blocks that contain formatting asterisks 
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "shell-raw-has-asterisks-in-commands"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
                 # Handle blocks that have prompts without commands following them
                 command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
                 if command_content is None or command_content.strip() == "":
