@@ -215,7 +215,7 @@ include::global_attr.adoc[]
 :description: List of {} code blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
         code_type, code_type, code_type))
             for file in extracted_code_blocks[code_type]:
-                outfile.write("=== {}\n(go to xref:{}#[article])\nFile for direct editing access: file://{}\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file))
+                outfile.write("=== {}\n(go to xref:{}#[article])\n(de) file for direct editing access: file://{}\n(en) file for direct editing access: file://{}\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
                 for block in extracted_code_blocks[code_type][file]:
                     block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
                     outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
