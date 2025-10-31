@@ -94,6 +94,11 @@ CODE_BLOCK_PATTERN = re.compile(
 
 ASTERISKY_COMMAND_PATTERN = re.compile(r"(?<=\n----\n)([^\n]*?\s\*[^*\n]*?\*( [^\n]*?)?)(?=\n)")
 
+UNESCAPED_BACKTICK_PATTERN = re.compile(r"(?<!pass:\[)`(?!\])")
+
+UNESCAPED_HASH_PATTERN = re.compile(r"(?<!pass:\[)#")
+FUNCTIONAL_HASH_PATTERN = re.compile(r"\[(green|yellow|red|cpignore)\]#[^#]+#")
+
 WINDOWSY_PROMPT_PATTERN = re.compile(r"(?<=\n)((PS|C:)[^>]*?>([^\n]*?))(?=\n)")
 
 # Attention, this is yet another list that needs to match the list of
@@ -236,8 +241,19 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
             elif re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
-                # Handle blocks that contain formatting asterisks and therefore 
-                # should be shell-raw instead
+                # Handle blocks that contain an unescaped hash anywhere inside
+                if re.search(UNESCAPED_HASH_PATTERN, block):
+                    functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
+                    if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                        code_type = "shell-has-hashes"
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):
+                    code_type = "shell-has-backticks"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that contain formatting asterisks
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "shell-has-asterisks-in-commands"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
@@ -272,6 +288,18 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
             elif re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                # Handle blocks that contain an unescaped hash anywhere inside
+                if re.search(UNESCAPED_HASH_PATTERN, block):
+                    functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
+                    if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                        code_type = "shell-raw-has-hashes"
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):
+                    code_type = "shell-raw-has-backticks"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
                 # Handle blocks that contain formatting asterisks 
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "shell-raw-has-asterisks-in-commands"
@@ -307,13 +335,24 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
             elif re.search(WINDOWSY_PROMPT_PATTERN, block):
+                # Handle blocks that contain an unescaped hash anywhere inside
+                if re.search(UNESCAPED_HASH_PATTERN, block):
+                    functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
+                    if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                        code_type = "powershell-has-hashes"
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):  
+                    code_type = "powershell-has-backticks"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
                 # Handle blocks that contain formatting asterisks 
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "powershell-has-asterisks-in-commands"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
                 # Handle blocks that have prompts without commands following them
-                # FIXME: See description for the similar case above.
                 command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
                 if command_content is None or command_content.strip() == "":
                     code_type = "powershell-prompt-lacks-command"
@@ -335,13 +374,24 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
             elif re.search(WINDOWSY_PROMPT_PATTERN, block):
+                # Handle blocks that contain an unescaped hash anywhere inside
+                if re.search(UNESCAPED_HASH_PATTERN, block):
+                    functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
+                    if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                        code_type = "cmd-has-hashes"
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):  
+                    code_type = "cmd-has-backticks"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
                 # Handle blocks that contain formatting asterisks 
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "cmd-has-asterisks-in-commands"
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
                 # Handle blocks that have prompts without commands following them
-                # FIXME: See description for the similar case above.
                 command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
                 if command_content is None or command_content.strip() == "":
                     code_type = "cmd-prompt-lacks-command"
@@ -359,6 +409,18 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
 
             # Handle pycon-type boxes that contain Python REPL elements like >>>
             if re.search(PYTHON_REPL_PATTERN, block):
+                # Handle blocks that contain an unescaped hash anywhere inside
+                if re.search(UNESCAPED_HASH_PATTERN, block):
+                    functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
+                    if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                        code_type = "pycon-has-hashes"
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):
+                    code_type = "pycon-has-backticks"
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
                 # Handle blocks that contain formatting asterisks 
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "pycon-has-asterisks-in-commands"
