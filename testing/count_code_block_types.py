@@ -35,14 +35,16 @@ OUTPATH_CODES = "{}/common/de/code_blocks_type_{}.asciidoc".format(SRCDIR, "{}")
 # Lists of file box types and code box types are populated from global_attr.adoc.
 # Attention: When that file changes, update these lists here to make sure the
 # script collects all relevant block types!
-file_box_types = ["file",
-                  "python",
-                  "sql",
-                  "apache",
-                  "ini",
-                  "yaml",
-                  "psscript",
-                  "bash"]
+
+file_box_types = {"file": r"\..+?",
+                  "python": r"\.py",
+                  "sql": r"\.sql",
+                  "apache": r"\.conf",
+                  "ini": r"\.(ini|cfg)",
+                  "yaml": r"(\.yml|\.yaml)",
+                  "psscript": r"\.ps1",
+                  "bash": r"\.(sh|bash)"}
+
 code_box_types = ["shell",
                   "shell-raw",
                   "powershell",
@@ -59,17 +61,19 @@ FILE_TYPE_LINE_PATTERN = r"(\[\{{({})\}}[^\]]*\]\s*\n)".format("|".join(file_box
 # Pattern for a line with file block opening, but no type specified
 FILE_UNTYPED_LINE_PATTERN = r"(\[([^\]\{\}]*)\]\s*\n)"
 
+FILE_NAME_PATTERN = r"(\.[^\n\]]+)(?=\n)"
+
 # Pattern for an entire file block
 FILE_BLOCK_PATTERN = re.compile(
     r"""
 
     (?<=\n) # must immediately follow a line break
-    (\.[^\n]+\n)? # optional line containing a dot-prefixed file name
+    ({}?)\n # optional line containing a dot-prefixed file name
       ({}|{}) # calling .format() on this entire string inserts the FILE_TYPE_LINE_PATTERN and FILE_UNTYPED_LINE_PATTERN here to correctly recognize the block header
       ----\s*\n+ # file header separator line
       ([^\n]*?\n)+? # contents of the file itself (this is what we will want to copy later)
       ---- # file footer separator line
-      """.format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN),
+      """.format(FILE_NAME_PATTERN, FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN),
     re.VERBOSE
 )
 
@@ -98,7 +102,9 @@ FUNCTIONAL_HASH_PATTERN = re.compile(r"\[(green|yellow|red|cpignore)\]#[^#]+#")
 PROMPT_WITH_HASH_PATTERN = re.compile(r"(?<=\n)[^@\n]+?@[^#\n]+?#")
 
 UNESCAPED_DOLLAR_SIGN_PATTERN = re.compile(r"(?<!pass:\[)\$")
-PROMPT_WITH_DOLLAR_SIGN_PATTERN = re.compile(r"(?<=\n)[^@\n]+?@[^\$\n]+?\$")
+PROMPT_WITH_DOLLAR_SIGN_PATTERN = re.compile(r"(?<=\n)([^@\n]+?@|OMD\[[^\]]+?\])[^\$\n]+?\$")
+
+PLUS_PAIR_PATTERN = re.compile(r"(?<=(\s|\n))\+[^\+]*?[^\s]\+(?=(\s|\n))")
 
 WINDOWSY_PROMPT_PATTERN = re.compile(r"(?<=\n)((PS|C:)[^>]*?>([^\n]*?))(?=\n)")
 
@@ -117,6 +123,8 @@ KNOWN_LINUXY_PROMPT_LINE_PATTERN = re.compile(r"(?<=\n)({{({})}})( +?[^\n]*?)?(?
 
 PYTHON_REPL_PATTERN = re.compile(r"(?<=\n)>>>([^\n]*?)(?=\n)")
 
+SHEBANG_PATTERN = re.compile(r"^(#![^\n]*?)(?=\n)")
+
 #################################################################################
 # Helper functions
 ##############################################################################
@@ -133,7 +141,14 @@ def add_to_collection(collection_dict, block_type, file, block):
 ##############################################################################
 
 def collect_code_and_file_blocks(verbose=True):
-    extracted_file_blocks = dict()
+    extracted_file_blocks = {"file": dict(),
+                             "python": dict(),
+                             "sql": dict(),
+                             "apache": dict(),
+                             "ini": dict(),
+                             "yaml": dict(),
+                             "psscript": dict(),
+                             "bash": dict()}
     extracted_code_blocks = {"shell": dict(),
                              "shell-raw": dict(),
                              "powershell": dict(),
@@ -193,19 +208,23 @@ def collect_code_and_file_blocks(verbose=True):
 ##############################################################################
 
 def write_results(extracted_file_blocks, extracted_code_blocks):
+    boilerplate_header = """// -*- coding: utf-8 -*-
+include::global_attr.adoc[]
+= {} {} blocks extracted from User Guide articles
+:title: {} {} blocks extracted from user guide articles
+:description: List of {} {} blocks appearing across the user guide. For testing purposes.\n\n\n"""
+
+    boilerplate_chapter = """=== {}\n(go to xref:{}#[article])\n(de) file for direct editing access: file://{}\n(en) file for direct editing access: file://{}\n"""
+
     for file_type in extracted_file_blocks:
         n = sum([len(extracted_file_blocks[file_type][file]) for file in extracted_file_blocks[file_type]])
+        outpath = OUTPATH_FILES.format(file_type)
         if n > 0:
-            outpath = OUTPATH_FILES.format(file_type)
             with open(outpath, "w", encoding="utf8") as outfile:
-                outfile.write("""// -*- coding: utf-8 -*-
-include::global_attr.adoc[]
-= {} file blocks extracted from User Guide articles
-:title: {} file blocks extracted from user guide articles
-:description: List of {} file blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
-                file_type, file_type, file_type))
+                outfile.write(boilerplate_header.format(
+                file_type, "file", file_type, "file", file_type, "file"))
                 for file in extracted_file_blocks[file_type]:
-                    outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
+                    outfile.write(boilerplate_chapter.format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
                     for block in extracted_file_blocks[file_type][file]:
                         block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
                         outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
@@ -213,17 +232,13 @@ include::global_attr.adoc[]
 
     for code_type in extracted_code_blocks:
         n = sum([len(extracted_code_blocks[code_type][file]) for file in extracted_code_blocks[code_type]])
+        outpath = OUTPATH_CODES.format(code_type)
         if n > 0:
-            outpath = OUTPATH_CODES.format(code_type)
             with open(outpath, "w", encoding="utf8") as outfile:
-                outfile.write("""// -*- coding: utf-8 -*-
-include::global_attr.adoc[]
-= {} code blocks extracted from User Guide articles
-:title: {} code blocks extracted from user guide articles
-:description: List of {} code blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
-                code_type, code_type, code_type))
+                outfile.write(boilerplate_header.format(
+                code_type, "code", code_type, "code", code_type, "code"))
                 for file in extracted_code_blocks[code_type]:
-                    outfile.write("=== {}\n(go to xref:{}#[article])\n(de) file for direct editing access: file://{}\n(en) file for direct editing access: file://{}\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
+                    outfile.write(boilerplate_chapter.format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
                     for block in extracted_code_blocks[code_type][file]:
                         block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
                         outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
@@ -234,7 +249,7 @@ include::global_attr.adoc[]
 ############################################################################### 
 def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
 
-    for orig_code_type in ["shell", "shell-raw", "powershell", "cmd", "pycon"]:
+    for orig_code_type in code_box_types:
         for file in extracted_code_blocks[orig_code_type]:
             for block in extracted_code_blocks[orig_code_type][file]:
                 code_type = None
@@ -332,6 +347,43 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                 if re.search(ASTERISKY_COMMAND_PATTERN, block):
                     code_type = "{}-has-asterisks-in-commands".format(orig_code_type)
                     extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                if orig_code_type in ["shell", "pycon", "powershell"]:
+                    # Handle blocks that contain pairs of plus signs
+                    if re.search(PLUS_PAIR_PATTERN, block):
+                        code_type = "{}-has-plus-pairs".format(orig_code_type)
+                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+    for file_type in file_box_types:
+            for file in extracted_file_blocks[file_type]:
+                for block in extracted_file_blocks[file_type][file]:
+                    specified_file_name = re.search(FILE_NAME_PATTERN, block)
+                    if specified_file_name is not None:
+                        specified_file_name = specified_file_name.group(1).strip()
+                        if specified_file_name != "":
+                            if file_type not in ["uncategorized", "file"]:
+                                expected_extension_pattern = file_box_types[file_type]
+                                if not re.search(re.compile(expected_extension_pattern), specified_file_name):
+                                    # Special case: If the file name is unspecific,
+                                    # but we find a shebang that fits the type,
+                                    # we are happy
+                                    file_content = block.split("----\n", 1)[1].strip()
+                                    if re.search(SHEBANG_PATTERN, file_content) is not None:
+                                        shebang_line = re.search(SHEBANG_PATTERN, file_content).group(1)
+                                        if file_type == "bash" and "bash" in shebang_line:
+                                            continue
+                                        elif file_type == "python" and "python" in shebang_line:
+                                            continue
+                                    
+                                    new_file_type = "{}-unexpected-extension".format(file_type)
+                                    extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
+                            else:
+                                # Handle files that are simply specified as "file" but should be a more specific type
+                                pass
+                                relevant_extension_pattern = re.compile("()".format("|".join([file_box_types[ft] for ft in file_box_types])))
+                                if re.search(relevant_extension_pattern, specified_file_name):
+                                    extension_found = re.search(relevant_extension_pattern, specified_file_name).group(1)
+                                    new_file_type = "file-needs-{}".format(extension_found)
 
     return extracted_code_blocks, extracted_file_blocks
 
