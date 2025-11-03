@@ -20,15 +20,13 @@ from pathlib import Path
 import re
 import os
 
-
 ##############################################################################
 # Path definitions
 ##############################################################################
 
 SRCDIR = "{}/git/checkmk-docs/src".format(str(Path.home()))
-OUTPATH_FILES = "{}/common/de/file_blocks_type_{}_per_user_guide_article.asciidoc".format(SRCDIR, "{}")
-OUTPATH_CODES = "{}/common/de/code_blocks_type_{}_per_user_guide_article.asciidoc".format(SRCDIR, "{}")
-
+OUTPATH_FILES = "{}/common/de/file_blocks_type_{}.asciidoc".format(SRCDIR, "{}")
+OUTPATH_CODES = "{}/common/de/code_blocks_type_{}.asciidoc".format(SRCDIR, "{}")
 
 ##############################################################################
 # File and block type definitions
@@ -50,7 +48,6 @@ code_box_types = ["shell",
                   "powershell",
                   "cmd",
                   "pycon"]
-
 
 ##############################################################################
 # Regex definitions
@@ -98,6 +95,10 @@ UNESCAPED_BACKTICK_PATTERN = re.compile(r"(?<!pass:\[)`(?!\])")
 
 UNESCAPED_HASH_PATTERN = re.compile(r"(?<!pass:\[)#")
 FUNCTIONAL_HASH_PATTERN = re.compile(r"\[(green|yellow|red|cpignore)\]#[^#]+#")
+PROMPT_WITH_HASH_PATTERN = re.compile(r"(?<=\n)[^@\n]+?@[^#\n]+?#")
+
+UNESCAPED_DOLLAR_SIGN_PATTERN = re.compile(r"(?<!pass:\[)\$")
+PROMPT_WITH_DOLLAR_SIGN_PATTERN = re.compile(r"(?<=\n)[^@\n]+?@[^\$\n]+?\$")
 
 WINDOWSY_PROMPT_PATTERN = re.compile(r"(?<=\n)((PS|C:)[^>]*?>([^\n]*?))(?=\n)")
 
@@ -132,7 +133,6 @@ def add_to_collection(collection_dict, block_type, file, block):
 ##############################################################################
 
 def collect_code_and_file_blocks(verbose=True):
-
     extracted_file_blocks = dict()
     extracted_code_blocks = {"shell": dict(),
                              "shell-raw": dict(),
@@ -188,43 +188,46 @@ def collect_code_and_file_blocks(verbose=True):
     print("Collected all recognized code and file blocks from {}.".format(SRCDIR))
     return extracted_file_blocks, extracted_code_blocks
 
-
 ##############################################################################
 # Write results to outfiles
 ##############################################################################
 
 def write_results(extracted_file_blocks, extracted_code_blocks):
     for file_type in extracted_file_blocks:
-        outpath = OUTPATH_FILES.format(file_type)
-        with open(outpath, "w", encoding="utf8") as outfile:
-            outfile.write("""// -*- coding: utf-8 -*-
+        n = sum([len(extracted_file_blocks[file_type][file]) for file in extracted_file_blocks[file_type]])
+        if n > 0:
+            outpath = OUTPATH_FILES.format(file_type)
+            with open(outpath, "w", encoding="utf8") as outfile:
+                outfile.write("""// -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = {} file blocks extracted from User Guide articles
 :title: {} file blocks extracted from user guide articles
 :description: List of {} file blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
-        file_type, file_type, file_type))
-            for file in extracted_file_blocks[file_type]:
-                outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
-                for block in extracted_file_blocks[file_type][file]:
-                    block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
-                    outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
-        print("Wrote file blocks of type '{}' to '{}'.".format(file_type, outpath))
+                file_type, file_type, file_type))
+                for file in extracted_file_blocks[file_type]:
+                    outfile.write("=== {}\n(go to xref:{}#[article])\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1]))
+                    for block in extracted_file_blocks[file_type][file]:
+                        block_with_button_markup = re.sub(r"({}|{})".format(FILE_TYPE_LINE_PATTERN, FILE_UNTYPED_LINE_PATTERN), r"[.copybutton]\n\1", block, 1)
+                        outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
+        print("Wrote {} file blocks of type '{}' to '{}'.".format(n, file_type, outpath))
 
     for code_type in extracted_code_blocks:
-        outpath = OUTPATH_CODES.format(code_type)
-        with open(outpath, "w", encoding="utf8") as outfile:
-            outfile.write("""// -*- coding: utf-8 -*-
+        n = sum([len(extracted_code_blocks[code_type][file]) for file in extracted_code_blocks[code_type]])
+        if n > 0:
+            outpath = OUTPATH_CODES.format(code_type)
+            with open(outpath, "w", encoding="utf8") as outfile:
+                outfile.write("""// -*- coding: utf-8 -*-
 include::global_attr.adoc[]
 = {} code blocks extracted from User Guide articles
 :title: {} code blocks extracted from user guide articles
 :description: List of {} code blocks appearing across the user guide. For testing purposes.\n\n\n""".format(
-        code_type, code_type, code_type))
-            for file in extracted_code_blocks[code_type]:
-                outfile.write("=== {}\n(go to xref:{}#[article])\n(de) file for direct editing access: file://{}\n(en) file for direct editing access: file://{}\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
-                for block in extracted_code_blocks[code_type][file]:
-                    block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
-                    outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
-        print("Wrote code blocks of type '{}' to '{}'.".format(code_type, outpath))
+                code_type, code_type, code_type))
+                for file in extracted_code_blocks[code_type]:
+                    outfile.write("=== {}\n(go to xref:{}#[article])\n(de) file for direct editing access: file://{}\n(en) file for direct editing access: file://{}\n".format(file.split(".")[0].rsplit("/", 1)[1], file.split(".")[0].rsplit("/", 1)[1], file, file.replace("/de/", "/en/")))
+                    for block in extracted_code_blocks[code_type][file]:
+                        block_with_button_markup = re.sub(CODE_TYPE_LINE_PATTERN, r"[.copybutton]\n\1", block, 1)
+                        outfile.write("\n{}\n\n".format(block_with_button_markup.strip()))
+        print("Wrote {} code blocks of type '{}' to '{}'.".format(n, code_type, outpath))
 
 ###############################################################################
 # Identify complicated blocks that need individual scrutiny
@@ -234,112 +237,70 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
     for orig_code_type in ["shell", "shell-raw", "powershell", "cmd", "pycon"]:
         for file in extracted_code_blocks[orig_code_type]:
             for block in extracted_code_blocks[orig_code_type][file]:
-                if orig_code_type in ["powershell", "cmd"]:
-                    code_type = None
+                code_type = None
 
+                if orig_code_type in ["powershell", "cmd", "shell", "shell-raw"]:
                     # Handle powershell-type boxes that contain Python REPL elements like >>>
                     if re.search(PYTHON_REPL_PATTERN, block):
                         code_type = "{}-contains-python-repl".format(orig_code_type)
                         extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
-                    elif re.search(WINDOWSY_PROMPT_PATTERN, block):
-                        # Handle blocks that contain an unescaped hash anywhere inside
-                        if re.search(UNESCAPED_HASH_PATTERN, block):
-                            functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
-                            if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
-                                code_type = "{}-has-hashes".format(orig_code_type)
-                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-                        
-                        # Handle blocks that contain an unescaped backtick anywhere inside
-                        if re.search(UNESCAPED_BACKTICK_PATTERN, block):  
-                            code_type = "{}-has-backticks".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks that contain formatting asterisks 
-                        if re.search(ASTERISKY_COMMAND_PATTERN, block):
-                            code_type = "{}-has-asterisks-in-commands".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks that have prompts without commands following them
-                        command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
-                        if command_content is None or command_content.strip() == "":
-                            code_type = "{}-prompt-lacks-command".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-                        
-                        # Handle blocks with multiple prompt lines
-                        prompt_lines = re.findall(WINDOWSY_PROMPT_PATTERN, block)
-                        if len(prompt_lines) > 1:
-                            code_type = "{}-multiple-prompt-lines".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-                
-                if orig_code_type in ["shell", "shell-raw"]:
-                    code_type = None
-
-                    # Handle shell-type boxes that contain Python REPL elements like >>>
-                    if re.search(PYTHON_REPL_PATTERN, block):
-                        code_type = "{}-contains-python-repl".format(orig_code_type)
-                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                    elif re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
-                        # Handle blocks that contain an unescaped hash anywhere inside
-                        if re.search(UNESCAPED_HASH_PATTERN, block):
-                            functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
-                            if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
-                                code_type = "{}-has-hashes".format(orig_code_type)
-                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-                        
-                        # Handle blocks that contain an unescaped backtick anywhere inside
-                        if re.search(UNESCAPED_BACKTICK_PATTERN, block):
-                            code_type = "{}-has-backticks".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks that contain formatting asterisks
-                        if re.search(ASTERISKY_COMMAND_PATTERN, block):
-                            code_type = "{}-has-asterisks-in-commands".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks that have prompts without commands following them
-                        command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
-                        if command_content is None or command_content.strip() == "":
-                            code_type = "{}-prompt-lacks-command".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks with multiple prompt lines
-                        prompt_lines = re.findall(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block)
-                        if len(prompt_lines) > 1:
-                            code_type = "{}-multiple-prompt-lines".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                    # Handle shell boxes without a macro-based prompt
-                    else:
-                        code_type = "{}-lacks-macro-prompts".format(orig_code_type)
-                        # Handle blocks that match a windows-style prompt
+                    if orig_code_type in ["powershell", "cmd"]:
                         if re.search(WINDOWSY_PROMPT_PATTERN, block):
-                            code_type = "{}-needs-cmd".format(orig_code_type)
-                        extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                            # Handle blocks that have prompts without commands following them
+                            command_content = re.search(WINDOWSY_PROMPT_PATTERN, block).group(3)
+                            if command_content is None or command_content.strip() == "":
+                                code_type = "{}-prompt-lacks-command".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                            
+                            # Handle blocks with multiple prompt lines
+                            prompt_lines = re.findall(WINDOWSY_PROMPT_PATTERN, block)
+                            if len(prompt_lines) > 1:
+                                code_type = "{}-multiple-prompt-lines".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
-                if orig_code_type in ["pycon"]:
-                    code_type = None
+                        else:
+                            # Handle blocks that don't have a recognizable prompt for this type
+                            code_type = "{}-lacks-recognizable-prompts".format(orig_code_type)
+                            # Handle blocks that match a linux-style prompt
+                            if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                                code_type = "{}-needs-shell".format(orig_code_type)
+                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                    
+                    elif orig_code_type in ["shell", "shell-raw"]:
+                        if re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block):
+                            # Handle blocks that have prompts without commands following them
+                            command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
+                            if command_content is None or command_content.strip() == "":
+                                code_type = "{}-prompt-lacks-command".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
+                            # Handle blocks with unescaped dollar signs anywhere in them
+                            if re.search(UNESCAPED_DOLLAR_SIGN_PATTERN, block):
+                                functional_dollar_signs_count = len(re.findall(PROMPT_WITH_DOLLAR_SIGN_PATTERN, block))
+                                if functional_dollar_signs_count < len(re.findall(UNESCAPED_DOLLAR_SIGN_PATTERN, block)):
+                                    code_type = "{}-has-dollar-sign".format(orig_code_type)
+                                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                            # Handle blocks with multiple prompt lines
+                            prompt_lines = re.findall(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block)
+                            if len(prompt_lines) > 1:
+                                code_type = "{}-multiple-prompt-lines".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                        # Handle shell boxes without a macro-based prompt
+                        else:
+                            code_type = "{}-lacks-macro-prompts".format(orig_code_type)
+                            # Handle blocks that match a windows-style prompt
+                            if re.search(WINDOWSY_PROMPT_PATTERN, block):
+                                code_type = "{}-needs-cmd".format(orig_code_type)
+                            elif re.search(PROMPT_WITH_DOLLAR_SIGN_PATTERN, block) or re.search(PROMPT_WITH_HASH_PATTERN, block):
+                                code_type = "{}-has-explicit-prompt".format(orig_code_type)
+                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                elif orig_code_type in ["pycon"]:
                     # Handle pycon-type boxes that contain Python REPL elements like >>>
                     if re.search(PYTHON_REPL_PATTERN, block):
-                        # Handle blocks that contain an unescaped hash anywhere inside
-                        if re.search(UNESCAPED_HASH_PATTERN, block):
-                            functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2
-                            if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
-                                code_type = "{}-has-hashes".format(orig_code_type)
-                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-                        
-                        # Handle blocks that contain an unescaped backtick anywhere inside
-                        if re.search(UNESCAPED_BACKTICK_PATTERN, block):
-                            code_type = "{}-has-backticks".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
-                        # Handle blocks that contain formatting asterisks 
-                        if re.search(ASTERISKY_COMMAND_PATTERN, block):
-                            code_type = "{}-has-asterisks-in-commands".format(orig_code_type)
-                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
-
                         # Handle blocks that have prompts without commands following them
                         command_content = re.search(PYTHON_REPL_PATTERN, block).group(1)
                         if command_content is None or command_content.strip() == "":
@@ -351,6 +312,26 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                         if len(prompt_lines) > 1:
                             code_type = "{}-multiple-prompt-lines".format(orig_code_type)
                             extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                if code_type != "{}-lacks-macro-prompts".format(orig_code_type):
+                    # Handle blocks that contain an unescaped hash anywhere inside.
+                    # In case we already found this block to lack a macro-based prompt,
+                    # we skip this check.
+                    if re.search(UNESCAPED_HASH_PATTERN, block):
+                        functional_hashes_count = len(re.findall(FUNCTIONAL_HASH_PATTERN, block))*2 + len(re.findall(PROMPT_WITH_HASH_PATTERN, block))
+                        if functional_hashes_count < len(re.findall(UNESCAPED_HASH_PATTERN, block)):
+                            code_type = "{}-has-hashes".format(orig_code_type)
+                            extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that contain an unescaped backtick anywhere inside
+                if re.search(UNESCAPED_BACKTICK_PATTERN, block):
+                    code_type = "{}-has-backticks".format(orig_code_type)
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+
+                # Handle blocks that contain formatting asterisks 
+                if re.search(ASTERISKY_COMMAND_PATTERN, block):
+                    code_type = "{}-has-asterisks-in-commands".format(orig_code_type)
+                    extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
     return extracted_code_blocks, extracted_file_blocks
 
