@@ -354,7 +354,10 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                         code_type = "{}-has-plus-pairs".format(orig_code_type)
                         extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
-    for file_type in file_box_types:
+    file_categories = set(file_box_types.keys())
+    file_categories.add("uncategorized")
+    
+    for file_type in file_categories:
             for file in extracted_file_blocks[file_type]:
                 for block in extracted_file_blocks[file_type][file]:
                     specified_file_name = re.search(FILE_NAME_PATTERN, block)
@@ -362,12 +365,12 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                         specified_file_name = specified_file_name.group(1).strip()
                         if specified_file_name != "":
                             if file_type not in ["uncategorized", "file"]:
+                                # For specific file types, make sure that either the file name extension
+                                # or the shebang licenses that file type
                                 expected_extension_pattern = file_box_types[file_type]
                                 if not re.search(re.compile(expected_extension_pattern), specified_file_name):
-                                    # Special case: If the file name is unspecific,
-                                    # but we find a shebang that fits the type,
-                                    # we are happy
                                     file_content = block.split("----\n", 1)[1].strip()
+                                    # If we find a fitting shebang, we are happy with this block
                                     if re.search(SHEBANG_PATTERN, file_content) is not None:
                                         shebang_line = re.search(SHEBANG_PATTERN, file_content).group(1)
                                         if file_type == "bash" and "bash" in shebang_line:
@@ -378,12 +381,14 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                                     new_file_type = "{}-unexpected-extension".format(file_type)
                                     extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
                             else:
-                                # Handle files that are simply specified as "file" but should be a more specific type
-                                pass
-                                relevant_extension_pattern = re.compile("()".format("|".join([file_box_types[ft] for ft in file_box_types])))
-                                if re.search(relevant_extension_pattern, specified_file_name):
-                                    extension_found = re.search(relevant_extension_pattern, specified_file_name).group(1)
-                                    new_file_type = "file-needs-{}".format(extension_found)
+                                # Handle files that are not marked as a specific type,
+                                # where the file name extension may give hints
+                                # for appropriate types.
+                                extension_found = specified_file_name.rsplit(".", 1)[1]
+                                if "/" not in extension_found:
+                                    extension_found = re.sub("\s*\([^\)]+?\)\s*", "", extension_found)
+                                    new_file_type = "{}-needs-{}".format(file_type, extension_found)
+                                    extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
 
     return extracted_code_blocks, extracted_file_blocks
 
