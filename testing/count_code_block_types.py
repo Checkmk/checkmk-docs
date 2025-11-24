@@ -267,6 +267,9 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                             if command_content is None or command_content.strip() == "":
                                 code_type = "{}-prompt-lacks-command".format(orig_code_type)
                                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                            elif command_content.strip().startswith("cd "):
+                                code_type = "{}-has-cd-command".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
                             
                             # Handle blocks with multiple prompt lines
                             prompt_lines = re.findall(WINDOWSY_PROMPT_PATTERN, block)
@@ -288,6 +291,10 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                             command_content = re.search(KNOWN_LINUXY_PROMPT_LINE_PATTERN, block).group(3)
                             if command_content is None or command_content.strip() == "":
                                 code_type = "{}-prompt-lacks-command".format(orig_code_type)
+                                extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
+                            # Handle blocks that contain a `cd` command
+                            elif command_content.strip().startswith("cd "):
+                                code_type = "{}-has-cd-command".format(orig_code_type)
                                 extracted_code_blocks = add_to_collection(extracted_code_blocks, code_type, file, block)
 
                             # Handle blocks with unescaped dollar signs anywhere in them
@@ -364,12 +371,12 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                     if specified_file_name is not None:
                         specified_file_name = specified_file_name.group(1).strip()
                         if specified_file_name != "":
+                            file_content = block.split("----\n", 1)[1].strip()
                             if file_type not in ["uncategorized", "file"]:
                                 # For specific file types, make sure that either the file name extension
                                 # or the shebang licenses that file type
                                 expected_extension_pattern = file_box_types[file_type]
                                 if not re.search(re.compile(expected_extension_pattern), specified_file_name):
-                                    file_content = block.split("----\n", 1)[1].strip()
                                     # If we find a fitting shebang, we are happy with this block
                                     if re.search(SHEBANG_PATTERN, file_content) is not None:
                                         shebang_line = re.search(SHEBANG_PATTERN, file_content).group(1)
@@ -389,6 +396,20 @@ def collect_complicated_blocks(extracted_code_blocks, extracted_file_blocks):
                                     extension_found = re.sub("\s*\([^\)]+?\)\s*", "", extension_found)
                                     new_file_type = "{}-needs-{}".format(file_type, extension_found)
                                     extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
+                                # Handle files of unspecific types that have a shebang
+                                shebang_found = re.search(SHEBANG_PATTERN, file_content)
+                                if shebang_found is not None:
+                                    shebang_line = shebang_found.group(1)
+                                    if "bash" in shebang_line:
+                                        new_file_type = "{}-needs-bash".format(file_type)
+                                        extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
+                                    elif "python" in shebang_line:
+                                        new_file_type = "{}-needs-python".format(file_type)
+                                        extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
+                                    else:
+                                        new_file_type = "{}-has-shebang".format(file_type)
+                                        extracted_file_blocks = add_to_collection(extracted_file_blocks, new_file_type, file, block)
+
 
     return extracted_code_blocks, extracted_file_blocks
 
