@@ -6,6 +6,7 @@ from datetime import datetime
 import logging
 from pydantic import BaseModel
 from os import listdir
+import re
 import shutil
 from sys import argv, stdout
 from subprocess import check_output
@@ -385,7 +386,7 @@ class ArticleDatabase:
                 continue
 
             if (
-                commit.properties.msg.startswith(EXCLUDE_COMMIT_PREFIX)
+                re.search(r"|".join(EXCLUDE_COMMIT_PREFIX), commit.properties.msg)
                 or commit.commit_id in article.commit_ids[check.rel]
                 or commit.properties.msg in article.commit_msgs[check.rel]
             ):
