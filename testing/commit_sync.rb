@@ -38,9 +38,11 @@ def switch_branch(target)
     system("git pull")
 end
 
-def check_against_ignores(filelist)
-	relevant_files = 0
-	filelist.each { |f|
+def check_against_ignores(commitinfo)
+	@ignore_tickets.each { |t|
+		return false if commitinfo[2].include? t
+	}
+	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
 		unless @ignore_files.include? fname
 			return true
@@ -56,6 +58,9 @@ end
 	"real_time_checks_cpu_load_graph.png",
 	"real_time_checks_rrd_config.png",
 	"real_time_checks_service_overview.png"
+]
+@ignore_tickets = [
+	"KNW-1934", "KNW-1943"
 ]
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
@@ -73,7 +78,7 @@ clist.each { |c|
 missingcommits.each { |b,l|
     puts "#{b}:"
     l.reverse.each { |c|
-		if check_against_ignores(c[3])
+		if check_against_ignores(c)
 			puts "#{c[0]} + #{c[1]} + #{c[2]}"
 			c[3].each { |f|
 				puts "    #{f}"
