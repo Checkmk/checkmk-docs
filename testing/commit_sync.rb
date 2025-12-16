@@ -42,7 +42,7 @@ def check_against_ignores(filelist)
 	relevant_files = 0
 	filelist.each { |f|
 		fname = f.split("/")[-1]
-		unless @ignore_files.include? f
+		unless @ignore_files.include? fname
 			return true
 		end
 	}
