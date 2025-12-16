@@ -57,7 +57,8 @@ end
 	"real_time_checks_agent_rule.png",
 	"real_time_checks_cpu_load_graph.png",
 	"real_time_checks_rrd_config.png",
-	"real_time_checks_service_overview.png"
+	"real_time_checks_service_overview.png",
+	"internal_reference.asciidoc"
 ]
 @ignore_tickets = [
 	"KNW-1934", "KNW-1943"
