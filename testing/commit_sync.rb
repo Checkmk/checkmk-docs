@@ -52,13 +52,15 @@ def check_against_ignores(commitinfo)
 end
 
 
-@ignore_files = [ "real_time_checks.asciidoc",
-	"real_time_checks_enable.png",
-	"real_time_checks_agent_rule.png",
-	"real_time_checks_cpu_load_graph.png",
-	"real_time_checks_rrd_config.png",
-	"real_time_checks_service_overview.png",
-	"internal_reference.asciidoc"
+@ignore_files = [ 
+	"real_time_checks.asciidoc", # on hold
+	"real_time_checks_enable.png", # on hold
+	"real_time_checks_agent_rule.png", # on hold
+	"real_time_checks_cpu_load_graph.png", # on hold
+	"real_time_checks_rrd_config.png", # on hold
+	"real_time_checks_service_overview.png", # on hold
+	"internal_reference.asciidoc", # only of use in master
+	"release_notes.asciidoc", # already diverting
 ]
 @ignore_tickets = [
 	"KNW-1934", "KNW-1943", "KNW-1543", "KNW-1959", "KNW-1967"
