@@ -61,7 +61,7 @@ end
 	"internal_reference.asciidoc"
 ]
 @ignore_tickets = [
-	"KNW-1934", "KNW-1943"
+	"KNW-1934", "KNW-1943", "KNW-1543", "KNW-1959", "KNW-1967"
 ]
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
