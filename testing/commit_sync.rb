@@ -38,6 +38,25 @@ def switch_branch(target)
     system("git pull")
 end
 
+def check_against_ignores(filelist)
+	relevant_files = 0
+	filelist.each { |f|
+		fname = f.split("/")[-1]
+		unless @ignore_files.include? f
+			return true
+		end
+	}
+	return false
+end
+
+
+@ignore_files = [ "real_time_checks.asciidoc",
+	"real_time_checks_enable.png",
+	"real_time_checks_agent_rule.png",
+	"real_time_checks_cpu_load_graph.png",
+	"real_time_checks_rrd_config.png",
+	"real_time_checks_service_overview.png"
+]
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
 pickbranches.each { |b| missingcommits[b] = [] }
@@ -54,9 +73,11 @@ clist.each { |c|
 missingcommits.each { |b,l|
     puts "#{b}:"
     l.reverse.each { |c|
-        puts "#{c[0]} + #{c[1]} + #{c[2]}"
-        c[3].each { |f|
-            puts "    #{f}"
-        }
+		if check_against_ignores(c[3])
+			puts "#{c[0]} + #{c[1]} + #{c[2]}"
+			c[3].each { |f|
+				puts "    #{f}"
+			}
+		end
     }
 }
