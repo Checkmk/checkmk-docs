@@ -77,6 +77,8 @@ end
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
 @allfiles = []
+# Hold all files with already skipped commits, these should not pick as default
+@files_with_skipped_commits = []
 pickbranches.each { |b| missingcommits[b] = [] }
 
 switch_branch "master"
@@ -93,24 +95,45 @@ missingcommits.each { |b,l|
     l.reverse.each { |c|
 		@allfiles.push c[3]
 		puts "#{c[0]} + #{c[1]} + #{c[2]}"
+		nskipped = 0
 		c[3].each { |f|
-			puts "    #{f}"
+			s = ""
+			if @files_with_skipped_commits.include? f
+				s = " <= has skipped commits!"
+				nskipped += 1
+			end
+			puts "    #{f}#{s}"
 		}
 		if check_against_ignores(c)
-			puts "===> Try to pick? [Y/n] "
+			if nskipped > 0
+				defdec = "n"
+				puts "===> Try to pick? [N/y] "
+			else
+				defdec = "y"
+				puts "===> Try to pick? [Y/n] "
+			end
 			decision = gets
-			if decision.strip == "" || decision.strip =~ /^y/i
+			decision = defdec if decision.strip == ""
+			if decision.strip =~ /^y/i
 				ret = system("git cherry-pick #{c[1]}")
 				unless ret
 					puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
 					secdec = gets
 					if secdec.strip == "" || secdec.strip =~ /^e/
 						exit 1
+					else
+						c[3].each { |f| @files_with_skipped_commits.push f }
+						unless system("git cherry-pick --abort")
+							exit 1
+						end
 					end
 				end
+			else
+				c[3].each { |f| @files_with_skipped_commits.push f }
 			end
 		else
 			puts "===> No decision needed, ticket or files on ignore list."
+			c[3].each { |f| @files_with_skipped_commits.push f }
 		end
     }
 }
