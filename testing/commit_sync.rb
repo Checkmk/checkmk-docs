@@ -51,7 +51,6 @@ def check_against_ignores(commitinfo)
 	return false
 end
 
-
 @ignore_files = [ 
 	"real_time_checks.asciidoc", # on hold
 	"real_time_checks_enable.png", # on hold
@@ -63,10 +62,21 @@ end
 	"release_notes.asciidoc", # already diverting
 ]
 @ignore_tickets = [
-	"KNW-1934", "KNW-1943", "KNW-1543", "KNW-1959", "KNW-1967"
+	"KNW-1934", "KNW-1943", "KNW-1543", "KNW-1959", "KNW-1967",
 ]
+@ignore_commits = [
+
+]
+
+# Force these tickets to behave like pick-24
+# Add a comment to each ticket to make cleaning easier later
+@force_tickets = [
+	"KNW-9999", # Example: Mattias is working on this...
+]
+
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
+@allfiles = []
 pickbranches.each { |b| missingcommits[b] = [] }
 
 switch_branch "master"
@@ -81,11 +91,33 @@ clist.each { |c|
 missingcommits.each { |b,l|
     puts "#{b}:"
     l.reverse.each { |c|
+		@allfiles.push c[3]
+		puts "#{c[0]} + #{c[1]} + #{c[2]}"
+		c[3].each { |f|
+			puts "    #{f}"
+		}
 		if check_against_ignores(c)
-			puts "#{c[0]} + #{c[1]} + #{c[2]}"
-			c[3].each { |f|
-				puts "    #{f}"
-			}
+			puts "===> Try to pick? [Y/n] "
+			decision = gets
+			if decision.strip == "" || decision.strip =~ /^y/i
+				ret = system("git cherry-pick #{c[1]}")
+				unless ret
+					puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
+					secdec = gets
+					if secdec.strip == "" || secdec.strip =~ /^e/
+						exit 1
+					end
+				end
+			end
+		else
+			puts "===> No decision needed, ticket or files on ignore list."
 		end
     }
 }
+
+#~ @allfiles = @allfiles.sort.uniq
+
+#~ puts "All files currently not in sync:"
+#~ @allfiles.each { |f|
+	#~ puts f
+#~ }
