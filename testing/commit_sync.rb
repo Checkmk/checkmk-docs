@@ -64,7 +64,6 @@ end
 @ignore_tickets = [
 	"KNW-1934", # Documentation of cmk services
 	"KNW-1943", # Documentation of cmk services typo
-	"KNW-1543", # Certificate overview page
 	"KNW-1959", # InfluxDB 3 is not supported
 	"KNW-1967", # Translation of various articles after inserting new design elements
 ]
