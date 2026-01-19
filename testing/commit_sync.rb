@@ -60,11 +60,15 @@ end
 	"real_time_checks_service_overview.png", # on hold
 	"internal_reference.asciidoc", # only of use in master
 	"release_notes.asciidoc", # already diverting
+	"menu.asciidoc", # editing notes
 ]
 @ignore_tickets = [
 	"KNW-1934", # Documentation of cmk services
 	"KNW-1943", # Documentation of cmk services typo
 	"KNW-1959", # InfluxDB 3 is not supported
+	"KNW-2016", # New edition macros
+	"KNW-2017", # New macros in context
+	"KNW-2043", # 2.5.0 only topic
 ]
 @ignore_commits = [
 
