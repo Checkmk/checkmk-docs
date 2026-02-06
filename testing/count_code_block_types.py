@@ -43,13 +43,15 @@ file_box_types = {"file": r"\..+?",
                   "ini": r"\.(ini|cfg)",
                   "yaml": r"(\.yml|\.yaml)",
                   "psscript": r"\.ps1",
-                  "bash": r"\.(sh|bash)"}
+                  "bash": r"\.(sh|bash)",
+                  "json": r"\.(json)"}
 
 code_box_types = ["shell",
                   "shell-raw",
                   "powershell",
                   "cmd",
-                  "pycon"]
+                  "pycon",
+                  "sql"]
 
 ##############################################################################
 # Regex definitions
@@ -141,19 +143,9 @@ def add_to_collection(collection_dict, block_type, file, block):
 ##############################################################################
 
 def collect_code_and_file_blocks(verbose=True):
-    extracted_file_blocks = {"file": dict(),
-                             "python": dict(),
-                             "sql": dict(),
-                             "apache": dict(),
-                             "ini": dict(),
-                             "yaml": dict(),
-                             "psscript": dict(),
-                             "bash": dict()}
-    extracted_code_blocks = {"shell": dict(),
-                             "shell-raw": dict(),
-                             "powershell": dict(),
-                             "cmd": dict(),
-                             "pycon": dict()}
+    extracted_file_blocks = {ftype: dict() for ftype in file_box_types}
+    extracted_code_blocks = {ctype: dict() for ctype in code_box_types}
+
 
     for root, dirs, files in os.walk(SRCDIR):
         for file in files:
