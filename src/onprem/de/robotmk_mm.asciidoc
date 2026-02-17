@@ -1,0 +1,1113 @@
+// -*- coding: utf-8 -*-
+// IGNORE + Entwicklungs MyApp1 MyApplication_mybot Windows|Linux rf × mybot_managed
+// NONASCII
+// SKIPCOMMITS 2026-01-19
+include::global_attr.adoc[]
+= {CMK} Synthetic Monitoring mit Robotmk
+:revdate: 2026-02-10
+:title: {CMK} Synthetic Monitoring mit Robotmk
+:description: {CMK} Synthetic Monitoring simuliert Nutzerverhalten auf Basis von Robot Framework. Lesen Sie hier, wie Sie Robotmk-Tests in Ihr Monitoring integrieren.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:agent_deployment#[Automatische Agenten-Updates]
+{related-end}
+
+[IMPORTANT]
+====
+Diesen Artikel gibt es derzeit in zwei Versionen.
+In {CMK} {v23} wurde synthetisches Monitoring eingeführt und der Bau von virtuellen Umgebungen für die Ausführung von Robots mit dem Tool *RCC* aus dem Hause Robocorp realisiert.
+
+Robocorp hat RCC in 2024 eingestellt.
+
+In künftigen {CMK}-Versionen wird RCC vollständig durch eine Lösung auf Basis von *Micromamba,* ergänzt durch unser hauseigenes Kommandozeilenwerkzeug *CSM,* ersetzt.
+In {CMK} {v25} gibt es übergangsweise *beide Varianten gleichzeitig.*
+Wenn Sie neu in {CMK} Synthetic Monitoring einsteigen, sollten Sie dringend auf Micromamba/CSM setzen!
+
+Sie befinden sich in der *aktuellen Micromamba/CSM-Version* dieses Artikel.
+Sollten Sie synthetisches Monitoring bereits mit RCC aufgesetzt haben, finden Sie hier den xref:robotmk#[Legacy-RCC-Artikel.]
+
+Hinweis zu **Screenshots:** In dieser Micromamba/CSM-Version sehen Sie in Screenshots teils RCC-Optionen, die nicht separat erläutert werden.
+====
+
+[#intro]
+== Synthetisches Monitoring mit Robot Framework
+
+{cee-only} {CMK} Synthetic Monitoring ist in den kommerziellen {CMK}-Editionen verfügbar, benötigt jedoch eine link:https://checkmk.com/request-quote/synthetic-monitoring[zusätzliche Subskription.^]
+Sie können die Funktion allerdings mit bis zu drei Tests kostenlos und ohne Zeitbegrenzung testen.
+
+Mit {CMK} können Sie Ihre eigene Infrastruktur sehr genau überwachen -- bis hin zur Frage, ob ein bestimmter Service, beispielsweise ein Webserver, ordentlich läuft.
+Wird Ihre Website über einen Cloud-Service von Dritten betrieben, werden Sie keinen Zugriff auf den Service selbst haben, können aber über einen HTTP-Check prüfen, ob die Website erreichbar ist.
+Aber was sagt das über die Nutzererfahrung aus? Dass ein Online-Shop erreichbar ist, heißt ja noch nicht, dass die Navigation, Bestellprozesse und dergleichen reibungslos funktionieren.
+
+An dieser Stelle setzt das {CMK} Synthetic Monitoring an.
+Mit dem Plugin Robotmk bietet {CMK} echtes End-to-End-Monitoring, also die Überwachung laufender Anwendungen aus Sicht der Nutzer.
+Das eigentliche Testen übernimmt dabei die Open-Source-Software link:https://robotframework.org/[Robot Framework^] -- in deren Trägerverein auch die {comfull} Mitglied ist.
+
+Mit der Automationssoftware lässt sich Nutzerverhalten komplett automatisieren, um beispielsweise Bestellprozesse in Online-Shops Klick für Klick nachzustellen.
+Das Besondere an Robot Framework: Tests werden nicht in einer vollwertigen Programmiersprache geschrieben, sondern über einfach zu verwendende Keywords definiert, wie `Open Browser` oder `Click Button`.
+So genügt ein `Open Browser checkmk.com` zum Aufrufen der {CMK}-Website.
+Mehrere Testfälle werden dann in sogenannten Test-Suites zusammengefasst (in Form einer `.robot`-Datei).
+
+Robotmk kann nun diese Robot-Framework-Test-Suites verteilen, auf den Hosts triggern und ihre Ausführung und Resultate als Services in {CMK} überwachen.
+In der {CMK}-Weboberfläche finden Sie dann Status, zugehörige Performance-Graphen sowie die Original-Auswertungen von Robot Framework selbst.
+
+
+=== Komponenten
+
+Für dieses End-to-End-Monitoring spielen allerhand Komponenten zusammen, daher hier ein kurzer Überblick.
+
+
+==== {CMK}-Server
+
+{CMK} Synthetic Monitoring wird über Robotmk realisiert, das ein Agentenplugin als Datensammler nutzt und den Robotmk-Scheduler (auf dem überwachten Host) für das Triggern von Robot-Framework-Projekten.
+Aktiviert und konfiguriert wird das synthetische Monitoring über die Regel [.guihint]#Robotmk Scheduler#.
+Hier legen Sie fest, welche Test-Suites ausgeführt werden sollen und wie exakt Robot Framework diese starten soll -- zusammengefasst in einem _Plan._
+Einmal verteilt, sorgt der Robotmk-Scheduler auf dem Ziel-Host für die planmäßige Ausführung Ihrer Robot-Framework-Suites.
+
+Im Monitoring bekommen Sie letztlich mehrere neue Services: [.guihint]#RMK Scheduler Status# zeigt den Status des Schedulers selbst, also ob Test-Suites erfolgreich gestartet werden konnten.
+Hinzu kommen Services für alle konfigurierten Test-Pläne (etwa [.guihint]#RMK MyApp1 Plan#) und einzelnen Tests aus Test-Suites (etwa [.guihint]#RMK MyApp1 Test#).
+Zu den Services der einzelnen Tests gehören auch die originalen Robot-Framework-Berichte.
+
+Dann gibt es noch zwei optionale Service-Regeln: [.guihint]#Robotmk plan# und [.guihint]#Robotmk test# sorgen für die Feineinstellung der Plan- und Test-Services -- beispielsweise um Statuswechsel bei bestimmten Laufzeiten zu erwirken.
+
+Zu guter Letzt existieren noch zwei Regeln zum _KPI-Monitoring:_
+KPI steht für Key Performance Indicator und meint in diesem Kontext einzelne Keywords.
+Über die Regel [.guihint]#Robotmk KPI discovery# lassen sich Keywords als separate Services ins Monitoring holen und über [.guihint]#Robotmk KPI monitoring# entsprechend auswerten.
+Wie genau das Keyword-Monitoring funktioniert, zeigen wir unten in einem separaten Kapitel.
+
+Etwas abseits der normalen Regeln gibt es im Bereich [.guihint]#Setup# noch das Feature [.guihint]#Managed robots.#
+Die Kurzversion: Robots, die auf dem {CMK}-Server verwaltet und via {CMK}-Agent verteilt werden -- für Details steht abermals ein eigenes Kapitel zur Verfügung.
+
+.Die Robotmk-Regeln in {CMK}
+image::robotmk_services_menu_csm.png[alt="Robotmk-Regeln im Setup-Menü.",width=65%]
+
+==== Testmaschine
+
+Die Robot-Framework-Test-Suites können Sie sowohl auf einem Windows- (ab Windows 10 beziehungsweise Server 2019) als auch Linux-Host bereitstellen.
+Für die Ausführung benötigt Robot Framework Zugriff auf deren Abhängigkeiten (Python, Bibliotheken, Treiber für die Browser-Automation und so weiter).
+Diese Konfiguration ist unabhängig von {CMK} und kann deklarativ in einem portablen Paket abgelegt werden.
+
+Dies erledigt das Open-Source-Kommandozeilenwerkzeug link:https://github.com/Checkmk/csm[CSM^] ({CMK} Synthetic Monitoring).
+CSM kann dabei auf einem beliebigen Rechner laufen und übernimmt das Erstellen der benötigten Konfigurationsdateien sowie das Verpacken dieser plus Test-Suites zu einem Automationspaket.
+Die Ausführung auf der Testmaschine übernimmt dann link:https://github.com/mamba-org/micromamba-releases[Micromamba,^] eine portable, ausführbare Mini-Version des Paketmanagers Mamba.
+Micromamba baut anhand Ihrer Konfigurationsdateien im YAML-Format virtuelle Python-Umgebungen samt Abhängigkeiten und Robot Framework selbst.
+Der als Hintergrundprozess laufende Robotmk-Scheduler stößt diesen Bau an und sorgt anschließend selbst für die Ausführung der Tests.
+
+Ein solches _Automationspaket_ mit der Definition der Ausführungsumgebung (`robotmk-env.yaml`), Post-Installationsanweisungen (`robotmk-setup.yaml`) und den Test-Suites (`tests.robot`) wird auch _Roboter_ genannt.
+Der Scheduler und Micromamba werden immer mit dem {CMK}-Agenten verteilt, das Automationspaket nur optional, kann aber auch schon auf dem Test-Host vorhanden sein.
+CSM wiederum wird auf dem Test-Host gar nicht benötigt, da es nur zum Erstellen und Verpacken der Konfiguration dient.
+
+Der große Vorteil dieser Micromamba-Lösung: Der ausführende Test-Host selbst benötigt keine konfigurierte Python-Umgebung.
+
+Der Agent selbst wird nur für die Übertragung von Ergebnissen, Protokollen und Screenshots benötigt.
+Dies ermöglicht auch die Überwachung sehr lange laufender oder lokal sehr ressourcenintensiver Suites – vorausgesetzt, Ihr Test-Host verfügt über entsprechende Kapazitäten.
+
+////
+// ML: Seems to be obsolete with CSM
+Ein Wort noch zu den Betriebssystemen der Test-Hosts -- Windows und Linux verhalten sich nämlich minimal unterschiedlich.
+Insbesondere weichen freilich die gesetzten Pfade ab; in den folgenden Beispielen führen wir nur Windows-Pfade an (sofern nicht wirklich explizite Pfade benötigt werden).
+Für den Fall, dass CSM offline arbeiten muss, gibt es zudem Unterschiede bezüglich Nutzerkontext des Robotmk-Schedulers und der nötigen Befehle -- hier gehen wir natürlich explizit auf beide Systeme ein.
+////
+
+Und auch wenn es nicht direkt mit {CMK} zu tun hat:
+Die link:https://robotframework-browser.org/[Browser-Bibliothek von Robot Framework^] nutzt Playwright -- und Playwright läuft nicht auf allen von {CMK} unterstützten Linux-Systemen.
+Beachten Sie die entsprechenden link:https://playwright.dev/docs/intro#system-requirements[Systemvoraussetzungen^] (wobei Node.js in unserem Fall via CSM/Conda bereitgestellt wird).
+
+Die Systemvoraussetzungen für die Testmaschine:
+
+- CPU: mindestens 4 Kerne, empfohlen 8 Kerne
+- RAM: 8 Gigabyte, empfohlen 16 Gigabyte
+- Internetzugriff (sofern die Pakete heruntergeladen werden sollen)
+- Für webbasierte Tests (Robot Framework Browser Library, basiert auf Playwright) Debian 12/13, Ubuntu 22.04/24.04
+
+[IMPORTANT]
+====
+CSM ist eine Eigenentwicklung von {CMK}, ein Interface für den Paketmanager Micromamba. Micromamba wiederum ist eine portable Mini-Version von Mamba -- und das eine Reimplementierung von Conda. Im üblichen Sprachgebrauch wird bezüglich virtueller Umgebungen häufig schlicht von Conda-Umgebungen gesprochen. Gemeint ist das Conda-Format, nicht das Tooling! Eine Conda-Umgebung kann also durchaus -- wie in unserem Fall -- von Micromamba stammen. Wir sprechen hier im Artikel daher auch von Conda-Umgebung, technisch korrekt wäre _Conda-kompatible Umgebung via Micromamba._
+====
+
+
+[#ruleconfig]
+== Test-Suites überwachen mit Robotmk
+
+Im Folgenden zeigen wir, wie Sie eine Test-Suite ins Monitoring aufnehmen.
+Als Beispiel dient dazu eine simple Hello-World-Suite, die lediglich einen String ausgibt.
+Eine Einführung in Robot Framework ist hier freilich nicht das Thema, ein kurzer Blick in das Automationspaket und die Demo-Test-Suite muss aber sein, damit Sie sehen, welche Daten wo im Monitoring landen.
+
+Das Beispiel läuft auf Basis von CSM/Conda, so dass der Windows-Host nicht extra konfiguriert werden muss.
+Die `micromamba.exe` wird später mit dem Agenten verteilt und findet sich unter `C:\ProgramData\checkmk\agent\bin\`.
+
+Unsere Demo-Test-Suite selbst wird mit CSM erstellt, samt aller nötigen Konfigurationsdateien, um Ihnen den Einstieg zu erleichtern.
+Zunächst muss also CSM selbst installiert werden, auf einem beliebigen Rechner:
+
+- Laden Sie link:https://github.com/Checkmk/csm[CSM^] herunter.
+- Entpacken Sie das Archiv.
+- Kopieren Sie die CSM-Executable in ein Verzeichnis, das im `PATH` Ihres Systems liegt.
+
+Zum Testen:
+
+[{powershell}]
+----
+PS C:\> csm -h
+----
+
+Nun können Sie das komplette Demo-Automationspaket `mybot1` mit einem Befehl erstellen:
+
+[{powershell}]
+----
+PS C:\robots> csm robot create mybot1
+----
+
+
+Das Verzeichnis der Suite:
+
+.C:\robots\mybot1\
+[{file}]
+----
+.gitignore
+robot.toml
+robotmk-env.yaml
+robotmk-setup.yaml
+sample.robot
+----
+
+Das Suite-Dateiverzeichnis beinhaltet nun einige Dateien:
+
+- `robotmk-env.yaml`: Definition der Ausführungsumgebung
+- `robotmk-setup.yaml`: Anweisungen, die nach Erstellung der Ausführungsumgebung abgearbeitet werden
+- `sample.robot`: Demo-Test-Suite
+- `robot.toml`: Optionale Konfigurationsdatei für das VS-Code-Plugin link:https://robotcode.io/[RobotCode^]
+- `.robot.toml`: Überschreibt bei Bedarf die `robot.toml`-Einstellung auf dem lokalen Rechner (gehört entsprechend nicht ins Versionskontrollsystem)
+- `.gitignore`: Schließt einige Standard- Dateien/-Ordner für Git aus (etwa Robot-Framework-Berichte, Archive etc.)
+
+Für die Umgebung werden in diesem Fall lediglich die Abhängigkeiten Python, Pip und Robot Framework (kompatibel bis Version 7.3) installiert.
+
+Im Monitoring taucht der Umgebungsbau später als [.guihint]#RCC/Conda environment build status# auf (zur Erinnerung: RCC war die erste implementierte lösung vor Conda).
+Nur wenn die Umgebung erfolgreich gebaut wird, können auch die Tests abgearbeitet und folglich überwacht werden.
+
+
+.C:\robots\mybot1\robotmk-env.yaml
+[{yaml}]
+----
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12.3
+  - pip=23.2.1
+  - pip:
+    # Python packages installed via pip
+    - robotframework==7.3
+----
+
+Die eigentliche Test-Suite sieht nun wie folgt aus:
+
+.C:\robots\mybot1\sample.robot
+[{file}]
+----
+*** Settings ***
+# Import Libraries, Resource files, and other settings here
+
+*** Variables ***
+# Define variables here
+
+*** Test Cases ***
+# One or more test cases
+
+Test1
+    Show Greeting
+
+*** Keywords ***
+# User-Defined keywords
+
+Show Greeting
+    Log  Hello World!
+
+----
+
+Hier wird also lediglich das übliche "Hello World!" ausgegeben.
+
+*Für diesen Artikel* haben wir den Test minimal verändert, um später auch ein paar aussagekräftige Bilder vom Monitoring sowie Variablen zeigen zu können.
+Hier der aktualisierte Part des Tests:
+
+.C:\robots\mybot1\sample.robot
+[{file}]
+----
+...
+
+*** Variables ***
+# Define variables here
+${MYVAR}    Hello Checkmk!
+
+...
+
+Show Greeting
+    Log  ${MYVAR}
+    Sleep    3
+    Log      Done.
+
+----
+
+Nun wird also der Wert der Variablen `MYVAR` ausgegeben, dann 3 Sekunden gewartet und abschließend `Done` ausgegeben.
+Den Wert der Variablen können Sie später in der {CMK}-Weboberfläche setzen -- ansonsten wird der hier gesetzte Standardwert `Hello Checkmk!` genutzt.
+
+=== Test-Suite manuell ausführen
+Sie können Test-Suites auch ohne {CMK} direkt mit CSM ausführen.
+Dafür muss das Tool aber noch eingerichtet werden -- und zwar spezifisch für die verwendete Shell.
+Sie können Ihre Shell manuell angeben oder CSM selbst erkennen lassen:
+
+[{powershell}]
+----
+PS C:\mybot1> csm init
+PS C:\mybot1> csm init bash
+PS C:\mybot1> csm init zsh
+PS C:\mybot1> csm init powershell
+
+----
+
+CSM gibt darauf hin genaue Instruktionen aus, wie die Einbindung in Ihre Shell funktioniert -- hier am Beispiel Powershell:
+
+[{powershell}]
+----
+PS C:\mybot1> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Unrestricted
+PS C:\mybot1> md -f $PROFILE\..; echo 'csm init powershell --code | Out-String | Invoke-Expression' >> $PROFILE
+----
+
+CSM ist im Wesentlichen ein Wrapper für Micromamba und über den init-Befehl werden entsprechende Einstellungen konfiguriert und hier auch direkt in die Shell-Konfiguration geschrieben, damit die Einstellung über die Session hinweg bestehen bleibt.
+Wenn Sie sehen wollen, welcher Code da generiert und in die Shell-Konfiguration geschrieben wird, führen einfach den CSM-Befehl für Ihre Shell solo aus:
+
+[{powershell}]
+----
+PS C:\mybot1> csm init powershell --code 
+
+----
+
+Nun ist CSM einsatzbereit und die Arbeit mit virtuellen Umgebungen kann beginnen.
+Im Ordner Ihres CSM-Automationspakets führen Sie folgenden Befehl aus, um die Umgebung zu erstellen:
+
+[{powershell}]
+----
+PS C:\mybot1> csm env create
+
+----
+
+Ein erster sinnvoller Befehl wäre nun das Auflisten verfügbarer virtueller Umgebungen:
+
+[{powershell}]
+----
+PS C:\mybot1> csm env list
+
+----
+
+[IMPORTANT]
+====
+Wenn sich auf Ihrem System weitere virtuelle Umgebungen im Conda-Format befinden, beispielsweise vom früher in {CMK} eingesetzten Tool RCC oder einem sonstigen Venv-Manager, kann der Befehl zu Fehlermeldungen bezüglich fehlender Rechte führen -- schließlich kann CSM nicht in fremde Dateien schauen. Der sonstige Betrieb von CSM ist davon unberührt.
+====
+
+Nun ist es an der Zeit, die erstellte Umgebung zu aktivieren:
+
+[{powershell}]
+----
+PS C:\mybot1> csm env activate
+
+----
+
+Einmal aktiviert, können Sie Robot-Framework-Befehle direkt in der virtuellen Umgebung absetzen (`robot --version`).
+
+Aber natürlich geht das auch ohne manuelles Aktivieren:
+
+[{powershell}]
+----
+PS C:\mybot1> csm env run robot --version
+
+----
+
+Der Robotmk-Scheduler agiert in der Praxis auf dem Test-Host freilich ohne CSM direkt mit Micromamba.
+
+
+[#agentconfig]
+=== Regel für das Agentenplugin konfigurieren
+
+Den Robotmk-Scheduler finden Sie unter [.guihint]#Setup > Agent rules > Robotmk scheduler (Windows).#
+Da die Regel recht umfangreich ist, hier zunächst ein Blick auf die noch leere Konfiguration:
+
+.Konfiguration des Agentenplugins
+image::robotmk_scheduler_00_csm.png[alt="Leere Robotmk-Scheduler-Regel."]
+
+Zunächst benötigt der Scheduler die Angabe des Basisverzeichnisses, in dem all Ihre Robot-Framework-Projekte, also Test-Suites, liegen.
+Tragen Sie diesen beliebigen, absoluten Pfad unter [.guihint]#Base directory of Robot Framework projects# ein, beispielsweise `C:\robots`.
+
+.Basisverzeichnis für alle Robot-Framework-Projekte
+image::robotmk_scheduler_01_csm.png[alt="Pfad für Test-Suites."]
+
+Mit [.guihint]#Parallel running sequences of plans# folgt nun ein {CMK}-eigenes Konzept.
+
+Zur Erklärung müssen wir zunächst eine Hierarchieebene tiefer gehen: Hier sehen Sie den Punkt [.guihint]#Sequence of plans.#
+Ein jeder Plan legt fest, welche Suites mit welchen Parametern ausgeführt werden sollen.
+Und Robot Framework arbeitet diese Suites dann nacheinander ab.
+Der Grund ist simpel: In der Praxis geht es manchmal um Tests, die auf dem Desktop ausgeführt werden, und da könnten sich mehrere Test-Suites gleichzeitig in die Quere kommen (sich gegenseitig „die Maus klauen“).
+Bis hierhin haben Sie also Robot-Framework-typisch *eine* Sequenz mit mehreren Plänen.
+
+Die [.guihint]#Parallel running sequences of plans# sind nun eine Kapselung für mehrere solcher Sequenzen -- und werden selbst parallel ausgeführt.
+Auch hier ist der Grund simpel: So können Test-Suites, die eben nicht auf den Desktop angewiesen sind, ohne Verzögerung in eigenen Plänen ausgeführt werden -- wie zum Beispiel die hier im Artikel eingesetzte Test-Suite.
+
+Wieder zurück zum Dialog: Die einzige explizite Einstellung ist das Ausführungsintervall, das Sie unter [.guihint]#Sequence execution interval# setzen.
+
+.Intervall für die (parallele) Ausführung von Sequenzen
+image::robotmk_scheduler_02_csm.png[alt="Ausführungsintervall für Sequenzen."]
+
+[IMPORTANT]
+====
+Die Pläne in einer Sequenz haben natürlich selbst eine gewisse Laufzeit, bestimmt durch den Timeout einer einzelnen Ausführung und die maximale Anzahl wiederholter Ausführungen im Falle fehlgeschlagener Tests. 
+Das Ausführungsintervall der Sequenz muss folglich größer sein als die Summe der maximalen Laufzeiten aller Pläne in der Sequenz.
+Die maximale Laufzeit einer Sequenz berechnet sich wie folgt: [.guihint]#Limit per attempt# × (1 + [.guihint]#Maximum number of re-executions#).
+====
+
+Nun geht es an die Konfiguration eines ersten Plans.
+Unter [.guihint]#Application name# können Sie einen beliebigen Namen eingeben.
+Dieser Name muss nicht eindeutig sein!
+Sinnvoll ist hier der Name der zu überwachenden Anwendung, beispielsweise `OnlineShop` oder hier im Beispiel schlicht `MyApplication`.
+Nun kann es natürlich vorkommen, dass eben dieser Online-Shop mehrfach getestet wird, sei es durch andere Test-Suites oder dieselbe Test-Suite mit unterschiedlichen Parametern.
+Um in solchen Fällen trotz identischer Namen dennoch eine Eindeutigkeit in den Ergebnissen zu erzielen, gibt es das Feld [.guihint]#Variant.#
+Wird die Anwendung `OnlineShop` etwa einmal auf Deutsch und einmal auf Englisch getestet (über entsprechende Parameter), könnten Sie hier entsprechende Kürzel verwenden.
+Im Monitoring gibt es dann Ergebnisse für `OnlineShop_de` und `OnlineShop_en.`
+
+Notwendig ist hingegen die Angabe unter [.guihint]#Relative path to test suite file or folder.#
+Die Pfadangabe ist relativ zum oben angegebenen Basisverzeichnis, also beispielsweise `mybot1\sample.robot` für `C:\robots\`.
+Alternativ kann hier auch ein Verzeichnis (mit mehreren `robot`-Dateien) angegeben werden, dann wäre es schlicht `mybot`. 
+
+.Sequenz für die Ausführung von Suiten 
+image::robotmk_scheduler_03_csm.png[alt="Bezeichnung und Pfad der Suite."]
+
+Weiter geht es mit der [.guihint]#Execution configuration.#
+Unter [.guihint]#Limit per attempt# legen Sie fest, wie lange eine Test-Suite maximal laufen darf -- pro Versuch.
+Mit [.guihint]#Robot Framework re-executions# können Sie nun Robot Framework anweisen, Test-Suites bei fehlgeschlagenen Tests komplett oder inkrementell zu wiederholen.
+Wenn die einzelnen Tests einer Test-Suite unabhängig voneinander sind, bietet sich die inkrementelle Strategie an, um Zeit zu sparen.
+Testet die Test-Suite hingegen eine logische Abfolge, etwa "Login > Aufruf Produktseite > Produkt in den Warenkorb > Checkout", muss die Test-Suite natürlich komplett neu abgearbeitet werden.
+Am Ende gibt es immer nur ein Ergebnis.
+
+Bei kompletten Wiederholungen werden für das Endergebnis nur in sich abgeschlossene Suite-Ergebnisse berücksichtigt: Schlägt ein Test bei der letzten Wiederholung fehl, wird die Test-Suite als Fehlschlag gewertet.
+Bei inkrementellen Wiederholungen setzt sich das Endergebnis aus den besten Teilergebnissen zusammen: Laufen einige Tests erst im dritten Anlauf erfolgreich durch, wird auch das Endergebnis als Erfolg gewertet.
+Zur Erinnerung: Durch die Kombination aus Versuchen und maximalen Laufzeiten aller Pläne einer Sequenz wird deren minimales Ausführungsintervall bestimmt.
+
+.Fehlgeschlagene Tests/Suiten können wiederholt werden
+image::robotmk_scheduler_04_csm.png[alt="Konfiguration von Ausführungslaufzeiten und -wiederholungen."]
+
+
+Standardmäßig ist die Ausführung via Conda unter [.guihint]#Automated environment setup# aktiviert, für die Sie drei Werte eintragen müssen.
+Zum einen benötigt Conda die Angabe, wo die Datei `robotmk-env.yaml` liegt.
+Diese ist für den Aufbau der Python-Umgebung verantwortlich, also die Installation von Python und Abhängigkeiten.
+Diese Angabe ist relativ zum Basisverzeichnis, das Sie oben unter [.guihint]#Relative path to test suite file or folder# gesetzt haben.
+Die YAML-Dateien können durchaus in Unterverzeichnissen gespeichert werden, Best-Practice ist aber das oberste Suite-Verzeichnis.
+Für das obige Basisverzeichnis `C:\robot\` und das Suite-Verzeichnis `C:\robot\mybot1` ist es entsprechend `mybot1\robotmk-env.yaml`.
+
+Es folgt die Pfadangabe für die `robotmk-setup.yaml`, die Anweisungen enthält, die nach dem Bau der Conda-Umgebung ausgeführt werden sollen -- natürlich nur, wenn Sie diese Datei auch nutzen.
+
+Beim folgenden Zeitlimit [.guihint]#Environment build timeout# für den Bau der Python-Umgebung sollten Sie bedenken, dass bisweilen größere Datenmengen heruntergeladen und eingerichtet werden müssen.
+Insbesondere für die benötigten Browser fallen hier schnell einige Hundert Megabyte an -- allerdings nur beim ersten Durchlauf.
+
+////
+ML: no caching (yet)
+Conda baut Umgebungen nur dann neu auf, wenn sich der Inhalt der `robotmk-env.yaml` geändert hat.
+////
+
+.Zeitlimit für den Aufbau virtueller Umgebungen
+image::robotmk_scheduler_05_csm.png[alt="RCC-Konfiguration der Suite."]
+
+Unter [.guihint]#Robot Framework parameters# haben Sie die Möglichkeit, einige der Kommandozeilenparameter von Robot Framework (die auch der Befehl `robot --help` anzeigt) sowie Umgebungsvariablen zu nutzen.
+Sollten Sie weitere Parameter nutzen wollen, hilft die Option [.guihint]#Argument files.#
+Eine hier angegebene Datei kann beliebige robot-Parameter beinhalten.
+Weitere Informationen über die einzelnen Parameter bekommen Sie über die Inline-Hilfe.
+
+Für unser Beispielprojekt wird lediglich die Option [.guihint]#Variables# aktiviert und eine Variable `MYVAR` mit dem Wert `My Value` gesetzt.
+Sie erinnern sich an den Befehl `Log ${MYVAR}` oben in der Datei `tests.robot`?
+Dies ist die zugehörige Referenz.
+
+.Einige Optionen des `robot`-Befehls
+image::robotmk_scheduler_06_csm.png[alt="Kommandozeilenparameter von Robot Framework."]
+
+Besonderes Augenmerk verdient die Option [.guihint]#Secret environment variables,# da sie keine originäre Robot-Framework-Funktion ist.
+Sie können hier geheime Umgebungsvariablen setzen, gedacht für Passwörter im Zusammenspiel mit der Robot-Framework-Bibliothek `CryptoLibrary`.
+Die hier gesetzten Variablen tauchen nicht in Logs auf, werden allerdings im Klartext in die {CMK}-Konfigurationsdateien auf den jeweiligen Test-Hosts geschrieben.
+
+.Geheime Passwörter für die CryptoLibrary
+image::robotmk_scheduler_06b_csm.png[alt="Option für geheime Umgebungsvariablen im Robotmk-Scheduler."]
+
+Am Ende der Suite-Konfiguration gibt es noch drei weitgehend selbsterklärende Optionen.
+
+Die erste Option gibt es exklusiv für Windows-Hosts.
+[.guihint]#Execute plan as a specific user# ermöglicht es, Robotmk im Kontext eines bestimmten Nutzerkontos auszuführen.
+Hintergrund: Standardmäßig wird Robotmk im Kontext des {CMK}-Agenten ausgeführt (link:https://learn.microsoft.com/de-de/windows/win32/services/localsystem-account[LocalSystem-Konto^]), der keine Berechtigung für den Zugriff auf den Desktop hat.
+Hier kann nun ein Nutzer angegeben werden, der permanent an einer Desktop-Sitzung angemeldet sein muss und entsprechend Zugriff auf grafische Desktop-Anwendungen hat.
+
+Aber nicht zu voreilig: Browser bilden hier eine Ausnahme!
+Diese können headless laufen und Webseiten rendern.
+Das Häkchen für einen spezifischen Nutzer sollten Sie wirklich nur setzen, wenn eine dedizierte Desktop-Anwendung abseits von Browsern gestartet wird -- nicht zuletzt aus Sicherheitsgründen.
+
+Mit [.guihint]#Assign plan/test result to piggyback host# lassen sich die Ergebnisse des Plans/Tests einem anderen Host zuweisen.
+Testet Robot Framework zum Beispiel den Bestellprozess eines Online-Shops, ließen sich die Ergebnisse so dem zugehörigen Webserver zuweisen.
+
+Jeder Testdurchlauf produziert Daten, die unter `C:\ProgramData\checkmk\agent\robotmk_output\working\suites\` abgelegt werden.
+Standardmäßig werden die Ergebnisse der letzten 14 Tage behalten, allerdings sollten Sie bedenken, dass sich hier schnell große Datenberge auftürmen.
+Pro Durchlauf fallen mindestens knapp 500 Kilobytes Daten an -- mit komplexeren Test-Suites und beispielsweise eingebetteten Screenshots können es aber auch schnell einige Megabyte sein.
+Je nach Ausführungsintervall, Größe des Reports und Anforderungen an Ihre Dokumentation sollten Sie hier eingreifen.
+
+.Automatisches Aufräumen der vielen anfallenden Daten
+image::robotmk_scheduler_07_csm.png[alt="Optionen für Nutzerkontext, Host-Zuweisung und automatische Aufräumarbeiten."]
+
+Hier angelangt, könnten Sie nun weitere Pläne in dieser Sequenz oder weitere Sequenzen erstellen.
+
+Am Ende warten noch zwei Optionen, die sich wiederum auf die komplette Robotmk-Scheduler-Konfiguration beziehen.
+
+[.guihint]#Conda configuration# erlaubt die Angabe von Proxy-Servern, TLS- und SSL-Zertifikaten sowie davon auszunehmende Hosts.
+
+.Optionen für Proxys und Zertifikate
+image::robotmk_scheduler_08a_csm.png[alt="Option eine Vorlaufszeit für den Scheduler-Start."]
+
+Sehr nützlich kann auch [.guihint]#Grace period before scheduler starts# sein: Der Scheduler startet zusammen mit dem {CMK}-Agenten noch vor der Desktop-Anmeldung -- was freilich dazu führt, dass etwaige Tests auf dem Desktop fehlschlagen müssen.
+Über eine Vorlaufzeit lässt sich der Start manuell verzögern.
+
+.Eine Vorlaufzeit verhindert Fehlschläge
+image::robotmk_scheduler_08b_csm.png[alt="Option eine Vorlaufszeit für den Scheduler-Start."]
+
+Damit ist die Konfiguration abgeschlossen und Sie können einen neuen xref:wato_monitoringagents#bakery[Agenten mit dem Plugin backen] und anschließend verteilen, manuell oder über die xref:agent_deployment#[automatischen Agenten-Updates.]
+
+
+==== Daten in der Agentenausgabe
+
+Die Ausgabe im Agenten ist recht umfangreich:
+In mehreren Sektionen werden Fehlermeldungen, Status, Konfiguration und Testdaten übermittelt.
+Letztere finden sich in der Sektion `robotmk_plan_execution_report`, hier ein stark gekürzter Auszug:
+
+.mysite-robot-host-agent.txt
+[{file},highlight=13;47]
+----
+<<<robotmk_plan_execution_report:sep(0)>>>
+
+{
+  "plan_id": "myapp1_mybot1",
+  "timestamp": 1770825600,
+  "attempts": [
+    {
+      "index": 1,
+      "outcome": "AllTestsPassed",
+      "runtime": 0
+    }
+  ],
+  "rebot": {
+    "Ok": {
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n
+<robot generator=\"Rebot 7.3 (Python 3.12.3 on win32)\" generated=\"2026-02-11T17:00:00.879104\" rpa=\"false\" schemaversion=\"5\">\r\n
+  <suite id=\"s1\" name=\"Mybot1\" source=\"C:\\Users\\User\\mybot1\">\r\n
+    <suite id=\"s1-s1\" name=\"Sample\" source=\"C:\\Users\\User\\mybot1\\sample.robot\">\r\n
+      <test id=\"s1-s1-t1\" name=\"Test1\" line=\"10\">\r\n
+        <kw name=\"Show Greeting\">\r\n
+          <kw name=\"Log\" owner=\"BuiltIn\">\r\n
+            <msg time=\"2026-02-11T17:00:00.452281\" level=\"INFO\">
+              Hello World!
+            </msg>\r\n
+            <arg>Hello World!</arg>\r\n
+            <doc>Logs the given message with the given level.</doc>\r\n
+            <status status=\"PASS\" start=\"2026-02-11T17:00:00.452281\" elapsed=\"0.000000\"/>\r\n
+          ...
+
+  <statistics>\r\n
+    <total>\r\n
+      <stat pass=\"1\" fail=\"0\" skip=\"0\">All Tests</stat>\r\n
+    </total>\r\n
+    <tag>\r\n
+    </tag>\r\n
+    <suite>\r\n
+      <stat name=\"Mybot1\" id=\"s1\" pass=\"1\" fail=\"0\" skip=\"0\">Mybot1</stat>\r\n
+      <stat name=\"Sample\" id=\"s1-s1\" pass=\"1\" fail=\"0\" skip=\"0\">Mybot1.Sample</stat>\r\n
+    </suite>\r\n
+  </statistics>\r\n
+
+  <errors>\r\n
+  </errors>\r\n
+
+</robot>\r\n",
+
+      "html_base64": "PCFET0NUWVBFIGh0bWw+DQo8aHRtb...
+	 ...
+----
+
+Interessant sind hier vor allem zwei Bereiche.
+Zum einen `rebot`: Das Tool `rebot` hat den eigentlichen Statusbericht für Robot Framework aus gegebenenfalls mehreren Teilergebnissen (daher auch re-bot) produziert.
+Zum anderen die letzte Zeile `html_base64`: Danach folgen die HTML-Berichte von Robot Framework base64-kodiert.
+Auch Screenshots, die über Tests angefertigt werden, werden auf diese Weise übertragen -- entsprechend umfangreich kann die Ausgabe/Datenmenge im Agenten werden.
+
+
+==== Daten im Monitoring
+
+Sobald der Robotmk-Scheduler und die Test-Suite durchgelaufen sind, wird die xref:glossar#service_discovery[Service-Erkennung] drei neue Services hervorbringen: 
+
+.Die neu erkannten Robotmk-Services
+image::robotmk_scheduler_09_csm.png[alt="Robotmk-Services im Monitoring."]
+
+Der Service [.guihint]#RMK Scheduler Status# existiert einmalig und unmittelbar nach der Verteilung.
+Die Services für Pläne und Tests, hier [.guihint]#RMK myapp1_mybot1 Plan# und [.guihint]#RMK myapp1_mybot1 Test: /Sample: Test1,# kommen ins Monitoring, sobald die zugehörigen Suites ein erstes Mal durchgelaufen sind.
+
+
+[#serviceconfig]
+=== Service-Regeln konfigurieren
+
+==== Regel für Plan-Status anlegen
+
+Zur Erinnerung: In der Agentenregel oben wurden maximale Laufzeiten für Pläne festgelegt.
+Mit der Regel [.guihint]#Robotmk plan# lassen sich diese Laufzeiten auf zwei Arten auswerten.
+
+Zum einen können Sie den Service etwa auf {CRIT} setzen, wenn ein Ausführungsversuch die 90 Prozent des gesetzten Schwellwerts überschreiten -- über die Option [.guihint]#Runtime-limit ratio (peak attempt).#
+
+.Schwellwerte für Statuswechsel aufgrund von Laufzeiten
+image::robotmk_service_suite_status_01_csm.png[alt="Konfigurationsdialog für Grenzwerte für Laufzeiten von Test-Suites."]
+
+Zum anderen lässt sich über [.guihint]#Runtime limit (total)# die gesamte Laufzeit auswerten, also die zusammengerechneten Zeiten aller Ausführungsversuche inklusive wiederholten Ausführungen ganzer Pläne oder einzelner Tests.
+Wenn Pläne nach Fehlschlägen einzelner Tests in Gänze oder inkrementell erneut ausgeführt werden sollen, kann die gesamte Ausführungszeit beträchtliche Abweichungen aufweisen.
+
+Im Kasten [.guihint]#Conditions# gibt es die Möglichkeit, die Regel auf bestimmte Pläne zu beschränken.
+
+.Optionale Beschränkung auf bestimmte Pläne
+image::robotmk_service_suite_status_02_csm.png[alt="Dialog mit Filter für bestimmte Pläne."]
+
+
+==== Regel für Test-Status anlegen
+
+Auch für einzelne Tests in den Test-Suites lassen sich weitere Daten ins Monitoring holen, über die Regel [.guihint]#Robotmk test.#
+Hier finden Sie wieder die Möglichkeit, Laufzeiten zu überwachen, sowohl von Tests als auch von Keywords.
+Die Überwachung von Keywords ist dabei eine {CMK}-eigene Funktion.
+Daher könnte auch der Suite-interne Status im Robot-Framework-Bericht `OK` sein, weil die Test-Suite innerhalb der maximal erlaubten Laufzeit verarbeitet wurde -- in {CMK} jedoch {WARN} oder {CRIT}, weil schon bei zum Beispiel 80 Prozent dieser maximal erlaubten Laufzeit ein Statuswechsel stattfindet.
+
+Zudem können über die Option [.guihint]#Enable metrics for high-level keywords# Metriken für übergeordnete Keywords erzeugt werden.
+Nützlich ist dies insbesondere dann, wenn Ihre Test so organisiert sind, dass die übergeordneten Keywords das „Was“ beschreiben und die darunter liegenden Keywords das „Wie“ -- so bekommen Sie abstraktere Auswertungen.
+
+Hier im Beispiel liegen die Schwellwerte für die maximale Laufzeit eines Tests bei 2 und 4 Sekunden.
+Die Auswirkungen werden Sie unten im Kapitel xref:#monitoring[Robotmk im Monitoring] sehen.
+
+.Über Keyword-Metriken lässt sich das Monitoring ausbauen
+image::robotmk_service_test_status_01_csm.png[alt="Regel zum Überwachen von Keywords mit Beispielwerten."]
+
+Abermals gibt es im Kasten [.guihint]#Conditions# eine explizite Filtermöglichkeit, hier für einzelne Tests.
+
+.Optionale Beschränkung auf bestimmte Tests
+image::robotmk_service_test_status_02_csm.png[alt="Dialog mit Option zur Beschränkung auf Tests."]
+
+
+[#monitoring]
+=== Robotmk im Monitoring
+
+Im Monitoring finden Sie Services für den Status des Robotmk-Schedulers sowie der einzelnen Pläne und Tests -- natürlich auch, wenn Sie keine separaten Service-Regeln angelegt haben.
+
+==== Scheduler-Status
+
+Der Service [.guihint]#RMK Scheduler Status# ist {OK}, wenn der Scheduler anläuft und erfolgreich die Ausführungsumgebungen bauen konnte.
+
+// ML: rework when cache is implemented
+
+.Micromamba konnte die Umgebungen aufbauen -- in 33 Sekunden
+image::robotmk_monitoring_scheduler_csm.png[alt="Status des Schedulers im Monitoring."]
+
+Hier im Bild sehen Sie den Hinweis [.guihint]#Environment build took 33 seconds.#
+Hier handelt es sich nicht um den ersten Bau der Umgebung, daher kann Micromamba zuvor heruntergeladene Pakete wiederverwenden.
+Der erste Bau ohne Cache hätte hier deutlich länger gedauert.
+
+
+==== Plan-Status
+
+Der Status eines Plans wird in einem Service wiedergegeben, der nach Applikationsnamen und Suite benannt ist, beispielsweise [.guihint]#RMK myapp1_mybot1 Plan.#
+
+.Die Ausführung eines Plans -- vor allem relevant für Administratoren
+image::robotmk_monitoring_suite_csm.png[alt="Status der Test-Suite im Monitoring.",fullscreen=1]
+
+
+==== Test-Status
+
+Wirklich interessant wird es bei der Auswertung der Tests.
+Im Bild sehen Sie nun die Auswirkung der oben gesetzten Schwellwerte für die Laufzeit von Tests -- hier die 2 Sekunden für den Zustand {WARN}.
+Da im Test selbst die Anweisung `Sleep 3 Seconds` schon für eine längere Laufzeit sorgt, muss dieser Service hier auf {WARN} gehen, obwohl der Test erfolgreich verlaufen ist.
+Dass der Test erfolgreich verlaufen ist, zeigt der Bericht von Robot Framework, den Sie über das icon:icon_log[Alt="Log-Icon."] Log-Symbol bekommen.
+
+.Ergebnisse eines konkreten Tests -- vor allem relevant für Entwickler
+image::robotmk_monitoring_test_csm.png[alt="Status des Tests im Monitoring.",fullscreen=1]
+
+Der Bericht zeigt nun klar und deutlich, dass Test und Test-Suite erfolgreich durchgelaufen sind.
+
+.Der Robot-Framework-Log, hier im optionalen Dark-Mode
+image::robotmk_monitoring_report_01_csm.png[alt="Robot-Framework-Bericht für Test-Suite 'Mybot'."]
+
+Ganz unten in den Daten sehen Sie auch die einzelnen Keywords, hier zum Beispiel `Log ${MYVAR}` samt dem in {CMK} für `MYVAR` gesetzten Wert `My value`.
+
+.Die Log-Datei lässt sich bis auf kleinste Details ausklappen
+image::robotmk_monitoring_report_02_csm.png[alt="Robot-Framework-Bericht auf Ebene der Keywords."]
+
+
+==== Dashboards
+
+Natürlich können Sie sich wie gewohnt eigene Dashboards bauen -- unter [.guihint]#Monitor > Synthetic Monitoring# finden Sie aber auch zwei eingebaute Dashboards.
+
+.Das komplette {CMK} Synthetic Monitoring im Überblick (gekürzt)
+image::robotmk_dashboard_01.png[alt="Robotmk-Dashboard in der Weboberfläche.",fullscreen=1]
+
+*Voraussetzung:* Damit Dashboards funktionieren, muss die xref:inventory#[HW-/SW-Inventur] auf den betroffenen Hosts aktiviert sein.
+
+
+[#managedrobots]
+== Managed Robots
+
+Bislang sind wir von einem Szenario ausgegangen, in dem die Test-Suiten bereits auf den Test-Hosts bereitstehen.
+Mit dem Feature [.guihint]#Managed robots# lassen sich Robots jedoch auch zentral auf dem {CMK}-Server verwalten und per {CMK}-Agenten verteilen.
+
+Die ganze Konfiguration kennen Sie bereits von der obigen Vorgehensweise zu bereits existierenden Robots über die Regel [.guihint]#Robotmk scheduler (Windows|Linux).#
+
+Zusätzlich geben Sie lediglich die Archiv-Datei (siehe unten) mit dem gepackten Robot an.
+Hier im Bild sehen Sie das Upload-Feld für den Robot, darunter unter [.guihint]#Plan Settings# dieselben Optionen wie im Scheduler.
+Achten Sie oben auf den Namen unter [.guihint]#Properties.#
+Dieser ist obligatorisch, da der Robot später über diesen Namen im Scheduler konfiguriert wird.
+
+.Der Robot selbst wird einfach als Archiv übergeben
+image::robotmk_managed_robots_robot_csm.png[alt="Konfiguration eines gemanagten Robots."]
+
+Um einen solchen [.guihint]#Managed robot# einzusetzen, wird abermals die Regel [.guihint]#Robotmk scheduler (Windows|Linux)# genutzt.
+Aber statt hier die Ausführung des Robots zu planen, geben Sie unter [.guihint]#Sequence of plans# einfach nur den gewünschten, vorkonfigurierten Robot an.
+Bei Bedarf können Sie die Plan-Konfiguration des vorkonfigurierten Robots für diesen Einsatz hier dennoch anpassen.
+In der Praxis beschränkt sich das Feature also meist darauf, die bekannte Konfiguration auszulagern und Robot-Archivdateien per Agent verteilen zu lassen.
+
+.Der gemanagte Robot [.guihint]#mybot_managed# wird mit der Standard-Plan-Konfiguration geplant
+image::robotmk_managed_robots_scheduler.png[alt="Konfiguration des Schedulers mit einem gemanagten Robot."]
+
+Der Agent bringt die angegebenen Archive schließlich auf die gewünschten Hosts und legt sie im Agentenverzeichnis unterhalb von `robomk_output/managed` ab, wo sie dann entpackt und schlussendlich ausgeführt werden.
+
+
+=== Robot-Archiv erstellen
+
+Grundsätzlich könnten Sie einfach das komplette Robot-Verzeichnis mit den Standarddateien (`robotmk-env.yaml, robotkmk-setup.yaml, sample.robot` etc.) archivieren.
+
+Allerdings werden solche Tests häufig per Git verwaltet und folglich finden sich regelmäßig Dateien, die nicht mit verteilt werden sollen -- typischerweise verwaltet über eine `gitignore`-Datei.
+Als Hilfestellung für saubere Archive folgen hier zwei kleine Skripte für Windows und Linux, die Archive ohne die zu ignorierenden Dateien erstellen.
+Verstehen Sie diese Skripte lediglich als Hilfestellung und testen Sie die Funktionsweise für Ihr System vorab.
+
+[.tabs]
+====
+Windows::
++
+--
+[{powershell}]
+----
+PS C:\robots\mybot1> $FolderName = (Get-Item .).Name
+PS C:\robots\mybot1> git archive --format=zip -o "../$FolderName.zip" HEAD
+----
+
+--
+Linux::
++
+--
+[{shell}]
+----
+user@host:~/robots/mybot1$ FolderName="pass:[$](basename "$(pwd)")" && \
+    git archive --format=zip -o "../${FolderName}.zip" HEAD
+----
+--
+====
+
+
+
+[#kpi]
+== Monitoring von Key Performance Indicators (KPI)
+
+Oben haben Sie bereits gesehen, dass sich die Laufzeiten von High-Level-Keywords als Teil eines Tests mit überwachen lassen.
+Sie können aber auch beliebige Keywords als einzelne Services ins Monitoring holen.
+Sinnvoll ist das vor allem für hoch abstrahierende Nutzer-Keywords, die ihrerseits mehrere einfache (Standard-)Keywords wie `Click` oder `Log` aufrufen -- also im Grunde als _Funktionen_ genutzt werden.
+Für die Service-Erkennung stehen Ihnen zwei Varianten zur Verfügung: Muster in {CMK} und Marker in den Test-Suiten.
+
+Für die _Muster-basierte Erkennung_ werden die gewünschten Keywords als reguläre Ausdrücke per {CMK}-Regel hinterlegt.
+
+Für die _Marker-basierte Erkennung_ werden Marker direkt vor die Keywords in den Tests selbst geschrieben.
+Die Verarbeitung dieser Marker läuft über eine Robotmk-eigene Bibliothek.
+
+Egal wie die Keyword-Daten ins Monitoring kommen, dort müssen sie über die Service-Regel [.guihint]#Robotmk KPI monitoring# konfiguriert werden.
+
+
+[#kpipattern]
+=== Variante 1: Erkennung via Muster
+
+Für diese Variante müssen Sie keinerlei Veränderungen an Ihren Tests selbst vornehmen.
+Öffnen Sie einfach die Regel [.guihint]#Robotmk KPI discovery# und tragen Sie die zu überwachenden Keywords als reguläre Ausdrücke oder ganz konkrete Namen ein.
+
+.Konfiguration von Keywords als separate Services
+image::robotmk_kpi_pattern_csm.png[alt="Konfiguratin von Keywords als separate Services für Robotmk."]
+
+*Achtung:* Wenn der reguläre Ausdruck auf mehrere Keywords desselben Tests matcht, wird nur _ein_ Keyword erkannt und dessen Service-Status geht auf {UNKNOWN} (weil {CMK} freilich nicht weiß, welcher Treffer denn gemeint ist).
+
+
+[#kpimarker]
+=== Variante 2: Erkennung via Marker
+
+Für die Erkennung via Marker müssen Sie folgende Schritte durchführen:
+
+. Robotmk-Bibliothek installieren.
+. Robotmk-Bibliothek in der Suite importieren.
+. Marker-Keyword vor relevante Keywords setzen.
+
+Für die Installation muss die `robotmk-env.yaml` von oben mit `robotframework-robotmklibrary` erweitert werden.
+Änderungen gegenüber der obigen Suite sind gelb unterlegt:
+
+.C:\robots\mybot1\robotmk-env.yaml
+[{yaml},highlight=9]
+----
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10.12
+  - pip=23.2.1
+  - pip:
+     - robotframework==7.0
+     - robotframework-robotmklibrary
+----
+
+Die Test-Suite `sample.robot` muss um die Bibliothek (im Bereich `Settings`) sowie einen Marker erweitert werden.
+KPIs werden sich dabei häufig auf individuelle Nutzer-Keywords beziehen, daher hier eine Erweiterung um das Keyword `Foobar` (das lediglich das Standard-Keyword `Log` aufruft und seinerseits vom Testfall `My Test` aufgerufen wird).
+
+
+.C:\robots\mybot1\sample.robot
+[{file},highlight=3;17-18;24-25]
+----
+*** Settings ***
+# Import Libraries, Resource files, and other settings here
+Library             RobotmkLibrary
+
+*** Variables ***
+# Define variables here
+${MYVAR}    Hello Checkmk!
+
+*** Test Cases ***
+# One or more test cases
+
+Test1
+    Show Greeting
+
+*** Keywords ***
+# User-Defined keywords
+Foobar
+    Log    The foo barred!
+
+Show Greeting
+    Log  ${MYVAR}
+    Sleep    3
+    Log      Done.
+    Monitor Subsequent Keyword Runtime  discover_as=My user keyword
+    Foobar
+
+----
+
+
+
+Das Robotmk-Keyword `Monitor Subsequent Keyword Runtime` ist der Marker, um ({CMK} anzuweisen) das folgende Keyword (`Foobar`) zu überwachen; genauer gesagt dessen Laufzeit.
+Über das optionale Argument `discover_as` lässt sich hier ein individueller Name für den Service im Monitoring setzen -- das Keyword `Foobar` taucht folglich im Monitoring als Service namens [.guihint]#My user keyword# auf.
+
+Der große Vorteil gegenüber der Muster-basierten Erkennung: Ein und dasselbe Keyword lässt sich auch mehrfach innerhalb eines Tests ganz explizit überwachen.
+
+Hier das obige Beispiel, erweitert um zwei `Foobar`-Aufrufe:
+
+.C:\robots\mybot1\sample.robot
+[{file},highlight=26-29]
+----
+*** Settings ***
+# Import Libraries, Resource files, and other settings here
+Library             RobotmkLibrary
+
+*** Variables ***
+# Define variables here
+${MYVAR}    Hello Checkmk!
+
+*** Test Cases ***
+# One or more test cases
+
+Test1
+    Show Greeting
+
+*** Keywords ***
+# User-Defined keywords
+Foobar
+    Log    The foo barred!
+
+Show Greeting
+    Log  ${MYVAR}
+    Sleep    3
+    Log      Done.
+    Monitor Subsequent Keyword Runtime  discover_as=My user keyword
+    Foobar
+    Monitor Subsequent Keyword Runtime  discover_as=Foobar_2
+    Foobar
+    Monitor Subsequent Keyword Runtime  discover_as=Foobar_3
+    Foobar
+
+----
+
+Die drei Aufrufe des Keywords `Foobar` würden folglich als `My user keyword`, `Foobar_2` und `Foobar_3` im Monitoring auftauchen.
+
+
+=== Service-Regel konfigurieren
+
+Egal über welche der beiden Varianten die Keywords ins Monitoring kommen, der nächste Schritt ist immer die Konfiguration der Auswertung:
+Ab welcher Laufzeit sollen die Services auf {WARN} beziehungsweise {CRIT} gehen?
+Dazu legen Sie in der Regel [.guihint]#Robotmk KPI monitoring# die entsprechenden Level fest.
+
+.Service-Regel für die Auswertung von Keywords
+image::robotmk_kpi_service_rule.png[alt="Service-Regel für die Auswertung von Keywords."]
+
+
+=== Keywords im Monitoring
+
+Die Keyword-Services tauchen im Monitoring unter einem dieser beiden Muster auf:
+
+. Muster-basiert: [.guihint]#RMK myapp1_mybot1 Test: /Sample: My Test1 (cmk): Foobar#
+. Marker-basiert: [.guihint]#RMK myapp1_mybot1 Test: /Sample: My Test1 (rf): Foobar#
+
+Der Unterschied liegt also lediglich in der Herkunftsangabe in Klammern direkt vor dem Keyword.
+
+.Muster- und Marker-basierte Keywords im Monitoring
+image::robotmk_kpi_monitoring_csm.png[alt="Muster- und Marker-basierte Keywords im Monitoring."]
+
+Für das obige Bild mit zwei Foobar-Keyword-Services musste die Suite noch etwas erweitert werden:
+
+.C:\robots\mybot1\sample.robot
+[{file},highlight=21-23;30-31]
+----
+*** Settings ***
+# Import Libraries, Resource files, and other settings here
+Library             RobotmkLibrary
+
+*** Variables ***
+# Define variables here
+${MYVAR}    Hello Checkmk!
+
+*** Test Cases ***
+# One or more test cases
+
+Test1
+    Show Greeting
+
+*** Keywords ***
+# User-Defined keywords
+Foobar
+    Sleep    3
+    Log    The foo barred!
+	
+Barfoo
+    Sleep    11
+    Log    The End of Barfoo
+
+Show Greeting
+    Log  ${MYVAR}
+    Sleep    3
+    Log      Done.
+    Foobar
+    Monitor Subsequent Keyword Runtime  discover_as=Foobar
+    Barfoo
+
+----
+
+Die beiden Keywords `Foobar` und `Barfoo` tauchen beide unter dem Namen [.guihint]#Foobar# im Monitoring auf, sind aber unterscheidbar durch die Herkunftsangabe in Klammern.
+
+Das Beispiel mit *zwei* unterschiedlichen Keywords, die unter dem gleichen Namen geführt werden, dient vor allem der Verdeutlichung der Herkunftsangaben.
+
+Wie oben bereits erwähnt: Der eigentliche Anwendungszweck von `discover_as` liegt darin, *ein* Keyword mehrmals in einem Test aufzurufen und unterschiedlich zu benennen. 
+
+
+
+== Offline-Modus für Test-Umgebungen
+
+Standardmäßig kümmert sich Micromamba um den Aufbau der Umgebungen, indem es die YAML-Konfiguration ausliest und die entsprechenden Pakete und Abhängigkeiten aus dem Netz herunterlädt.
+
+Was aber, wenn die Hosts, auf denen die Tests laufen sollen, keinen oder sehr eingeschränkten Internetzugriff haben?
+
+{CMK}, genauer gesagt der Robotmk-Scheduler, kann hier weiterhelfen und Conda-Umgebungen auch ohne Internetverbindung aufbauen.
+Die Kurzversion: Die Umgebungen werden vorab auf einem beliebigen Rechner gebaut und anschließend als tgz-Archiv verteilt.
+
+Dank CSM ist das in vier simplen Schritten erledigt.
+
+*Schritt 1:* Damit die Verarbeitung eines gepackten Roboters funktioniert, muss die Konfigurationsdatei `robotmk-env.yaml` um den Eintrag `conda-pack` erweitert werden:
+
+.C:\robots\mybot1\robotmk-env.yaml
+[{yaml}]
+----
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12.3
+  - pip=23.2.1
+  - pip:
+    # Python packages installed via pip
+    - robotframework==7.3
+    - conda-pack
+----
+
+*Schritt 2:* Anschließend muss die Umgebung erneut gebaut und dann gepackt werden: 
+
+[{powershell}]
+----
+PS C:\mybot1> csm create
+PS C:\mybot1> csm pack
+----
+
+Das Ergebnis ist die Datei `mybot1.tar.gz`.
+
+*Schritt 3:* In {CMK} setzen Sie in der Regel [.guihint]#Robotmk scheduler (Windows|Linux)# die Option [.guihint]#Environment source# auf [.guihint]#Packed Conda environment# und geben entsprechend den Pfad zum Archiv `mybot1.tar.gz` an -- statt zur `robotmk-env.yaml` wie üblich.
+
+Dieselbe Konfiguration gilt natürlich für die Verwendung als [.guihint]#Managed robot.#
+
+
+// ML: Here was RCC offline
+== Debugging
+Der Robotmk Scheduler bietet zwei Möglichkeiten, etwaigen Problemen auf den Grund zu gehen -- also beispielsweise Fehlern beim Aufbau der Ausführungsumgebungen oder bei der Ausführung von Plänen generell.
+Der eine Weg führt über die xref:#log_inspection[Inspektion von Log-Dateien], der andere über eine explizite Debug-Funktion des Schedulers, die die xref:#execution[Ausführung einzelner Pläne] erlaubt (seit {v25}).
+
+
+[#log_inspection]
+=== Log-Inspektion
+Der einfachste Weg, die Ereignisse im Synthetic Monitoring zu beobachten, ist die Verfolgung der Log-Dateien in einer Live-Ansicht.
+Die genauen Speicherpfade finden Sie unten in der Übersicht.
+
+Unter Linux bietet sich hierfür folgender Befehl an:
+
+[{shell}]
+----
+{c-user} journalctl -u robotmk-scheduler-daemon.service -f
+----
+
+
+Unter Windows könnten Sie beispielsweise Notepad++ oder VS Code nutzen, aber auch viele andere IDEs bieten die Möglichkeit, Dateiänderungen live mitzuverfolgen.
+
+Je nach Konfiguration Ihrer Pläne, Tests und Umgebungen kann dieser Weg natürlich einige Zeit dauern -- er dient hauptsächlich zur Verfolgung der regulären Scheduler-Aktivität.
+
+Alternativ können Sie den Scheduler auch manuell starten.
+Dafür muss dieser zuvor gestoppt und im Monitoring sollte eine xref:basics_downtimes[Wartungszeit] gesetzt werden, um Auswirkungen auf das Monitoring und einen automatischen Neustart des Schedulers zu verhindern.
+
+Unter Windows stoppen Sie den Service mit Hilfe des Task-Managers, unter Linux lassen sich Stop und Start im Terminal durchführen:
+
+
+[.tabs]
+====
+Windows::
++
+--
+Öffnen Sie zunächst den Task-Manager (`taskmgr.exe`) und stoppen Sie den Scheduler.
+[{powershell}]
+----
+PS C:\> C:\ProgramData\checkmk\agent\bin\robotmk_scheduler.exe -vv `
+          C:\ProgramData\checkmk\agent\config\robotmk.json
+----
+
+--
+Linux::
++
+--
+[{shell}]
+----
+{c-user} systemctl stop robotmk-scheduler-daemon.service
+{c-user} /usr/lib/check_mk_agent/robotmk/robotmk_scheduler -vv \
+              /etc/check_mk/robotmk.json \
+----
+--
+====
+
+
+Über den manuellen Start des Schedulers haben Sie etwas mehr Kontrolle, sind aber immer noch auf Log-Dateien angewiesen und die komplette Synthetic-Monitoring-Konfiguration wird ausgeführt.
+
+
+[#execution]
+=== Adhoc-Ausführung von Plänen
+Der Scheduler unterstützt jedoch auch die manuelle und einmalige Ausführung einzelner Pläne.
+In diesem Fall erfolgt die Ausführung umgehend, etwaige Wartezeiten oder sonstige Ausführungslogik spielen hier keine Rolle.
+Zudem bekommen Sie die Informationen ohne Umweg über Log-Dateien direkt im Terminal geliefert.
+Auch bei der Adhoc-Ausführung müssen Sie den laufenden Scheduler-Service zunächst stoppen und sollten im Monitoring eine xref:basics_downtimes[Wartungszeit] setzen.
+
+Der Scheduler lädt auch in diesem Szenario die komplette Konfiguration, beschränkt die Ausführung aber auf den angegebenen Plan:
+
+[.tabs]
+====
+Windows::
++
+--
+Öffnen Sie zunächst den Task-Manager (`taskmgr.exe`) und stoppen Sie den Scheduler.
+[{powershell}]
+----
+PS C:\> C:\ProgramData\checkmk\agent\bin\robotmk_scheduler.exe -vv `
+          --plan myapp1_mybot1 `
+          C:\ProgramData\checkmk\agent\config\robotmk.json
+----
+
+--
+Linux::
++
+--
+[{shell}]
+----
+{c-user} systemctl stop robotmk-scheduler-daemon.service
+{c-user} /usr/lib/check_mk_agent/robotmk/robotmk_scheduler -vv \
+              --plan myapp1_mybot1 \
+              /etc/check_mk/robotmk.json
+----
+--
+====
+
+
+Die hier angebene Plan-ID entspricht der Angabe, die Sie in der Robotmk-Scheduler-Konfiguration unter [.guihint]#Sequence of plans > Application name# gemacht haben, gefolgt von einem Unterstrich und dem eigentlichen Bot-Namen, hier also beispielsweise `myapp1_mybot1` (so wie der Service auch im Monitoring auftaucht). 
+
+Wichtig ist auch das Argument `-vv` für die erweiterte Ausgabe, da der Scheduler ansonsten nur wenig Rückmeldung gibt.
+
+Ein letztes verfügbares Argument `--no-plan-result` verhindert, dass ein Resultat, also ein Robot-Framework-Bericht, in den entsprechenden Ordner kopiert wird -- so dass es lediglich lokal verbleibt.
+
+
+
+
+[#troubleshooting]
+== Troubleshooting
+
+=== Scheduler meldet `No Data`
+
+Wenn der Scheduler keinerlei Daten bekommt, hat der Bau der Umgebung vermutlich nicht funktioniert.
+Ein häufiger Grund dafür sind Netzwerkprobleme, aufgrund derer zum Beispiel bestimmte Abhängigkeiten nicht geladen werden können.
+Schauen Sie in diesem Fall in die zugehörige Log-Datei unter `C:\ProgramData\checkmk\agent\robotmk_output\working\environment_building` beziehungsweise `/var/lib/check_mk_agent/robotmk/scheduler/environment_building`.
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Windows
+	
+[cols="~,45",options="header"]
+|===
+|Pfad |Bedeutung
+|`C:\ProgramData\checkmk\agent\robotmk_output\working\plans\` |Log-Dateien und Ergebnisse der Suites
+|`C:\ProgramData\checkmk\agent\robotmk_output\working\environment_building` |Log-Dateien zum Aufbau virtueller Umgebungen
+// |`C:\ProgramData\checkmk\agent\robotmk_output\working\rcc_setup` |Meldungen der RCC-Ausführung
+|`C:\ProgramData\checkmk\agent\log\robotmk_scheduler_rCURRENT.log` |Log-Datei des Agentenplugins
+|`C:\ProgramData\checkmk\agent\bin\` |`micromamba.exe` und `robotmk_scheduler.exe`
+|`C:\ProgramData\checkmk\agent\plugins\` |Agentenplugin `robotmk_agent_plugin.exe`
+|===
+
+=== Linux
+	
+[cols="~,45",options="header"]
+|===
+|Pfad |Bedeutung
+|`/var/lib/check_mk_agent/robotmk/scheduler/plans` |Log-Dateien und Ergebnisse der Suites
+|`/var/lib/check_mk_agent/robotmk/scheduler/environment_building` |Log-Dateien zum Aufbau virtueller Umgebungen
+// |`/var/lib/check_mk_agent/robotmk/scheduler/rcc_setup` |Meldungen der RCC-Ausführung
+|`/usr/lib/check_mk_agent/robotmk/` |`micromamba` und `robotmk_scheduler`
+|`/usr/lib/check_mk_agent/plugins/` |Agentenplugin `robotmk_agent_plugin`
+|`/var/lib/check_mk_agent/robotmk/scheduler/managed/` |Ausführungsort for Managed Robots
+|`/usr/lib/check_mk_agent/managed_robots/` |Ablageort für Managed-Robots-Archive
+|===
+
+*Achtung:* Unter Linux legt der Robotmk-Scheduler keine eigene Log-Datei an (unter Windows die `robotmk_scheduler_rCURRENT.log`), sondern protokolliert via Agent und Syslog.
+Der zugehörige Befehl:
+
+[{shell}]
+----
+{c-user} journalctl -xu robotmk-scheduler-daemon.service
+----
+
+
