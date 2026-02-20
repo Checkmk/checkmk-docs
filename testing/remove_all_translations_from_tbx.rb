@@ -6,7 +6,8 @@ require "nokogiri"
 indata = File.read(ARGV[0])
 inxml = Nokogiri::XML.parse(indata)
 
-outdata = '<!DOCTYPE martif PUBLIC "ISO 12200:1999A//DTD MARTIF core (DXFcdV04)//EN" "TBXcdv04.dtd">
+outdata = '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE martif PUBLIC "ISO 12200:1999A//DTD MARTIF core (DXFcdV04)//EN" "TBXcdv04.dtd">
 <martif type="TBX" xml:lang="en">
     <martifHeader>
         <fileDesc>
