@@ -1,0 +1,606 @@
+// -*- coding: utf-8 -*-
+// IGNORE Usb Lsusb
+// NONASCII
+include::global_attr.adoc[]
+= Developing HW/SW inventory plug-ins
+:title: Developing HW/SW inventory plug-ins
+:description: If necessary, you can develop your own inventory plug-ins using Python. Read here to find out how to create and use a plug-in yourself.
+:experimental:
+
+{related-start}
+xref:devel_intro#[Developing extensions for {CMK}]
+xref:devel_check_plugins#[Developing agent-based check plug-ins]
+xref:inventory#[The HW/SW inventory]
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:agent_windows#[Monitoring Windows]
+xref:wato_services#[Understanding and configuring services]
+xref:cmk_commandline#[{CMK} on the command line]
+xref:mkps#[{CMK} extension packages (MKPs)]
+{related-end}
+
+
+// Anthony, please proofread also the description in line 6.
+
+// This block is outdated
+// delete from here
+[TIP]
+====
+This article is currently being prepared for publication. +
+Please be patient. Thank you! +
+By the way, the https://docs.checkmk.com/master/de/devel_inventory_plugins.html[German version] of this article has already been updated -- if that is an alternative for you.
+====
+// delete to here
+
+
+// This block is new
+// start translation
+////
+[#intro]
+== Einleitung
+
+Die xref:inventory#[HW/SW-Inventur] hilft, den Überblick über vorhandene Hardware zu behalten und jederzeit Kontrolle über installierte Software zu haben.
+{CMK} liefert fertige Plugins für viele Basis-Anwendungsfälle mit.
+Allerdings werden Sie in vielen Fällen bei spezieller Hard- und Software detailliertere Informationen ermitteln wollen.
+An dieser Stelle kommen eigene Plugins für die HW/SW-Inventur ins Spiel.
+
+Für diesen Artikel setzen wir voraus, dass Sie bereits Grundkenntnisse in der Programmierung von agentenbasierten Check-Plugins haben.
+Wo sich die Verwendung der Inventur-API nicht wesentlich von der Verwendung der Check-API unterscheidet, fallen die Erklärungen in diesem Artikel daher etwas spärlicher aus.
+Dafür weisen wir an Stellen mit signifikanten Unterschieden umso deutlicher auf diese hin. 
+
+[TIP]
+====
+Bitte berücksichtigen Sie die Differenzierung zwischen Check- und Inventur-Plugin.
+Check-Plugins eignen sich vorrangig für sich schnell ändernde Daten, Inventur-Plugins für selten geänderte Daten.
+In diesem Artikel verwenden wir zur Veranschaulichung ein übersichtlich gehaltenes Beispiel mit USB-Geräten.
+Wollen Sie beispielsweise sicherstellen, dass niemand an irgendeinen Rechner im Monitoring USB-Geräte anschließt, die nicht auf einer Positivliste stehen, ist dafür ein Check-Plugin geeigneter.
+====
+
+
+[#check_api_doc]
+=== Die Check-API-Dokumentation
+
+Die Inventur-API ist Teil der Check-API.
+Für den Zugriff auf die Dokumentation gilt dasselbe wie bei xref:devel_check_plugins#check_api_doc[agentenbasierten Check-Plugins].
+
+Sie können auf die mit Ihrer {CMK}-Instanz mitgelieferte Dokumentation zugreifen.
+Dazu navigieren Sie in der {CMK}-GUI zu [.guihint]#Help > Developer resources > Plug-in API references#.
+Wählen Sie im neuen Browserfenster in der linken Navigationsleiste [.guihint]#Agent based ("Check API") > Version 2# aus.
+Auch ohne laufende {CMK}-Instanz können Sie sich die Plugin-API-Dokumentation als Kopie auf link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.agent_based/index.html#version-2-cmk-agent-based-v2[docs.checkmk.com/plugin-api^] ansehen.
+
+
+[#preparation]
+== Vorbereitung
+
+Die Standardeinstellung von {CMK} sieht vor, Inventardaten nur einmal täglich zu aktualisieren.
+Dies steht natürlich im Widerspruch zu einer schnellen Sichtbarkeit von Ergebnissen bei eigenen Programmierversuchen.
+Daher raten wir zu zwei vorbereitenden Maßnahmen für mehr Geschwindigkeit ohne signifikante Systemlast:
+
+. Verzichten Sie bei dem Host, der die Daten für das neu zu erstellende Plugin liefert, auf das viel Last verursachende Plugin `mk_inventory`.
+. Setzen Sie für diesen Host das xref:inventory#set_interval[Ausführungsintervall des aktiven Checks] auf eine oder wenige Minuten. 
+
+[#agentplugin]
+== Das Agentenplugin
+
+Wenn Sie ein agentenbasiertes Check-Plugin um Inventur-Funktionalität erweitern wollen, können Sie möglicherweise eine für Ihr Check-Plugin geschriebene Agentensektion mitverwenden.
+Für unser Beispiel erstellen Sie eine eigene.
+Die Grundlage hierfür ist der Befehl `lsusb`.
+Ohne Parameter aufgerufen, gibt er eine Liste aller angeschlossenen USB-Geräte aus.
+Das könnte so aussehen:
+
+
+[{shell}]
+----
+{c-omd} lsusb
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 002 Device 002: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 003: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 004: ID 0bda:8153 Realtek Semiconductor Corp. RTL8153 Gigabit Ethernet Adapter
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 003 Device 002: ID 0c45:6a09 Microdia Integrated_Webcam_HD
+----
+
+Die hier verwendete Kurzausgabe zeigt in den ersten Feldern, an welchem Bus und Port ein Gerät angeschlossen ist.
+Es folgt – durch einen Doppelpunkt getrennt – zuerst die Hersteller-ID, dann die Geräte-ID.
+Der Rest der Zeile enthält beschreibenden Text.
+
+=== Das resultierende Skript
+
+Da {CMK} mit zeilenweisen Ausgaben gut klarkommt, genügen für das benötigte Check-Plugin drei Zeilen:
+
+./usr/lib/check_mk_agent/plugins/lsusb
+[{bash}]
+----
+#!/bin/bash
+echo '<<<lsusb_demo>>>'
+lsusb
+----
+
+Vergessen Sie nicht, das Plugin als ausführbar zu markieren:
+
+[{shell-raw}]
+----
+{c-root} chmod 0755 /usr/lib/check_mk_agent/plugins/lsusb
+----
+
+Falls der Host, auf dem Sie das Agenten-Plugin testen, eine virtuelle Maschine ist oder Sie nicht ständig Geräte entfernen und anschließen wollen, speichern Sie das folgende Beispiel einfach in einer Spool-Datei.
+Spool-Dateien werden in die Agentenausgabe aufgenommen und mit übertragen.
+Achten Sie daher darauf, dass die Datei mit einem Zeilenumbruch endet.
+
+[.copybutton]
+./var/lib/check_mk_agent/spool/lsusb.txt
+[{file}]
+----
+<<<lsusb_demo>>>
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 002 Device 002: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 003: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 004: ID 0bda:8153 Realtek Semiconductor Corp. RTL8153 Gigabit Ethernet Adapter
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 003 Device 002: ID 0c45:6a09 Microdia Integrated_Webcam_HD
+Bus 003 Device 004: ID 8087:0032 Intel Corp. AX210 Bluetooth
+Bus 003 Device 005: ID 0bda:5409 Realtek Semiconductor Corp. USB2.1 Hub
+Bus 003 Device 006: ID 0bda:5409 Realtek Semiconductor Corp. USB2.1 Hub
+Bus 003 Device 007: ID 0bda:1100 Realtek Semiconductor Corp. HID Device
+Bus 003 Device 071: ID 046d:c093 Logitech, Inc. M500s Optical Mouse
+Bus 003 Device 096: ID 1a40:0101 Terminus Technology Inc. Hub
+Bus 003 Device 108: ID 6964:0075 MT ID75 Rev
+Bus 003 Device 109: ID 0c45:636b Microdia USB 2.0 Camera
+Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+----
+
+Das Anschließen und Entfernen von USB-Geräten können Sie dann simulieren, indem Sie der Textdatei Zeilen hinzufügen oder welche entfernen.
+
+[#test_agent]
+=== Agent ausprobieren
+
+Testen Sie die Agentenausgabe lokal mit dem folgenden Befehl:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl dump | grep -A25 '^<<<lsusb'
+----
+
+Sie sollten nun je nach Zahl angeschlossener USB-Geräte (oder Zahl der Zeilen in der Spool-Datei) die Ausgabe von `lsusb` und ein paar Zeilen der folgenden Agentensektion sehen.
+Achten Sie auf den korrekten Zeilenumbruch am Ende der Agentensektion.
+
+[#inventory_plugin]
+== Das Inventur-Plugin
+
+Inventur-Plugins leben in der regulären xref:devel_check_plugins#scaffold[Verzeichnisstruktur] neben den normalen Check-Plugins.
+Sie können Inventur-Plugins entweder als separate Dateien ablegen, dann empfehlen wir, als Präfix `inventory_` zu verwenden.
+Oder Sie integrieren Inventur-Plugins in gemeinsamen Dateien mit Check-Plugins, dann verzichten Sie auf das Präfix ganz.
+Für welche Methode Sie sich entscheiden, sollten Sie von der Übersichtlichkeit und dem Bedarf nach gemeinsam verwendeten Funktionen abhängig machen.
+
+Um ein reines Inventur-Plugin zu erstellen, müssen Sie daher ein passendes Verzeichnis anlegen:
+
+[{shell}]
+----
+{c-omd} mkdir -p ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based
+{c-omd} cd ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based
+----
+
+
+[#scaffold]
+=== Ein minimales Plugin
+
+Sie können nun ein minimales Inventur-Plugin erstellen, welches Sie mit einem beliebigen Text-Editor bearbeiten:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes
+
+def inventory_lsusb_demo(section):
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Max standard": "3.2" },
+    )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+)
+----
+
+Der Aufbau ähnelt dem von xref:devel_check_plugins#check_plug-in[Check-Plugins].
+Auch das Inventur-Plugin importiert aus dem Namensraum `cmk.agent_based.v2`.
+Ein instanziiertes `CheckPlugin`-Objekt wird mit einer konkreten Check-Funktion verknüpft, die ein oder mehrere `Result`-Objekte via `yield` zurückgibt.
+Analog dazu wird ein instanziiertes `InventoryPlugin`-Objekt mit einer konkreten Inventory-Funktion verknüpft, die ein `Attributes`-Objekt via `yield` zurückgibt.
+
+Die `Attributes`, welche per `yield` zurückgegeben werden, implementieren das minimal sinnvolle Blatt eines Inventurbaumes:
+
+* Der Pfad (`path`) beschreibt den relevanten Knoten in der Hierarchie des Baums, hier [.guihint]#Hardware > Usb > General#
+* Die Schlüssel-Wert-Paare im Objekt `inventory_attributes` werden als Schlüssel-Wert-Tabelle dargestellt
+
+Testen Sie zunächst, ob das Plugin syntaktisch korrekt ist und bei der Inventur gestartet werden kann:
+
+[{shell-raw},highlight=8]
+----
+{c-omd} cmk-validate-plugins 
+Agent based plugins loading succeeded, Active checks loading succeeded, Special agents
+loading succeeded, Rule specs loading succeeded, Rule specs forms creation succeeded,
+Referenced rule specs validation succeeded, Loaded rule specs usage succeeded
+{c-omd} cmk -vv --inventory localhost | grep lsusb_demo
+<<<lsusb_demo>>> / Transition HostSectionParser -> HostSectionParser
+  HostKey(hostname='myhost', source_type=<SourceType.HOST: 1>)  -> Add sections: ['check_mk', 'local', 'lsusb_demo', ...]
+ lsusb_demo: ok
+ lsusb_demo: skipped (no data)
+----
+
+Ist das der Fall, aktualisieren Sie die Konfiguration für den Monitoring-Kern und starten dann Ihre Instanz neu:
+
+[{shell}]
+----
+{c-omd} cmk -U
+Generating configuration for core (type cmc)...
+Starting full compilation for all hosts
+ Creating global helper config...OK
+ Creating cmc protobuf configuration...OK
+{c-omd} omd restart
+Stopping crontab...OK
+Stopping dcd...killing 153645....OK
+Stopping apache...killing 153387.................OK
+Stopping cmc...killing 153300.....OK
+Stopping ui-job-scheduler...killing 153285...OK
+...
+----
+
+Ein Blick in das Inventar des Test-Hosts zeigt nun -- sobald der nächste reguläre Check erfolgt ist -- ein neues Blatt im Inventarbaum:
+
+
+[#parse_function]
+=== Die Parse-Funktion schreiben
+
+Agentensektionen ohne Angabe eines Separators werden vor der Übergabe an die Inventurfunktion anhand des Default-Separators (Leerzeichen) in eine zweidimensionale Liste von Tokens umgewandelt:
+Je Zeile entsteht eine Liste von Tokens.
+Jede dieser Listen wiederum ist Element einer Liste von Zeilen.
+Wird ein Separator angegeben, definiert dieser die Grenze zwischen Tokens.
+Das erleichtert beispielsweise die Verarbeitung von als CSV formatierten Daten.
+
+Eine Parse-Funktion wie bei xref:devel_check_plugins#parse_function[agentenbasierten Check-Plugins] ist nicht zwingend erforderlich.
+Dennoch kann die Verwendung einer separaten Parse-Funktion einige Vorteile haben.
+So erhöht sie Übersichtlichkeit und Erweiterbarkeit.
+Und wenn ein bereits vorhandenes Plugin eines agentenbasierten Checks weiterverwendet werden soll, stellt sich die Frage ohnehin nicht:
+Dann verwenden Sie einfach die vorhandene Parse-Funktion weiter.
+
+In unserem Beispiel interessiert nicht, wo ein USB-Gerät angeschlossen ist.
+Für das Plugin sollen die Hersteller- und Geräte-ID ermittelt werden (an sechster Stelle der Liste), sowie die Beschreibung (ab der siebten Stelle bis zum Ende der Liste).
+
+Während die maximal unterstützte USB-Version oben im simplen Beispiel noch einfach hart kodiert wurde, können Sie sich gerne Gedanken machen, wie Sie diese mittelfristig mit regulären Ausdrücken aus der Beschreibung ermitteln.
+Dafür wird die Beschreibung komplett benötigt, also alles ab dem siebten, bis zum letzten Wort der Liste:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+def parse_lsusb_demo(string_table):
+    parsed = { "devices": [] }
+    for line in string_table:
+        vendor = line[5].split(":")[0]
+        device = line[5].split(":")[1]
+        description = ""
+        for i in range(6, len(line)):
+            description = description + " " + line[i]
+        parsed["devices"].append({ "vendor": vendor, "device": device, "description": description })
+    return parsed
+----
+
+[#inventory_function]
+=== Die Inventurfunktion schreiben
+
+Hier können Sie ein wenig abkürzen: Im Gegensatz zu agentenbasierten Check-Plugins wird die Parse-Funktion nicht über die Erzeugung eines `AgentSection`-Objektes eingebunden, sondern muss aus der Inventurfunktion selbst aufgerufen werden.
+Das Prinzip des `yield` zur fortwährenden Übergabe von Elementen kennen Sie aus agentenbasierten Check-Plugins:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=2;9]
+----
+def inventory_lsusb_demo(section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        # FIXME: dynamically calculate from agent section
+        inventory_attributes = { "Max standard": "3.2" },
+    )
+    for d in section["devices"]:
+        yield TableRow(
+            path = [ "hardware", "usb", "devices" ],
+            key_columns = {
+                "vendor": d["vendor"],
+                "device": d["device"]
+            },
+            inventory_columns = {
+                "description": d["description"]
+            }
+        )
+----
+
+Hier wird pro Zeile der Ausgabe von `lsusb` ein Objekt des Typs `TableRow` zurückgegeben.
+Dieses enthält drei Spalten: Vendor- und Device-ID dienen gemeinsam als Schlüssel.
+Die dritte, rein informative Spalte enthält die Beschreibung.
+
+Schlüsselspalten haben die Besonderheit, dass sie zur Erkennung von Änderungen herangezogen werden, die wiederum im Monitoring zu einem Statuswechsel des Dienstes [.guihint]#HW/SW Inventory# führen können.
+Des weiteren müssen Schlüssel eindeutig sein.
+Weitere Zeilen mit derselben Kombination aus Vendor- und Device-ID werden folglich ignoriert.
+
+Neben Schlüssel- und Inventarspalten können Sie die Einträge der Tabelle zusätzlich mit Statusspalten (`status_columns`) und analog Statusattributen (`status_attributes`) beschreiben, welche den _Zustand_ eines Objektes abbilden.
+Für den Wert des Zustands stehen die einfachen Datentypen (`int`, `float`, `str`, `bool` oder `None`) zur Verfügung.
+Wollen Sie beispielsweise eine Tabelle erstellen, in der verzeichnet ist, welcher Anschluss (`Bus/Device`) belegt ist, dann können Sie `key_columns` (`Bus` und `Device`) und `status_columns` (hier: `bool`) verwenden.
+
+[#finished_plugin]
+=== Das fertige Plugin
+
+Das fertige Plugin fügt alles zusammen.
+Hier wird zusätzlich noch die `TableRow`-Klasse importiert:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=3]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes, TableRow
+
+def parse_lsusb_demo(string_table):
+    parsed = { "devices": [] }
+    for line in string_table:
+        vendor = line[5].split(":")[0]
+        device = line[5].split(":")[1]
+        description = ""
+        for i in range(6, len(line)):
+            description = description + " " + line[i]
+        parsed["devices"].append({ "vendor": vendor, "device": device, "description": description })
+    return parsed
+
+def inventory_lsusb_demo(section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Plugin version": "0.1.0" },
+    )
+    for d in section["devices"]:
+        yield TableRow(
+            path = [ "hardware", "usb", "devices" ],
+            key_columns = {
+                "vendor": d["vendor"],
+                "device": d["device"],
+            },
+            inventory_columns = {
+                "description": d["description"],
+            }
+        )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+)
+----
+
+
+[#rulesets]
+== Regelsätze für die Inventur
+
+Da die Inventur-API Teil der Check-Plugin-API ist, gestaltet sich die Erstellung und Anwendung von Regelsätzen exakt wie bei der Entwicklung regulärer Check-Plugins.
+Aus diesem Grund zeigen wir hier nur ein minimales Beispiel.
+
+=== Regelsatz definieren
+
+In der Ausgabe von `lsusb` tauchen einige Zeilen für Hubs (externe und Root-Hubs) auf.
+Diese Geräte ohne eigene Funktionalität erschweren es, den Überblick zu behalten.
+
+Daher sollen die Nutzenden die Möglichkeit haben, selbst zu entscheiden, ob Hubs erfasst werden sollen oder nicht.
+Die Einstellung sollen sie über eine Checkbox in einer Regel vornehmen können.
+
+Erstellen Sie hierfür den Ordner `rulesets` der Plugin-Familie:
+
+[{shell}]
+----
+{c-omd} mkdir -p ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets
+{c-omd} cd ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets
+----
+
+In diesem Ordner legen Sie nun den Regelsatz an:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets/ruleset_lsusb_demo_inventory.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.rulesets.v1 import Label, Title, Help
+from cmk.rulesets.v1.form_specs import (
+    BooleanChoice,
+    DefaultValue,
+    DictElement,
+    Dictionary,
+)
+from cmk.rulesets.v1.rule_specs import (
+    InventoryParameters,
+    Topic
+)
+from cmk.rulesets.v1 import Label
+
+def _parameter_form():
+    return Dictionary(
+        elements = {
+            "hubs": DictElement(
+                parameter_form = BooleanChoice(
+                    title = Title("USB hubs"),
+                    label = Label("Consider USB hubs in the inventory table"),
+                    prefill=DefaultValue(True),
+                ),
+                required = True,
+            ),
+        }
+    )
+
+rule_spec_lsusb_demo_inventory = InventoryParameters(
+    name = "lsusb_demo",
+    title = Title("Lsusb inventory demo"),
+    topic = Topic.GENERAL,
+    parameter_form = _parameter_form,
+)
+----
+
+Wenn Sie das Skript für den Regelsatz abgespeichert haben, validieren Sie es mit `cmk-validate-plugins` und starten Sie dann die Instanz mit `omd restart` neu.
+Dass `cmk-validate-plugins` vorhandene, aber nicht verknüpfte Regelsätze bemängelt, dürfen Sie an dieser Stelle ignorieren.
+Die Verknüpfung erfolgt im xref:#apply_ruleset[nächsten Schritt].
+
+Sie können die Regel jetzt in der GUI unter [.guihint]#Setup > Hosts > HW/SW inventory rules# einsehen und anpassen.
+Ist der Name einer Regel bekannt (hier: [.guihint]#Lsusb inventory demo#), können Sie diesen direkt ins xref:user_interface#search_setup[Suchfeld] tippen.
+Mit [.guihint]#Add rule# können Sie die Regel, die Sie soeben vorbereitet haben, anlegen und wie gewohnt auf Ordner oder Hosts mit von Ihnen gewählten Eigenschaften anwenden.
+
+[#apply_ruleset]
+=== Regelsatz anwenden
+
+Noch ist der Regelsatz nicht verknüpft.
+Um ihn anzuwenden, ergänzen Sie zwei weitere [.notranslate]#_Named Arguments_# bei der Erstellung der `InventoryPlugin`-Klasse.
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=6-7]
+----
+# ...
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+    inventory_default_parameters = { "hubs": True },
+    inventory_ruleset_name = "lsusb_demo",
+)
+----
+
+Zusätzlich muss der Inventur-Funktion als erstes Argument das Parameter-Dictionary übergeben werden.
+Hier ergänzen Sie auch einen regulären Ausdruck, um zu erkennen, welche Gerät-Beschreibungen mit „hub“ enden.
+Beachten Sie, dass Sie dafür eine weitere `import`-Zeile zu Beginn des Skripts einfügen müssen:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+# ...
+
+import re
+
+# ...
+
+def inventory_lsusb_demo(params, section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Plugin version": "0.1.0" },
+    )
+    h = re.compile('.*?hub$', re.IGNORECASE)
+    for d in section["devices"]:
+        if params['hubs'] or not h.match(d["description"]):
+            yield TableRow(
+                path = [ "hardware", "usb", "devices" ],
+                key_columns = {
+                    "vendor": d["vendor"],
+                    "device": d["device"],
+                },
+                inventory_columns = {
+                    "description": d["description"],
+                }
+            )
+# ...
+----
+
+
+[#extending]
+== Erweiterungsmöglichkeiten
+
+[#multiple_sections]
+=== Mehrere Sektionen abonnieren
+
+Im Beispiel haben Sie sich bisher an das Standardverhalten gehalten:
+Ein Inventur-Plugin abonniert eine Agentensektion, welche denselben Namen trägt, wie das Inventur-Plugin.
+Aber was tun, wenn Sie vorhandene Agentensektionen mitverwenden wollen, die bereits von einem vorhandenen Inventur-Plugin ausgewertet werden?
+Hier ist die Wahrscheinlichkeit hoch, dass bereits ein Inventur-Plugin existiert, das eben diesen Namen der Agentensektion verwendet.
+Klarheit schafft die Ausgabe von:
+
+[{shell}]
+----
+{c-omd} cmk -vv --inventory localhost
+Doing HW/SW Inventory on: localhost
+localhost:
++ INVENTORIZING
++ FETCHING DATA
+  Source: SourceInfo(hostname='localhost', ipaddress='127.0.0.1', ident='agent' ...)
+...
++ EXECUTING INVENTORY PLUGINS
+ mssql_instance: skipped (no data)
+ mssql_instance: skipped (no data)
+ azure_app_gateway: skipped (no data)
+ azure_app_gateway: skipped (no data)
+ redfish_firmware: skipped (no data)
+ redfish_firmware: skipped (no data)
+ redfish_firmware_hpe_ilo4: skipped (no data)
+ redfish_firmware_hpe_ilo4: skipped (no data)
+ robotmk: skipped (no data)
+ robotmk: skipped (no data)
+----
+
+In diesem Fall und dem Fall, dass ein Inventur-Plugin mehrere Agentensektionen auswerten soll, können Sie die abonnierten Sektionen als Liste angeben.
+Gehen wir beispielsweise davon aus, dass Sie zwei Agentensektionen auswerten wollen, die sich auf fiktionale Dinge beziehen:
+
+[.copybutton]
+./var/lib/check_mk_agent/spool/fictional.txt
+[{file}]
+----
+<<<zorg>>>
+ZF1 23.0
+<<<yoyodyne>>>
+Gnomovision 42.1
+----
+
+In diesem Fall müssen die abonnierten Agentensektionen explizit angegeben werden.
+Der Name des Plugins muss mit den Agentensektionen nicht mehr übereinstimmen:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "fictional",
+    sections = [ "yoyodyne", "zorg" ],
+    inventory_function = inventory_fictional,
+)
+----
+
+Die Inventurfunktion bekommt dann die String-Tabellen als Variablen nach dem Muster `section_sectionname` übergeben:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+def inventory_fictional(section_yoyodyne, section_zorg):
+    # Do something with the two two-dimensional arrays...
+----
+
+Das vollständige Plugin, welches die Versionen von link:https://www.gnu.org/licenses/old-licenses/gpl-2.0.html[Yoyodyne Gnomovision^] und link:https://fictionalcompanies.fandom.com/wiki/Zorg_Industries#Zorg_ZF-1_Pod_Weapon[Zorg ZF1^] im Inventarbaum abbildet, kann dann so aussehen:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes
+
+def inventory_fictional(section_yoyodyne, section_zorg):
+    yoyo = section_yoyodyne
+    zorg = section_zorg
+    yield Attributes(
+        path = [ "software", "fictional", "example" ],
+        inventory_attributes = { "Yoyodyne " + yoyo[0][0]: yoyo[0][1] },
+    )
+    yield Attributes(
+        path = [ "hardware", "fictional", "example" ],
+        inventory_attributes = { "Zorg " + zorg[0][0]: zorg[0][1] },
+    )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "fictional",
+    sections = [ "yoyodyne", "zorg" ],
+    inventory_function = inventory_fictional,
+)
+----
+////
+// end translation
