@@ -56,7 +56,7 @@ ifdef::onprem[]
 {cee-only}
 Für Funktionen, die es nur in den kommerziellen Editionen gibt, wie z.B. Service Level Agreement (SLA) oder Agentenbäckerei, werden die zugehörigen Methoden der REST-API auch nur in diesen Editionen angeboten.
 In der Dokumentation für die REST-API finden Sie für jede Funktion Hinweise dazu, in welchen Editionen sie verfügbar ist.
-// ES: WH erstellt ein Ticket, um sicherzustellen, dass diese Hinweise tatsächlich für jeden Endpunkt korrekt sind
+// ES: CMK-29526 blockiert hier nicht direkt, wir sollten aber dennoch sicherstellen, dass das Ticket erledigt wird, damit der obige Satz wirklich korrekt ist
 endif::[]
 
 [#api_doc]
@@ -85,6 +85,7 @@ Die Versionierung der REST-API für {CMK} ist unabhängig von der Versionierung 
 Änderungen von API-Funktionen -- in Form von Bug Fixes, kompatiblen Änderungen oder sogar als neue Major-Versionen mit inkompatiblen Änderungen -- können in jeder Patch-Version von {CMK} ausgeliefert werden.
 Hierüber werden Sie wie gewohnt über link:https://checkmk.com/de/werks[Werks^] informiert.
 // TK: Werk-Link ist hier besser als Glossar-Link. Kann man hier im Werk-Link auf Component=REST API vorfiltern?
+// ES: Bisher nicht möglich, aber vielleicht eines Tages: WD-1345
 
 Erscheint eine neue Major-Version der REST-API, können Sie vorübergehend weiterhin die vorige Version der REST-API nutzen.
 Abkündigungen veralteter Versionen der REST-API werden mit genügend Vorlauf bekanntgegeben.
@@ -103,9 +104,8 @@ Wie der Name schon andeutet, wird die `unstable`-Version nicht unterstützt und 
 Der Funktionsumfang dieser API-Version kann für jede {CMK}-Version unterschiedlich sein.
 ====
 // ES: blocked by CMK-29126: obigen Abschnitt editieren, sobald das tatsächliche Verhalten bekannt ist
+// ES: Querverweis zum neuen Abschnitt #unstable hier einfügen!
 // ES: blocked by CMK-31526?
-
-
 
 
 [#access]
@@ -335,8 +335,6 @@ In der obigen Tabelle finden Sie auch die Beispielwerte, die im Folgenden verwen
 
 [#making_requests]
 === Anfragen stellen per Skript
-
-// ES: Gesamte Anleitung durchspielen, dabei neue Screenshots erzeugen und genau darauf achten, ob hier in diesem Abschnitt Text geändert, gelöscht oder ergänzt werden muss
 
 Wir werden nun den Umgang mit der REST-API an einem übersichtlichen Beispiel demonstrieren:
 Sie erstellen einen Host mit seinen Services mit insgesamt vier Anfragen.
@@ -1245,40 +1243,49 @@ Einen Sonderfall stellt der HTTP-Status-Code `204` dar, der besagt, dass eine An
 Aber auch bei fehlgeschlagenen Anfragen lohnt sich ein Blick in das JSON-Objekt, das die API zurückgibt.
 Hier können Sie hilfreiche Informationen ablesen, die Ihnen helfen, dem zugrundeliegenden Problem auf die Spur zu kommen:
 
-// ES: TODO from here
+// ES: Es wäre schöner, wenn hier eine lesbarere Reihenfolge der Felder präsentiert würde, aber die API spuckt das JSON-Objekt nun einmal leider alphabetisch sortiert aus. Logische Reihenfolge fingieren für bessere Nachvollziehbarkeit, oder bei der originalen Reihenfolge bleiben im Sinne der Konsistenz mit der tatsächlichen Ausgabe? Die Frage gilt für beide Beispiele in diesem Abschnitt.
 [{shell}]
 ----
 {
-  "title": "The operation has failed.",
+  "detail": "There are changes from other users and foreign changes are not allowed in this API call.",
   "status": 401,
-  "detail": "There are changes from other users and foreign changes are not allowed in this API call."
+  "title": "The operation has failed."
 }
-xxx-status_code=401
 ----
 
 Je nach Fehler können die in der Ausgabe angezeigten Parameter unterschiedlich sein.
-Immer erhalten Sie aber in `status` den xref:http-status-code[HTTP-Status-Code] und in `title` eine Kurzbeschreibung der Fehlerursache.
+Immer erhalten Sie aber -- wie auch bei erfolgreichen Anfragen -- in `status` den xref:http-status-code[HTTP-Status-Code] und in `title` eine Kurzbeschreibung der Rückmeldung von der API.
 
 In den meisten Fällen zeigt Ihnen `detail`, wie der Name schon vermuten lässt, detaillierte Informationen an.
-Im obigen Beispiel erfahren Sie, dass es zwar ausstehende Änderungen in {CMK} gibt, diese aber von einem anderen Benutzer veranlasst wurden.
-Über die API können standardmäßig nur Änderungen aktiviert werden, die auch über die API durchgeführt wurden.
-// ES: Prüfen, ob das hier wirklich stimmt oder ob es darum geht, welcher _Benutzer_ die Änderungen getriggert hat
+Im obigen Beispiel erfahren Sie, dass es zwar ausstehende Änderungen in {CMK} gibt, diese aber nicht mit der durchgeführten API-Anfrage aktiviert werden dürfen.
+Über die API können standardmäßig nur Änderungen aktiviert werden, die erstens auch über die API durchgeführt wurden und zweitens vom gleichen Benutzer stammen wie dem, der die Aktivierung via API ausführt.
+Sie können dieses Verhalten durch explizites Setzen des Felds `force_foreign_changes` auf `True` überschreiben.
+// ES: Ist diese Zusatzinfo hier zuviel?
+
+// ES: Ergebnisse meiner Tests in einer Checkmk Pro (formerly Enterprise) 2.5.0-2026.02.16:
+////
+* cmkadmin2 legt Host via GUI an, cmkadmin ruft Skript auf -> fail
+* cmkadmin2 legt Host via GUI an, cmkadmin2 ruft Skript auf -> fail
+* cmkadmin legt Host via Skript an, cmkadmin2 ruft Skript auf -> fail
+* cmkadmin legt Host via Skript an, cmkadmin ruft Skript auf -> success
+* cmkadmin legt Host via Skript an, cmkadmin2 aktiviert via GUI -> success
+////
 
 Auch im nächsten Beispiel stecken die hilfreichen in den detaillierten Informationen:
 
 [{shell}]
 ----
 {
-  "title":"Bad Request",
-  "status":400,
-  "detail":"These fields have problems: host_name",
-  "fields":{
-    "host_name":[
-      "'my/host123' does not match pattern '^[-0-9a-zA-Z_.]+\\\\Z'."
+  "detail": "These fields have problems: host_name",
+  "fields": {
+    "host_name": [
+      "'my/host' does not match pattern '^[-0-9a-zA-Z_.]+\\\\Z'."
     ]
-  }
+  },
+  "status": 400,
+  "title": "Bad Request"
 }
-xxx-status_code=400
+
 ----
 
 Hier liegt das Problem darin, dass ein Parameterwert sich nicht an den gültigen Wertebereich hält (wegen eines Schrägstrichs im Host-Namen).
@@ -1286,55 +1293,6 @@ Hier liegt das Problem darin, dass ein Parameterwert sich nicht an den gültigen
 Die Anzahl der möglichen Fehler ist natürlich sehr viel länger als die beiden, die wir vorgestellt haben.
 An den gezeigten Beispielen sehen Sie aber, dass die REST-API in der Ausgabe meist genügend Informationen über die Ursache liefert und Ihnen so Anhaltspunkte für den Einstieg in die Analyse und die Fehlerbehebung gibt.
 
-////
-[#error_correction]
-=== Fehler korrigieren
-
-// ES: Dieser Abschnitt braucht eine bessere Überschrift!
-
-Im Gegensatz zu den bisher gezeigten Ausgaben bei erfolgreichen Kommandos per Skript, zeigt Ihnen die REST-API Fehler in der folgenden Art an:
-
-// ES: Szenario nachstellen (cmkadmin macht eine Änderung, automation versucht Changes zu aktivieren) -> bekomme ich dann in beiden Skriptvarianten den sprechenden Fehler, der hier versprochen wird?
-[{shell}]
-----
-{
-  "title": "The operation has failed.",
-  "status": 401,
-  "detail": "There are changes from other users and foreign changes are not allowed in this API call."
-}
-xxx-status_code=401
-----
-
-Je nach Fehler können die in der Ausgabe angezeigten Parameter unterschiedlich sein.
-Immer erhalten Sie aber in `status` den xref:http-status-code[HTTP-Status-Code] und in `title` eine Kurzbeschreibung der Fehlerursache.
-
-In den meisten Fällen zeigt Ihnen `detail`, wie der Name schon vermuten lässt, detaillierte Informationen an.
-Im obigen Beispiel erfahren Sie, dass es zwar ausstehende Änderungen in {CMK} gibt, diese aber von einem anderen Benutzer veranlasst wurden.
-Über die API können standardmäßig nur Änderungen aktiviert werden, die auch über die API durchgeführt wurden.
-// ES: Prüfen, ob das hier wirklich stimmt oder ob es darum geht, welcher _Benutzer_ die Änderungen getriggert hat
-
-Auch im nächsten Beispiel stecken die hilfreichen in den detaillierten Informationen:
-
-[{shell}]
-----
-{
-  "title":"Bad Request",
-  "status":400,
-  "detail":"These fields have problems: host_name",
-  "fields":{
-    "host_name":[
-      "'my/host123' does not match pattern '^[-0-9a-zA-Z_.]+\\\\Z'."
-    ]
-  }
-}
-xxx-status_code=400
-----
-
-Hier liegt das Problem darin, dass ein Parameterwert sich nicht an den gültigen Wertebereich hält (wegen eines Schrägstrichs im Host-Namen).
-
-Die Anzahl der möglichen Fehler ist natürlich sehr viel länger als die beiden, die wir vorgestellt haben.
-An den gezeigten Beispielen sehen Sie aber, dass die REST-API in der Ausgabe meist genügend Informationen über die Ursache liefert und Ihnen so Anhaltspunkte für den Einstieg in die Analyse und die Fehlerbehebung gibt.
-////
 
 [#unstable]
 == Die `unstable`-Version der API nutzen
