@@ -1,0 +1,73 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII ├─ └─ │ ● ○
+include::global_attr.adoc[]
+= Das {CMK} Metrik-Backend 
+:title: Das {CMK} Metrik-Backend
+:description: Das {CMK} Metrik-Backend bietet einen effizienten Hintergrundspeicher für Monitoringdaten in dynamischen Umgebungen
+:experimental:
+
+////
+{related-start}
+xref:snmp#[Monitoring via SNMP]
+xref:special_agents#[Special agents]
+ifdef::onprem[]
+xref:distributed_monitoring#[Distributed monitoring]
+endif::[]
+xref:ports#[Ports]
+{related-end}
+////
+
+[#intro]
+== Einleitung
+
+Bislang speicherte {CMK} Metriken in Round Robin Databases (kurz RRDs), Informationen zu Events in SQLite-Dateien und Inventardaten in JSON-Dateien.
+Allen gemeinsam ist, dass es sich um relativ simple Datei basierte Formate handelt, deren Größe und Performance sehr gut vorhersehbar sind und die für die Kernaufgaben genügend Flexibilität mitbringen.
+
+Allerdings erfüllen gerade RRDs nicht mehr alle Anforderungen eines modernen Monitoring-Systems mit vielen dynamischen Objekten.
+So ist zwar die Abfrage einer Metrik über einen definierten Zeitraum leicht möglich, aber komplexere Abfragen wie beispielsweise die Identifikation von Zeitspannen, in denen mehrere Metriken Anomalien aufwiesen, erfordern es, große Datenmengen herauszuziehen und separat zu verarbeiten.
+Zudem war der in {CMK} {v24} beschrittene Weg, OpenTelemetry-Daten auf "klassischem" Weg über einen Spezialagenten nach in {CMK} verfügbar zu machen, mit einem gewissen Overhead an Umwandlungs- und Kopiervorgängen behaftet.
+
+Aus diesen Gründen fiel für {CMK} {v25} die Entscheidung, zunächst für OpenTelemetry-Daten eine Spalten basierte (_column based_) Datenbank zu verwenden.
+Die Wahl fiel hier auf Clickhouse, da die Weitergabe vom OpenTelemetry Kollektor zur Datenbank sehr effizient vonstatten geht.
+Spalten basierte Datenbanken liefern eine sehr gute Performance wenn viele Werte einer Metrik ausgelesen werden sollen – ein typischer Anwendungsfall hierfür ist beispielsweise die Erzeugung von Graphen aus Metriken.
+
+In {CMK} {v25} kommt das Metrik-Backend nur für OpenTelemetry-Metriken zum Einsatz.
+Für künftige Versionen behalten wir uns vor, das Metrik-Backend auch für weitere Monitoringdaten ergänzend zu RRDs zu nutzen.
+Wo RRDs ihren Zweck zufriedenstellend erfüllen, wird {CMK} diese auch in Zukunft verwenden.
+
+== Einrichtung
+
+Beachten Sie, dass jegliche Verarbeitung von OpenTelemetry-_Metriken_ ein aktiviertes Metrik-Backend voraussetzt.
+Lediglich die Weiterleitung von OpenTelemetry-_Logs_ an die Event Console kommt ohne aus.
+
+Die Aktivierung führen Sie in den Global Settings durch.
+Sofern nicht abweichend festgelegt, verwendet {CMK} drei scheinbar zufällige hohe Ports für Einlieferung von Daten durch den OpenTelemetry Kollektor, die Abfrage von Daten und eine Web-UI als SQL-Konsole.
+Die verwendeten Ports werden dabei aus dem Namen der Instanz errechnet, sind also für gleich benannte {CMK}-Instanzen immer dieselben drei.
+Auf die Web-UI als SQL-Konsole können Sie verzichten.
+Allerdings kann diese bei Tests hilfreich sein, daher empfehlen wir, diese zumindest solange beizubehalten, bis Sie alle Tests abgeschlossen haben.
+
+[#distributed]
+=== Verteiltes Monitoring
+
+Derzeit sind keine Weiterleitungsmechanismen im verteilten Monitoring vorgesehen.
+Das bedeutet, wenn Sie OpenTelemetry-Metriken an OpenTelemetry-Kollektoren und damit Metrik-Backends von {CMK} Remote Instanzen schicken, diese auch nur dort als Insellösung eingesehen werden können.
+
+Für kommende Versionen von {CMK} evaluieren wir daher die Möglichkeit einer zentralen Instanz des Metrik-Backends und die Verwendung eines verteilten Clickhouse-Clusters.
+Details können Sie rechtzeitig der Roadmap-Dokumentation entnehmen.
+
+In {CMK} {v25} dürfte daher die  Verwendung von OpenTelemetry-Kollektor und des Metrik-Backends alleine auf der Zentralinstanz der pragmatischste Ansatz sein.
+Sollte dieser Ansatz aus Gründen der Netzwerksegmentierung nicht sinnvoll sein, können Sie OpenTelemetry-Kollektoren und Metrik-Backends als Insellösung auch auf Remote-Instanzen betreiben.
+Beachten Sie, dass in diesem Fall nur Daten, die auf dem Weg über xref:opentelemetry#special_agent_option[den Spezialagenten] nehmen, im verteilten Monitoring genutzt werden können.
+// MFS: Was ist mit DCD? Ich habe es noch nicht getestet.
+Die Verwendung von xref:opentelemetry#custom_graphs[benutzerdefinierten Graphen] ist nur an deren Quelle möglich.
+
+[#troubleshooting]
+=== Troubleshooting
+
+Ob Daten eingehen und diese mit erwarteten Metadaten gespeichert werden, können Sie in der SQL-Konsole von Clickhouse überprüfen.
+Hier sind die Tabellen `checkmk.metrics_samples_*` meist diejenigen, in denen Sie stöbern werden wollen.
+Unser Screenshot zeigt die Suche nach allen Tupeln aus 
+
+.Mit SQL-Grundlagenwissen können Sie herausfinden, ob erwartete Daten im Metrik-Backend landen
+image::metric_backend_sql_console.png[alt="Mit SQL-Grundlagenwissen können Sie herausfinden, ob erwartete Daten im Metrik-Backend landen",fullscreen=1]
