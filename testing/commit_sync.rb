@@ -63,10 +63,7 @@ end
 	"menu.asciidoc", # editing notes
 ]
 @ignore_tickets = [
-	"KNW-2016", # New edition macros
-	"KNW-2017", # New macros in context
 	"KNW-2043", # 2.5.0 only topic
-	"KNW-1836", # Devel inventory plugins
 ]
 @ignore_commits = [
 
