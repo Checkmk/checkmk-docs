@@ -909,39 +909,61 @@ Damit Sie hier mit `less` arbeiten können, müssen Sie Standardausgabe (STDOUT)
 
 Schlägt die Registrierung eines Hosts im Monitoring fehl, ohne dass überhaupt das Zertifikat angezeigt wird, hilft Kenntnis der involvierten Netzwerkkommunikation bei der Identifizierung des Problems -- und natürlich bei der Behebung.
 
-Nach Absetzen des Befehls `cmk-agent-ctl register` fragt der Agent Controller zunächst mittels REST-API den {CMK}-Server nach dem Port des Agent Receivers.
-Im zweiten Schritt wird eine Verbindung zum Agent Receiver aufgebaut, um das Zertifikat abzurufen.
-Sie können die erste Anfrage auf dem Host mit einem Programm wie `curl` simulieren:
+Um herauszufinden, warum die Registrierung nicht erfolgreich war, führen Sie die Registrierung noch einmal mit der zusätzlichen Option `-vv` durch.
+Dadurch werden Ihnen nicht nur Fehler, sondern auch zusätzliche Informationen und Debug-Nachrichten ausgegeben.
+Ist beispielsweise der {CMK}-Server vom Host aus nicht erreichbar, wird die Ausgabe etwa folgendermaßen aussehen:
 
-[{shell-raw}]
+[{shell}]
 ----
-{c-root} curl -v --insecure https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke
+{c-root} cmk-agent-ctl -vv register \
+--hostname mynewhost \
+--server cmkserver \
+--site mysite \
+--user agent_registration
+INFO [cmk_agent_ctl] starting
+INFO [cmk_agent_ctl] Loaded config from '"/var/lib/cmk-agent/cmk-agent-ctl.toml"', connection registry from '"/var/lib/cmk-agent/registered_connections.json"'
+DEBUG [reqwest::connect] starting new connection: pass:[https://cmkserver/]
+INFO [cmk_agent_ctl::site_spec] Failed to discover agent receiver port using https.
+DEBUG [cmk_agent_ctl::site_spec] https error: "Failed to discover agent receiver port from pass:[https://cmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror] sending request for url (pass:[https://cmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke])\nclient error (Connect)\ndns error\nfailed to lookup address information: Try again"
+DEBUG [reqwest::connect] starting new connection: pass:[http://cmkserver/]
+INFO [cmk_agent_ctl::site_spec] Failed to discover agent receiver port using http.
+DEBUG [cmk_agent_ctl::site_spec] http error: "Failed to discover agent receiver port from pass:[http://cmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror] sending request for url (pass:[http://cmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke])\nclient error (Connect)\ndns error\nfailed to lookup address information: Try again"
+ERROR [cmk_agent_ctl] Failed to discover agent receiver port from Checkmk REST API, both with http and https. Run with verbose output to see errors.
 ----
 
-Der Parameter `--insecure` weist `curl` hier an, keine Zertifikatsprüfung vorzunehmen.
-Dieses Verhalten entspricht dem Verhalten des Agent Controller an dieser Stelle.
-Die Antwort ist lediglich wenige Bytes groß und besteht aus der Port-Nummer des Agent Receiver.
-Bei der ersten Instanz auf einem Server wird die Antwort einfach `8000` lauten, bei der zweiten `8001` und so weiter.
+Nach Absetzen des Befehls `cmk-agent-ctl register` fragt der Agent Controller zunächst über die REST-API den {CMK}-Server nach dem Port des Agent Receivers.
+In der oben gezeigten Ausgabe ist zu erkennen, dass die Verbindung über die REST-API fehlgeschlagen ist, und zwar sowohl über https als auch über http.
+Logischerweise kann es an dieser Stelle mit der Registrierung nicht weitergehen.
+
+An diesem Punkt können Sie die Routing- oder Firewall-Einstellungen so verändern, dass der Zugriff vom Host auf den {CMK}-Server möglich ist.
+Wenn der zu registrierende Host einen HTTP-Proxy verwendet, weisen Sie `cmk-agent-ctl` mit der zusätzlichen Option `--detect-proxy` an, den systemweit konfigurierten Proxy zu nutzen.
+
+// ES: In einer früheren Version dieses Abschnitts wurde auch noch das Problem angedeutet, dass der von der REST-API verwendete Port von den Standard-Ports 443 (https) oder 80 (http) abweichen könnte. Mir ist nicht klar, unter welchen Bedingungen das so sein sollte, weil ich nirgends eine Einstellung für diesen Port finden kann. Wie kann ich diese Situation 1. provozieren und 2. einen Umgang damit empfehlen? Die Antworten interessieren mich auch für die aktualisierte Fassung von rest_api.asciidoc.
 
 ifdef::onprem[]
-Typische Probleme bei dieser Anfrage sind:
+Ist der {CMK}-Server erreichbar und die Registrierung schlägt dennoch fehl, dann liegt das Problem an einer anderen Stelle.
+Nach der Ermittlung des Ports für den Agent Receiver wird im zweiten Schritt eine Verbindung zum Agent Receiver aufgebaut, um das Zertifikat abzurufen.
 
-* Der {CMK}-Server ist vom Host aus gar nicht erreichbar.
-* Der von der REST-API verwendete Port weicht von den Standard-Ports 443 (https) oder 80 (http) ab.
-endif::[]
+Ist der Agent Receiver unter dem ermittelten Port nicht erreichbar, wird die Ausgabe etwa folgendermaßen aussehen:
 
-ifdef::saas[]
-Ein typisches Probleme bei dieser Anfrage ist, dass der {CMK}-Server vom Host aus gar nicht erreichbar ist.
-endif::[]
+[{shell}]
+----
+{c-root} cmk-agent-ctl -vv register \
+--hostname mynewhost \
+--server cmkserver \
+--site mysite \
+--user agent_registration
+INFO [cmk_agent_ctl] starting
+INFO [cmk_agent_ctl] Loaded config from '"/var/lib/cmk-agent/cmk-agent-ctl.toml"', connection registry from '"/var/lib/cmk-agent/registered_connections.json"'
+Attempting to register at cmkserver, port 8005. Server certificate details:
 
-Falls die obige Anfrage fehlschlägt, können Sie die Routing- oder Firewall-Einstellungen so verändern, dass der Zugriff möglich ist.
+ERROR [cmk_agent_ctl] Connection refused (os error 111)
+----
 
-Wenn der zu registrierende Host einen HTTP-Proxy verwendet, nutzt `curl` diesen, `cmk-agent-ctl` jedoch nicht in den Standardeinstellungen.
-Mit der zusätzlichen Option `--detect-proxy` weisen Sie `cmk-agent-ctl` an, den systemweit konfigurierten Proxy zu nutzen.
-
-ifdef::onprem[]
-Alternativ können Sie auf dem {CMK}-Server den Port des Agent Receiver auslesen und notieren.
-Führen Sie dazu den folgenden Befehl als Instanzbenutzer aus:
+Im gezeigten Beispiel versucht der Agent Controller, den Agent Receiver auf Port 8005 zu erreichen.
+// ES: Das Beispiel ist fingiert, kann diese Situation in der Realität wirklich unprovoziert entstehen?
+Die Fehlermeldung drückt eindeutig aus, dass diese Verbindung abgelehnt wurde.
+Sie können auf dem {CMK}-Server als Instanzbenutzer prüfen, welchem Port der Agent Receiver zugeordnet ist:
 
 [{shell-raw}]
 ----
@@ -949,36 +971,21 @@ Führen Sie dazu den folgenden Befehl als Instanzbenutzer aus:
 AGENT_RECEIVER: on
 AGENT_RECEIVER_PORT: 8000
 ----
+
 endif::[]
 
-Sie können nun den ermittelten Port bei der Registrierung direkt angeben und so die erste Anfrage via REST-API überspringen.
-Die Kommunikation findet dann ohne Umwege direkt mit dem Agent Receiver statt:
+ifdef::saas[]
+In {CE} wird dem Agent Receiver normalerweise der Port 8000 zugewiesen.
+endif::[]
+Den korrekten Port können Sie bei der Registrierung zusammen mit der {CMK}-Server-Adresse explizit angeben (`--server cmkserver:8000`), um sicherzustellen, dass der Agent Receiver erreicht wird.
+So wird die erste Anfrage via REST-API übersprungen, und die Kommunikation findet ohne Umwege direkt mit dem Agent Receiver statt.
 
-[{shell}]
-----
-{c-root} cmk-agent-ctl register \
-             --hostname mynewhost \
-             --server mycmkserver:8000 \
-             --site mysite \
-             --user agent_registration \
-             --password 'PTEGDYXBFXVGNDPRL'
-----
+Möglicherweise erhalten Sie trotz korrekter Port-Angabe die Fehlermeldung `Connection refused`.
+In diesem Fall können Sie wiederum die Routing- oder Firewall-Einstellungen so anpassen, dass der zu registrierende Host den {CMK}-Server auf dem benötigten Port (hier 8000) erreichen kann.
 
-Auch dieser Port 8000 muss vom Host aus erreichbar sein.
-Ist er das nicht, erhalten Sie die eindeutige Fehlermeldung:
-
-[{shell-raw}]
-----
-ERROR [cmk_agent_ctl] Connection refused (os error 111)
-----
-
-Analog zu Port 443
 ifdef::onprem[]
-(respektive 80)
-endif::[]
-oben können Sie jetzt die Routing- oder Firewall-Einstellungen so anpassen, dass der zu registrierende Host den {CMK}-Server auf dem Port des Agent Receiver (8000 oder 8001…) erreichen kann.
-
 Im Falle der Registrierung im Push-Modus gilt:
+endif::[]
 Hat die Registrierung funktioniert, wird auch der minütliche Transfer der Agentenausgabe erfolgreich sein.
 
 ifdef::onprem[]
@@ -987,6 +994,7 @@ endif::[]
 ifdef::saas[]
 Sollten Sicherheitsrichtlinien in Ihrer Umgebung den Zugriff auf den Agent Receiver nicht zulassen, ist {CE-saas} keine adäquate Lösung für das Monitoring dieses Hosts.
 endif::[]
+// ES: evtl. Querverweis auf Relay hier einfügen?
 
 
 [#agent_ctl_dump]
