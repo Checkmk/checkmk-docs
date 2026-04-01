@@ -1,0 +1,598 @@
+// -*- coding: utf-8 -*-
+// IGNORE Usb Lsusb
+// NONASCII
+include::global_attr.adoc[]
+= Developing HW/SW inventory plug-ins
+:title: Developing HW/SW inventory plug-ins
+:description: If necessary, you can develop your own inventory plug-ins using Python. Read here to find out how to create and use a plug-in.
+:experimental:
+
+{related-start}
+xref:devel_intro#[Developing extensions for {CMK}]
+xref:devel_check_plugins#[Developing agent-based check plug-ins]
+xref:inventory#[The HW/SW inventory]
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:agent_windows#[Monitoring Windows]
+xref:wato_services#[Understanding and configuring services]
+xref:cmk_commandline#[{CMK} on the command line]
+xref:mkps#[{CMK} extension packages (MKPs)]
+{related-end}
+
+
+
+[#intro]
+== Introduction
+
+The xref:inventory#[HW/SW inventory] helps you to keep track of existing hardware and maintain control over installed software at all times.
+{CMK} provides ready-made plug-ins for many basic usage scenarios.
+However, in many cases you will want to obtain more detailed information about specific hardware and software.
+This is where custom HW/SW inventory plug-ins come into play.
+
+For this article, we will assume that you already have a basic knowledge of the programming of agent-based check plug-ins.
+For aspects where the use of the Inventory API does not differ significantly from the use of the Check API, the explanations in this article are therefore somewhat sparse.
+However, as needed we will point out any significant differences all the more clearly. 
+
+[TIP]
+====
+Note the difference between check plug-ins and inventory plug-ins.
+Check plug-ins are primarily suitable for rapidly changing data, while inventory plug-ins are suitable for data that rarely changes.
+In this article, we will use a simple example involving USB devices to illustrate this point.
+For example, if you want to ensure that no one connects USB devices that are not on a whitelist to any computer in the monitoring system, a check plug-in will be more suitable.
+====
+
+
+[#check_api_doc]
+=== The Check API documentation
+
+The Inventory API is a part of the Check API.
+To access the documentation, follow the same steps as for xref:devel_check_plugins#check_api_doc[agent-based check plug-ins].
+
+You can access the documentation supplied with your {CMK} site.
+To do this, navigate to [.guihint]#Help > Developer resources > Plug-in API references# in the {CMK} GUI.
+In the new browser window, select [.guihint]#Agent based ("Check API") > Version 2# in the left navigation bar.
+Even without a currently running {CMK} site, you can view a copy of the plug-in API documentation at link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.agent_based/index.html#version-2-cmk-agent-based-v2[docs.checkmk.com/plugin-api^].
+
+
+[#preparation]
+== Preparation
+
+The default setting for {CMK} is to update inventory data only once a day.
+This, of course, conflicts with the need for results to be visible quickly when testing your own programming.
+We therefore recommend two preparatory measures to increase speed without significantly increasing the system load:
+
+. Do not use the `mk_inventory` plug-in, which generates a high load on the host that provides the data for the new plug-in that is to be created.
+. Set the xref:inventory#set_interval[execution interval of the active check] for this host to one or a few minutes. 
+
+
+[#agentplugin]
+== The agent plug-in
+
+If you want to add inventory functionality to an agent-based check plug-in, you may be able to use an agent section written for your check plug-in.
+For our example, create your own.
+The basis for this is the `lsusb` command.
+When called without parameters, it outputs a list of all connected USB devices.
+This could look like this:
+
+[{shell}]
+----
+{c-omd} lsusb
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 002 Device 002: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 003: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 004: ID 0bda:8153 Realtek Semiconductor Corp. RTL8153 Gigabit Ethernet Adapter
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 003 Device 002: ID 0c45:6a09 Microdia Integrated_Webcam_HD
+----
+
+The short version used here in its first fields shows which bus and port a device is connected to.
+This is followed -- separated by a colon -- first by the manufacturer ID, then by the device ID.
+The rest of the line contains descriptive text.
+
+
+=== The resulting script
+
+Since {CMK} handles line-by-line output well, three lines are sufficient for the required check plug-in:
+
+./usr/lib/check_mk_agent/plugins/lsusb
+[{bash}]
+----
+#!/bin/bash
+echo '<<<lsusb_demo>>>'
+lsusb
+----
+
+Do not forget to make the plug-in executable:
+
+[{shell-raw}]
+----
+{c-root} chmod 0755 /usr/lib/check_mk_agent/plugins/lsusb
+----
+
+If the host on which you are testing the agent plug-in is a virtual machine, or if you do not want to be continuously removing and connecting devices, simply save the following example in a file in the xref:spool_directory#[spool directory].
+Spool files are included in the agent output and are transferred with it,
+so make sure that the file ends with a line break.
+
+[.copybutton]
+./var/lib/check_mk_agent/spool/lsusb.txt
+[{file}]
+----
+<<<lsusb_demo>>>
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 002 Device 002: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 003: ID 0bda:0409 Realtek Semiconductor Corp. USB3.2 Hub
+Bus 002 Device 004: ID 0bda:8153 Realtek Semiconductor Corp. RTL8153 Gigabit Ethernet Adapter
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 003 Device 002: ID 0c45:6a09 Microdia Integrated_Webcam_HD
+Bus 003 Device 004: ID 8087:0032 Intel Corp. AX210 Bluetooth
+Bus 003 Device 005: ID 0bda:5409 Realtek Semiconductor Corp. USB2.1 Hub
+Bus 003 Device 006: ID 0bda:5409 Realtek Semiconductor Corp. USB2.1 Hub
+Bus 003 Device 007: ID 0bda:1100 Realtek Semiconductor Corp. HID Device
+Bus 003 Device 071: ID 046d:c093 Logitech, Inc. M500s Optical Mouse
+Bus 003 Device 096: ID 1a40:0101 Terminus Technology Inc. Hub
+Bus 003 Device 108: ID 6964:0075 MT ID75 Rev
+Bus 003 Device 109: ID 0c45:636b Microdia USB 2.0 Camera
+Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+----
+
+You can then simulate connecting and removing USB devices by adding or removing lines from the text file.
+
+
+[#test_agent]
+=== Testing the agent
+
+Test the agent output locally with the following command:
+
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl dump | grep -A25 '^<<<lsusb'
+----
+
+Depending on the number of connected USB devices (or the number of lines in the spool file), you should now see the output of `lsusb` and a few lines of the following agent section.
+Make sure that the line break at the end of the agent section is correct.
+
+
+[#inventory_plugin]
+== The inventory plug-in
+
+Inventory plug-ins reside in the regular xref:devel_check_plugins#scaffold[directory structure] alongside the normal check plug-ins.
+You can either store inventory plug-ins as separate files, in which case we recommend using the prefix `inventory_`.
+You can alternatively integrate inventory plug-ins into the same files as check plug-ins, in which case you should omit the prefix entirely.
+Which method you choose should depend on clarity and the need for shared functions.
+
+To create a pure inventory plug-in, you must therefore create a suitable directory:
+
+[{shell}]
+----
+{c-omd} mkdir -p ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based
+{c-omd} cd ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based
+----
+
+
+[#scaffold]
+=== A basic plug-in
+
+You can now create a basic inventory plug-in, which you can edit using any text editor:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes
+
+def inventory_lsusb_demo(section):
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Max standard": "3.2" },
+    )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+)
+----
+
+The structure is similar to that of xref:devel_check_plugins#write_check_plugin[check plug-ins].
+The inventory plug-in also imports from the `cmk.agent_based.v2` namespace.
+An instantiated `CheckPlugin` object is linked to a specific check function that returns one or more `Result` objects via `yield`.
+Similarly, an instantiated `InventoryPlugin` object is linked to a specific inventory function that returns an `Attributes` object via `yield`.
+
+The `Attributes` returned by `yield` implement the minimum meaningful leaf of an inventory tree:
+
+* The `path` describes the relevant node in the tree hierarchy, here [.guihint]#Hardware > Usb > General#.
+* The key-value pairs in the `inventory_attributes` object are represented as a key-value table.
+
+First, test that the plug-in is syntactically correct and can be started during inventory:
+
+[{shell-raw},highlight=8]
+----
+{c-omd} cmk-validate-plugins 
+Agent based plugins loading succeeded, Active checks loading succeeded, Special agents
+loading succeeded, Rule specs loading succeeded, Rule specs forms creation succeeded,
+Referenced rule specs validation succeeded, Loaded rule specs usage succeeded
+{c-omd} cmk -vv --inventory myhost | grep lsusb_demo
+<<<lsusb_demo>>> / Transition HostSectionParser -> HostSectionParser
+  HostKey(hostname='myhost', source_type=<SourceType.HOST: 1>)  -> Add sections: ['check_mk', 'local', 'lsusb_demo', ...]
+ lsusb_demo: ok
+ lsusb_demo: skipped (no data)
+----
+
+If this is the case, update the configuration for the monitoring core and then restart your site:
+
+[{shell}]
+----
+{c-omd} cmk -U
+Generating configuration for core (type cmc)...
+Starting full compilation for all hosts
+ Creating global helper config...OK
+ Creating cmc protobuf configuration...OK
+{c-omd} omd restart
+Stopping crontab...OK
+Stopping dcd...killing 153645....OK
+Stopping apache...killing 153387.................OK
+Stopping cmc...killing 153300.....OK
+Stopping ui-job-scheduler...killing 153285...OK
+...
+----
+
+A look at the test host's inventory now shows -- as soon as the next regular check has been performed -- a new leaf in the inventory tree.
+
+
+[#parse_function]
+=== Writing the parse function
+
+Agent sections without a specified separator are converted into a two-dimensional list of tokens using the default separator (space) before being passed to the inventory function:
+A list of tokens is created for each line.
+Each of these lists is in turn an element of a list of lines.
+If a separator is specified, it defines the boundary between tokens.
+This facilitates the processing of CSV-formatted data, for example.
+
+A parse function such as for xref:devel_check_plugins#parse_function[agent-based check plug-ins] is not absolutely necessary.
+However, using a separate parse function can have some advantages.
+For example, it increases clarity and extensibility.
+And if an existing agent-based check plug-in is to be reused, the question does not even need to be asked:
+Simply continue to use the existing parse function.
+
+In our example, it does not matter where a USB device is connected.
+For the plug-in, the manufacturer and device IDs (sixth item in the list) and the description (from the seventh item to the end of the list) need to be determined.
+
+While the maximum supported USB version was simply hard-coded in the simple example xref:scaffold[above], you are welcome to think about how you can determine this in the medium term using regular expressions from the description.
+To do this, the entire description is required, i.e., everything from the seventh to the last word in the list:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+def parse_lsusb_demo(string_table):
+    parsed = { "devices": [] }
+    for line in string_table:
+        vendor = line[5].split(":")[0]
+        device = line[5].split(":")[1]
+        description = ""
+        for i in range(6, len(line)):
+            description = description + " " + line[i]
+        parsed["devices"].append({ "vendor": vendor, "device": device, "description": description })
+    return parsed
+----
+
+
+[#inventory_function]
+=== Writing the inventory function
+
+Here you can take a shortcut: Unlike agent-based check plug-ins, the parse function is not integrated by creating an `AgentSection` object, but must be called from the inventory function itself.
+You are familiar with the principle of `yield` for the continuous transfer of elements from agent-based check plug-ins:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=2;9]
+----
+def inventory_lsusb_demo(section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        # FIXME: dynamically calculate from agent section
+        inventory_attributes = { "Max standard": "3.2" },
+    )
+    for d in section["devices"]:
+        yield TableRow(
+            path = [ "hardware", "usb", "devices" ],
+            key_columns = {
+                "vendor": d["vendor"],
+                "device": d["device"]
+            },
+            inventory_columns = {
+                "description": d["description"]
+            }
+        )
+----
+
+Here, an object of type `TableRow` is returned for each line of the output of `lsusb`.
+This contains three columns: Vendor and Device ID together serve as keys.
+The third column, which is purely informative, contains the description.
+
+Key columns have the special feature that they are used to detect changes, which in turn can lead to a status change of the [.guihint]#HW/SW Inventory# service in monitoring.
+Furthermore, keys must be unique.
+Additional lines with the same combination of vendor and device IDs are therefore ignored.
+
+In addition to key and inventory columns, you can also describe the entries in the table with `status_columns` and analogous `status_attributes`, which represent the _state_ of an object.
+The simple data types (`int`, `float`, `str`, `bool`, or `None`) are available for the value of the state.
+For example, if you want to create a table that lists which connection (`Bus/Device`) is occupied, you can use `key_columns` (`Bus` and `Device`) and `status_columns` (here: `bool`).
+
+
+[#finished_plugin]
+=== The finished plug-in
+
+The finished plug-in puts everything together.
+The `TableRow` class is also imported here:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=3]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes, TableRow
+
+def parse_lsusb_demo(string_table):
+    parsed = { "devices": [] }
+    for line in string_table:
+        vendor = line[5].split(":")[0]
+        device = line[5].split(":")[1]
+        description = ""
+        for i in range(6, len(line)):
+            description = description + " " + line[i]
+        parsed["devices"].append({ "vendor": vendor, "device": device, "description": description })
+    return parsed
+
+def inventory_lsusb_demo(section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Plugin version": "0.1.0" },
+    )
+    for d in section["devices"]:
+        yield TableRow(
+            path = [ "hardware", "usb", "devices" ],
+            key_columns = {
+                "vendor": d["vendor"],
+                "device": d["device"],
+            },
+            inventory_columns = {
+                "description": d["description"],
+            }
+        )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+)
+----
+
+
+[#rulesets]
+== Rule sets for inventory
+
+Since the Inventory API is part of the Check API, the creation and application of rule sets is exactly the same as for the development of regular check plug-ins.
+For this reason, we will only show a simple example here.
+
+
+=== Defining a rule set
+
+The output of `lsusb` includes several lines for hubs (external and root hubs).
+These devices, which have no functionality of their own, make it difficult to maintain an overview.
+
+Users should therefore be able to decide for themselves whether hubs should be included or not.
+They should be able to configure this setting using a checkbox in a rule.
+
+To do this, create the `rulesets` folder for the plug-in family:
+
+[{shell}]
+----
+{c-omd} mkdir -p ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets
+{c-omd} cd ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets
+----
+
+Now create the rule set in this folder:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/rulesets/ruleset_lsusb_demo_inventory.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.rulesets.v1 import Label, Title, Help
+from cmk.rulesets.v1.form_specs import (
+    BooleanChoice,
+    DefaultValue,
+    DictElement,
+    Dictionary,
+)
+from cmk.rulesets.v1.rule_specs import (
+    InventoryParameters,
+    Topic
+)
+from cmk.rulesets.v1 import Label
+
+def _parameter_form():
+    return Dictionary(
+        elements = {
+            "hubs": DictElement(
+                parameter_form = BooleanChoice(
+                    title = Title("USB hubs"),
+                    label = Label("Consider USB hubs in the inventory table"),
+                    prefill = DefaultValue(True),
+                ),
+                required = True,
+            ),
+        }
+    )
+
+rule_spec_lsusb_demo_inventory = InventoryParameters(
+    name = "lsusb_demo",
+    title = Title("Lsusb inventory demo"),
+    topic = Topic.GENERAL,
+    parameter_form = _parameter_form,
+)
+----
+
+Once you have saved the script for the rule set, validate it with `cmk-validate-plugins` and then restart the site with `omd restart`.
+You can ignore any complaints from `cmk-validate-plugins` about existing but unlinked rule sets at this point.
+The linking is done in the xref:apply_ruleset[next section].
+
+You can now view and customize the rule in the GUI under [.guihint]#Setup > Hosts > HW/SW inventory rules#.
+If you know the name of a rule (here: [.guihint]#Lsusb inventory demo#), you can type it directly into the xref:user_interface#search[search field].
+With [.guihint]#Add rule#, you can create the rule you just prepared and apply it as usual to folders or hosts with the properties you selected.
+
+
+[#apply_ruleset]
+=== Applying the rule set
+
+The rule set has not yet been linked.
+To apply it, add two more [.notranslate]#_named arguments_# when creating the `InventoryPlugin` class.
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python},highlight=6-7]
+----
+# ...
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "lsusb_demo",
+    inventory_function = inventory_lsusb_demo,
+    inventory_default_parameters = { "hubs": True },
+    inventory_ruleset_name = "lsusb_demo",
+)
+----
+
+In addition, the parameter dictionary must be passed to the inventory function as the first argument.
+Here, you also add a regular expression to identify which device descriptions end with ‘hub’.
+Note that you must add another `import` line at the beginning of the script for this:
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
+[{python}]
+----
+# ...
+
+import re
+
+# ...
+
+def inventory_lsusb_demo(params, section):
+    section = parse_lsusb_demo(section)
+    yield Attributes(
+        path = [ "hardware", "usb", "general" ],
+        inventory_attributes = { "Plugin version": "0.1.0" },
+    )
+    h = re.compile('.*?hub$', re.IGNORECASE)
+    for d in section["devices"]:
+        if params['hubs'] or not h.match(d["description"]):
+            yield TableRow(
+                path = [ "hardware", "usb", "devices" ],
+                key_columns = {
+                    "vendor": d["vendor"],
+                    "device": d["device"],
+                },
+                inventory_columns = {
+                    "description": d["description"],
+                }
+            )
+# ...
+----
+
+
+[#extending]
+== Extension options
+
+
+[#multiple_sections]
+=== Subscribing to multiple sections
+
+In the example, you have followed the standard procedure so far:
+An inventory plug-in subscribes to an agent section that has the same name as the inventory plug-in.
+But what if you want to use existing agent sections that are already being evaluated by an existing inventory plug-in?
+In this case, there is a high probability that an inventory plug-in already exists that uses the same name as the agent section.
+The following output provides an overview of existing sections:
+
+[{shell}]
+----
+{c-omd} cmk -vv --inventory myhost
+Doing HW/SW Inventory on: myhost
+myhost:
++ INVENTORIZING
++ FETCHING DATA
+  Source: SourceInfo(hostname='myhost', ipaddress='127.0.0.1', ident='agent' ...)
+...
++ EXECUTING INVENTORY PLUGINS
+ mssql_instance: skipped (no data)
+ mssql_instance: skipped (no data)
+ azure_app_gateway: skipped (no data)
+ azure_app_gateway: skipped (no data)
+ redfish_firmware: skipped (no data)
+ redfish_firmware: skipped (no data)
+ redfish_firmware_hpe_ilo4: skipped (no data)
+ redfish_firmware_hpe_ilo4: skipped (no data)
+ robotmk: skipped (no data)
+ robotmk: skipped (no data)
+----
+
+In this case, and in cases where an inventory plug-in is to evaluate multiple agent sections, you can specify the subscribed sections as a list.
+For example, let's assume that you want to evaluate two agent sections that refer to fictional items:
+
+[.copybutton]
+./var/lib/check_mk_agent/spool/fictional.txt
+[{file}]
+----
+<<<zorg>>>
+ZF1 23.0
+<<<yoyodyne>>>
+Gnomovision 42.1
+----
+
+In this case, the subscribed agent sections must be explicitly specified.
+The name of the plug-in no longer has to match the agent sections:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "fictional",
+    sections = [ "yoyodyne", "zorg" ],
+    inventory_function = inventory_fictional,
+)
+----
+
+The inventory function then receives the string tables as variables based on the pattern `section_sectionname`:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+def inventory_fictional(section_yoyodyne, section_zorg):
+    # Do something with the two two-dimensional arrays...
+----
+
+The complete plug-in, which includes the versions from link:https://www.gnu.org/licenses/old-licenses/gpl-2.0.html[Yoyodyne Gnomovision^] and link:https://fictionalcompanies.fandom.com/wiki/Zorg_Industries#Zorg_ZF-1_Pod_Weapon[Zorg ZF1^] in the inventory tree, can then look like this:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.agent_based.v2 import InventoryPlugin, Attributes
+
+def inventory_fictional(section_yoyodyne, section_zorg):
+    yoyo = section_yoyodyne
+    zorg = section_zorg
+    yield Attributes(
+        path = [ "software", "fictional", "example" ],
+        inventory_attributes = { "Yoyodyne " + yoyo[0][0]: yoyo[0][1] },
+    )
+    yield Attributes(
+        path = [ "hardware", "fictional", "example" ],
+        inventory_attributes = { "Zorg " + zorg[0][0]: zorg[0][1] },
+    )
+
+inventory_plugin_lsusb_demo = InventoryPlugin( 
+    name = "fictional",
+    sections = [ "yoyodyne", "zorg" ],
+    inventory_function = inventory_fictional,
+)
+----
