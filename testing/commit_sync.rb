@@ -64,6 +64,7 @@ end
 ]
 @ignore_tickets = [
 	"KNW-2043", # 2.5.0 only topic
+	"KNW-1966", # 2.5.0 only topic
 ]
 @ignore_commits = [
 
