@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE otel25
+// IGNORE otel25 ClickHouse backends siloed
 // NONASCII 
 include::global_attr.adoc[]
 = The {CMK} metrics backend
@@ -7,118 +7,103 @@ include::global_attr.adoc[]
 :description: The {CMK} metrics backend provides efficient background storage for monitoring data in dynamic environments.
 
 
-// This block is outdated
-// delete from here
-[TIP]
-====
-This article is currently being prepared for publication. +
-Please be patient. Thank you! +
-By the way, the https://docs.checkmk.com/master/de/opentelemetry.html[German version] of this article has already been updated -- if that is an alternative for you.
-====
-// delete to here
-
-
-// This block is new
-// start translation
-////
 [#intro]
-== Einleitung
+== Introduction
 
-Bislang speicherte {CMK} Metriken in Round Robin Databases (kurz RRDs), Informationen zu Ereignissen (_events_) in SQLite-Dateien und Inventardaten in JSON-Dateien.
-Allen gemeinsam ist, dass es sich um relativ simple, dateibasierte Formate handelt, deren Größe und Performance sehr gut vorhersehbar sind, und die für die Kernaufgaben genügend Flexibilität mitbringen.
+Until now, {CMK} has stored metrics in Round Robin Databases (RRDs for short), event information in SQLite files, and inventory data in JSON files.
+What they all have in common is that they are relatively simple, file-based formats whose size and performance are highly predictable, and which offer sufficient flexibility for core tasks.
 
-Allerdings erfüllen gerade RRDs nicht mehr alle Anforderungen eines modernen Monitoring-Systems mit vielen dynamischen Objekten.
-So ist zwar die Abfrage einer Metrik über einen definierten Zeitraum leicht möglich, aber komplexere Abfragen wie beispielsweise die Identifikation von Zeitspannen, in denen mehrere Metriken Anomalien aufwiesen, erfordern es, große Datenmengen herauszuziehen und separat zu verarbeiten.
-Zudem war der in {CMK} {v24} beschrittene Weg, OpenTelemetry-Daten auf "klassischem" Weg über einen Spezialagenten in {CMK} verfügbar zu machen, mit einem gewissen Overhead an Umwandlungs- und Kopiervorgängen behaftet.
+However, RRDs in particular no longer meet all the requirements of a modern monitoring system with many dynamic objects.
+While querying a metric over a defined time period is easily possible, more complex queries -- such as identifying time periods during which multiple metrics exhibited anomalies -- require extracting large volumes of data and processing them separately.
+Furthermore, the approach taken in {CMK} {v24} -- making OpenTelemetry data available in {CMK} via a specialized agent using 'traditional' methods -- came with a certain overhead in terms of conversion and copying operations.
 
-Aus diesen Gründen fiel für {CMK} {v25} die Entscheidung, zunächst für OpenTelemetry-Daten eine spaltenbasierte (_column based_) Datenbank als Metrik-Backend zu verwenden.
-Die Wahl fiel hier auf _Clickhouse_, da die Weitergabe vom OpenTelemetry Collector zur Datenbank sehr effizient vonstatten geht.
-Spaltenbasierte Datenbanken liefern eine sehr gute Performance wenn viele Werte einer Metrik ausgelesen werden sollen – ein typischer Anwendungsfall hierfür ist beispielsweise die Erzeugung von Graphen aus Metriken.
+For these reasons, {CMK} {v25} decided to initially use a column-based database as the metrics backend for OpenTelemetry data.
+We chose _ClickHouse_ here because its data transfer from the OpenTelemetry Collector to the database is very efficient.
+Column-based databases deliver excellent performance when many values of a metric need to be read -- a typical use case for this is, for example, generating graphs from metrics.
 
-In {CMK} {v25} kommt das Metrik-Backend nur für xref:opentelemetry#[OpenTelemetry-Metriken] zum Einsatz.
-Für künftige Versionen behalten wir uns vor, das Metrik-Backend auch für weitere Monitoring-Daten ergänzend zu RRDs zu nutzen.
-Wo RRDs ihren Zweck zufriedenstellend erfüllen, wird {CMK} diese auch in Zukunft verwenden.
+In {CMK} {v25}, the metrics backend is used only for xref:opentelemetry#[OpenTelemetry metrics].
+For future versions, we reserve the right to use the metrics backend for additional monitoring data in addition to RRDs.
+Where RRDs satisfactorily fulfill their purpose, {CMK} will continue to use them in the future.
 
 
 [#setup]
-== Einrichtung
+== Setup
 
-Beachten Sie, dass jegliche Verarbeitung von OpenTelemetry-_Metriken_ ein aktiviertes Metrik-Backend voraussetzt.
+Note that any processing of OpenTelemetry _metrics_ requires an enabled metrics backend.
 ifdef::onprem[]
-Lediglich die Weiterleitung von OpenTelemetry-_Logs_ an die xref:glossar#ec[Event Console] kommt ohne aus.
+Only the forwarding of OpenTelemetry _logs_ to the xref:glossar#ec[Event Console] does not require this.
 endif::[]
 
-Die Aktivierung führen Sie in den globalen Einstellungen ([.guihint]#Setup > General > Global settings > Site management > Metric backend#) durch.
-Sofern nicht abweichend festgelegt, verwendet {CMK} drei scheinbar zufällige hohe Ports -- für die Einlieferung von Daten durch den OpenTelemetry Collector, die Abfrage von Daten und eine Web-GUI als SQL-Konsole.
-Die verwendeten Ports werden dabei aus dem Namen der Instanz errechnet, sind also für gleich benannte {CMK}-Instanzen immer dieselben drei.
-Auf die Web-GUI als SQL-Konsole können Sie verzichten.
-Allerdings kann diese bei Tests hilfreich sein, daher empfehlen wir, diese zumindest solange beizubehalten, bis Sie alle Tests abgeschlossen haben.
+You can enable this in the global settings ([.guihint]#Setup > General > Global settings > Site management > Metric backend#).
+Unless otherwise specified, {CMK} uses three seemingly random high-numbered ports -- for data collection by the OpenTelemetry Collector, data querying, and a web GUI acting as an SQL console.
+The ports used are derived from the site's name, so they are always the same three ports for {CMK} sites with the same name.
+
+You can do without the web GUI as an SQL console.
+However, this can be helpful during testing, so we recommend keeping it at least until you have completed all tests.
 
 
 ifdef::onprem[]
 [#distributed]
-=== Verteiltes Monitoring
+=== Distributed monitoring
 
-Derzeit sind keine Weiterleitungsmechanismen im xref:glossar#distributed_monitoring[verteilten Monitoring] vorgesehen.
-Wenn Sie also OpenTelemetry-Metriken an OpenTelemetry Collectors und damit Metrik-Backends von Remote-Instanzen schicken, können diese Metriken nur dort als Insellösung eingesehen werden.
+Currently, no forwarding mechanisms are planned in xref:glossar#distributed_monitoring[distributed monitoring].
+Therefore, if you send OpenTelemetry metrics to OpenTelemetry Collectors and thus to metrics backends of remote sites, these metrics can only be viewed there as a siloed solution.
 
-Für kommende Versionen von {CMK} evaluieren wir daher die Möglichkeit einer zentralen Instanz des Metrik-Backends und die Verwendung eines verteilten Clickhouse-Clusters.
-Details können Sie rechtzeitig der Roadmap-Dokumentation entnehmen.
+For upcoming versions of {CMK}, we are therefore evaluating the possibility of creating a central site for the metrics backend enabling the use of a distributed ClickHouse cluster.
+Details will be available in the road map documentation in due course.
 
-In {CMK} {v25} dürfte daher die Verwendung von OpenTelemetry Collector und Metrik-Backend alleine auf der Zentralinstanz der pragmatischste Ansatz sein.
-Sollte dieser Ansatz aus Gründen der Netzwerksegmentierung nicht sinnvoll sein, können Sie OpenTelemetry Collectors und Metrik-Backends als Insellösung auch auf Remote-Instanzen betreiben.
-Beachten Sie, dass in diesem Fall nur Daten, die den Weg über xref:opentelemetry#special_agent_option[den Spezialagenten] nehmen, im verteilten Monitoring genutzt werden können.
-Die Verwendung von xref:opentelemetry#custom_graphs[benutzerdefinierten Graphen] ist nur an deren Quelle möglich.
+In {CMK} {v25}, the most pragmatic approach is likely to be using the OpenTelemetry Collector and metrics backend solely on the central site.
+If this approach is not feasible due to network segmentation, you can also run OpenTelemetry Collectors and metrics backends as a standalone solution on remote sites.
+Note that in this case, only data that passes through xref:opentelemetry#special_agent_option[the special agent] can be used in distributed monitoring.
+The use of xref:opentelemetry#custom_graphs[custom graphs] is only possible at their source.
 endif::[]
 
 
 [#troubleshooting]
-=== Fehlersuche
+=== Troubleshooting
 
-Ob Daten eingehen und diese mit erwarteten Metadaten gespeichert werden, können Sie in der SQL-Konsole von Clickhouse überprüfen.
-Hier sind die Tabellen `checkmk.metrics_samples_*` meist diejenigen, in denen Sie stöbern werden wollen.
+You can confirm whether data is being received and stored with the expected metadata in the ClickHouse SQL console.
+The `checkmk.metrics_samples_*` tables are usually the ones you'll want to explore.
 
-.Mit SQL-Grundlagenwissen können Sie herausfinden, ob erwartete Daten im Metrik-Backend landen
-image::metric_backend_sql_console.png[alt="Mit SQL-Grundlagenwissen können Sie herausfinden, ob erwartete Daten im Metrik-Backend landen",fullscreen=1]
+.With a basic understanding of SQL you can determine whether expected data is landing in the metrics backend
+image::metric_backend_sql_console.png[alt=“With a basic understanding of SQL, you can determine whether expected data is landing in the metrics backend”,fullscreen=1]
 
 
 [#license_calculation]
-== Berechnungsgrundlagen für die Lizenzierung
+== Basics for calculating licensing
 
 === Custom Metrics
 
-Eine _Custom Metric_ entspricht der Zeitreihe von Daten, die über _Service Name_, _Metric Name_ (in der Terminologie des Metrik-Backends, respektive des OpenTelemetry Collectors) sowie weitere Attribute identifiziert werden.
-Die aktuelle Zahl der Custom Metrics können Sie jederzeit über den Service [.guihint]#OMD otel25 metric backend# im Selbst-Monitoring Ihrer {CMK}-Instanz einsehen.
+A _Custom Metric_ corresponds to a time series of data identified by _Service Name_, _Metric Name_ (in the terminology of the metrics backend or the OpenTelemetry Collector), and other attributes.
+You can view the current number of Custom Metrics at any time via the [.guihint]#OMD otel25 metric backend# service in your {CMK} site's self-monitoring.
 
-Die abrechnungsrelevante Anzahl der Custom Metrics wird alle 20 Minuten ermittelt.
-Nur Custom Metrics, die innerhalb dieses 20-Minuten-Intervalls Updates erhalten haben, fließen dabei in die Zählung ein.
-Einmal pro Tag wird ein Durchschnitt dieser Zahl über alle 20-Minuten-Intervalle der vergangenen 24 Stunden gebildet.
-Hiervon wird wiederum am Monatsende der Monatsdurchschnitt gebildet.
+The billing-relevant number of Custom Metrics is determined every 20 minutes.
+Only Custom Metrics that have received updates within this 20-minute interval are included in the count.
+Once a day, an average of these numbers is calculated across all 20-minute intervals over the past 24 hours.
+From this, the monthly average is calculated at the end of the month.
 
 
-=== Frequenz eingehender Daten
+=== Frequency of incoming data
 
 ifdef::onprem[]
-Die Frequenz eingehender Daten wird bei {UE} derzeit nur durch Ihre Hardware, Einstellungen wie das Speicherlimit des Konnektors und die Netzwerkanbindung des {CMK}-Servers limitiert.
+The frequency of incoming data for {UE} is currently limited only by your hardware, settings such as the connector's storage limit, and the network connection of the {CMK} server.
 endif::[]
 
 ifdef::saas[]
-Die Frequenz eingehender Daten wird bei {CE} auf ein Datum pro 15 Sekunden begrenzt (bei Instanzen im Lizenzstatus „Trial“ auf ein Datum pro 30 Sekunden).
-Treten Lastspitzen nur für wenige Minuten pro Tag auf, ziehen diese keine Drosselung eingehenden Verkehrs nach sich.
+For {CE}, the frequency of incoming data is limited to one data point every 15 seconds (for sites with a 'Trial' license status, one data point every 30 seconds).
+If traffic spikes occur for only a few minutes per day, they do not result in throttling of incoming traffic.
 endif::[]
 
 
-=== Vorhaltedauer
+=== Retention period
 
 ifdef::onprem[]
-Die Vorhaltedauer von Telemetriedaten ist auf 14 Tage beschränkt.
-Dieser Wert ist derzeit in {CMK} nicht konfigurierbar.
-Wenn Änderungen an Konfigurationsdateien vorgenommen werden, behalten wir uns vor, keinen Support zu leisten.
+The retention period for telemetry data is limited to 14 days.
+This value cannot currently be configured in {CMK}.
+If changes are made to configuration files, we reserve the right not to provide support.
 endif::[]
 
 ifdef::saas[]
-Die Vorhaltedauer von Telemetriedaten ist auf 14 Tage beschränkt.
-Bei Instanzen im Lizenzstatus „Trial“ beträgt die Vorhaltedauer zwei Tage.
+The retention period for telemetry data is limited to 14 days.
+For sites with a 'Trial' license status, the retention period is two days.
 endif::[]
-////
-// end translation
