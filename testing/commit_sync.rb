@@ -68,6 +68,7 @@ end
 @ignore_tickets = [
 	"KNW-2043", # 2.5.0 only topic
 	"KNW-1966", # 2.5.0 only topic
+	"KNW-2149", # on hold; to be discussed in breakout session on 2026-05-18
 ]
 @ignore_commits = [
 
