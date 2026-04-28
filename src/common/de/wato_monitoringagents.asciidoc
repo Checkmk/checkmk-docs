@@ -215,7 +215,7 @@ Diese ist nur in den Metadaten des gebackenen Pakets sichtbar.
 Die Funktion ist ab {CMK} {v23} standardmäßig deaktiviert, um zu verhindern, dass gebackene Agenten möglicherweise ihre gültige Signatur verlieren.
 Wenn Sie die Bake Revision dennoch aktivieren möchten, zum Beispiel für die eindeutige Verarbeitung in einem Paketmanager, schalten Sie die Option [.guihint]#Setup > Global settings > Setup > Apply bake revision# ein.
 Und sofern eingeschaltet: Bei später über die Regel [.guihint]#Automatically create monitoring agents# automatisch gebackenen Agenten bleibt die vorige Revision in jedem Fall bestehen und wird nicht weiter erhöht -- abermals, um die Signatur nicht zu verlieren.
-Wenn Sie automatisch gebackene Agenten _mit_ fortlaufenden Revisionen benötigen, sollten Sie zum Beispiel die xref:rest_api#[REST-API] statt der Regel einsetzen.
+Wenn Sie automatisch gebackene Agenten _mit_ fortlaufenden Revisionen benötigen, sollten Sie zum Beispiel die xref:rest_api_bakery[REST-API] statt der Regel einsetzen.
 ====
 endif::[]
 
@@ -364,6 +364,89 @@ image::wato_monitoringagents_bakery_logging.png[alt="Option zum Aktivieren des B
 
 Ohne aktiviertes Logging sehen Sie diese Informationen nur, wenn Sie Agenten mit `cmk --bake-agents -v` xref:cmk_commandline#bake_agents[auf der Befehlszeile backen].
 endif::[]
+
+
+[#rest_api_bakery]
+=== Agenten über die REST-API verwalten
+
+Alle Funktionen der Agentenbäckerei stehen auch über die xref:rest_api#[REST-API] zur Verfügung.
+Das ermöglicht die Einbindung in automatisierte Deployment-Pipelines und CI/CD-Systeme sowie den skriptgesteuerten Download von Agentenpaketen.
+
+Legen Sie zunächst die folgenden Variablen mit den Werten Ihrer {CMK}-Instanz fest:
+
+[{bash}]
+----
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+----
+
+*Agentenkonfigurationen auflisten*
+
+Eine Liste aller vorhandenen Agentenkonfigurationen mit ihren Hashes erhalten Sie mit:
+
+[{bash}]
+----
+curl \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  "http://$HOST_NAME/$SITE_NAME/check_mk/api/v1/domain-types/agent/collections/all"
+----
+
+Jeder Eintrag enthält ein Feld `id` mit dem vollständigen 16-stelligen Hash der Konfiguration.
+In der Agentenbäckerei werden nur die ersten 8 Zeichen des Hashs angezeigt.
+
+*Agentenpakete herunterladen*
+
+Sie können ein Agentenpaket entweder direkt über seinen Hash oder über einen Hostnamen herunterladen.
+
+Beim Download über den Hash geben Sie den vollständigen 16-stelligen Hash und das Zielformat an:
+
+[{bash}]
+----
+curl \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  "http://$HOST_NAME/$SITE_NAME/check_mk/api/v1/domain-types/agent/actions/download_by_hash/invoke?agent_hash=<hash>&os_type=linux_deb" \
+  --output check-mk-agent.deb
+----
+
+Alternativ können Sie ein Agentenpaket auch über den Hostnamen herunterladen, ohne den Hash zu kennen:
+
+[{bash}]
+----
+curl \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  "http://$HOST_NAME/$SITE_NAME/check_mk/api/v1/domain-types/agent/actions/download_by_host/invoke?agent_type=host_name&host_name=myhost&os_type=linux_deb" \
+  --output check-mk-agent.deb
+----
+
+Der Parameter `agent_type` entspricht den Spaltentypen in der Agentenbäckerei: `host_name` für Host-spezifische Pakete, `vanilla` für den Vanilla-Agenten und `generic` für ordnerspezifische Pakete.
+Für ordnerbasierte Pakete verwenden Sie statt des Parameters `host_name` den Parameter `folder_name`.
+
+Als Werte für `os_type` stehen `linux_deb`, `linux_rpm`, `linux_tgz`, `windows_msi`, `aix_tgz`, `solaris_pkg` und `solaris_tgz` zur Verfügung.
+
+*Agenten backen*
+
+Um einen Backvorgang auszulösen, senden Sie eine POST-Anfrage:
+
+[{bash}]
+----
+curl \
+  --request POST \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  "http://$HOST_NAME/$SITE_NAME/check_mk/api/v1/domain-types/agent/actions/bake/invoke"
+----
+
+Da der Backvorgang asynchron abläuft, können Sie den aktuellen Status abrufen:
+
+[{bash}]
+----
+curl \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  "http://$HOST_NAME/$SITE_NAME/check_mk/api/v1/domain-types/agent/actions/baking_status/invoke"
+----
+
+Warten Sie, bis der Status `done` zurückgegeben wird, bevor Sie die fertig gebackenen Agentenpakete herunterladen.
 
 
 [#agent_update]
