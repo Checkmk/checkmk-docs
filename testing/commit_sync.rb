@@ -60,7 +60,10 @@ end
 	"real_time_checks_service_overview.png", # on hold
 	"internal_reference.asciidoc", # only of use in master
 	"release_notes.asciidoc", # already diverting
-	"menu.asciidoc", # editing notes
+	"relay.asciidoc", # Only 2.5
+	"snmp.asciidoc", # Moved to common, manually patch
+	"opentelemetry.asciidoc", # massively diverting
+	"update_major.asciidoc", # forked
 ]
 @ignore_tickets = [
 	"KNW-2043", # 2.5.0 only topic
