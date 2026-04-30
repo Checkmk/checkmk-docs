@@ -1,199 +1,263 @@
 // -*- coding: utf-8 -*-
-// IGNORE Podman mypodmanhost schiefgelaufen
-// NONASCII
 include::global_attr.adoc[]
 = Podman überwachen
-:title: Podman überwachen
+:title: Podman überwachen - Podman-Hosts und Container mit {CMK} überwachen
 :description: {CMK} kann Podman-Hosts und die Container darauf überwachen. Lesen Sie hier, wie Sie die Überwachung einrichten und nutzen.
 
 {related-start}
+xref:monitoring_docker#[Docker überwachen]
 xref:wato_monitoringagents#[Monitoring-Agenten]
 xref:agent_linux#[Linux überwachen]
-xref:intro_setup_monitor#[Das Monitoring einrichten]
-xref:monitoring_docker#[Docker überwachen]
+xref:dcd#[Dynamische Host-Verwaltung]
+xref:piggyback#[Der Piggyback-Mechanismus]
 {related-end}
 
-//sebkir: @Reviewer Teile von diesem Artikel habe ich als Blaupause für Dinge, die per Agentenplugin überwacht werden und einen eigenen Artikel bekommen sollten oder könnten angelegt. Deshalb geht es hier manchmal etwas grundsätzlicher und einfacher zur Sache.
 
 [#intro]
 == Einleitung
 
-{CMK} kann Container, die Sie mit Podman verwalten, über das xref:glossar#agent_plugin[Agentenplugin] `mk_podman.py` überwachen.
-Dabei werden nicht nur Rahmendaten, wie der Status Ihres Podman-Hosts, sondern auch die Container selbst überwacht.
-Eine vollständige Liste der aktuell überwachbaren Dinge finden Sie wie immer im link:https://checkmk.com/integrations?tags=podman[Katalog der Check-Plugins^].
+Podman ist eine daemonlose Container-Engine für Linux, die als Alternative zu Docker eingesetzt werden kann.
+Anders als Docker benötigt Podman keinen zentralen Daemon und unterstützt rootless Container direkt.
 
-Das Agentenplugin kann auf zwei verschiedenen Wegen mit Podman kommunizieren.
-Entweder über die API von Podman und somit über den zugehörigen Unix-Socket oder direkt über das Kommando `podman`.
-Wie Sie das Agentenplugin konfigurieren können, erfahren Sie in den Kapiteln xref:monitoring_podman#setup[Manuelle Einrichtung] bzw. xref:monitoring_podman#bakery[Einrichtung über die Agentenbäckerei].
-
-Neben den Status- und Inventurinformationen, die {CMK} über den Podman-Host - also den Host, auf dem Podman installiert ist und läuft - ermitteln kann, kann {CMK} auch detaillierte Statusinformationen über die Container selbst ermitteln.
-Hierzu wird in {CMK} jeder Container als eigenständiger Host angelegt, wenn er überwacht werden soll.
-Seine Daten werden im xref:glossar#piggyback[Piggyback]-Verfahren mit zu Ihrem {CMK}-Server gebracht.
+{CMK} kann Podman-Hosts und die darauf laufenden Container überwachen – einschließlich Root- und Rootless-Container.
+Die Überwachung erfolgt über das xref:glossar#agent_plugin[Agentenplugin] `mk_podman.py`, das auf dem Podman-Host installiert wird.
+Jeder Container wird in {CMK} als eigenständiger Host abgebildet; seine Daten werden im xref:glossar#piggyback[Piggyback]-Verfahren an diesen Host geliefert.
 
 ifdef::onprem[]
-In den kommerziellen Editionen 
+In den kommerziellen Editionen
 endif::[]
 ifdef::saas[]
 In {CE}
 endif::[]
-können Sie mithilfe der xref:dcd#[dynamischen Host-Verwaltung] die Hosts, die Ihre Container repräsentieren, auch automatisch anlegen und entfernen lassen.
+können Sie mithilfe der xref:dcd#[dynamischen Host-Verwaltung] die Container-Hosts automatisch anlegen und entfernen lassen.
+
+Eine vollständige Liste der verfügbaren Check-Plugins finden Sie im link:https://checkmk.com/de/integrations?tags=podman[Katalog der Check-Plugins^].
+
+
+[#prerequisites]
+== Voraussetzungen
+
+Für das Podman-Monitoring gelten folgende Voraussetzungen:
+
+* Auf dem Podman-Host ist der xref:agent_linux#[Linux-Agent] von {CMK} installiert und aktiv.
+* Das Python-Paket `requests` ist auf dem Podman-Host installiert (siehe xref:python_requests[Python-Paket installieren]).
+* Der Podman-Socket-Dienst ist aktiv, wenn die Standard-Verbindungsmethode (API) verwendet wird (siehe xref:socket_activation[Socket aktivieren]).
+
+// AI: Bitte prüfen: Laut CMK-27999 ist cgroupsv2 Pflicht für das Podman-Monitoring. Bitte bestätigen und ggf. als Voraussetzung ergänzen.
 
 
 [#setup]
-== Manuelle Einrichtung
-
-=== Voraussetzung
-
-Auf dem Podman-Host muss der {CMK}-Agent bereits xref:agent_linux#install[installiert] und xref:agent_linux#registration[registriert] sein.
-
-//sebkir: Python und die Python-Bibliothek Requests erwähne ich hier nicht, weil alle geprüften Distributionen beides standardmäßig enthalten.
+== Einrichtung
 
 [#install_agent_plugin]
-=== Agentenplugin installieren
+=== Agent und Plugin installieren
 
-Zusätzlich zum Agenten benötigen Sie noch das Agentenplugin `mk_podman.py`, das Sie in {CRE} über [.guihint]#Setup > Agents > Linux > Plug-ins# finden.
-In den kommerziellen Editionen gelangen Sie im [.guihint]#Setup#-Menü über [.guihint]#Agents > Windows, Linux, Solaris, AIX# zunächst in die xref:wato_monitoringagents#bakery[Agentenbäckerei], wo Sie die gebackenen Pakete finden.
-Von dort aus kommen Sie mit dem Menüeintrag [.guihint]#Related > Linux, Solaris, AIX files# zur Liste der Agentendateien.
+Damit Sie einen Podman-Host überwachen können, muss dieser zunächst mit dem xref:agent_linux#[Linux-Agenten] überwacht werden.
+Dadurch erhalten Sie ein Basis-Monitoring des Wirtssystems, jedoch noch keine Informationen über Podman oder die Container.
 
-// AI: Defekter Anker – `glossar#dir_plugins` existiert nicht im Glossar (einzige Verwendung in der Doku). Entweder den fehlenden Glossar-Eintrag anlegen oder den xref durch einfachen Text ersetzen.
-Installieren Sie das Plugin auf dem Podman-Host in das xref:glossar#dir_plugins[Plugin-Verzeichnis] des Agenten (im Standardfall `/usr/lib/check_mk_agent/plugins`):
+Dazu benötigen Sie das xref:glossar#agent_plugin[Agentenplugin] `mk_podman.py`, das Sie in {CMK} unter [.guihint]#Setup > Agents > Other operating systems > Plugins# finden.
+
+Installieren Sie das Plugin in das Plugin-Verzeichnis des Agenten (in der Regel `/usr/lib/check_mk_agent/plugins`):
 
 [{shell}]
 ----
 {c-root} install -m 0755 mk_podman.py /usr/lib/check_mk_agent/plugins
 ----
 
-Ausführlichere Informationen zur Installation eines Agentenplugins finden Sie im xref:agent_linux#plugins[Artikel zum Linux-Agenten].
-
-Wenn Sie im Anschluss in {CMK} eine xref:wato_services#[Service-Erkennung] auf dem zugehörigen Host durchführen, sollten Sie bereits einige Services sehen, die das Wort Podman im Namen tragen:
-
-.Ergebnis der Service-Erkennung auf dem Podman-Host
-image::monitoring_podman_first_discovery.png[alt="Ansicht der neu in {CMK} gefundenen Podman-Services.",fullscreen=1]
-
-Sollten Sie an dieser Stelle jedoch noch keine Podman-Services finden, dann kann dies daran liegen, dass die automatische Erkennung des Agentenplugins, auf den üblichen Wegen, nicht mit Ihrer Podman-Instanz kommunizieren konnte.
-In diesem Fall, und auch wenn Sie gewisse Parameter umstellen wollen, müssen Sie dem Agentenplugin noch eine Konfiguration mitgeben.
-Wie Sie das machen, erfahren Sie im folgenden Kapitel xref:monitoring_podman#configure[Agentenplugin konfigurieren].
-
-
-[#configure]
-=== Agentenplugin konfigurieren
-
-Das Agentenplugin findet im Regelfall selbst heraus, wie es mit Podman, auf dem jeweiligen Host, kommunizieren kann.
-Falls diese automatische Erkennung jedoch fehlschlägt oder Sie festlegen möchten, dass nur bestimmte Sockets oder beispielsweise nur der Root-Socket abgefragt werden sollen, dann können Sie das Plugin entsprechend konfigurieren.
-
-// AI: Defekter Anker – `glossar#dir_conf` existiert nicht im Glossar (einzige Verwendung in der Doku). Entweder den fehlenden Glossar-Eintrag anlegen oder den xref durch einfachen Text ersetzen.
-Erstellen Sie dazu auf dem Podman-Host eine Konfigurationsdatei mit dem Namen `mk_podman.cfg` im xref:glossar#dir_conf[Konfigurationsverzeichnis] des Agenten.
-Im Standardfall lautet dieses `/etc/check_mk/`.
-
-Eine Vorlage für diese Konfigurationsdatei mit ausführlichen Erläuterungen, finden Sie als Instanzbenutzer Ihrer {CMK}-Instanz im Verzeichnis `~/share/check_mk/agents/cfg_examples/mk_podman.cfg`.
-In der grafischen Oberfläche von {CRE} finden Sie die Beispielkonfiguration wieder über [.guihint]#Setup > Agents > Linux > Plug-ins#.
-In den kommerziellen Editionen gelangen Sie im [.guihint]#Setup#-Menü über [.guihint]#Agents > Windows, Linux, Solaris, AIX# zunächst in die xref:wato_monitoringagents#bakery[Agentenbäckerei].
-Von dort aus kommen Sie mit dem Menüeintrag [.guihint]#Related > Linux, Solaris, AIX files# zur Liste der Agentendateien.
-
-Auf eine zentrale Einstellungsmöglichkeit möchten wir allerdings auch an dieser Stelle kurz eingehen.
-Dabei handelt es sich um die `connection_method`, also die Art und Weise, wie `mk_podman.py` versucht, Ihre Podman-Instanz anzusprechen.
-Standardmäßig versucht das Agentenplugin über einen Unix-Socket mit der API von Podman zu sprechen.
-Alternativ können Sie das Plugin anweisen, die Überwachung über das Kommando `podman` durchzuführen.
-// AI: Das Beispiel setzt `piggyback_name_method: name_id`. Im Diagnose-Kapitel werden daraufhin Verzeichnisnamen im Format `containername_containerid` gezeigt. Mit dem Standard `nodename_name` sähen die Namen anders aus (z.B. `mypodmanhost_mycontainer`). Bitte prüfen, ob das Beispiel beide Optionen separat zeigen soll oder ob ein Hinweis auf den Zusammenhang fehlt.
-Eine entsprechende Konfiguration dafür könnte so aussehen:
-
-./etc/check_mk/mk_podman.cfg
-[{file}]
-----
-[PODMAN]
-connection_method: cli
-piggyback_name_method: name_id
-----
-
-
-[#bakery]
-== Einrichtung über die Agentenbäckerei
-
 ifdef::onprem[]
-{cee-only}
-Die Einrichtung wird in den kommerziellen Editionen
+In den kommerziellen Editionen
 endif::[]
 ifdef::saas[]
-Die Einrichtung wird in {CE}
+In {CE}
 endif::[]
-durch die xref:glossar#agent_bakery[Agentenbäckerei] sehr vereinfacht, da Syntaxfehler in den Konfigurationsdateien vermieden werden und Anpassungen an sich verändernde Umgebungen einfach bewerkstelligt werden können.
-
-Nutzen Sie dazu den Regelsatz [.guihint]#Podman hosts and containers (Linux)# und aktivieren Sie dort die Option [.guihint]#Deploy Podman plug-in#.
-
-image::monitoring_podman_podman_hosts_and_containers.png[alt="Ansicht Standardeinstellung der Regel Podman hosts and containers (Linux)."]
-
-Des Weiteren können Sie hier noch die Verbindungsmethode (API oder `podman`-Kommando) und die Benamsung der Container-Hosts festlegen.
-Details zu den Auswahlmöglichkeiten finden Sie in der Inline-Hilfe der Regel.
+können Sie alternativ die xref:wato_monitoringagents#bakery[Agentenbäckerei] nutzen.
+Den zugehörigen Regelsatz finden Sie unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Podman hosts and containers (Linux)#.
+Aktivieren Sie dort [.guihint]#Deploy Podman plug-in# und backen Sie anschließend den Agenten.
+Nach der automatischen Installation des neuen Agentpakets auf dem Host können Sie direkt mit der xref:wato_services#[Service-Erkennung] fortfahren.
 
 
-== Container überwachen
+[#socket_activation]
+=== Socket aktivieren
 
-=== Container-Hosts anlegen
+Das Agentenplugin kommuniziert standardmäßig über einen Unix-Socket mit der Podman-API.
+Der entsprechende systemd-Dienst muss daher aktiv sein.
 
-Das eigentlich Interessante, bei der Überwachung von Podman, ist natürlich das Überwachen der Container.
-Auch diese Daten besorgt natürlich das Agentenplugin.
-Allerdings werden die Services nicht dem Podman-Host zugeordnet, sondern {CMK} geht von einem eigenen Host pro Container aus.
+Für den Root-Socket aktivieren Sie den Dienst als Root:
 
-Die Zuordnung geschieht über den xref:glossar#piggyback[Piggyback]-Mechanismus.
-Sie brauchen dann nur noch im Setup Hosts mit den richtigen Namen anzulegen und die Services werden diesen automatisch zugeordnet.
+[{shell}]
+----
+{c-root} systemctl enable --now podman.socket
+----
 
-In den kommerziellen Editionen können Sie diese Hosts automatisch anlegen lassen.
+Für Rootless-Container aktivieren Sie den Socket für den jeweiligen Benutzer:
+
+[{shell}]
+----
+{c-user} systemctl --user enable --now podman.socket
+----
+
+Im Standard-Modus (`auto`) erkennt das Plugin automatisch sowohl den Root-Socket unter `/run/podman/podman.sock` als auch Benutzer-Sockets nach dem Muster `/run/user/{uid}/podman/podman.sock`.
+
+[TIP]
+====
+Als Alternative zur API-Verbindung über Sockets können Sie das Plugin mit der CLI-Verbindungsmethode betreiben, die den `podman`-Befehl direkt aufruft.
+Diese Methode ist dann nützlich, wenn der Podman-Socket-Dienst nicht verfügbar ist.
+Konfigurieren Sie dazu `connection_method: cli` in der Konfigurationsdatei (siehe xref:finetuning[Plugin feinjustieren]).
+====
+
+
+[#python_requests]
+=== Python-Paket installieren
+
+Das Agentenplugin benötigt das Python-Paket `requests`.
+Prüfen Sie dessen Vorhandensein auf der Befehlszeile des Podman-Hosts:
+
+[{shell}]
+----
+{c-root} python3 -c "import requests; print(requests.__version__)"
+2.28.2
+----
+
+Falls das Paket nicht installiert ist, installieren Sie es bevorzugt über das Paketmanagement Ihrer Linux-Distribution.
+Auf RHEL- und Rocky-Linux-Systemen finden Sie das Paket `python3-requests` im EPEL-Repository:
+
+[{shell}]
+----
+{c-root} dnf install python3-requests
+----
+
+[NOTE]
+====
+Bei der Installation mit `pip3` besteht die Gefahr, von der Distribution mitgelieferte Python-Pakete zu beschädigen.
+Nutzen Sie daher bevorzugt das Paketmanagement Ihrer Distribution.
+====
+
+
+[#finetuning]
+=== Plugin feinjustieren
+
+Sie können das Verhalten des Plugins über eine Konfigurationsdatei anpassen.
+Erstellen Sie dazu auf dem Podman-Host die Datei `/etc/check_mk/mk_podman.cfg`.
+Eine vollständige kommentierte Vorlage finden Sie im {CMK}-Verzeichnis unter `~/share/check_mk/agents/cfg_examples/mk_podman.cfg`.
+
+Die wichtigsten Einstellungen im Überblick:
+
+[cols="30,~"]
+|===
+|Option |Beschreibung
+
+|`connection_method` |Verbindungsmethode: `api` (Standard, über Unix-Socket) oder `cli` (Podman-Befehlszeile ohne Socket)
+|`socket_detection_method` |Socket-Erkennung: `auto` (Standard), `only_root_socket`, `only_user_sockets` oder `manual`
+|`socket_paths` |Manuelle Socket-Pfade, kommagetrennt – nur bei `socket_detection_method: manual`
+|`piggyback_name_method` |Namensbildung der Piggyback-Hosts (siehe xref:piggyback_naming[Piggyback-Hostnamen konfigurieren])
+|===
+
+ifdef::onprem[]
+In den kommerziellen Editionen
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+lassen sich alle Parameter komfortabel in der xref:wato_monitoringagents#bakery[Agentenbäckerei] über den Regelsatz [.guihint]#Podman hosts and containers (Linux)# konfigurieren.
+
+Nach der Installation und Konfiguration des Plugins führen Sie in {CMK} eine xref:wato_services#[Service-Erkennung] für den Podman-Host durch.
+Auf dem Podman-Host erscheinen anschließend unter anderem die folgenden Services:
+
+* [.guihint]#Podman status# – zeigt Fehler des Plugins an
+* [.guihint]#Podman containers# – Anzahl der Container nach Zustand
+* [.guihint]#Podman disk usage: images#, [.guihint]#... containers#, [.guihint]#... volumes# – Festplattennutzung nach Typ
+* [.guihint]#Podman pods# – Anzahl der Pods nach Zustand
+
+
+[#containers]
+=== Container überwachen
+
+==== Container-Hosts anlegen
+
+Das Agentenplugin liefert die Daten der Container im xref:glossar#piggyback[Piggyback]-Verfahren.
+{CMK} legt diese Daten im Verzeichnis `~/tmp/check_mk/piggyback` ab.
+Damit die Services der Container im Monitoring erscheinen, muss für jeden Container ein eigener Host in {CMK} angelegt werden.
+
+Beachten Sie beim manuellen Anlegen Folgendes:
+
+* Der Host-Name muss exakt dem Verzeichnisnamen in `~/tmp/check_mk/piggyback` entsprechen.
+  In der Standardeinstellung lautet er `{nodename}_{containername}`, zum Beispiel `mypodmanhost_nginx`.
+* Falls der Container keine eigene IP-Adresse hat (was in der Regel zutrifft), stellen Sie im Abschnitt [.guihint]#Network address# das Attribut [.guihint]#IP address family# auf [.guihint]#No IP# ein.
+* Bei [.guihint]#Monitoring agents# setzen Sie [.guihint]#{CMK} agent / API integrations# auf [.guihint]#No API integrations, no {CMK} agent#.
+* Im Abschnitt [.guihint]#Basic settings# können Sie das Feld [.guihint]#Parents# auf den Namen des Podman-Hosts setzen.
+* Der Podman-Host und seine Container müssen von derselben {CMK}-Instanz überwacht werden.
+
+ifdef::onprem[]
+In den kommerziellen Editionen
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+können Sie Container-Hosts auch automatisch anlegen lassen.
 Verwenden Sie dazu in der xref:dcd#[dynamischen Host-Verwaltung] den Verbindungstyp [.guihint]#Piggyback data#.
-Sie können die Hosts auch von Hand anlegen.
 
-Beachten Sie dabei Folgendes:
+Nach der Service-Erkennung für die Container-Hosts erscheinen dort unter anderem die folgenden Services:
 
-* Der Host-Name muss exakt dem Verzeichnis entsprechen, welches in `~/tmp/check_mk/piggyback` angelegt wird.
-* Falls die Container keine eigene IP-Adresse haben (was meist der Fall ist), stellen Sie im Abschnitt [.guihint]#Network address# das Attribut bei [.guihint]#IP address family# auf [.guihint]#No IP# ein.
-* Bei [.guihint]#Monitoring agents# stellen Sie [.guihint]#{CMK} agent / API integrations# unbedingt auf [.guihint]#No API integrations, no {CMK} agent# ein.
-* Das Feld [.guihint]#Parents# im Abschnitt [.guihint]#Basic settings# können Sie auf den Host-Namen des Podman-Hosts setzen.
-
-Nachdem Sie die Container-Hosts angelegt und die Service-Erkennung durchgeführt haben, tauchen in dieser weitere Services auf.
-
-
-=== Umbenennung der Container-Hosts
-
-Die Namen für die Container-Hosts erzeugt bereits das Agentenplugin `mk_podman.py`.
-Standardmäßig verknüpft das Plugin dafür den Namen des Podman-Hosts, per Unterstrich, mit dem Namen des Containers.
-Abweichend davon, können Sie das Agentenplugin anweisen, den Container-Namen mit der Container-ID zu kombinieren, oder tatsächlich nur den Container-Namen zu verwenden.
-In der Konfigurationsdatei des Agentenplugins müssen Sie dafür die Option `piggyback_name_method` entweder auf `name` oder `name_id` setzen.
-Wenn Sie sich für eine dieser beiden Methoden entscheiden, müssen Sie allerdings anderweitig sicherstellen, dass es in {CMK} nicht zu Namenskollisionen kommt.
-In {CMK} kann es jeden Host-Namen nur genau einmal geben.
-
-Falls Sie diese Namen dann noch nachträglich ändern wollen, um beispielsweise direkt am Hostnamen bestimmte Informationen ablesen zu können, steht Ihnen der Regelsatz [.guihint]#Host name translation for piggybacked hosts# zur Verfügung.
-Damit können Sie recht flexibel Regeln zur Umbenennung von Host-Namen, die in Piggyback-Daten enthalten sind, festlegen.
-In dem folgenden Beispiel, wird allen Containern, die über den Host [.guihint]#mypodmanhost# Huckepack mitgebracht werden, die Zeichenkette `mypodmanhost-` vorangestellt.
-
-image::monitoring_podman_hostname_translation.png[alt="Regel zur Umbenennung der in den Piggyback-Daten enthaltenen Host-Namen."]
-
-Im Artikel xref:piggyback#renamehosts[Der Piggyback-Mechanismus] finden Sie weitere Möglichkeiten und eine genauere Beschreibung hierzu.
+* [.guihint]#Status# – Container-Zustand (z.B. `Running`, `Exited`, `Paused`)
+* [.guihint]#CPU utilization# – CPU-Auslastung des Containers
+* [.guihint]#Memory# – Arbeitsspeichernutzung des Containers
+* [.guihint]#Disk I/O# – Festplattenaktivität des Containers
+* [.guihint]#Health# – Ergebnis des im Container konfigurierten Health-Checks (sofern vorhanden)
+* [.guihint]#Restart count# – Anzahl der Neustarts des Containers
+* [.guihint]#Uptime# – Laufzeit des Containers seit dem letzten Start
 
 
-=== Zustand der Container-Hosts überwachen
+[#piggyback_naming]
+==== Piggyback-Hostnamen konfigurieren
 
-Im Auslieferungszustand enthält jede {CMK}-Instanz bereits eine Regel im Regelsatz [.guihint]#Host check command#, die dafür sorgt, dass jeder Container-*Host* den Zustand des jeweiligen Service [.guihint]#Status# erhält.
-Diese Regel sollte unverändert bleiben bzw. genau so eingerichtet werden:
+In der Standardeinstellung (`nodename_name`) wird jeder Container-Host nach dem Schema `{nodename}_{containername}` benannt, zum Beispiel `mypodmanhost_nginx`.
+Dies verhindert Namenskollisionen, wenn auf verschiedenen Podman-Hosts Container mit identischem Namen laufen.
 
-image::monitoring_podman_host_status.png[alt="Regel für den Befehl zur Überprüfung des Host-Zustand der Container."]
+Die Namensbildung lässt sich über die Option `piggyback_name_method` in der Konfigurationsdatei `/etc/check_mk/mk_podman.cfg` anpassen:
 
-Der Service [.guihint]#Status# prüft eben, ob der Container läuft und kann daher als sicheres Mittel verwendet werden, um den Host-Zustand zu ermitteln.
-Da jeder Container-Host automatisch das Host-Label `cmk/podman/object:container` zugewiesen bekommt, wird dieses hier als Bedingung verwendet.
+[cols="25,~"]
+|===
+|Wert |Beschreibung
+
+|`nodename_name` (Standard) |`{nodename}_{containername}` – empfohlen, da Kollisionen bei gleichnamigen Containern auf verschiedenen Hosts vermieden werden
+|`name` |Nur der Container-Name – stabil, aber Kollisionen bei gleichnamigen Containern möglich
+|`name_id` |`{containername}_{container-id}` – eindeutig, jedoch kann sich die Container-ID in manchen Fällen ändern
+|===
+
+ifdef::onprem[]
+In den kommerziellen Editionen
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+konfigurieren Sie dies in der xref:wato_monitoringagents#bakery[Agentenbäckerei] unter [.guihint]#Podman hosts and containers (Linux) > Host name used for containers#.
+
+Über den Regelsatz [.guihint]#Host name translation for piggybacked hosts# können Sie Hostnamen aus Piggyback-Daten außerdem flexibel umbenennen.
+Weitere Details hierzu finden Sie im Artikel xref:piggyback#renamehosts[Der Piggyback-Mechanismus].
+
+
+==== Host-Zustand überwachen
+
+ifdef::onprem[]
+Da der xref:monitoring_basics#hosts[Host-Zustand] eines Containers nicht über xref:cmc_differences#smartping[TCP-Pakete oder ICMP] ermittelt werden kann, bietet sich der Service [.guihint]#Status# des jeweiligen Containers an.
+endif::[]
+ifdef::saas[]
+Für die Überwachung des xref:monitoring_basics#hosts[Host-Zustandes] eines Containers bietet sich der Service [.guihint]#Status# des jeweiligen Containers an.
+endif::[]
+Dieser prüft, ob der Container läuft, und kann daher als zuverlässige Grundlage für den Host-Zustand dienen.
+Legen Sie dazu eine Regel im Regelsatz [.guihint]#Host check command# an, setzen Sie [.guihint]#Use the status of the service...# auf den Service [.guihint]#Status#, und schränken Sie die Bedingungen so ein, dass die Regel nur Container-Hosts betrifft.
 
 
 [#diagnose]
 == Diagnosemöglichkeiten
 
-=== Diagnose für einen Podman-Host
+=== Diagnose für den Podman-Host
 
-Sollte die Einrichtung nicht klappen, gibt es verschiedene Möglichkeiten der Analyse des Problems.
-
-Prüfen Sie zuerst die Ausgabe des {CMK}-Agenten.
-Diese erhalten Sie in der Host-Ansicht im Monitoring über den Eintrag [.guihint]#Download agent output# des Aktionsmenüs.
-
-image::monitoring_podman_download_agent_output.png[alt="Aktionsmenü des Hosts im Monitoring mit dem Eintrag zum Download der Agentenausgabe.", width=50%]
+Sollte die Einrichtung nicht wie erwartet funktionieren, prüfen Sie zunächst, ob das Plugin Daten liefert.
+Sie können die Agentenausgabe als Textdatei herunterladen: Öffnen Sie dazu in einer Host-Ansicht im Monitoring das Aktionsmenü und wählen Sie [.guihint]#Download agent output#.
 
 ifdef::onprem[]
-Oder Sie durchsuchen direkt den Agent-Cache.
+Alternativ können Sie den Agenten-Cache direkt auf dem {CMK}-Server durchsuchen:
 
 [{shell-raw}]
 ----
@@ -203,65 +267,79 @@ Oder Sie durchsuchen direkt den Agent-Cache.
 <<<podman_disk_usage:sep(0)>>>
 <<<podman_engine:sep(0)>>>
 <<<podman_pods:sep(0)>>>
-<<<podman_container_inspect:sep(0)>>>
-<<<podman_container_stats:sep(0)>>>
-<<<podman_container_inspect:sep(0)>>>
-<<<podman_container_stats:sep(0)>>>
 ----
 endif::[]
 
-Sollte die Ausgabe des Agenten keine Sektionen beinhalten, die mit `<<<podman` beginnen, müssen Sie auf dem Podman-Host weiter nach der Ursache suchen.
+Falls diese Sektionen fehlen oder der Service [.guihint]#Podman status# den Zustand {CRIT} anzeigt, prüfen Sie Folgendes:
 
-Führen Sie dafür auf dem Podman-Host das Agentenplugin manuell aus:
+* Ist das Plugin vorhanden und ausführbar? Prüfen Sie mit `ls -l /usr/lib/check_mk_agent/plugins/mk_podman.py`.
+* Ist der Podman-Socket-Dienst aktiv? Prüfen Sie mit `systemctl status podman.socket`.
+* Ist das Python-Paket `requests` installiert? Prüfen Sie mit `python3 -c "import requests"`.
+* Erkennt das Plugin den Host als Podman-Host? Es prüft auf `/var/lib/podman`, `/run/podman` oder den Befehl `podman`.
 
-[{shell}]
-----
-{c-root} python3 /usr/lib/check_mk_agent/plugins/mk_podman.py
-----
-
-Die Ausgabe von `mk_podman.py` wird auch im Fehlerfall Hinweise darauf geben, was schief gelaufen ist.
-Falls das Agentenplugin Podman auf dem Host beispielsweise nicht finden kann, dann wird es diesen Umstand unumwunden mitteilen:
-
-[{shell}]
-----
-{c-root} python3 /usr/lib/check_mk_agent/plugins/mk_podman.py
-mk_podman.py: Does not seem to be a podman host. Terminating.
-----
+Die Fehlermeldung des Service [.guihint]#Podman status# enthält eine genauere Beschreibung des Problems, beispielsweise den genauen Pfad des nicht gefundenen Sockets.
 
 
-=== Diagnose für einen Container-Host
+=== Diagnose für Container-Hosts
 
-Falls nur ein Container-Host keine Daten erhält bzw. keine Services für diesen erkannt werden, prüfen Sie zuerst, ob die Piggyback-Daten zu diesem Host vorhanden sind.
-Prüfen Sie dazu erneut den Inhalt der Agentenausgabe dahingehend, ob Sektionen für den Container-Host vorhanden sind.
-Sie können die Agentenausgabe bspw. nach der ID des Containers durchsuchen.
+Falls ein Container-Host keine Daten erhält, prüfen Sie zunächst, ob die Piggyback-Daten im richtigen Verzeichnis abgelegt werden.
+Der Host-Name in {CMK} muss exakt dem Verzeichnisnamen in `~/tmp/check_mk/piggyback` entsprechen.
 
 ifdef::onprem[]
-Als Instanzbenutzer können Sie prüfen, ob zu einem Container Piggyback-Daten angelegt wurden.
-Im Verzeichnis `tmp/check_mk/piggyback` müssen Sie Verzeichnisse finden, die zu Ihren Containern gehören.
-
-// AI: Diese Beschreibung gilt nur für die Methode `name_id` (Containername + 12-stellige Container-ID), die im Konfigurationsbeispiel weiter oben gesetzt wurde. Mit der Standardmethode `nodename_name` hätten die Verzeichnisse das Format `knotenname_containername`. Bitte den Text und das Shell-Beispiel auf die im eigenen Setup verwendete Methode abstimmen oder klarstellen, dass hier vom obigen Beispiel ausgegangen wird.
-Wenn Sie die Host-Namen nicht per [.guihint]#Host name translation for piggybacked hosts# verändern, sollten Sie hier Verzeichnisse finden, die sich aus dem Namen des Containers und seiner ID zusammensetzen.
-
 [{shell}]
 ----
 {c-omd} ls tmp/check_mk/piggyback/
-exciting_cori_25e6c35a9adb/  quirky_rubin_3900d763658e/
+mypodmanhost_nginx  mypodmanhost_myapp
 ----
 endif::[]
+
+Falls der Name nicht übereinstimmt, können Sie im Regelsatz [.guihint]#Host name translation for piggybacked hosts# eine explizite Zuordnung per [.guihint]#Explicit hostname mapping# vornehmen.
 
 
 [#host_labels]
 == Host-Labels
 
-{CMK} erzeugt auch für alle Podman-Objekte, die überwacht werden können, xref:labels#[Host-Labels].
-Das Podman-Monitoring setzt unter anderem diese automatischen Labels: 
+Das Podman-Monitoring setzt automatisch xref:labels#[Host-Labels], die Sie als Bedingungen in xref:wato_rules#[Regeln] nutzen können:
 
-// AI: Drei Punkte zur Prüfung: (1) `cmk/podman/user` fehlt der Wert – der tatsächliche Label lautet z.B. `cmk/podman/user:root`; bitte mit Wert-Platzhalter angeben. (2) Der Quellcode setzt für den Podman-Host auch `cmk/podman/host:{hostname}` (podman_engine.py), der hier nicht aufgeführt ist. (3) Das Pod-Label heißt konkret `cmk/podman/pod:{pod-name}`; ggf. explizit benennen.
-* für den Podman-Host das Label `cmk/podman/object:node`,
-* für jeden Container die Labels `cmk/podman/object:container` und `cmk/podman/user`,
-* für alle Container, die Teil eines Pods sind, werden außerdem noch Labels erzeugt, welche den Pod identifizieren.
+Für den Podman-Host (Node):
 
-Diese Labels können Sie z.B. in Bedingungen für Ihre xref:wato_rules#[Regeln] verwenden, um Ihre Monitoring-Konfiguration abhängig von dem Image zu machen, das in einem Container verwendet wird.
+* `cmk/podman/object:node` – kennzeichnet den Host als Podman-Node
+* `cmk/podman/host:{hostname}` – Hostname des Podman-Nodes
+
+Für jeden Container:
+
+* `cmk/podman/object:container` – kennzeichnet den Host als Podman-Container
+* `cmk/podman/user:{user}` – Benutzer, dem der verwendete Podman-Socket gehört
+* `cmk/podman/pod:{pod}` – Pod, in dem der Container läuft (nur gesetzt, wenn der Container Teil eines Pods ist)
+* `cmk/docker_image` – vollständiger Image-Name, z.B. `docker.io/library/nginx:latest`
+* `cmk/docker_image_name` – Image-Name ohne Registry und Tag, z.B. `nginx`
+* `cmk/docker_image_version` – Image-Tag, z.B. `latest`
+
+[NOTE]
+====
+Die Labels `cmk/docker_image`, `cmk/docker_image_name` und `cmk/docker_image_version` sind absichtlich identisch zu den Labels des xref:monitoring_docker#host_labels[Docker-Monitorings].
+So können Sie Docker- und Podman-Container mit denselben Regeln verwalten.
+====
+
+
+[#inventory]
+== HW/SW-Inventur
+
+Das Podman-Monitoring liefert Inventurdaten, die Sie in der xref:inventory#[HW/SW-Inventur] einsehen können.
+
+Für den Podman-Host enthält die Inventur unter [.guihint]#Software > Applications > Podman# unter anderem:
+
+* Betriebsmodus: Rootful oder Rootless
+* API-Version
+* Anzahl der Container nach Zustand (laufend, pausiert, gestoppt, beendet)
+* Anzahl der Images
+
+Eine Tabelle aller Container mit ID, Name, Status, Image, Labels und Erstellungszeitpunkt sowie eine Tabelle aller Images mit ID, Repository, Tag und Größe sind ebenfalls abrufbar.
+
+Für jeden Container enthält die Inventur außerdem:
+
+* Hostname, Pod-Zugehörigkeit und Labels
+* Netzwerkinformationen: IP-Adresse, Gateway, MAC-Adresse
 
 
 ifdef::onprem[]
@@ -270,11 +348,12 @@ ifdef::onprem[]
 
 [cols="30,~"]
 |===
-|Pfad |Bedeutung 
+|Pfad |Bedeutung
 
-|`~/tmp/check_mk/piggyback/` |Hier legt {CMK} die Piggyback-Daten ab. Für jeden Piggybacked-Host wird ein Unterordner mit seinem Namen erzeugt. Darin befindet sich eine Textdatei mit den Daten des Hosts. Der Dateiname ist der Name des Piggyback-Hosts, welcher die Daten angeliefert hat.
-|`~/tmp/check_mk/cache/` |Hier wird die jeweils jüngste Agentenausgabe aller Hosts temporär gespeichert. Der Inhalt einer Datei zu einem Host ist identisch zur Ausgabe des Befehls `cmk -d myserver123`.
-|`/usr/lib/check_mk_agent/plugins` |standardmäßiges Plugin-Verzeichnis auf Linux-Host
-|`/etc/check_mk/` |standardmäßiges Konfigurationsverzeichnis auf einem Linux-Host
+|`/usr/lib/check_mk_agent/plugins/mk_podman.py` |Das Agentenplugin für Podman
+|`/etc/check_mk/mk_podman.cfg` |Konfigurationsdatei des Plugins (optional; wird ohne diese Datei mit Standardwerten ausgeführt)
+|`~/share/check_mk/agents/cfg_examples/mk_podman.cfg` |Kommentierte Beispielkonfiguration mit allen verfügbaren Optionen
+|`~/tmp/check_mk/piggyback/` |Ablageverzeichnis für Piggyback-Daten; für jeden Container-Host wird ein Unterordner mit seinem Namen angelegt
+|`~/tmp/check_mk/cache/` |Zwischengespeicherte Agentenausgaben aller Hosts
 |===
 endif::[]
