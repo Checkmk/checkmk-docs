@@ -1,6 +1,9 @@
 #!/usr/bin/env ruby
 # encoding: utf-8
 
+require 'json'
+require 'optparse'
+
 $startdate = '2025-08-01'
 
 def retrieve_commits() 
@@ -39,46 +42,45 @@ def switch_branch(target)
 end
 
 def check_against_ignores(commitinfo)
-	@ignore_tickets.each { |t|
+	@cfg["ignore_tickets"].each { |t|
 		return false if commitinfo[2].include? t
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		unless @ignore_files.include? fname
+		unless @cfg["ignore_files"].include? fname
 			return true
 		end
 	}
 	return false
 end
 
-@ignore_files = [ 
-	"real_time_checks.asciidoc", # on hold
-	"real_time_checks_enable.png", # on hold
-	"real_time_checks_agent_rule.png", # on hold
-	"real_time_checks_cpu_load_graph.png", # on hold
-	"real_time_checks_rrd_config.png", # on hold
-	"real_time_checks_service_overview.png", # on hold
-	"internal_reference.asciidoc", # only of use in master
-	"release_notes.asciidoc", # already diverting
-	"relay.asciidoc", # Only 2.5
-	"snmp.asciidoc", # Moved to common, manually patch
-	"opentelemetry.asciidoc", # massively diverting
-	"update_major.asciidoc", # forked
-]
-@ignore_tickets = [
-	"KNW-2043", # 2.5.0 only topic
-	"KNW-1966", # 2.5.0 only topic
-	"KNW-2149", # on hold; to be discussed in breakout session on 2026-05-18
-]
-@ignore_commits = [
+def get_config()
+	@cfg = {
+		"ignore_files" => [],
+		"ignore_tickets" => [],
+	}
+	opts = OptionParser.new
+	opts.on('--config', :REQUIRED) { |i|
+		cfgfile = i
+		@cfg = JSON.parse(File.read(cfgfile))
+		@cfg['cfgfile'] = cfgfile
+	}
+	opts.parse!
+end
 
-]
+@cfg = {}
+# @ignore_commits = []
+# @only_tickets = []
+# @only_files = []
 
 # Force these tickets to behave like pick-24
 # Add a comment to each ticket to make cleaning easier later
-@force_tickets = [
-	"KNW-9999", # Example: Mattias is working on this...
-]
+# @force_tickets = [
+# 	"KNW-9999", # Example: Mattias is working on this...
+# ]
+
+get_config
+# print @cfg
 
 pickbranches = [ "2.4.0" ]
 missingcommits = {}
