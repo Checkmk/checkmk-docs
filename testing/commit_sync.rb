@@ -92,7 +92,7 @@ clist.each { |c|
     missingcommits.push c unless check_present(olist, c[0])
 }
 
-missingcommits.each { |l|
+missingcommits.each { |c|
     l.reverse.each { |c|
 		@allfiles.push c[3]
 		puts "#{c[0]} + #{c[1]} + #{c[2]}"
