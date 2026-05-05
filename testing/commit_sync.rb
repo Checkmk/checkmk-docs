@@ -34,6 +34,36 @@ def check_present(commitlist, commitdate)
     return false
 end
 
+# Convert the list of all to a tree
+# Challenges:
+#  * Commit IDs change when a commit is picked
+#  * The timestamp is only 1s resolution
+#  * Commit messages might be the same when commited via a script
+# 
+# Solution: Create a data structure that supports checking for the same of:
+#  * Commit timestamp
+#  * Author email
+#  * Files affected
+
+def commitlist_to_tree(commitlist)
+	committree = {}
+	commitlist.each { |c|
+		# Create an empty list with the timestamp/email pair as key
+		committree[c[0]] = [] unless committree.has_key? c[0]
+		commitmeta = { c[1] => c[3] }
+		committree[c[0]].push commitmeta
+	}
+	return committree
+end
+
+def check_present_tree(committree, commitinfo)
+	return false unless committree.has_key? commitinfo[0]
+	committree[commitinfo[0]].each { |cid, cfiles|
+		return true if cfiles & commitinfo[3] == cfiles
+	}
+	return false
+end
+
 def switch_branch(target)
     ret = system("git checkout #{target}")
 	raise "CheckoutFailed" unless ret
@@ -41,8 +71,9 @@ def switch_branch(target)
 end
 
 def check_against_ignores(commitinfo)
-	@cfg["ignore_tickets"].each { |t|
-		return false if commitinfo[2].include? t
+	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords.each { |c|
+		return true if @cfg["ignore_tickets"].include? c
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
@@ -114,22 +145,26 @@ def ask_and_pick(missingcommits)
 		}
 		ask = true
 		decision = "no"
-		# Forced tickets/files first:
 		if check_against_forced(c)
+			# Forced tickets/files first, these also override the ignores if defined
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
-		elsif !check_against_ignores(c)
+		elsif check_against_ignores(c) == false
+			# Ignore ticket IDs or files on the ignore list, do not ask
 			puts "===> No decision needed, ticket or files on ignore list."
 			c[3].each { |f| @files_with_skipped_commits.push f }
 			ask = false
 			decision = "no"
 		elsif nskipped > 0
+			# If there are skipped commits in this session, default to: no
 			defdec = "no"
 			puts "===> Try to pick? [N/y] "
 		elsif commitwords.include? @cfg["keyword"]
+			# If the correct pick keyword is present, default to: yes
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
 		else
+			# Everything else, default to: no
 			defdec = "no"
 			puts "===> Try to pick? [N/y] "
 		end
@@ -157,9 +192,10 @@ switch_branch @cfg["pick_from_branch"]
 clist = retrieve_commits
 switch_branch @cfg["pick_to_branch"]
 olist = retrieve_commits
+otree = commit_list_to_tree(olist)
 
 clist.each { |c|
-    missingcommits.push c unless check_present(olist, c[0])
+    missingcommits.push c unless check_present_tree(otree, c)
 }
 
 ask_and_pick(missingcommits)
