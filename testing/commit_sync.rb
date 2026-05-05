@@ -94,6 +94,18 @@ def check_against_forced(commitinfo)
 	return false
 end
 
+def check_against_only(commitinfo)
+	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords.each { |c|
+		return true if @cfg["only_tickets"].include? c
+	}
+	commitinfo[3].each { |f|
+		fname = f.split("/")[-1]
+		return true if @cfg["only_files"].include? fname
+	}
+	return false
+end
+
 def get_config()
 	@cfg = {}
 	opts = OptionParser.new
@@ -104,9 +116,11 @@ def get_config()
 	}
 	opts.on('--since', :REQUIRED) { |i| @cfg["start_date"] = i }
 	opts.on('--only-files', :REQUIRED) { |i| @cfg["only_files"] = i.split(',') }
+	opts.on('--only-tickets', :REQUIRED) { |i| @cfg["only_tickets"] = i.split(',') }
 	opts.on('--force-tickets', :REQUIRED) { |i| @cfg["force_tickets"] = i.split(',') }
+	opts.on('--force-files', :REQUIRED) { |i| @cfg["force_files"] = i.split(',') }
 	opts.parse!
-	[ "ignore_files", "ignore_tickets", "only_files", "force_files", "force_tickets" ].each { |n|
+	[ "ignore_files", "ignore_tickets", "only_files", "only_tickets", "force_files", "force_tickets" ].each { |n|
 		@cfg[n] = [] unless @cfg.has_key? n
 	}
 end
@@ -128,6 +142,11 @@ def try_to_pick(commitinfo)
 end
 
 def ask_and_pick(missingcommits)
+	# If only_files or only_commits is set, the everything else check should not be run
+	only_active = false
+	if @cfg["only_files"].size > 0 && @cfg["only_tickets"].size > 0
+		only_active = true
+	end
 	missingcommits.reverse.each { |c|
 		@allfiles.push c[3]
 		puts "#{c[0]} + #{c[1]} + #{c[2]}"
@@ -143,8 +162,13 @@ def ask_and_pick(missingcommits)
 		}
 		ask = true
 		decision = "no"
-		if check_against_forced(c)
-			# Forced tickets/files first, these also override the ignores if defined
+		if only_active && check_against_only(c)
+			# Override for only first, these also override the ignores if defined
+			# and they beat the next comparison for forced files/tickets
+			defdec = "yes"
+			puts "===> Try to pick? [Y/n] "
+		elsif check_against_forced(c)
+			# Forced tickets/files second, these also override the ignores if defined
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
 		elsif check_against_ignores(c)
@@ -161,6 +185,12 @@ def ask_and_pick(missingcommits)
 			# If the correct pick keyword is present, default to: yes
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
+		elsif only_active
+			# Hard ignore if the option 
+			puts "===> No decision needed, ticket or files not on only ticket/file list."
+			c[3].each { |f| @files_with_skipped_commits.push f }
+			ask = false
+			decision = "no"
 		else
 			# Everything else, default to: no
 			defdec = "no"
