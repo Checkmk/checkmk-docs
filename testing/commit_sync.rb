@@ -144,7 +144,7 @@ end
 def ask_and_pick(missingcommits)
 	# If only_files or only_commits is set, the everything else check should not be run
 	only_active = false
-	if @cfg["only_files"].size > 0 && @cfg["only_tickets"].size > 0
+	if @cfg["only_files"].size > 0 || @cfg["only_tickets"].size > 0
 		only_active = true
 	end
 	missingcommits.reverse.each { |c|
