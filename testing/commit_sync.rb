@@ -35,7 +35,8 @@ def check_present(commitlist, commitdate)
 end
 
 def switch_branch(target)
-    system("git checkout #{target}")
+    ret = system("git checkout #{target}")
+	raise "CheckoutFailed" unless ret
     system("git pull")
 end
 
@@ -83,7 +84,7 @@ missingcommits = []
 # Hold all files with already skipped commits, these should not pick as default
 @files_with_skipped_commits = []
 
-switch_branch "master"
+switch_branch @cfg["pick_from_branch"]
 clist = retrieve_commits
 switch_branch @cfg["pick_to_branch"]
 olist = retrieve_commits
@@ -97,7 +98,7 @@ puts missingcommits
 missingcommits.reverse.each { |c|
 	@allfiles.push c[3]
 	puts "#{c[0]} + #{c[1]} + #{c[2]}"
-	commitwords = c[2].split
+	commitwords = c[2].gsub(',', ' ').split
 	nskipped = 0
 	c[3].each { |f|
 		s = ""
