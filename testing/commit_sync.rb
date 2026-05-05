@@ -66,10 +66,7 @@ def check_against_forced(commitinfo)
 end
 
 def get_config()
-	@cfg = {
-		"ignore_files" => [],
-		"ignore_tickets" => [],
-	}
+	@cfg = {}
 	opts = OptionParser.new
 	opts.on('--config', :REQUIRED) { |i|
 		cfgfile = i
@@ -80,7 +77,9 @@ def get_config()
 	opts.on('--only-files', :REQUIRED) { |i| @cfg["only_files"] = i.split(',') }
 	opts.on('--force-tickets', :REQUIRED) { |i| @cfg["force_tickets"] = i.split(',') }
 	opts.parse!
-	@cfg["only_files"] = [] unless @cfg.has_key? "only_files"
+	[ "ignore_files", "ignore_tickets", "only_files", "force_files", "force_tickets" ].each { |n|
+		@cfg[n] = [] unless @cfg.has_key? n
+	}
 end
 
 def try_to_pick(commitinfo)
