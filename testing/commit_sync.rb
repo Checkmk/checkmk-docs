@@ -192,7 +192,7 @@ switch_branch @cfg["pick_from_branch"]
 clist = retrieve_commits
 switch_branch @cfg["pick_to_branch"]
 olist = retrieve_commits
-otree = commit_list_to_tree(olist)
+otree = commitlist_to_tree(olist)
 
 clist.each { |c|
     missingcommits.push c unless check_present_tree(otree, c)
