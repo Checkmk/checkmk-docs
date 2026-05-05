@@ -77,7 +77,7 @@ def check_against_ignores(commitinfo)
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		unless @cfg["ignore_files"].include? fname
+		if @cfg["ignore_files"].include? fname
 			return true
 		end
 	}
