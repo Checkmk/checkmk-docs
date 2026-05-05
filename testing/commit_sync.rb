@@ -4,11 +4,9 @@
 require 'json'
 require 'optparse'
 
-$startdate = '2025-08-01'
-
 def retrieve_commits() 
     commitlist = []
-    IO.popen("git log --oneline --since #{$startdate}") { |l|
+    IO.popen("git log --oneline --since #{@cfg["start_date"]}") { |l|
         while l.gets
             ltoks = $_.split(' ', 2)
             cid = ltoks[0]
@@ -65,13 +63,11 @@ def get_config()
 		@cfg = JSON.parse(File.read(cfgfile))
 		@cfg['cfgfile'] = cfgfile
 	}
+	opts.on('--since', :REQUIRED) { |i| @cfg["start_date"] = i }
 	opts.parse!
 end
 
 @cfg = {}
-# @ignore_commits = []
-# @only_tickets = []
-# @only_files = []
 
 # Force these tickets to behave like pick-24
 # Add a comment to each ticket to make cleaning easier later
@@ -80,29 +76,27 @@ end
 # ]
 
 get_config
-# print @cfg
+print @cfg
 
-pickbranches = [ "2.4.0" ]
-missingcommits = {}
+missingcommits = []
 @allfiles = []
 # Hold all files with already skipped commits, these should not pick as default
 @files_with_skipped_commits = []
-pickbranches.each { |b| missingcommits[b] = [] }
 
 switch_branch "master"
 clist = retrieve_commits
-switch_branch pickbranches[0]
+switch_branch @cfg["pick_to_branch"]
 olist = retrieve_commits
 
 clist.each { |c|
-    missingcommits[pickbranches[0]].push c unless check_present(olist, c[0])
+    missingcommits.push c unless check_present(olist, c[0])
 }
 
-missingcommits.each { |b,l|
-    puts "#{b}:"
+missingcommits.each { |c|
     l.reverse.each { |c|
 		@allfiles.push c[3]
 		puts "#{c[0]} + #{c[1]} + #{c[2]}"
+		commitwords = c[2].split
 		nskipped = 0
 		c[3].each { |f|
 			s = ""
@@ -116,9 +110,12 @@ missingcommits.each { |b,l|
 			if nskipped > 0
 				defdec = "n"
 				puts "===> Try to pick? [N/y] "
-			else
+			elsif commitwords.include? @cfg["keyword"]
 				defdec = "y"
 				puts "===> Try to pick? [Y/n] "
+			else
+				defdec = "n"
+				puts "===> Try to pick? [N/y] "
 			end
 			decision = gets
 			decision = defdec if decision.strip == ""
