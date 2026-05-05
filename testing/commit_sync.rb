@@ -92,55 +92,55 @@ clist.each { |c|
     missingcommits.push c unless check_present(olist, c[0])
 }
 
-missingcommits.each { |c|
-    l.reverse.each { |c|
-		@allfiles.push c[3]
-		puts "#{c[0]} + #{c[1]} + #{c[2]}"
-		commitwords = c[2].split
-		nskipped = 0
-		c[3].each { |f|
-			s = ""
-			if @files_with_skipped_commits.include? f
-				s = " <= has skipped commits!"
-				nskipped += 1
-			end
-			puts "    #{f}#{s}"
-		}
-		if check_against_ignores(c)
-			if nskipped > 0
-				defdec = "n"
-				puts "===> Try to pick? [N/y] "
-			elsif commitwords.include? @cfg["keyword"]
-				defdec = "y"
-				puts "===> Try to pick? [Y/n] "
-			else
-				defdec = "n"
-				puts "===> Try to pick? [N/y] "
-			end
-			decision = gets
-			decision = defdec if decision.strip == ""
-			if decision.strip =~ /^y/i
-				ret = system("git cherry-pick #{c[1]}")
-				unless ret
-					puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
-					secdec = gets
-					if secdec.strip == "" || secdec.strip =~ /^e/
+puts missingcommits 
+
+missingcommits.reverse.each { |c|
+	@allfiles.push c[3]
+	puts "#{c[0]} + #{c[1]} + #{c[2]}"
+	commitwords = c[2].split
+	nskipped = 0
+	c[3].each { |f|
+		s = ""
+		if @files_with_skipped_commits.include? f
+			s = " <= has skipped commits!"
+			nskipped += 1
+		end
+		puts "    #{f}#{s}"
+	}
+	if check_against_ignores(c)
+		if nskipped > 0
+			defdec = "n"
+			puts "===> Try to pick? [N/y] "
+		elsif commitwords.include? @cfg["keyword"]
+			defdec = "y"
+			puts "===> Try to pick? [Y/n] "
+		else
+			defdec = "n"
+			puts "===> Try to pick? [N/y] "
+		end
+		decision = gets
+		decision = defdec if decision.strip == ""
+		if decision.strip =~ /^y/i
+			ret = system("git cherry-pick #{c[1]}")
+			unless ret
+				puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
+				secdec = gets
+				if secdec.strip == "" || secdec.strip =~ /^e/
+					exit 1
+				else
+					c[3].each { |f| @files_with_skipped_commits.push f }
+					unless system("git cherry-pick --abort")
 						exit 1
-					else
-						c[3].each { |f| @files_with_skipped_commits.push f }
-						unless system("git cherry-pick --abort")
-							exit 1
-						end
 					end
 				end
-			else
-				c[3].each { |f| @files_with_skipped_commits.push f }
 			end
 		else
-			puts "===> No decision needed, ticket or files on ignore list."
 			c[3].each { |f| @files_with_skipped_commits.push f }
 		end
-    }
+	else
+		puts "===> No decision needed, ticket or files on ignore list."
+		c[3].each { |f| @files_with_skipped_commits.push f }
+	end
 }
 
 #~ @allfiles = @allfiles.sort.uniq
