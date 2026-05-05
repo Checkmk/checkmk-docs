@@ -162,11 +162,18 @@ def ask_and_pick(missingcommits)
 		}
 		ask = true
 		decision = "no"
+		puts "Only? #{only_active}"
 		if only_active && check_against_only(c)
 			# Override for only first, these also override the ignores if defined
 			# and they beat the next comparison for forced files/tickets
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
+		elsif only_active
+			# Hard ignore if the only option is set, but other criteria are not met 
+			puts "===> No decision needed, ticket or files not on only ticket/file list."
+			c[3].each { |f| @files_with_skipped_commits.push f }
+			ask = false
+			decision = "no"
 		elsif check_against_forced(c)
 			# Forced tickets/files second, these also override the ignores if defined
 			defdec = "yes"
@@ -185,12 +192,6 @@ def ask_and_pick(missingcommits)
 			# If the correct pick keyword is present, default to: yes
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
-		elsif only_active
-			# Hard ignore if the option 
-			puts "===> No decision needed, ticket or files not on only ticket/file list."
-			c[3].each { |f| @files_with_skipped_commits.push f }
-			ask = false
-			decision = "no"
 		else
 			# Everything else, default to: no
 			defdec = "no"
