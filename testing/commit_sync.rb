@@ -113,27 +113,29 @@ def ask_and_pick(missingcommits)
 			puts "    #{f}#{s}"
 		}
 		ask = true
-		decision = ""
+		decision = "no"
 		# Forced tickets/files first:
 		if check_against_forced(c)
-			defdec = "y"
+			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
 		elsif !check_against_ignores(c)
 			puts "===> No decision needed, ticket or files on ignore list."
 			c[3].each { |f| @files_with_skipped_commits.push f }
 			ask = false
+			decision = "no"
 		elsif nskipped > 0
-			defdec = "n"
+			defdec = "no"
 			puts "===> Try to pick? [N/y] "
 		elsif commitwords.include? @cfg["keyword"]
-			defdec = "y"
+			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
 		else
-			defdec = "n"
+			defdec = "no"
 			puts "===> Try to pick? [N/y] "
 		end
 		decision = gets if ask == true
 		decision = defdec if decision.strip == ""
+		puts "Decision: #{decision}"
 		if decision.strip =~ /^y/i
 			try_to_pick(c)
 		else
