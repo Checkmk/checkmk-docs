@@ -77,9 +77,7 @@ def check_against_ignores(commitinfo)
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		if @cfg["ignore_files"].include? fname
-			return true
-		end
+		return true if @cfg["ignore_files"].include? fname
 	}
 	return false
 end
@@ -149,7 +147,7 @@ def ask_and_pick(missingcommits)
 			# Forced tickets/files first, these also override the ignores if defined
 			defdec = "yes"
 			puts "===> Try to pick? [Y/n] "
-		elsif check_against_ignores(c) == false
+		elsif check_against_ignores(c)
 			# Ignore ticket IDs or files on the ignore list, do not ask
 			puts "===> No decision needed, ticket or files on ignore list."
 			c[3].each { |f| @files_with_skipped_commits.push f }
