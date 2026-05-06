@@ -16,7 +16,7 @@ import argparse
 import git
 from importlib.metadata import version
 
-TRANSLATE_REGEX: str = r"^translated\|^content-sync\|^content_sync"
+TRANSLATE_REGEX: str = r"translated\|content-sync\|content_sync"
 DEFAULT_DATE: int = (
     1704063599  # set to 2023-12-31 23:59:59; need to adjust if including legacy articles
 )
