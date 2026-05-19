@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE
+// IGNORE  Toolchain MY_JIRA_URL atlassian
 include::global_attr.adoc[]
 = Benachrichtigungen per Jira
 :title: Benachrichtigungen per Jira (notifications)
@@ -41,7 +41,7 @@ Damit ist es dann einfach möglich, dass verschiedene Benutzer Issues in verschi
 == Jira konfigurieren
 
 {CMK} muss bei der Interaktion mit Jira wissen, welche Benachrichtigungen bereits einen Issue erzeugt haben und welche nicht.
-Damit das möglich wird, müssen Sie in Jira zwei sogenannte _Custom fields,_ also benutzerdefinierte Felder, erstellen -- eines für Benachrichtigungen über Host-Probleme, und eines über Service-Probleme.
+Damit das möglich wird, müssen Sie in Jira zwei sogenannte _Custom fields_, also benutzerdefinierte Felder, erstellen -- eines für Benachrichtigungen über Host-Probleme, und eines über Service-Probleme.
 
 Um die Host- und Service-Probleme zuordnen zu können, müssen deren IDs eindeutig sein.
 Dies ist der Fall, wenn Ihre Jira-Instanz von genau _einer_ {CMK}-Instanz Benachrichtigungen erhält, da der Monitoring-Kern einer {CMK}-Instanz für die Eindeutigkeit sorgt.
@@ -53,7 +53,7 @@ In einer solchen Konfiguration benötigen Sie ein weiteres benutzerdefiniertes F
 
 Für die Konfiguration in {CMK} benötigen Sie die Jira-IDs der erstellten benutzerdefinierten Felder -- und zusätzlich die von einigen anderen Feldern, im Ganzen also die folgende Liste:
 
-* Project ID
+* Project/Space ID
 * Issue type ID
 * Priority ID (optional)
 * Host custom field ID
@@ -78,14 +78,14 @@ Die in der folgenden Tabelle enthaltenen Namen passen aber zum Skript, mit dem S
 [cols="~,~,~",options="header"]
 |===
 |Benutzerdefiniertes Feld |Feldtyp |Name
-|Host custom field |`Text field (single line)` |`CMK_HOST_FIELD` (Beispiel)
-|Service custom field |`Text field (single line)` |`CMK_SVC_FIELD` (Beispiel)
-|Site custom field (optional) |`Text field (single line)` |`CMK_SITE_FIELD` (Beispiel)
+|Host custom field |`Short text (plain text only)` |`CMK_HOST_FIELD` (Beispiel)
+|Service custom field |`Short text (plain text only)` |`CMK_SVC_FIELD` (Beispiel)
+|Site custom field (optional) |`Short text (plain text only)` |`CMK_SITE_FIELD` (Beispiel)
 |===
 
 [TIP]
 ====
-Der Feldtyp `Text field (single line)` für „Host custom field“ und „Service custom field“ ist ab der {CMK}-Version {v24} notwendig,
+Der Feldtyp `Short text (plain text only)` für „Host custom field“ und „Service custom field“ ist ab der {CMK}-Version {v24} notwendig,
 ifdef::onprem[]
 wenn Sie Jira-Benachrichtigungen xref:notification_rules#notification_testing[testen] oder über die xref:ec.html#notifications[Event Console] erzeugen möchten.
 endif::[]
@@ -103,14 +103,19 @@ Achten Sie außerdem darauf, dass der Jira-Benutzer, der von {CMK} zum Erstellen
 
 Sie können die IDs gesammelt mit folgendem Skript abfragen, das die link:https://docs.atlassian.com/software/jira/docs/api/REST/latest[Jira REST-API^] nutzt.
 
-Ersetzen Sie dabei `JIRA_USERNAME`, `JIRA_PASSWORD`, `PROJECT_KEY` und `\https://jira.server.your-domain.de` mit den bei Ihnen gültigen Werten.
-Den `PROJECT_KEY` können Sie auch ohne administrative Rechte aus der Jira-GUI ermitteln.
+Ersetzen Sie Sie dazu die Beispielwerte der folgenden Variablen:
+
+- `user`: Jira-Nutzer in Form einer Email-Adresse.
+- `api_token`: Die Erstellung eines Tokens zeigt die link:https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/[Jira-Dokumentation.^] 
+- `space_key`: Schlüssel des Space wie in der Weboberfläche und der URL zu sehen (häufig ein 3-Buchstaben-Kürzel).
+- `jira_instance`: Die URL zur Jira-Instanz (häufig etwa _https://MY_JIRA_URL.atlassian.net_)
 
 [IMPORTANT]
 ====
-Falls Sie ein Jira Cloud-Produkt nutzen, erfolgt die Authentifizierung des Skripts nicht mit Passwort, sondern mit einem API-Token.
-Hintergründe und die Anleitung zum Erstellen eines API-Tokens stehen in der link:https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/[Jira-Dokumentation.^] 
-In Jira können Sie das generierte API-Token in die Zwischenablage kopieren und im folgenden Skript als `JIRA_PASSWORD` einfügen.
+Das Skript ist auf Jira Cloud und API-Version 3 ausgelegt.
+On-Prem-Versionen von Jira verlangen eine Authentifizierung per Passwort statt API-Token und setzen gegebenenfalls auf API-Version 2.
+Sollten Sie das Skript für ältere On-Prem-Versionen einsetzen wollen, ändern Sie die Variable `api_version` und verwenden Sie statt Email/API-Token die Kombination Nutzername/Passwort.
+Voraussetzung ist, dass die Basic-Authentifizierung noch unterstützt wird.
 ====
 
 .example_script.py
@@ -118,64 +123,128 @@ In Jira können Sie das generierte API-Token in die Zwischenablage kopieren und 
 ----
 #!/usr/bin/env python3
 
-import requests
 import sys
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import re
+import requests
 
-user = "JIRA_USERNAME"
-password = "JIRA_PASSWORD"
-project_key = "PROJECT_KEY"
-jira_instance = "https://jira.server.your-domain.de"
+# Jira Cloud: use email + API token, NOT your Atlassian password
+user = "MY_USER_NAME@example.com"
+api_token = "MY_API_TOKEN_ABCDE12345"
+
+space_key = "MY_SPACE_KEY"
+jira_instance = "https://MY_JIRA_URL.atlassian.net"
+
 custom_field_1 = "CMK_HOST_FIELD"
 custom_field_2 = "CMK_SVC_FIELD"
-custom_field_3 = "CMK_SITE_FIELD" # don't edit if field is not used
+custom_field_3 = "CMK_SITE_FIELD"  # leave as-is if unused
 
-def handle_response(user, password, jira_instance, what):
-    url = "%s/rest/api/2/%s" % (jira_instance, what)
-    sess = requests.Session()
-    sess.auth = (user, password)
-    response = sess.get(url, verify=False)
+# Jira API version (change if using older on-prem verions of Jira)
+api_version = "3"   # Cloud
+# api_version = "2" # Server/DC
 
-    return response
+def get_json(session, jira_instance, resource_name):
+    url = f"{jira_instance.rstrip('/')}/rest/api/{api_version}/{resource_name}"
 
-sys.stdout.write("=== IDs for project %s ===\n" % project_key)
-infotext = ""
-for section, id_name in [ ("Project_ID", "project"),
-                          ("Issue", "issuetype"),
-                          ("Priority", "priority"),
-                          ("Field", "field"),
-                        ]:
+    response = session.get(
+        url,
+        headers={"Accept": "application/json"},
+        timeout=30,
+    )
 
-    json_response = handle_response(user,password,jira_instance,id_name).json()
-    if id_name == "project":
-        infotext = ""
-        for project in json_response:
-            if project["key"] == project_key:
-                infotext += "%s\n\n" % project.get("id", "Project ID not found")
-        if not infotext:
-            infotext += "Project ID not found, project name existing?\n\n"
-    else:
-        types = ""
-        for line in json_response:
-            if id_name == "field":
-                if line["name"].lower() == custom_field_1.lower() or \
-                    line["name"].lower() == custom_field_2.lower() or \
-                    line["name"].lower() == custom_field_3.lower():
-                    types += "%s: %s\n" % (line["name"], line["id"].split("_")[1])
-            else:
-                types += "%s: %s\n" % (line["name"], line["id"])
+    if not response.ok:
+        print(f"\nERROR calling: {url}")
+        print(f"HTTP status: {response.status_code}")
+        print(f"Content-Type: {response.headers.get('content-type')}")
+        print("Response start:")
+        print(response.text[:1000])
+        sys.exit(1)
 
-        infotext += "=== %s types\n%s\n" % (section, types)
+    try:
+        return response.json()
+    except ValueError:
+        print(f"\nERROR: Jira did not return JSON for: {url}")
+        print(f"HTTP status: {response.status_code}")
+        print(f"Content-Type: {response.headers.get('content-type')}")
+        print("Response start:")
+        print(response.text[:1000])
+        sys.exit(1)
 
-sys.stdout.write(infotext)
+
+def main():
+    session = requests.Session()
+    session.auth = (user, api_token)
+
+    custom_fields_lower = [
+        cf.lower()
+        for cf in [
+            custom_field_1,
+            custom_field_2,
+            custom_field_3,
+        ]
+    ]
+
+    sys.stdout.write(f"=== IDs for space {space_key} ===\n")
+    infotext = ""
+
+    for section, id_name in [
+        ("Space_ID", "project"),
+        ("Issue", f"project/{space_key}"),
+        ("Priority", "priority"),
+        ("Field", "field"),
+    ]:
+        json_response = get_json(session, jira_instance, id_name)
+
+        if id_name == "project":
+            found = False
+
+            for space in json_response:
+                if space.get("key") == space_key:
+                    infotext += f"{space.get('id', 'Space ID not found')}\n\n"
+                    found = True
+                    break
+
+            if not found:
+                infotext += (
+                    "Space ID not found, space key existing / accessible?\n\n"
+                )
+                
+        elif section == "Issue":
+            types = ""
+        
+            for item in json_response.get("issueTypes", []):
+                types += f"{item.get('name')}: {item.get('id')}\n"
+        
+            infotext += f"=== {section} types\n{types}\n"        
+
+        else:
+            types = ""
+
+            for item in json_response:
+                if id_name == "field":
+                    field_name = item.get("name", "")
+                    field_id = item.get("id", "")
+                    if field_name.lower() in custom_fields_lower:
+                        field_id = re.sub(r"^customfield_(.*)$", r"\1", field_id)
+                        types += f"{field_name}: {field_id}\n"
+
+                else:
+                    types += f"{item.get('name')}: {item.get('id')}\n"
+
+            infotext += f"=== {section} types\n{types}\n"
+
+    sys.stdout.write(infotext)
+
+
+if __name__ == "__main__":
+    main()
+
 ----
 
 Die Ausgabe des Skripts sieht dann ungefähr so aus:
 
 [{shell}]
 ----
-=== IDs for project MY_PROJECT ===
+=== IDs for space MY_SPACE ===
 10401
 
 === Issue types
@@ -213,10 +282,12 @@ CMK_SITE_FIELD: 11403
 === Jira-IDs über die GUI ermitteln
 
 Als Alternative zur Skriptausführung können Sie die IDs auch über die Jira-GUI auslesen, wofür Sie sich aber mit einem administrativen Konto in Jira anmelden müssen.
-Atlassian, der Hersteller von Jira, hat das Vorgehen am Beispiel der Project ID in einer eigenen link:https://confluence.atlassian.com/jirakb/how-to-get-project-id-from-the-jira-user-interface-827341414.html[Anleitung^] beschrieben.
+
+Die `projectid` (gemeint ist die Space-ID, leider vermischt Atlassian die Begriffe Projekt und Space -- für die GUI wurden Projekte einst in Spaces umbenannt, für den technischen Unterbau wurde dies nicht umgesetzt) zu finden ist etwas umständlich: Öffnen Sie die [.guihint]#Space settings# und klicken Sie in der Navigationsleiste links auf den Punkt [.guihint]#Toolchain# -- die aufgerufene URL enthält dann ganz am Ende einen Eintrag in der Art `projectId=10000`.
 
 Die IDs der weiteren Felder und Issues types lassen sich ablesen, in dem Sie das jeweilige Element in der Administrator-GUI von Jira editieren.
-Die ID steht dann im Regelfall als letzter Wert in der Adressleiste Ihres Browsers.
+Die Felder finden Sie über [.guihint]#Settings > Work types > Fields#.
+Die ID steht dann im Regelfall wieder als letzter Wert in der Adressleiste Ihres Browsers.
 
 
 [#config_cmk]
@@ -227,12 +298,12 @@ Wie Sie Benachrichtigungen im Allgemeinen in {CMK} einrichten, haben Sie bereits
 Um nun die Jira-Benachrichtigungen zu nutzen, gehen Sie in {CMK} wie folgt vor:
 
 . Wenn Sie xref:wato_user#custom_user_attributes[benutzerdefinierte Attribute] verwenden möchten, können Sie diese für die folgenden Jira-IDs erstellen:
-Project ID (`jiraproject`), Issue type ID (`jiraissuetype`), Priority ID (`jirapriority`) und Transition ID (`jiraresolution`).
+Project/Space ID (`jiraproject`), Issue type ID (`jiraissuetype`), Priority ID (`jirapriority`) und Transition ID (`jiraresolution`).
 // TK: Das benutzerdefinierte Attribut zur Transition ID (`jiraresolution`) wird in der Hilfe der Benachrichtigungsregel aber *nicht* erwähnt.
 In den Klammern sind die Namen angegeben, die Sie als [.guihint]#Name# eines Attributs eingeben können.
 Ein benutzerdefiniertes Attribut legen Sie mit [.guihint]#Setup > Users > Custom user attributes > Add attribute# an: +
 +
-image::jira_notification_custom_user_attribute.png[alt="Ein benutzerdefinierter Attribut für die Jira Project ID."]
+image::jira_notification_custom_user_attribute.png[alt="Ein benutzerdefiniertes Attribut für die Jira Project ID."]
 +
 Achten Sie darauf, dass bei allen diesen für Jira erstellten benutzerdefinierten Attributen die Checkbox [.guihint]#Make this variable available in notifications# gesetzt ist. +
 In den Eigenschaften eines Benutzers können Sie dann in diese Attribute die Jira-IDs eintragen, für die dieser Benutzer zuständig ist. +
@@ -245,7 +316,11 @@ image::notifications_parameter_jira.png[alt="Die Einstellungen zur Benachrichtig
 +
 . Im Feld [.guihint]#Jira URL# tragen Sie die URL Ihrer Jira-Instanz ein, also z.B. `jira.server.your-domain.com`.
 
-. Im Bereich [.guihint]#Authentication# hinterlegen Sie die Zugangsdaten des Jira-Kontos für den Zugriff -- Name/Passwort beziehungsweise Token für Jira-Cloud-Produkte.
+. Im Bereich [.guihint]#Authentication# hinterlegen Sie die Zugangsdaten des Jira-Kontos für den Zugriff.
++
+Jira Data Center und Jira Server: [.guihint]#API/PAT token#.
++
+Jira-Cloud-Produkte: [.guihint]#Basic authentication# mit Nutzername und Passwort -- wobei hier hier unter [.guihint]#Password# ein API-Token einzutragen ist (mehr dazu bei link:https://developer.atlassian.com/cloud/jira/platform/deprecation-notice-basic-auth-and-cookie-based-auth/[Atlassian^])
 
 . Für [.guihint]#Project ID# und [.guihint]#Issue type ID# benötigen Sie die vorher ermittelten IDs in Jira, im Beispiel `10401` für die Project ID und `10006` für den Issue-Typ `Bug`.
 
