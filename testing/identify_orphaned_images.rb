@@ -25,7 +25,7 @@ imgsrclist = []     # images in source tags
 
 Dir.entries(imgfolder).each { |f|
     if f =~ /\.(jpg|jpeg|png|svg)$/i
-        imglist.push f unless f =~ /original/
+        imglist.push f unless (f =~ /original/ || f =~ /internal_reference/)
     end
 }
 
