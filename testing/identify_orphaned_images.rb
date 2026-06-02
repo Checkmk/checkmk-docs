@@ -20,8 +20,8 @@ require 'nokogiri'
 
 htmlfolder = ARGV[0]
 imgfolder = ARGV[1]
-imglist = []
-imgsrclist = []
+imglist = []        # images in folder
+imgsrclist = []     # images in source tags
 
 Dir.entries(imgfolder).each { |f|
     if f =~ /\.(jpg|jpeg|png|svg)$/i
