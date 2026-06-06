@@ -1,0 +1,289 @@
+// -*- coding: utf-8 -*-
+// IGNORE
+// NONASCII
+include::global_attr.adoc[]
+= MKPs für Entwickelnde
+:title: MKPs für Entwickelnde
+:description: Wenn man selbst Erweiterungen für {CMK} entwickelt oder modifiziert, kommt bald der Wunsch auf, sie als Paket anderen verfügbar zu machen.
+
+{related-start}
+xref:mkps#[{CMK}-Erweiterungspakete (MKPs)]
+xref:localchecks#[Lokale Checks]
+xref:devel_intro#[Erweiterungen für {CMK} entwickeln]
+xref:bakery_api#[Die Bakery-API]
+{related-end}
+
+[#intro]
+== Einleitung
+
+In den anderen Artikeln dieses Handbuchkapitels haben Sie bereits gelernt, wie Sie Erweiterungen entwickeln.
+Und sicher haben Sie selbst auch schon Erweiterungen als xref:mkps#[MKP] aus der link:https://exchange.checkmk.com/[{CMK}-Exchange^] heruntergeladen und installiert.
+In diesem Artikel erfahren Sie nun alles notwendige, um Erweiterungspakete für {CMK} anzupassen oder aus selbst entwickelten Erweiterungen zu erstellen.
+
+
+[#testenvironment]
+=== Die Arbeitsumgebung
+
+Verwenden Sie zur Erstellung und Anpassung von MKPs eine Testinstanz und kopieren Sie die MKPs für die Verteilung auf die produktiv genutzte Instanz.
+Dies wird Ihnen vor allem zwei potentielle Probleme ersparen, die entstehen, wenn geänderte Dateien nicht rechtzeitig zu MKPs gepackt werden:
+
+* Beim {CMK}-Update werden lokal geänderte Dateien durch den letzten Stand des MKPs überschrieben (dem Autor dieses Satzes ist genau dies passiert).
+* Im xref:glossar#central_setup[verteilten Monitoring mit zentralem Setup] wundern Sie sich, weil sich Plugins auf Remote-Instanzen anders verhalten als auf der Zentralinstanz, denn die Remote-Instanzen erhalten weiterhin den zuletzt gepackten Stand.
+
+Zudem ist das Risiko, versehentlich etwas bereits vorhandenes zu überschreiben weit geringer, wenn eine Instanz primär zum Testen eigener Entwicklungen eingesetzt wird und keine produktiv genutzten Erweiterungen aus anderer Quelle nutzt.
+
+
+// [#exchange]
+// === Die {CMK} Exchange
+
+[#tools]
+=== Werkzeuge für MKPs
+
+Zur Verwaltung von MKPs gibt es zwei Werkzeuge:
+
+* Den xref:commandline[Befehl] `mkp`
+* In den kommerziellen Editionen haben Sie zusätzlich den Setup-Menüeintrag [.guihint]#Extension Packages#
+
+Beide Wege sind kompatibel und mit der einen Methode vorgenommene Änderungen sind sofort in der anderen Methode sichtbar.
+*Aber:* auf der Befehlszeile stehen zusätzliche Optionen zur Verfügung, die künftig weiter ausgebaut werden.
+Daneben ist der Einsatz in Skripten möglich.
+
+Für die Entwicklungsarbeit raten wir daher zur Verwendung der Befehlszeile.
+
+[#workflow]
+== Der Workflow
+
+In diesem Abschnitt zeigen wir Ihnen an der Reihenfolge aus auflösen, zusammenstellen und paketieren, wie Sie für die Modifikation eines vorhandenen Paketes vorgehen.
+Wollen Sie stattdessen ein eigenes MKP aus selbst erstellten Dateien bauen, überspringen Sie einfach den ersten Schritt des auflösens.
+
+[#release_mkp_cli]
+=== Ein MKP auflösen
+
+Damit ein Paket aufgelöst werden kann, muss dieses zunächst den Zustand [.guihint]#Enabled (active on this site)# haben.
+Dies überprüfen Sie mit dem folgenden Befehl:
+
+[{shell}]
+----
+{c-omd} mkp list
+Name        Version Title        Author             Req. Version Until Version Files State                          
+----------- ------- ------------ ------------------ ------------ ------------- ----- -----------------------------
+hello_world 0.2.5   Hello world! Mattias Schlenker  2.3.0b1      2.5.99        8     Enabled (active on this site)  
+----
+
+Ist das Paket nicht _aktiv_, aktivieren Sie es:
+
+[{shell}]
+----
+{c-omd} mkp enable hello_world
+----
+
+Im Falle, dass ein Paket mit Ihrer {CMK}-Version inkompatibel ist, sie das Paket aber dennoch aktivieren wollen – eben gerade um es auf die neuere {CMK}-Version anzupassen – verwenden Sie den zusätzlichen Parameter `--force-install`.
+
+Das Auflösen geschieht dann mit dem folgenden Befehl:
+
+[{shell}]
+----
+{c-omd} mkp release hello_world
+----
+
+Im Setup der kommerziellen Editionen steht alternativ das Icon eines Klemmbausteines (icon:icon_release_mkp[]) zur Verfügung.
+
+
+[#find_unpackaged_cli]
+=== Unpaketierte Dateien finden
+
+Bevor Sie ein Paket bauen, sollten Sie sich zuerst einen Überblick verschaffen, welche unpaketierten Dateien im Instanzverzeichnis liegen.
+Mit dieser Information können Sie entscheiden, ob Sie Dateien löschen oder frühere Experimente zuerst paketieren wollen.
+
+Der hierfür verwendete Befehl ist `mkp find`:
+
+[{shell}]
+----
+{c-omd} mkp release hello_world
+File                                                  Package Version Part                                         Mode      
+----------------------------------------------------- ------- ------- -------------------------------------------- ----------
+hello_world/rulesets/ruleset_hello_world.py                           Additional Checkmk plug-ins by third parties -rw-------
+hello_world/agent_based/hello_world.py                                Additional Checkmk plug-ins by third parties -rw-------
+hello_world/rulesets/ruleset_hello_world_bakery.py                    Additional Checkmk plug-ins by third parties -rw-------
+hello_world/graphing/helloworld_perfometer_graphing.py                Additional Checkmk plug-ins by third parties -rw-------
+hello_world/checkman/hello_world                                      Additional Checkmk plug-ins by third parties -rw-------
+windows/plugins/hello_world.cmd                                       Agents                                       -rwx------
+plugins/hello_world                                                   Agents                                       -rwx------
+python3/cmk/base/cee/plugins/bakery/hello_world.py                    Libraries                                    -rw-------
+----
+
+Die angezeigte Liste ist rein informativ.
+Bei den kommerziellen Editionen können Sie im Setup auf der Seite der Paketverwaltung den Button [.guihint]#Unpackaged files# verwenden.
+In der angezeigten Seite können Sie nicht mehr benötigte Dateien einfach löschen.
+
+
+[#create_template]
+=== Die Paketkonfiguration erstellen
+
+Mit dem Befehl `mkp template` erstellen Sie eine Vorlage für eine Paketkonfiguration, als weiterer Parameter ist der Name des Pakets anzugeben.
+Da der Befehl auf die Standardausgabe schreibt, müssen Sie die Ausgabe entweder umleiten oder Sie kopieren Sie einfach aus dem Terminal:
+
+[{shell-raw}]
+----
+{c-omd} mkp template hello_world > ~/tmp/hello_world.info
+{c-omd} cat ~/tmp/hello_world.info
+{'author': 'Add your name here',
+ 'description': 'Please add a description here',
+ 'download_url': 'https://example.com/hello_world/',
+ 'files': {'agents': ['plugins/hello_world', 'windows/plugins/hello_world.cmd'],
+           'cmk_addons_plugins': ['hello_world/agent_based/hello_world.py',
+                                  'hello_world/checkman/hello_world',
+                                  'hello_world/graphing/helloworld_perfometer_graphing.py',
+                                  'hello_world/rulesets/ruleset_hello_world.py',
+                                  'hello_world/rulesets/ruleset_hello_world_bakery.py'],
+           'lib': ['python3/cmk/base/cee/plugins/bakery/hello_world.py']},
+ 'name': 'hello_world',
+ 'title': 'Title of hello_world',
+ 'version': '1.0.0',
+ 'version.min_required': '2.5.0p4',
+ 'version.packaged': 'cmk-mkp-tool 3.0.0',
+ 'version.usable_until': None}
+----
+
+Wollen Sie stattdessen die Paketkonfiguration eines zuvor aufgelösten Paketes verwenden, extrahieren Sie diese einfach aus dem ursprünglichen Paket:
+
+[{shell-raw}]
+----
+{c-omd} tar -Ox info -f ~/var/check_mk/packages_local/hello_world-0.2.5.mkp \
+    > ~/tmp/hello_world.info
+----
+
+Passen Sie die Paketkonfiguration jetzt mit Ihrem Lieblingseditor an.
+Achten Sie dabei auf korrekte Python-Syntax.
+Unicode-Zeichenketten (Texte, die Nicht-ASCII-Zeichen, wie Umlaute, enthalten) müssen mit einem kleinen vorangestellten `u` gekennzeichnet werden.
+
+Unter dem Schlüssel `files` können Sie Dateien entfernen, welche nicht paketiert werden sollen.
+Tragen Sie unter `version.min_required` die Mindestversion von {CMK} ein, die erforderlich ist, um das Paket zu verwenden.
+
+Wenn Sie eine kommerzielle Edition verwenden, landen Sie mit dem Button [.guihint]#Create package# in einer Eingabemaske, in denen Sie alle in der Vorlage für die Paketkonfiguration enthaltenen Parameter eintragen können – ohne auf korrekte Python-Syntax achten zu müssen.
+
+
+[#package_mkp_cli]
+=== Das Paket erstellen
+
+Ist das Bearbeiten der Konfigurationsdatei abgeschlossen, packen Sie mit `mkp package` gefolgt vom Namen der Konfigurationsdatei:
+
+[{shell-raw}]
+----
+{c-omd} mkp package ~/tmp/hello_world.info
+----
+
+Bei diesem Vorgang wird nicht nur das MKP erzeugt, welches Sie dann in `~/var/check_mk/packages_local/` vorfinden oder im Paketmanagent der kommerziellen Editionen herunterladen können.
+Das Paket wird direkt aktiviert (hat also den Zustand [.guihint]#Enabled (active on this site)#) was exakt dem Verhalten vor dem Paketieren entspricht.
+
+Beachten Sie, dass beim Packen auf einer produktiv genutzten Instanz bei aktiviertem zentralen Setup das neue Paket direkt an die Remote-Instanzen verteilt wird.
+Diese Tatsache sollte ein weiterer Anlass für die Nutzung dedizierter Entwicklungs-Instanzen sein.
+
+
+[#package_format]
+== Das MKP-Paketformat
+
+Wollen Sie lediglich einen Blick in ein MKP werfen, oder einzelne Dateien extrahieren, ohne das ganze Paket zu installieren, ist Kenntnis vom Paketformat hilfreich.  
+Der Blick in ein Paket ist recht simpel, weil das MKP-Format lediglich eine `.tar.gz` Datei ist, die wiederum `.tar` Dateien und Manifest-Dateien enthält.
+
+Die Untersuchung der heruntergeladenen `hello_world-0.2.5.mkp` gibt die erste Stufe der Struktur preis:
+
+[{shell}]
+----
+{c-user} tar -tvf hello_world-0.2.5.mkp 
+-rw-r--r-- 0/0            1715 2025-03-07 16:19 info
+-rw-r--r-- 0/0            1311 2025-03-07 16:19 info.json
+-rw-r--r-- 0/0           10240 2025-03-07 16:19 agents.tar
+-rw-r--r-- 0/0           20480 2025-03-07 16:19 cmk_addons_plugins.tar
+-rw-r--r-- 0/0           10240 2025-03-07 16:19 lib.tar
+----
+
+Mit einer Pipeline über zwei `tar`-Befehle können Sie nun einen Blick in den Inhalt der `cmk_addons_plugins.tar` werfen:
+
+[{shell}]
+----
+{c-user} tar -Ox cmk_addons_plugins.tar -f hello_world-0.2.5.mkp | tar -tvf -
+-rw------- mysite/mysite 3711 2025-03-07 10:59 hello_world/agent_based/hello_world.py
+-rw------- mysite/mysite 1079 2025-03-07 10:59 hello_world/checkman/hello_world
+-rw------- mysite/mysite 1179 2025-03-07 10:59 hello_world/graphing/helloworld_perfometer_graphing.py
+-rw------- mysite/mysite 3373 2025-03-07 10:59 hello_world/rulesets/ruleset_hello_world.py
+-rw------- mysite/mysite 2634 2025-03-07 10:59 hello_world/rulesets/ruleset_hello_world_bakery.py
+----
+
+Und was ist mit den beiden Manifest-Dateien `info` und `info.json`?
+Die Datei `info` und ihre im Python-Dict-Format enthaltenen Felder haben Sie weiter xref:package_mkp_cli[oben] kennengelernt.
+Das JSON-Äquivalent `info.json` enthält exakt die gleichen Felder und Werte, wurde aber im JSON-Format serialisiert.
+
+
+[#command_reference]
+== Befehlsreferenz
+
+Befehle für die Verwaltung und das Management von Updates finden Sie im xref:mkps#command_reference[Artikel zur Verwaltung von MKPs].
+
+////
+[#reference_management]
+=== Verwaltung
+
+[cols="18,~,~",options="header"]
+|===
+|Sub-Befehl |Parameter |Verwendungszweck
+|`add` |Dateiname des hinzuzufügenden Pakets |Macht ein Paket verfügbar, aktiviert es aber noch nicht.
+|`enable` |Name des Pakets (und ggf. Versionsnummer) |Aktiviert ein Paket je nach Versionskompatibilität für lokale Verwendung oder Verteilung an Remote-Instanzen.
+|`enable --force-install` |Name des Pakets (und ggf. Versionsnummer) |Aktiviert ein Paket, auch wenn keine Versionskompatibilität gegeben ist.
+|`disable` |Name des Pakets und Versionsnummer |Deaktiviert ein Paket, das im Dateisystem verfügbar bleibt.
+|`remove` |Name des Pakets und Versionsnummer |Entfernt ein zuvor deaktiviertes Paket vollständig.
+|`install` |Dateiname des hinzuzufügenden Pakets |Dieser Sub-Befehl ist abgekündigt und wird bald entfernt werden!
+|`list` |_keine_ |Listet alle verfügbaren Pakete und deren Aktivierungszustand auf.
+|`inspect` |Dateiname des zu untersuchenden Pakets |Zeigt Informationen zu einem nicht installierten MKP.
+|`show` |Name des Pakets (und ggf. Versionsnummer) |Zeigt Informationen zu einem verfügbaren MKP.
+|`show-all` |_keine_ |Zeigt Informationen zu allen verfügbaren MKPs.
+|`files` |Name des Pakets (und ggf. Versionsnummer) |Listet alle zu einem Paket gehörenden Dateien auf.
+|===
+////
+
+[#reference_development]
+=== Entwicklung
+
+[cols="18,~,~",options="header"]
+|===
+|Sub-Befehl |Parameter |Verwendungszweck
+|`release` |Name des Pakets |Löst ein aktives Paket auf.
+|`find` |_keine_ |Listet alle zu keinem Paket gehörenden Dateien auf.
+|`template`  |Name des neu zu erstellenden Pakets |Erstellt eine Manifest-Datei als Basis für ein neues Paket.
+|`package` |Pfad zur Manifest-Datei |Erstellt auf Basis des Inhalts einer Manifest-Datei ein MKP.
+|===
+
+////
+[#reference_update]
+=== Updates
+
+[cols="18,~,~",options="header"]
+|===
+|Sub-Befehl |Parameter |Verwendungszweck
+|`disable-outdated`|_keine_ |Deaktiviert nach einem Update nicht mehr zur {CMK}-Version passende Pakete.
+|`update-active` |_keine_ |Aktiviert nach einem Update die zur {CMK}-Version passenden Pakete.
+|===
+////
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
