@@ -143,7 +143,7 @@ def get_config()
 	opts.on('--force-tickets', :REQUIRED) { |i| @cfg["force_tickets"] = i.split(',') }
 	opts.on('--force-files', :REQUIRED) { |i| @cfg["force_files"] = i.split(',') }
 	opts.parse!
-	[ "ignore_files", "ignore_tickets", "only_files", "only_tickets", "force_files", "force_tickets" ].each { |n|
+	[ "ignore_files", "ignore_tickets", "ignore_commits", "only_files", "only_tickets", "force_files", "force_tickets" ].each { |n|
 		@cfg[n] = [] unless @cfg.has_key? n
 	}
 end
