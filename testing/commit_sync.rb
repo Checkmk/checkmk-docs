@@ -57,7 +57,7 @@ def commitlist_to_tree(commitlist)
 end
 
 def check_present_tree(committree, commitinfo)
-	return false unless committree.has_key? commitinfo[0]
+	return false unless committree.has_key? commitinfo[1]
 	committree[commitinfo[0]].each { |cid, cfiles|
 		return true if cfiles & commitinfo[3] == cfiles
 	}
