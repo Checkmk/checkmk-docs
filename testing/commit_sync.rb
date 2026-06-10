@@ -94,7 +94,7 @@ def switch_branch(target)
 end
 
 def check_against_ignores(commitinfo)
-	return true if @cfg["ignore_commits"].include?(commitinfo[0])
+	return true if @cfg["ignore_commits"].include?(commitinfo[1])
 	commitwords = commitinfo[2].gsub(',', ' ').split
 	commitwords.each { |c|
 		return true if @cfg["ignore_tickets"].include? c
