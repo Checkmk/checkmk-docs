@@ -64,6 +64,29 @@ def check_present_tree(committree, commitinfo)
 	return false
 end
 
+# Create a hash containing the checksums of all files affected
+# in a commit tree
+
+def checksum_list(committree)
+	csumlist = {}
+	committree.each { |k,commitinfo|
+		commitinfo.each { |c|
+			c.each { |id,fs|
+				fs.each { |f|
+					unless csumlist.has_key? f
+						if File.exist? f
+							csum = `sha256sum "#{f}"`.strip
+							puts csum
+							csumlist[f] = csum
+						end
+					end
+				}
+			}
+		}
+	}
+	return csumlist
+end
+
 def switch_branch(target)
     ret = system("git checkout #{target}")
 	raise "CheckoutFailed" unless ret
@@ -141,7 +164,18 @@ def try_to_pick(commitinfo)
 	end
 end
 
-def ask_and_pick(missingcommits)
+def compare_checksums(files, csumsfrom, csumsto)
+	files.each { |f|
+		if csumsfrom.has_key?(f) && csumsto.has_key?(f) && csumsfrom[f] == csumsto[f]
+			# Do nothing, this is fine
+		else
+			return false
+		end
+	}
+	return true
+end
+
+def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
 	# If only_files or only_commits is set, the everything else check should not be run
 	only_active = false
 	if @cfg["only_files"].size > 0 || @cfg["only_tickets"].size > 0
@@ -163,7 +197,13 @@ def ask_and_pick(missingcommits)
 		ask = true
 		decision = "no"
 		puts "Only? #{only_active}"
-		if only_active && check_against_only(c)
+		if compare_checksums(c[3], csumsfrom, csumsto)
+			# All checksums currently match, this should not happen
+			puts "===> Checksums in source and target tree are identical which means"
+			puts "   > this commit probably cannot be cherry picked anymore."
+			ask = false
+			decision = "no"
+		elsif only_active && check_against_only(c)
 			# Override for only first, these also override the ignores if defined
 			# and they beat the next comparison for forced files/tickets
 			defdec = "yes"
@@ -219,15 +259,19 @@ missingcommits = []
 
 switch_branch @cfg["pick_from_branch"]
 clist = retrieve_commits
+ctree = commitlist_to_tree(clist)
+ccsums = checksum_list(ctree)
+
 switch_branch @cfg["pick_to_branch"]
 olist = retrieve_commits
 otree = commitlist_to_tree(olist)
+ocsums = checksum_list(otree)
 
 clist.each { |c|
     missingcommits.push c unless check_present_tree(otree, c)
 }
 
-ask_and_pick(missingcommits)
+ask_and_pick(missingcommits, ccsums, ocsums)
 
 
 #~ @allfiles = @allfiles.sort.uniq
