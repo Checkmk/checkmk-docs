@@ -32,98 +32,94 @@ Des Weiteren sperren die meisten Browser den Zugriff auf die Zwischenablage per 
 
 Wenn Sie die Weboberfläche von {CMK} über HTTPS einsetzen möchten, dann müssen Sie auf Ihrem Monitoring-Server – unabhängig von Ihren Instanzen – folgende Voraussetzungen schaffen:
 
+* Sie besitzen ein gültiges Server-Zertifikat.
 * Das Apache-Modul `mod_ssl` ist installiert und aktiviert.
 * Die Apache-Module `mod_rewrite` und `mod_headers` sind vorhanden und ebenfalls aktiviert.
-* Sie besitzen ein gültiges Server-Zertifikat.
 * Der Server ist über HTTPS erreichbar.
 
 Was dafür zu tun ist, erklärt dieser Artikel.
 
 
-[#apache]
-== Apache-Module aktivieren
-
-Die HTTPS-Absicherung der {CMK}-Oberfläche benötigt das Apache-Modul `mod_ssl`.
-Wir gehen im weiteren Verlauf der Einrichtung zudem davon aus, dass eine auf dem unverschlüsselten Port 80 eingehende Verbindung auf den SSL verschlüsselten Port 443 weitergeleitet werden soll.
-Dafür ist das Modul `mod_rewrite` nötig.
-Schließlich wird noch `mod_headers` benötigt, damit der als link:https://httpd.apache.org/docs/2.4/howto/reverse_proxy.html[Reverse Proxy^] konfigurierte extern erreichbare Apache dem xref:ports#loopback[Site Apache] die Request Header weiterleitet.
-
-Die geladenen Apache-Module können Sie sich mit dem Befehl `apachectl` anzeigen lassen. Alte Red Hat Enterprise Linux (RHEL) und CentOS-Versionen benötigen möglicherweise stattdessen `httpd`.
-Mit `grep` prüfen Sie gleich, ob alle drei benötigten Module vorhanden sind:
-
-[{shell}]
-----
-{c-root} apachectl -M | grep -E 'headers|rewrite|ssl'
- headers_module (shared)
- rewrite_module (shared)
-----
-
-Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem Skript `a2enmod`.
-Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an.
-Die Datei mit der Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, und die Datei `.conf` enthält die eigentliche Konfiguration des Moduls:
-
-[{shell}]
-----
-{c-root} a2enmod ssl
-Enabling module ssl.
-To activate the new configuration, you need to run:
-  systemctl restart apache2
-----
-
-// MFS: Getestet mit CentOS 7, alles davor solle irrelevant sein, globale /etc/httpd/conf/httpd.conf nur nach Update früherer Versionen
-Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl` ein eigenes Paket, das Sie separat installieren müssen:
-
-[{shell}]
-----
-{c-root} yum install -y httpd mod_ssl
-----
-
-Ist der Befehl `a2enmod` nicht vorhanden, arbeiten Sie mit einer Distribution, welche die Apache-Konfiguration statt auf Verzeichnisse und viele Einzeldateien aufzuteilen in einer einzigen Konfigurationsdatei vorhält.
-In solch einem Fall muss in der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit werden.
-Analog ist für die beiden anderen Module vorzugehen.
-
-Ob der Apache-Webserver bereits jetzt oder erst später neu gestartet werden kann, entscheidet sich an der Frage, ob bei der Installation von Apache einfache, selbst signierte Zertifikate automatisch erzeugt wurden.
-
-Dies erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Dateien existieren (bei RHEL ist als Startverzeichnis der Suche `/etc/httpd` anzugeben):
-
-[{shell}]
-----
-{c-root} find /etc/apache2/ -type f -exec grep -Hn '^\s*SSLCertificate.*File' {} \;
-/etc/apache2/sites-available/default-ssl.conf:32: SSLCertificateFile	/etc/ssl/certs/ssl-cert-snakeoil.pem
-/etc/apache2/sites-available/default-ssl.conf:33: SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
-----
-
-Prüfen Sie, ob die in der Konfigurationsdatei angegebenen Dateien existieren.
-Falls kein automatisch erstelltes Zertifikat vorhanden ist, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben – sonst schlägt der Neustart fehl.
-
-Sind Zertifikat und Schlüssel vorhanden, starten Sie den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` mit folgendem Befehl:
-
-[{shell}]
-----
-{c-root} systemctl restart apache2
-----
-
-Wieder gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
-Passen Sie in diesem Fall den Befehl an.
-
-*Hinweis:* In der {CMK} Appliance aktivieren Sie xref:appliance_usage#ssl[HTTPS über die Weboberfläche!]
-
-
 [#certificates]
 == Zertifikate erhalten
 
-Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat zu gelangen:
+Da viele Distributionen Phantasiepfade zu Zertifikaten, Ketten und Schlüsseln in ihrer Standardkonfiguration eingetragen haben, ist es sinnvoll, zuerst Zertifikate zu beschaffen und danach die Konfiguration des Apache-Webservers anzugehen.
 
-* Sie greifen auf einen externen Dienstleister für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_) zurück, dessen Root-Zertifikat von Browser- und Betriebssystemherstellern vertraut wird.
-Mit diesem Verfahren können Zertifikate nicht nur auf link:https://de.wikipedia.org/wiki/Zertifizierungsstelle_(Digitale_Zertifikate)#Web_PKI[Ebene^] einer Domain validiert werden, sondern auch auf Organisationsebene (Organization Validation) und höher (Extended Validation), wie es in einigen Branchen aus regulatorischen Gründen verpflichtend ist.
+Im Wesentlichen existieren die folgenden Methoden, um an ein Server-Zertifikat zu gelangen:
 
 * Sie nutzen xref:letsencrypt[kostenlose Zertifikate von _Let's Encrypt_].
 Dieses Verfahren erlaubt nur eine Validierung auf Domain-Ebene.
 Um Zertifikate anfordern zu können, muss der abzusichernde Server von außen erreichbar sein oder Sie müssen die Möglichkeit haben, (automatisiert) Einträge im öffentlichen DNS der verwendeten Domain anzulegen.
 
+* Sie greifen auf einen externen Dienstleister für die xref:oldschoolcsr[Zertifikatsausstellung mittels CSR] (_Certificate Signing Request_) zurück, dessen Root-Zertifikat von Browser- und Betriebssystemherstellern vertraut wird.
+Mit diesem Verfahren können Zertifikate nicht nur auf link:https://de.wikipedia.org/wiki/Zertifizierungsstelle_(Digitale_Zertifikate)#Web_PKI[Ebene^] einer Domain validiert werden, sondern auch auf Organisationsebene (Organization Validation) und höher (Extended Validation), wie es in einigen Branchen aus regulatorischen Gründen verpflichtend ist.
+
 * Sie werden Ihre xref:becomeca[eigene _Certificate Authority_ (CA)] und erzeugen Zertifikate selbst.
 Das Root-Zertifikat der eigenen CA muss auf allen Rechnern vorhanden sein, die mit Servern kommunizieren, die mit dem CA-Schlüssel signierte Zertifikate verwenden.
 Im Umgang mit der eigenen CA sollten hohe Sicherheitsstandards eingehalten werden, da mit dieser CA Zertifikate für beliebige Domains ausgestellt werden können.
+
+
+[#letsencrypt]
+=== Let's Encrypt
+
+Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Name-Server, so können Sie automatisiert Zertifikate über den zu der Electronic Frontier Foundation (EFF) gehörenden Non-Profit-Dienstleister link:https://letsencrypt.org/#[Let's Encrypt^] erstellen lassen.
+Es entstehen keine Kosten.
+Per DNS validierte Zertifikate erfordern alle 90 Tage wenige Minuten Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden.
+
+Für Let's Encrypt-Zertifikate stellt die EFF das Python-Programm _Certbot_ in vielen verschiedenen Paketformaten bereit.
+Der Certbot übernimmt die Erstellung des Schlüssels, den Versand der CSR, die Prüfung der Inhaberschaft von Server oder Domain und lädt schließlich das Zertifikat herunter.
+Er kommuniziert hierfür über das Protokoll link:https://de.wikipedia.org/wiki/Automatic_Certificate_Management_Environment[Automatic Certificate Management Environment (ACME)^] mit den Servern der EFF.
+
+==== Installation des Certbot-Skripts
+
+Es existieren drei Möglichkeiten, Certbot zu installieren.
+Welche Sie wählen, dürfte vor allem vom Alter der eingesetzten Distribution und den Richtlinien in Ihrem Unternehmen zur Installation aus fremden Paketquellen abhängen:
+
+* Wenn das Paketmanagement Ihrer Linux-Distribution Certbot-Version 1.10 oder höher bereitstellt, kann diese Certbot-Version verwendet werden.
+
+* Die EFF bevorzugt auf ihrer link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite^] die Installation aus einem Snap-Image.
+Es gelten die bekannten Vor- und Nachteile des Snap-Paketformates.
+
+* Certbot ist über das Python-Paketinstallationswerkzeug `pip` aus dem link:https://pypi.org/project/certbot/#[Python Package Index^] installierbar.
+Erstellen Sie zunächst ein link:https://docs.python.org/3/library/venv.html[Python Virtual Environment (`venv`)], um sicherzustellen, dass keine von der Distribution bereitgestellten Python-Module beschädigt werden.
+In der virtuellen Umgebung führen Sie `pip install certbot` aus, um Certbot und alle abhängig benötigten Python-Module zu installieren.
+
+==== Vollautomatische Konfiguration
+
+Falls der {CMK}-Server aus dem Internet erreichbar ist und Sie an der Konfiguration des systemweiten Apache-Webservers seit der Installation von {CMK} keine Änderung vorgenommen haben, können Sie den "Apache-Automatismus" von Certbot verwenden.
+Mit diesem können Sie Schlüssel erzeugen, Zertifikate anfordern, die Apache-Konfiguration automatisch anpassen und schließlich einen Cronjob einrichten, um regelmäßig die 90 Tage laufenden Zertifikate zu erneuern.
+
+[{shell}]
+----
+{c-root} certbot --apache
+----
+
+Das Skript fragt nun interaktiv einige Informationen zu Kontaktdaten (E-Mail-Kontakt für zusätzliche Informationen wie notwendige Zertifikatsrückrufe) und Installationspfaden ab.
+Am Ende steht die funktionsfähige SSL-Konfiguration.
+Eine Anpassung der Konfigurationsdatei für `mod_ssl` ist nicht nötig, dies hat der Certbot bereits erledigt.
+
+==== Teilautomatisierte Konfiguration
+
+Falls Sie, wie im vorherigen Abschnitt beschrieben, Zertifikate anfordern, aber die Apache-Konfiguration selbst anpassen wollen, verwenden Sie den Befehl:
+
+[{shell}]
+----
+{c-root} certbot certonly --apache
+----
+
+Die Konfiguration schließen Sie dann xref:configsample[wie unten beschrieben] in der Konfigurationsdatei für `mod_ssl` ab.
+
+
+==== Weitere Möglichkeiten
+
+Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine _DNS-Challenge_ vornehmen.
+Hier wird die Inhaberschaft einer Domain nicht darüber geprüft, Dateien auf dem Webserver ablegen zu können, sondern darüber, dass Sie Einträge im DNS hinzufügen können.
+Dabei kommen keine Einträge zur Anwendung, die einen Host-Namen zu einer IP-Adresse auflösen, sondern sogenannte TXT-Einträge, die beliebige Zeichenketten enthalten können.
+TXT-Einträge werden beispielsweise auch verwendet, um anzugeben, welche Server E-Mails für eine Domain versenden dürfen.
+
+DNS-Challenges können manuell durchgeführt werden, was bei 90 Tagen Gültigkeit meist nur für einzelne Testsysteme praktikabel ist.
+Verfügt Ihr DNS-Anbieter über ein von Let's Encrypt unterstütztes API, kann auch eine automatische Erneuerung durchgeführt werden.
+Lesen Sie hierfür die link:https://letsencrypt.org/de/docs/challenge-types/[Übersicht der Challenge Typen^] bei Let's Encrypt.
 
 
 [#oldschoolcsr]
@@ -230,69 +226,6 @@ Neben dem Zertifikat erhalten Sie auch einen Downloadlink zur _Zertifikatskette_
 Speichern Sie diese unbedingt mit ab.
 
 
-[#letsencrypt]
-=== Let's Encrypt
-
-Ist ein Server von außen erreichbar oder haben Sie Zugriff auf den Name-Server, so können Sie automatisiert Zertifikate über den zu der Electronic Frontier Foundation (EFF) gehörenden Non-Profit-Dienstleister link:https://letsencrypt.org/#[Let's Encrypt^] erstellen lassen.
-Es entstehen keine Kosten.
-Per DNS validierte Zertifikate erfordern alle 90 Tage wenige Minuten Aufmerksamkeit, per Server-Verzeichnis validierte Zertifikate können Jahre lang automatisch neu erzeugt werden.
-
-Für Let's Encrypt-Zertifikate stellt die EFF das Python-Programm _Certbot_ in vielen verschiedenen Paketformaten bereit.
-Der Certbot übernimmt die Erstellung des Schlüssels, den Versand der CSR, die Prüfung der Inhaberschaft von Server oder Domain und lädt schließlich das Zertifikat herunter.
-Er kommuniziert hierfür über das Protokoll link:https://de.wikipedia.org/wiki/Automatic_Certificate_Management_Environment[Automatic Certificate Management Environment (ACME)^] mit den Servern der EFF.
-
-==== Installation des Certbot-Skripts
-
-Es existieren drei Möglichkeiten, Certbot zu installieren.
-Welche Sie wählen, dürfte vor allem vom Alter der eingesetzten Distribution und den Richtlinien in Ihrem Unternehmen zur Installation aus fremden Paketquellen abhängen:
-
-* Wenn das Paketmanagement Ihrer Linux-Distribution Certbot-Version 1.10 oder höher bereitstellt, kann diese Certbot-Version verwendet werden.
-
-* Die EFF bevorzugt auf ihrer link:https://certbot.eff.org/instructions#[Certbot-Dokumentationsseite^] die Installation aus einem Snap-Image.
-Es gelten die bekannten Vor- und Nachteile des Snap-Paketformates.
-
-* Certbot ist über das Python-Paketinstallationswerkzeug `pip` aus dem link:https://pypi.org/project/certbot/#[Python Package Index^] installierbar.
-Erstellen Sie zunächst ein link:https://docs.python.org/3/library/venv.html[Python Virtual Environment (`venv`)], um sicherzustellen, dass keine von der Distribution bereitgestellten Python-Module beschädigt werden.
-In der virtuellen Umgebung führen Sie `pip install certbot` aus, um Certbot und alle abhängig benötigten Python-Module zu installieren.
-
-==== Vollautomatische Konfiguration
-
-Falls der {CMK}-Server aus dem Internet erreichbar ist und Sie an der Konfiguration des systemweiten Apache-Webservers seit der Installation von {CMK} keine Änderung vorgenommen haben, können Sie den "Apache-Automatismus" von Certbot verwenden.
-Mit diesem können Sie Schlüssel erzeugen, Zertifikate anfordern, die Apache-Konfiguration automatisch anpassen und schließlich einen Cronjob einrichten, um regelmäßig die 90 Tage laufenden Zertifikate zu erneuern.
-
-[{shell}]
-----
-{c-root} certbot --apache
-----
-
-Das Skript fragt nun interaktiv einige Informationen zu Kontaktdaten (E-Mail-Kontakt für zusätzliche Informationen wie notwendige Zertifikatsrückrufe) und Installationspfaden ab.
-Am Ende steht die funktionsfähige SSL-Konfiguration.
-Eine Anpassung der Konfigurationsdatei für `mod_ssl` ist nicht nötig, dies hat der Certbot bereits erledigt.
-
-==== Teilautomatisierte Konfiguration
-
-Falls Sie, wie im vorherigen Abschnitt beschrieben, Zertifikate anfordern, aber die Apache-Konfiguration selbst anpassen wollen, verwenden Sie den Befehl:
-
-[{shell}]
-----
-{c-root} certbot certonly --apache
-----
-
-Die Konfiguration schließen Sie dann xref:configsample[wie unten beschrieben] in der Konfigurationsdatei für `mod_ssl` ab.
-
-
-==== Weitere Möglichkeiten
-
-Ist der {CMK}-Server beispielsweise nur aus dem Intranet oder per VPN erreichbar, aber der DNS-Server öffentlich, können Sie die Validierung über eine _DNS-Challenge_ vornehmen.
-Hier wird die Inhaberschaft einer Domain nicht darüber geprüft, Dateien auf dem Webserver ablegen zu können, sondern darüber, dass Sie Einträge im DNS hinzufügen können.
-Dabei kommen keine Einträge zur Anwendung, die einen Host-Namen zu einer IP-Adresse auflösen, sondern sogenannte TXT-Einträge, die beliebige Zeichenketten enthalten können.
-TXT-Einträge werden beispielsweise auch verwendet, um anzugeben, welche Server E-Mails für eine Domain versenden dürfen.
-
-DNS-Challenges können manuell durchgeführt werden, was bei 90 Tagen Gültigkeit meist nur für einzelne Testsysteme praktikabel ist.
-Verfügt Ihr DNS-Anbieter über ein von Let's Encrypt unterstütztes API, kann auch eine automatische Erneuerung durchgeführt werden.
-Lesen Sie hierfür die link:https://letsencrypt.org/de/docs/challenge-types/[Übersicht der Challenge Typen^] bei Let's Encrypt.
-
-
 [#becomeca]
 === Interne CA verwenden
 
@@ -359,10 +292,285 @@ Das genaue Vorgehen können Sie im link:https://docs.microsoft.com/de-de/trouble
 Alternativ können Sie Zertifikate per link:https://docs.microsoft.com/de-de/mem/intune/protect/certificates-configure[Intune^] verteilen.
 
 
+[#apache]
+== Apache-Module aktivieren
+
+Die HTTPS-Absicherung der {CMK}-Oberfläche benötigt das Apache-Modul `mod_ssl`.
+Wir gehen im weiteren Verlauf der Einrichtung zudem davon aus, dass eine auf dem unverschlüsselten Port 80 eingehende Verbindung auf den SSL verschlüsselten Port 443 weitergeleitet werden soll.
+Dafür ist das Modul `mod_rewrite` nötig.
+Schließlich wird noch `mod_headers` benötigt, damit der als link:https://httpd.apache.org/docs/2.4/howto/reverse_proxy.html[Reverse Proxy^] konfigurierte extern erreichbare Apache dem xref:ports#loopback[Site Apache] die Request Header weiterleitet.
+
+Je nach Distribution sind die benötigten Apache-Module in den Webserver einkompiliert, beigelegt und inaktiv oder als separate Pakete zu installieren.
+
+[TIP]
+====
+Wenn Sie den vollautomatischen Modus von Let's Encrypt verwendet haben, dürfen Sie diesen Abschnitt überspringen.
+====
+
+[.tabs]
+====
+[#tab_debian]#Debian/Ubuntu#::
++
+--
+Die geladenen Apache-Module können Sie sich mit dem Befehl `apachectl` anzeigen lassen. 
+Mit `grep` prüfen Sie gleich, ob alle drei benötigten Module vorhanden sind:
+
+[{shell}]
+----
+{c-root} apachectl -M | grep -E 'headers|rewrite|ssl'
+ headers_module (shared)
+ rewrite_module (shared)
+----
+
+Die Aktivierung fehlender Module gelingt mit dem Skript `a2enmod`.
+Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an.
+Die Datei mit der Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, und die Datei `.conf` enthält die eigentliche Konfiguration des Moduls:
+
+[{shell}]
+----
+{c-root} a2enmod ssl
+Enabling module ssl.
+To activate the new configuration, you need to run:
+  systemctl restart apache2
+----
+--
+[#tab_rhel]#Red Hat#::
++
+--
+Bei RHEL, sowie darauf basierenden Distributionen ist `mod_ssl` ein eigenes Paket, das Sie separat installieren müssen:
+
+[{shell}]
+----
+{c-root} dnf install httpd mod_ssl
+----
+
+////
+Nach der Installation wird der Neustart des Apache Webservers fehlschlagen, weil die Konfigurationsdatei `/etc/httpd/conf.d/ssl.conf` Pfade zu nicht existierenden Zertifikatsdateien enthält.
+Passen Sie die Datei an und starten Sie den Apache neu:
+
+[{shell}]
+----
+{c-root} systemctl restart httpd
+----
+////
+
+--
+[#tab_sles]#SuSE#::
++
+--
+SLES und OpenSuse Leap bringen die benötigten Module in das Apache-Binary einkompiliert mit.
+Aktiviert werden diese über Startparameter, welche Sie in der Datei `/etc/sysconfig/apache2` setzen müssen:
+
+[{file}]
+----
+APACHE_SERVER_FLAGS="SSL"
+----
+
+--
+====
+
+Starten Sie den Apache noch nicht neu.
+In vielen Fällen enthält die Konfiguration jetzt Pfade zu nicht existierenden Dateien, welche dafür sorgen, dass Apache nicht startet.
+Die Konfiguration passen Sie im nächsten Abschnitt an.
+
+////
+Die geladenen Apache-Module können Sie sich mit dem Befehl `apachectl` anzeigen lassen. 
+// Alte Red Hat Enterprise Linux (RHEL) und CentOS-Versionen benötigen möglicherweise stattdessen `httpd`.
+Mit `grep` prüfen Sie gleich, ob alle drei benötigten Module vorhanden sind:
+
+[{shell}]
+----
+{c-root} apachectl -M | grep -E 'headers|rewrite|ssl'
+ headers_module (shared)
+ rewrite_module (shared)
+----
+
+Die Aktivierung fehlender Module gelingt auf den meisten Distributionen mit dem Skript `a2enmod`.
+Es legt Softlinks im Ordner `/etc/apache2/mods-enabled` an.
+Die Datei mit der Endung `.load` enthält dabei Anweisungen zum Laden des Moduls, und die Datei `.conf` enthält die eigentliche Konfiguration des Moduls:
+
+[{shell}]
+----
+{c-root} a2enmod ssl
+Enabling module ssl.
+To activate the new configuration, you need to run:
+  systemctl restart apache2
+----
+
+// MFS: Getestet mit CentOS 7, alles davor solle irrelevant sein, globale /etc/httpd/conf/httpd.conf nur nach Update früherer Versionen
+Bei älteren Versionen von RHEL und darauf basierenden Distributionen ist `mod_ssl` ein eigenes Paket, das Sie separat installieren müssen:
+
+[{shell}]
+----
+{c-root} yum install -y httpd mod_ssl
+----
+
+Ist der Befehl `a2enmod` nicht vorhanden, arbeiten Sie mit einer Distribution, welche die Apache-Konfiguration statt auf Verzeichnisse und viele Einzeldateien aufzuteilen in einer einzigen Konfigurationsdatei vorhält.
+In solch einem Fall muss in der Konfigurationsdatei `/etc/httpd/conf/httpd.conf` die auskommentierte Zeile `LoadModule ssl_module [...]` vom `#` befreit werden.
+Analog ist für die beiden anderen Module vorzugehen.
+////
+
+////
+Ob der Apache-Webserver bereits jetzt oder erst später neu gestartet werden kann, entscheidet sich an der Frage, ob bei der Installation von Apache einfache, selbst signierte Zertifikate automatisch erzeugt wurden.
+
+Dies erfahren Sie, indem Sie zunächst nach der Konfigurationsdatei suchen, welche die Pfade zu Zertifikat und Schlüsseln enthält und dann prüfen, ob diese Dateien existieren (bei RHEL ist als Startverzeichnis der Suche `/etc/httpd` anzugeben):
+
+[{shell}]
+----
+{c-root} find /etc/apache2/ -type f -exec grep -Hn '^\s*SSLCertificate.*File' {} \;
+/etc/apache2/sites-available/default-ssl.conf:32: SSLCertificateFile	/etc/ssl/certs/ssl-cert-snakeoil.pem
+/etc/apache2/sites-available/default-ssl.conf:33: SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
+----
+
+Prüfen Sie, ob die in der Konfigurationsdatei angegebenen Dateien existieren.
+Falls kein automatisch erstelltes Zertifikat vorhanden ist, warten Sie mit dem Neustart des Apache-Webservers, bis Sie ein Zertifikat erhalten oder selbst erstellt haben – sonst schlägt der Neustart fehl.
+
+Sind Zertifikat und Schlüssel vorhanden, starten Sie den Apache-Webserver neu, beim mittlerweile standardmäßig verwendeten `systemd` mit folgendem Befehl:
+
+[{shell}]
+----
+{c-root} systemctl restart apache2
+----
+
+Wieder gilt: Einige Distributionen verwenden als Name des Dienstes nicht `apache2`, sondern das etwas generischere `httpd`.
+Passen Sie in diesem Fall den Befehl an.
+
+*Hinweis:* In der {CMK} Appliance aktivieren Sie xref:appliance_usage#ssl[HTTPS über die Weboberfläche!]
+////
+
+
 [#configsample]
 == HTTPS-Verbindung für eine Instanz konfigurieren
 
-Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und Intermediate-Zertifikat angeben. Beachten Sie, dass es sich hier um Konfigurationen für den Webserver `apache2` handelt und diese nicht spezifisch für {CMK} sind. Daher ist die verwendete Konfigurationsdatei unter Debian-basierten Systemen in der Regel der Standard `/etc/apache2/sites-enabled/default-ssl.conf`. Der Pfad kann jedoch bei älteren Distributionen abweichen.
+Zunächst müssen Sie in der SSL-Konfigurationsdatei die korrekten Pfade zu Schlüssel, Zertifikat und Intermediate-Zertifikat angeben.
+Wir zeigen hier die einfachste Konfiguration mit einem Zertifikat pro Server, welches in der Standard-Konfigurationsdatei angegeben wird.
+Da Apache _Server Name Indication_ unterstützt, können verschiedene _Virtual Hosts_ verschiedene Zertifikate verwenden, die pro _Vhost_ definiert werden.
+Dies ist nicht Scope dieses Artikels.
+
+In den folgenden Beispielen bezeichnet das `SSLCertificateKeyFile` den eingangs erzeugten privaten Schlüssel für diesen Server.
+`SSLCertificateChainFile` enthält das Intermediate Certificate oder gegebenenfalls aneinandergereihte Intermediate Certificates.
+Lediglich bei einer internen CA, wo direkt mit dem CA-Schlüssel signiert wird, fällt dieses weg.
+
+[.tabs]
+====
+[#tab_debian]#Debian/Ubuntu#::
++
+--
+Zuerst müssen Sie die Konfiguration für die Standard-SSL-Site aktivieren:
+
+[{shell}]
+----
+{c-root} a2ensite default-ssl
+Enabling site default-ssl.
+To activate the new configuration, you need to run:
+  systemctl reload apache2
+----
+
+Passen Sie jetzt die Konfiguration an:
+
+./etc/apache2/sites-available/default-ssl.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/certs/checkmk.mydomain.com.key
+SSLCertificateChainFile /etc/certs/ca_bundle.crt
+SSLCertificateFile /etc/certs/certificate.crt
+----
+
+...oder bei Let's Encrypt:
+
+./etc/apache2/sites-available/default-ssl.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
+SSLCertificateChainFile /etc/letsencrypt/live/checkmk.mydomain.com/chain.pem
+SSLCertificateFile /etc/letsencrypt/live/checkmk.mydomain.com/cert.pem
+----
+
+Starten Sie dann den Apache-Prozess neu:
+
+[{shell}]
+----
+{c-root} systemctl restart apache2
+----
+
+--
+[#tab_rhel]#Red Hat#::
++
+--
+Passen Sie die Datei `/etc/httpd/conf.d/ssl.conf` an:
+
+./etc/httpd/conf.d/ssl.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/certs/checkmk.mydomain.com.key
+SSLCertificateChainFile /etc/certs/ca_bundle.crt
+SSLCertificateFile /etc/certs/certificate.crt
+----
+
+...oder bei Let's Encrypt:
+
+./etc/httpd/conf.d/ssl.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
+SSLCertificateChainFile /etc/letsencrypt/live/checkmk.mydomain.com/chain.pem
+SSLCertificateFile /etc/letsencrypt/live/checkmk.mydomain.com/cert.pem
+----
+
+Starten Sie dann den Apache-Prozess neu:
+
+[{shell}]
+----
+{c-root} systemctl restart httpd
+----
+
+--
+[#tab_sles]#SuSE#::
++
+--
+SuSE liefert eine Vorlage einer SSL-Konfiguration mit.
+Diese muss in eine Datei mit Suffix `.conf` kopiert werden, damit sie eingelesen wird:
+
+[{shell}]
+----
+{c-root} cp -v /etc/apache2/vhosts.d/vhost-ssl.template /etc/apache2/vhosts.d/vhost-ssl-default.conf
+'/etc/apache2/vhosts.d/vhost-ssl.template' -> '/etc/apache2/vhosts.d/vhost-ssl-default.conf'
+----
+
+In der Zieldatei sind lediglich die zwei oder drei Zeilen für Schlüssel, Zertifikat und gegebenfalls Kette anzupassen:
+
+./etc/apache2/vhosts.d/vhost-ssl-default.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/certs/checkmk.mydomain.com.key
+SSLCertificateChainFile /etc/certs/ca_bundle.crt
+SSLCertificateFile /etc/certs/certificate.crt
+----
+
+...oder bei Let's Encrypt:
+
+./etc/apache2/vhosts.d/vhost-ssl-default.conf
+[{apache}]
+----
+SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
+SSLCertificateChainFile /etc/letsencrypt/live/checkmk.mydomain.com/chain.pem
+SSLCertificateFile /etc/letsencrypt/live/checkmk.mydomain.com/cert.pem
+----
+
+Starten Sie dann den Apache-Prozess neu:
+
+[{shell}]
+----
+{c-root} systemctl restart apache2
+----
+
+--
+====
+
+
+
+////
+Daher ist die verwendete Konfigurationsdatei unter Debian-basierten Systemen in der Regel der Standard `/etc/apache2/sites-enabled/default-ssl.conf`. Der Pfad kann jedoch bei älteren Distributionen abweichen.
 
 Im Beispiel unten bezeichnet das `SSLCertificateKeyFile` den eingangs erzeugten privaten Schlüssel für diesen Server.
 `SSLCertificateChainFile` enthält das Intermediate Certificate oder gegebenenfalls aneinandergereihte Intermediate Certificates.
@@ -389,6 +597,7 @@ SSLCertificateKeyFile /etc/letsencrypt/live/checkmk.mydomain.com/privkey.pem
 SSLCertificateChainFile /etc/letsencrypt/live/checkmk.mydomain.com/chain.pem
 SSLCertificateFile /etc/letsencrypt/live/checkmk.mydomain.com/cert.pem
 ----
+////
 
 [#httpsredirect]
 === HTTPS-Weiterleitung hinzufügen
