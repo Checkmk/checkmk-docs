@@ -1,0 +1,390 @@
+// -*- coding: utf-8 -*-
+// IGNORE % DB2 Filesystems JVM rulesets timespecific
+include::global_attr.adoc[]
+= Die Funktionsweise von Regeln in {CMK}
+:title: Die Funktionsweise von Regeln in {CMK}
+:description: Die Überwachung von Objekten und viele Einstellungen in {CMK} konfigurieren Sie über Regeln. Lesen Sie hier, wie Regeln ausgewertet werden.
+
+{related-start}
+xref:wato#[Die Konfiguration von {CMK}]
+xref:hosts_setup#[Verwaltung der Hosts]
+xref:wato_services#[Services verstehen und konfigurieren]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+In {CMK} konfigurieren Sie Parameter für Hosts und Services über _Regeln._
+Diese Besonderheit macht {CMK} in komplexen Umgebungen sehr leistungsfähig 
+und bringt auch in kleineren Installationen etliche Vorteile.
+Um das Prinzip der regelbasierten Konfiguration anschaulich zu machen, vergleichen wir es mit der klassischen Methode.
+
+[#classic]
+=== Der klassische Ansatz
+
+Nehmen wir als Beispiel die Konfiguration von Schwellwerten für {WARN} und {CRIT} bei der Überwachung von Dateisystemen.
+Bei einer an Datenbanken orientierten Konfiguration würde man in einer Tabelle für jedes Dateisystem eine Zeile anlegen:
+
+[cols="25,25,~,~",options="header"]
+|===
+|Host |Dateisystem |Warnung |Kritisch
+|`myserver001` |`/var` |90{nbsp}% |95{nbsp}%
+|`myserver001` |`/sapdata` |90{nbsp}% |95{nbsp}%
+|`myserver001` |`/var/log` |90{nbsp}% |95{nbsp}%
+|`myserver002` |`/var` |85{nbsp}% |90{nbsp}%
+|`myserver002` |`/opt` |85{nbsp}% |90{nbsp}%
+|`myserver002` |`/sapdata` |85{nbsp}% |95{nbsp}%
+|`myserver002` |`/var/trans`|100{nbsp}% |100{nbsp}%
+|===
+
+Das ist einigermaßen übersichtlich -- aber nur weil die Tabelle hier kurz ist.
+In der Praxis haben Sie eher Hunderte oder Tausende von Dateisystemen.
+Werkzeuge wie Copy & Paste und Bulk-Aktionen können die Arbeit erleichtern, aber es bleibt ein Grundproblem:
+Wie können Sie hier eine Richtlinie (_policy_) erkennen und durchsetzen?
+Wie ist die generelle Regel?
+Wie sollen Schwellwerte für zukünftige Hosts eingestellt werden?
+
+
+[#rule_based]
+=== Regelbasiert ist besser!
+
+Eine regelbasierte Konfiguration hingegen *besteht* aus der Richtlinie!
+Die Logik der obigen Tabelle ersetzen wir durch einen Satz aus vier Regeln.
+Wenn wir davon ausgehen, dass `myserver001` ein Testsystem ist,
+und dass für jedes Dateisystem die jeweils _erste zutreffende Regel_ gilt, 
+ergeben sich die gleichen Schwellwerte wie in der Tabelle von oben:
+
+. Dateisysteme mit dem Mount-Punkt `/var/trans` haben die Schwellwerte 100/100{nbsp}%.
+. Das Dateisystem `/sapdata` auf `myserver002` hat die Schwellwerte 85/95{nbsp}%.
+. Dateisysteme auf Testsystemen haben die Schwellwerte 90/95{nbsp}%.
+. Alle (übrigen) Dateisysteme haben die Schwellwerte 85/90{nbsp}%.
+
+Zugegeben -- bei nur zwei Hosts bringt das nicht viel.
+Aber wenn es nur ein paar mehr sind, wird der Mehraufwand schnell sehr groß.
+Die Vorteile der regelbasierten Konfiguration liegen auf der Hand:
+
+* Die Richtlinie ist klar erkennbar und wird zuverlässig durchgesetzt.
+* Sie können die Richtlinie jederzeit ändern, ohne dass Sie Tausende Datensätze anfassen müssen.
+* _Ausnahmen_ sind immer noch möglich, aber in Form von Regeln dokumentiert.
+* Das Aufnehmen von neuen Hosts ist einfach und wenig fehleranfällig.
+
+Zusammengefasst also: weniger Arbeit -- mehr Qualität!
+Und deswegen finden Sie Regeln bei {CMK} an allen Stellen, wo es irgendwie um Hosts oder Services geht: 
+bei Schwellwerten, Monitoring-Einstellungen, Zuständigkeiten, Benachrichtigungen, Agentenkonfiguration und vielem mehr.
+
+
+[#rule_set_types]
+=== Arten von Regelsätzen
+
+Im Setup von {CMK} werden Regeln in _Regelsätzen_ organisiert.
+Jeder Regelsatz hat die Aufgabe, einen ganz bestimmten Parameter für Hosts oder Services festzulegen.
+In {CMK} gibt es über 700 Regelsätze!
+Hier einige Beispiele:
+
+* [.guihint]#Host check command# -- legt fest, wie geprüft werden soll, ob Hosts {UP} sind.
+* [.guihint]#Alternative display name for services# -- definiert für Services alternative Anzeigenamen.
+* [.guihint]#JVM memory levels# -- legt Schwellwerte und andere Parameter für die Überwachung des Speicherbedarfs von Java virtuellen Maschinen (VM) fest.
+
+Jeder Regelsatz ist entweder für Hosts oder für Services zuständig -- nie für beide.
+Wenn Parameter sowohl für Hosts als auch für Services einstellbar sind, gibt es jeweils ein Paar von Regelsätzen --
+z.B. [.guihint]#Normal check interval for host checks# und [.guihint]#Normal check interval for services checks#.
+
+Einige Regelsätze legen genau genommen nicht Parameter fest, sondern erzeugen Services.
+Ein Beispiel sind die Regeln für xref:glossar#active_check[aktive Checks], die Sie unter [.guihint]#Setup > Services > HTTP, TCP, Email, ...# finden.
+Damit können Sie z.B. einen HTTP-Check für bestimmte Hosts einrichten.
+Diese Regeln gelten als Host-Regeln.
+Denn die Tatsache, dass so ein Check auf einem Host existiert, gilt als eine Eigenschaft des Hosts.
+
+Ferner gibt es Regelsätze, welche die xref:glossar#service_discovery[Service-Erkennung] steuern.
+So können Sie z.B. über [.guihint]#Windows service discovery# festlegen, für welche Windows-Dienste automatisch Checks eingerichtet werden sollen, 
+falls diese auf einem System gefunden werden.
+Auch dies sind Host-Regeln.
+
+//SP: Hier wechselt der Text meiner Meinung nach sehr plötzlich und erst auf den zweiten Blick erkennbar von Host- zu Serviceregeln.
+Der Großteil der Regelsätze legt Parameter für bestimmte xref:glossar#check_plugin[Check-Plugins] fest.
+Ein Beispiel ist [.guihint]#Network interfaces and switch ports.#
+Die Einstellungen in diesen Regeln sind sehr individuell auf das jeweilige Plugin zugeschnitten.
+Solche Regelsätze finden grundsätzlich nur bei denjenigen Services Anwendung, die auf diesem Check-Plugin basieren.
+Falls Sie unsicher sind, welcher Regelsatz für welche Services zuständig ist,
+navigieren Sie am besten direkt über den Service zur passenden Regel.
+Wie das geht, erfahren Sie später.
+
+[#host_tags]
+=== Host-Merkmale
+
+Eines haben wir bisher noch unterschlagen:
+In obigem Beispiel gibt es eine Regel für alle Testsysteme.
+Wo ist eigentlich festgelegt, welcher Host ein Testsystem ist?
+
+So etwas wie _Testsystem_ heißt bei {CMK} xref:glossar#host_tag[Host-Merkmal] (englisch: _host tag_).
+Welche Merkmale es gibt, können Sie sich über [.guihint]#Setup > Hosts > Tags# anzeigen lassen.
+Einige Merkmale sind bereits vordefiniert -- zum Beispiel für ein [.guihint]#Test system#, das in der Gruppe [.guihint]#Criticality# definiert ist.
+
+Die Zuordnung zu den Hosts geschieht entweder explizit in den Eigenschaften des Hosts oder per Vererbung über die Ordnerhierarchie.
+Wie das geht, erfahren Sie im xref:hosts_setup#folder[Artikel über die Hosts.]
+Wie Sie eigene Merkmale anlegen können und was es mit den bereits vordefinierten Merkmalen auf sich hat, lesen Sie im Artikel über die xref:host_tags#[Host-Merkmale.]
+
+
+[#rule_characteristics]
+== Eigenschaften einer Regel
+
+Jede Regel besteht aus drei Blöcken.
+Der erste Block enthält allgemeine Informationen zur Regel, wie z.B. den Namen der Regel.
+Im zweiten Block wird definiert, was die Regel machen soll, welche Aktionen also durch sie ausgeführt werden.
+Der dritte Block enthält die Informationen darüber, auf wen, d.h. auf welche Hosts oder Services, die Regel angewendet werden soll.
+
+[#rule_properties]
+=== Allgemeine Optionen (Rule properties)
+
+Alles im ersten Block [.guihint]#Rule Properties# ist optional und dient vor allem der Dokumentation:
+
+image::rules_props_properties.png[alt="Allgemeine Regeloptionen."]
+
+* Die [.guihint]#Description# wird in der Tabelle aller Regeln eines Regelsatzes angezeigt.
+* Das Feld [.guihint]#Comment# können Sie für eine längere Beschreibung verwenden.
+Es erscheint nur im Editiermodus einer Regel.
+Über das Symbol icon:icon_insertdate[] können Sie einen Zeitstempel und Ihren Login-Namen in den Text einfügen lassen.
+* Die [.guihint]#Documentation URL# ist für einen Link auf interne Dokumentation gedacht, die Sie in einem anderen System (z.B. einer CMDB) pflegen.
+Sie wird in der Regeltabelle über das Symbol icon:icon_url[] anklickbar dargestellt.
+* Mit der Checkbox [.guihint]#do not apply this rule# können Sie die Regel vorübergehend abschalten.
+Sie wird dann in der Tabelle mit icon:icon_disabled[] dargestellt und hat keine Wirkung.
+
+[#defined_parameters]
+=== Die festgelegten Parameter
+
+Der zweite Abschnitt ist bei jeder Regel anders, legt aber immer fest, was geschehen soll.
+Folgende Abbildung zeigt einen weit verbreiteten Typ von Regel ([.guihint]#DB2 Tablespaces#).
+Über Checkboxen können Sie bestimmen, welche Einzelparameter die Regel definieren soll.
+Wie weiter oben beschrieben, wird von {CMK} für jeden einzelnen Parameter getrennt ermittelt, welche Regel diesen setzt.
+Die Regel aus der Abbildung setzt also nur den einen Wert und lässt alle anderen Einstellungen unbeeinflusst:
+
+image::rules_props_value_1.png[alt="Verschiedene Regelwerte mit Festlegung eines Wertes."]
+
+Die Werte in dieser und anderen Regeln können Sie auch zeitabhängig steuern.
+So können Sie zum Beispiel die Schwellwerte für die Nutzung der Tablespaces während der Geschäftszeiten anders setzen als am Wochenende.
+
+Klicken Sie erst auf den Knopf [.guihint]#Enable timespecific parameters# und dann auf [.guihint]#Add new element#, werden Ihnen die zeitabhängigen Optionen angezeigt:
+
+image::wato_rules_time_period.png[alt="Ansicht der Regelwerte bei Auswahl zeitabhängiger Parameter."]
+
+Nun wählen Sie in der Liste [.guihint]#Match only during time period# eine xref:timeperiods#[Zeitperiode] aus und anschließend die Parameter, für die diese Zeitperiode gelten soll.
+
+Manche Regelsätze legen keinen Parameter fest, sondern entscheiden nur, welche Hosts _drin_ sind und welche nicht.
+Ein Beispiel ist der Regelsatz [.guihint]#Hosts to be monitored#, dessen Parameterbereich so aussieht:
+
+image::wato_rules_positive.png[alt="Auswahl der positiven oder negativen Übereinstimmung."]
+
+Durch Auswahl eines der beiden verfügbaren Werte entscheiden Sie, was mit den betroffenen Hosts geschehen soll.
+Wählen Sie [.guihint]#Positive match (Add matching hosts to the set)#, so werden die betroffenen Hosts in die Menge der zu überwachenden Hosts aufgenommen.
+Durch Auswahl von [.guihint]#Negative match (Exclude matching hosts from the set)# entfernen Sie die betroffenen Hosts aus dem Monitoring.
+Das [.guihint]#Positive match# bzw. [.guihint]#Negative match# bezieht sich auf den Inhalt der aktuellen Regel.
+Es ist _kein_ zusätzliches Filterkriterium zur Auswahl der Hosts.
+Die Menge der betroffenen Hosts filtern Sie ausschließlich mit den nachfolgenden Bedingungen ([.guihint]#Conditions#).
+
+
+[#conditions]
+=== Bedingungen (Conditions)
+
+Im vorigen Abschnitt haben Sie festgelegt, wie all jene Hosts bzw. Services bearbeitet werden sollen, die von Ihrer Regel betroffen sind. 
+Im dritten Abschnitt [.guihint]#Conditions# definieren Sie nun, welche Hosts bzw. Services für die Regel -- und damit deren Auswirkungen -- herangezogen werden sollen.
+Dabei gibt es verschiedene Arten von Bedingungen, die alle erfüllt sein müssen, damit die Regel greift.
+Die Bedingungen werden also logisch UND-verknüpft:
+
+image::rules_props_conditions_1.png[alt="Die Bedingungen für eine Regel."]
+
+
+==== Condition type
+
+Hier haben Sie die Möglichkeit, neben einer normalen Bedingung auch auf vordefinierte Bedingungen (_predefined conditions_) zurückzugreifen.
+Diese werden über [.guihint]#Setup > General > Predefined conditions# verwaltet.
+Geben Sie hier Regelbedingungen, die Sie immer wieder brauchen, einen festen Namen und verweisen in den Regeln einfach darauf.
+Sie können sogar später den Inhalt dieser Bedingungen zentral ändern und alle Regeln werden automatisch angepasst.
+In folgendem Beispiel wird die vordefinierte Bedingung [.guihint]#No VM# ausgewählt:
+
+image::rules_props_conditions_2.png[alt="Auswahl einer vordefinierten Bedingung für eine Regel."]
+
+
+==== Folder
+
+Mit der Bedingung [.guihint]#Folder# legen Sie fest, dass die Regel nur für Hosts gelten soll, die in diesem Ordner (oder einem Unterordner) enthalten sind.
+Ist die Einstellung auf [.guihint]#Main,# so gilt diese Bedingung also für alle Hosts.
+Wie weiter oben beschrieben, haben die Ordner auch einen Einfluss auf die Reihenfolge der Regeln.
+Regeln in tieferen Ordnern haben immer Vorrang vor Regeln in höher liegenden.
+
+
+==== Host tags
+
+Die [.guihint]#Host tags# schränken die Regel auf solche Hosts ein, die bestimmte Host-Merkmale haben oder nicht haben.
+Auch hier wird immer mit UND verknüpft.
+Jede weitere Bedingung für Host-Merkmale in einer Regel verringert also die Menge der Hosts, auf die diese wirkt.
+
+Wenn Sie eine Regel für zwei mögliche Ausprägungen eines Merkmals gelten lassen möchten (z.B. bei [.guihint]#Criticality# sowohl [.guihint]#Productive system# als auch [.guihint]#Business critical#), so geht das nicht mit einer einzelnen Regel.
+Sie benötigen dann eine Kopie der Regel für jede Variante.
+Manchmal hilft hier aber auch die Negation.
+Sie können als Bedingung auch festlegen, dass ein Merkmal *nicht* vorhanden ist (z.B. nicht [.guihint]#Test system#).
+Eine andere Möglichkeit sind sogenannte xref:host_tags#aux_tag[Hilfsmerkmale.]
+
+Weil einige Anwender wirklich sehr viele Host-Merkmale verwenden, haben wir den Dialog so gestaltet, dass nicht sofort alle Host-Merkmalsgruppen angezeigt werden.
+Sie müssen diese zunächst für die Regel aktivieren.
+Das geht so:
+
+. Wählen Sie in der Auswahlbox eine Host-Merkmalsgruppe.
+. Klicken Sie [.guihint]#Add tag condition#. Dadurch wird darüber ein Eintrag für diese Gruppe hinzugefügt.
+. Wählen Sie [.guihint]#is# oder [.guihint]#is not.#
+. Wählen Sie das gewünschte Merkmal als Vergleichswert.
+
+image::rules_props_hosttags.png[alt="Festlegung mehrerer Host-Merkmale in einer Bedingung."]
+
+
+==== Labels
+
+Auch xref:glossar#label[Labels] können Sie für Bedingungen in Regeln verwenden.
+Lesen Sie hierzu die Beschreibung zu den xref:labels#rule_conditions[Bedingungen in Regeln.]
+
+
+==== Explicit hosts
+
+Diese Art von Bedingung ist für Ausnahmeregeln vorgesehen.
+Hier können Sie einen oder mehrere Host-Namen auflisten.
+Die Regel gilt dann nur für diese Hosts.
+Beachten Sie, dass wenn Sie [.guihint]#Explicit hosts# angekreuzt haben und *keinen* Host eintragen, die Regel überhaupt nicht greifen wird.
+
+Über die Option [.guihint]#Negate# können Sie eine umgekehrte Ausnahme definieren.
+Damit schließen Sie bestimmte explizit genannte Hosts von der Regel aus.
+Die Regel greift dann für alle Hosts *außer* den hier genannten.
+
+image::rules_props_explicithosts_1.png[alt="Bedingung für explizit genannte Hosts."]
+
+*Wichtig*: Alle hier eingetippten Host-Namen werden auf *genaue Übereinstimmung* geprüft.
+Groß-/Kleinschreibung wird von {CMK} in Host-Namen grundsätzlich unterschieden!
+
+Sie können dieses Verhalten auf xref:regexes#[reguläre Ausdrücke] umstellen, indem Sie dem Host-Namen eine Tilde (`~`) voranstellen.
+In diesem Fall gilt wie immer im [.guihint]#Setup#:
+
+* Die Suche geht auf den *Anfang* des Host-Namens.
+* Die Suche ignoriert Groß-/Kleinschreibung.
+
+Punkt-Stern (`pass:[.*]`) bedeutet bei xref:regexes#[regulären Ausdrücken] eine beliebige Folge von Zeichen.
+Folgendes Beispiel zeigt eine Bedingung, die bei allen Hosts greift, deren Namen die Zeichenfolge `my` (oder `My`, `MY`, `mY` usw.) *enthalten*:
+
+image::rules_props_explicithosts_2.png[alt="Bedingung zur Host-Auswahl mit Platzhaltern."]
+
+
+==== Explicit services
+
+Bei Regeln, die sich auf Services beziehen, gibt es als letzte Bedingungsart noch eine Suche auf den Namen des Services, 
+bzw. bei Regeln, die Check-Parameter festlegen, auf den Namen des *Check Items.*
+Wonach genau gesucht wird, sehen Sie in der Beschriftung.
+In unserem Beispiel ist das der Name ([.guihint]#Instance#) eines Tablespaces:
+
+image::rules_props_explicitservices.png[alt="Bedingung zur Service-Auswahl mit Platzhaltern."]
+
+Hier gilt grundsätzlich eine Suche mit xref:regexes#[regulären Ausdrücken].
+Die Folge `pass:[.*]temp` findet alle Tablespaces, die `temp` *enthalten,* denn die Suche geht immer auf den Anfang des Namens.
+Das Dollarzeichen am Ende von `transfer$` steht für das Ende und erzwingt somit einen exakten Treffer.
+Ein Tablespace mit dem Namen `transfer2` würde daher *nicht* gefunden.
+
+Vergessen Sie nicht:
+Bei Regeln, in denen es um [.guihint]#Explicit services# geht, benötigen Sie eine Suche nach dem Service-Namen (z.B. `Tablespace transfer`).
+Bei Regeln mit Check-Parametern geht es um eine Suche nach dem Item (z.B. `transfer`).
+Das Item ist quasi der variable Teil des Service-Namens und legt fest, um _welchen_ Tablespace es sich handelt.
+
+Es gibt übrigens auch Services ohne Item.
+Ein Beispiel ist die [.guihint]#CPU load.#
+Diese gibt es pro Host nur einmal, also ist kein Item notwendig.
+Regeln für solche Check-Typen haben folglich auch keine Bedingung dafür.
+
+
+[#matching]
+== Regelauswertungen
+
+Die Erstellung von Regeln wird im Artikel xref:wato_rules#create_rules[Regeln in {CMK} anwenden] erklärt.
+
+Mit der Erstellung von Regeln ist es jedoch nicht getan.
+Im Beispiel des Abschnitts xref:rule_based[Regelbasiert ist besser] reicht eine einzelne Regel nicht, um das gewünschte Ergebnis zu erreichen.
+Ein komplexeres System aus logisch aufeinanderfolgenden Regeln wird hierfür benötigt.
+Damit wird auch das Verständnis für das Zusammenspiel verschiedener Regeln bedeutsam.
+
+
+[#matching_type]
+=== Arten der Regelauswertung
+
+In der Einleitung in das Prinzip der Regeln haben Sie gesehen, dass immer die erste zutreffende Regel den Ergebniswert festlegt.
+Das ist nicht die ganze Wahrheit.
+Es gibt insgesamt drei verschiedene Arten der Auswertung:
+
+[cols="~,~", options="header"]
+|===
+|Auswertung |Verhalten
+
+|Erste Regel +
+([.guihint]#The first matching rule defines the parameter.#) 
+|Die erste Regel, die zutrifft, legt den Wert fest.
+Weitere Regeln werden nicht mehr ausgewertet.
+Dies ist der Normalfall für Regeln, die einfache Parameter festlegen.
+
+|Erste Regel pro Parameter +
+([.guihint]#Each parameter is defined by the first matching rule where that parameter is set.#)
+|Jeder Einzelparameter wird von der ersten Regel festgelegt, bei der dieser Parameter definiert ist (Checkbox angekreuzt).
+Dies ist der Normalfall für alle Regeln mit Unterparametern, die mit Checkboxen aktiviert werden.
+
+|Alle Regeln +
+([.guihint]#All matching rules will add to the resulting list.#)|
+Alle zutreffenden Regeln fügen Elemente zum Ergebnis hinzu.
+Dieser Typ kommt z.B. bei der Zuordnung von Hosts und Services zu Host-, Service- und Kontaktgruppen zum Einsatz.
+|===
+
+Die Information, wie die Regel ausgewertet wird, wird bei jedem Regelsatz direkt unterhalb der Menüleiste angezeigt:
+
+image::rules_matching_strategy.png[alt="Anzeige der geltenden Regelauswertung oberhalb der Regel."]
+
+
+[#rules_applied]
+=== Regelauswertung praktisch erklärt
+
+Wie wird nun konkret ausgewertet, wenn man mehrere Regeln erstellt hat, die auf mehrere Hosts angewendet werden sollen?
+Um dies zu veranschaulichen, nehmen wir ein einfaches Beispiel:
+
+Angenommen, Sie haben drei Hosts und wollen für jeden dieser Hosts (und auch für alle künftig hinzukommenden) mit der Regel [.guihint]#Periodic notifications during host problems# unterschiedliche periodisch wiederholte Benachrichtigungen festlegen:
+
+. Regel A: Host-1 alle 10 Minuten
+. Regel B: Host-2 alle 20 Minuten
+. Regel C: alle Hosts alle 30 Minuten (allgemeine Regel, um sowohl Host-3 als auch künftige Hosts abzudecken)
+
+Wenn Sie nun Ihre Konfiguration aktivieren, läuft {CMK} die Regelkette von oben nach unten durch.
+Es ergibt sich so die folgende Auswertung:
+
+* Für Host-1 trifft Regel A zu und wird angewendet.
+Die Benachrichtigung für Host-1 erfolgt im 10-Minuten-Takt.
+Damit ist die Bearbeitung für Host-1 abgeschlossen.
+
+* Für Host-2 trifft Regel A nicht zu.
+Weiter geht es mit Regel B.
+Diese trifft für Host-2 zu und wird angewendet, so dass für Host-2 im 20-Minuten-Takt benachrichtigt wird.
+Damit ist die Bearbeitung für Host-2 abgeschlossen.
+
+* Für Host-3 trifft Regel A nicht zu, ebenso wenig Regel B.
+Aber Regel C passt und wird angewendet: die Benachrichtigung für Host-3 erfolgt im 30-Minuten-Takt.
+Damit ist auch die Bearbeitung für Host-3 abgeschlossen.
+
+Zu beachten ist hier:
+Da bei diesem Regelsatz xref:matching_type[„The first matching rule defines the parameter“] gilt, wird die Abarbeitung der Regelkette jeweils nach dem ersten Treffer beendet.
+Die Reihenfolge der Regeln ist daher entscheidend für das Ergebnis!
+Das zeigt sich, wenn die Reihenfolge der Regeln umgestellt wird und Regel B und C vertauscht werden:
+
+. Regel A: Host-1 alle 10 Minuten
+. Regel C: alle Hosts alle 30 Minuten
+. Regel B: Host-2 alle 20 Minuten
+
+Wird nun die Regelkette erneut von oben nach unten für die einzelnen Hosts durchlaufen, so ändert sich auch das Ergebnis:
+Regel C trifft jetzt nicht nur auf Host-3, sondern auch auf Host-2 zu, so dass die Benachrichtigung für beide Hosts im 30-Minuten-Takt erfolgt.
+Damit ist die Bearbeitung für beide Hosts abgeschlossen.
+Obwohl Regel B für Host-2 relevant wäre, ja sogar für diesen Host geschrieben wurde, wird sie nicht mehr ausgewertet und angewendet.
+Im xref:analyse_traffic_light[Analysemodus] sieht das dann so aus:
+
+.Für Host-2 trifft auch die letzte Regel mit der gelben Kugel zu, wird aber nicht angewendet
+image::rules_analyse_mode_example.png[alt="Analysemodus für Host-2 nach Vertauschung der Regeln B und C."]
+
+Kombinieren Sie die verschiedenen in diesem Artikel genannten Einstellungen und beachten dabei die Abarbeitungsreihenfolge, 
+so können Sie damit komplexe Regelketten für ganze Host-Komplexe aufbauen.
