@@ -11,7 +11,7 @@ import json
 
 def parse_ometemp(string_table):
     flatlist = list(itertools.chain.from_iterable(string_table))
-    parsed = json.loads(" ".join(flatlist).replace("'", "\""))
+    parsed = json.loads(" ".join(flatlist))
     return parsed
 
 def discover_ometemp(section):
@@ -19,6 +19,7 @@ def discover_ometemp(section):
 
 def check_ometemp(section):
     t = section['current']['temperature_2m']
+    yield Metric(name="temp", value=t)
     if t < 0.0:
         yield Result(state=State.CRIT, summary="Brrrrrr!")
     elif t < 5.0:
