@@ -177,6 +177,8 @@ def compare_checksums(files, csumsfrom, csumsto)
 end
 
 def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
+	# Store the IDs of all commits from files where the checksum already is identical
+	obsolete_commits = []
 	# If only_files or only_commits is set, the everything else check should not be run
 	only_active = false
 	if @cfg["only_files"].size > 0 || @cfg["only_tickets"].size > 0
@@ -202,6 +204,7 @@ def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
 			# All checksums currently match, this should not happen
 			puts "===> Checksums in source and target tree are identical which means"
 			puts "   > this commit probably cannot be cherry picked anymore."
+			obsolete_commits.push c[1]
 			ask = false
 			decision = "no"
 		elsif only_active && check_against_only(c)
@@ -247,6 +250,7 @@ def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
 			c[3].each { |f| @files_with_skipped_commits.push f }
 		end
 	}
+	return obsolete_commits
 end
 
 
@@ -272,8 +276,12 @@ clist.each { |c|
     missingcommits.push c unless check_present_tree(otree, c)
 }
 
-ask_and_pick(missingcommits, ccsums, ocsums)
+obsolete_commits = ask_and_pick(missingcommits, ccsums, ocsums)
 
+puts "// Obsolete commits (checksum of both files already identical):" if obsolete_commits.size > 0 
+obsolete_commits.each { |o|
+	print "\"#{o}\", " unless @cfg["ignore_commits"].include? o
+}
 
 #~ @allfiles = @allfiles.sort.uniq
 
