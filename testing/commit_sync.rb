@@ -21,7 +21,7 @@ def retrieve_commits()
             while l.gets
                 files.push $_.strip
             end
-            c.push files
+            c.push files.sort
         }
     }
     return commitlist
