@@ -1,0 +1,295 @@
+// -*- coding: utf-8 -*-
+// IGNORE UserPrincipalName | Guihint: Creat Guihint: don’t Guihint: principalname omnipräsente Einladungs glass@example harry+break cer gemappten umformatiert
+// NONASCII
+include::global_attr.adoc[]
+= Authentication with SAML
+:title: Authentication with SAML
+:description: You can log in to {CE} using a single sign-on (SSO) solution. Click here to learn how to set up authentication with SAML.
+
+{related-start}
+xref:wato_user#[User management in {CMK}]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+In this article you will learn how to set up login via _Secure Assertion Markup Language_ (SAML) in {CE}.
+
+SAML is a standardized method for informing external applications and services that a user is who they claim to be.
+SAML enables Single Sign-On (SSO), as it allows a user to be authenticated once and that authentication to be then transmitted to multiple applications.
+Through the connection and communication between the so-called 'service provider' (SP) and the so-called 'identity provider' (IdP), users known to the IdP can access various web applications with a single sign-in.
+In the SAML architecture, the service provider hosts the application, and the identity provider manages users' digital identities.
+
+You are probably familiar with this from your everyday life: 'Sign in with Google' is a ubiquitous SSO option with Google as the IdP—available, for example, for the SP GitHub.com.
+And here, it's 'Sign in with Entra ID' for the SP {CMK}.
+
+Key points for implementation in {CMK}:
+
+* SSO via SAML is implemented directly in the [.guihint]#Admin Panel# of {CE}.
+* The service provider is {CMK} (Amazon Cognito handles user management itself).
+* The identity provider is Entra ID.
+
+
+[#use_saml]
+== SAML in {CMK}
+
+Once you have completed all of the setup steps, users will be able to use SAML login in {CMK}.
+
+Every user authorized via SAML is automatically created in {CMK} the first time they log in there.
+If an account with the corresponding email address already exists in {CMK}, the existing account will also be automatically linked to the Cognito account.
+For you as a user, only one thing is really important: The email address serves as the unique ID for accounts and is therefore always unique and a prerequisite.
+
+User data is synchronized every time the user logs in to {CMK}.
+
+For SAML to work, several prerequisites must be met:
+
+* At least one _'break-glass user'_ must be available.
+* A verified domain must be configured.
+* {CMK}'s SAML endpoints are registered with Entra ID.
+* SAML metadata from Entra ID is stored in {CMK}.
+
+Below, you'll find a step-by-step guide on how this works and what each element is used for.
+
+
+[#prerequisites]
+== Prerequisites for configuration 
+
+First, you will need to set up a few prerequisites before you can begin the actual SSO configuration: a break-glass user, domains, and the Entra ID app.
+
+
+[#breakglass]
+=== {CMK}: Setting up a 'break-glass' user
+
+You will need a [.guihint]#break-glass# user.
+This user role is intended solely for enabling and disabling the SSO configuration—in case something isn't working, SSO needs to be temporarily disabled, or for similar reasons.
+Therefore, this role can only log in using an email address and password.
+
+If a break-glass user disables SSO, all users who have previously logged in exclusively via SSO will receive an email prompting them to set a password.
+Additional notes:
+
+* There can be a maximum of two break-glass accounts.
+* All logins are logged for auditing purposes.
+* These accounts do not count toward the link:https://checkmk.com/blog/introducing-checkmk-cloud-saas[maximum of 20 accounts from {CMK} Cloud^].
+
+In the desired tenant, open [.guihint]#User management# and use [.guihint]#Add user# to create a user with the [.guihint]#Break-glass# role.
+
+The user will then receive an invitation email as usual and can specify a password upon their first login.
+
+Tip: {CMK} supports Plus sub-addresses in the format _harry+break-glass@example.com._
+
+
+.Break-glass users bypass SSO and log in using a password
+image::sso_saas_breakglass_01.png[alt="Creating a break-glass account.", width=75%]
+
+
+[#verifydomain]
+=== {CMK}: Domain verification
+
+SSO login is tied to email addresses and, consequently, to domains.
+You must therefore prove that you actually control the domain.
+To do this, {CMK} uses a unique token that you must enter in your DNS configuration as link: 
+https://en.wikipedia.org/wiki/TXT_record[TXT record^].
+
+From the Admin Panel, go to the [.guihint]#Domain config# section and add a new domain via [.guihint]#Add new domain#, in the format `example.com` without any additional information.
+
+.The domain is specified without a protocol
+image::sso_saas_domain_01.png[alt="Adding a new domain.", width=75%]
+
+Continue by clicking [.guihint]#Save & show verification instructions#.
+You will be taken to a wizard dialog that helps with the setup—starting with navigating to the DNS management interface, which can look different for each provider!
+
+.DNS management varies by provider; the wizard provides helpful tips
+image::sso_saas_domain_02.png[alt="Domain verification wizard.", width=75%]
+
+Things get interesting in step three.
+Here, the wizard provides the data for the DNS record with your provider:
+
+* The type is TXT.
+* The host/name can be either _@_ (which stands for the base domain) or the specific domain you specified, such as `example.com`.
+* The value is the generated token.
+
+.This token requires {CMK} in your DNS management
+image::sso_saas_domain_03.png[alt="Token for domain verification.", width=75%]
+
+The final entry with your provider might look something like this:
+
+.TXT records in the DNS management interface—the {CMK} token is shown below (the one above is from Entra ID; see xref:#entraiddomains[below])
+image::sso_saas_domain_04.png[alt="TXT record in the DNS management interface.”]
+
+Once the entry has been made, you can close the wizard and initiate verification in the [.guihint]#Domain configuration#—and you should receive a confirmation.
+
+.You can access the instructions again via the Verification field (image cropped)
+image::sso_saas_domain_05.png[alt="List of configured domains.”]
+
+[TIP]
+====
+Domains are unique across the entire platform, so `example.com` can only be verified by one tenant. Subdomains such as `myserver.example.com` are treated separately.
+====
+
+
+[#entraidapp]
+=== Entra ID: Creating an Enterprise App
+
+In Entra ID, you will now create an enterprise application.
+
+First, open Entra ID and create a new app, for example, via [.guihint]#Add > Enterprise applications > Create your own application#.
+
+[{image-border}]
+.The file paths may vary depending on the Microsoft product
+image::sso_saas_entraid_app.png[alt="Creating a new enterprise app in Entra ID.”]
+
+Assign any name you like, such as `CMK Cloud`; however, to avoid confusion, we recommend not naming the application `checkmk`!
+The only option for the app is already preselected: [.guihint]#Integrate any other application you don't find in the gallery (Non-gallery)#.
+
+
+[#entraiddomains]
+=== Entra ID: Domain verification
+
+And one more _little thing_: As we saw above for {CMK}, the desired domain must also be verified in Entra ID—fortunately, in the same way, that is, via a DNS record.
+
+You can find this feature in Entra ID on the left side of the main navigation under [.guihint]#Domain names#.
+Again, simply enter the three specified values into your provider's DNS configuration.
+
+.Domain verification in Entra ID—the same technique as in {CMK}
+[{image-border}]
+image::sso_saas_entraid_app_2.png[alt="Domain verification via DNS record in Entra ID.”]
+
+With that, the prerequisites are complete, and you can move on to the actual SAML configuration.
+
+
+[#saml_cee]
+== Configuring SAML
+
+This chapter covers the specific process of connecting Entra ID to {CMK} via SAML.
+This essentially involves copying data from Entra ID to {CMK} and vice versa.
+
+
+[#enterpriseappmetadata]
+=== {CMK}/Entra ID: Configuring the Enterprise App
+
+Open the SSO configuration in the {CE} admin panel.
+In the first dialog, the [.guihint]#Basic SAML configuration# section is relevant.
+
+.The SAML endpoints in {CMK}
+image::sso_saas_config_01_basicsaml.png[alt="SAML endpoints in Checkmk.”]
+
+Now, in your Entra ID app, open the [.guihint]#Single sign-on# section and copy the SAML endpoints from {CMK} into the corresponding fields with the same names in the *first box* [.guihint]#Basic SAML Configuration#.
+
+[{image-border}]
+.The SAML endpoints in Entra ID for a copy-and-paste configuration
+image::sso_saas_config_01b_k1.png[alt="SAML endpoints in Entra ID.”]
+
+Next, copy the URL listed under [.guihint]#App Federation Metadata URL# (see image above) from the *third box* [.guihint]#SAML Certificates# and paste it into {CMK} under [.guihint]#SAML metadata URL#.
+
+.SAML metadata can also be entered as XML—in which case no internet connection is required
+image::sso_saas_config_01_samlmetadata.png[alt="Metadata URL in Checkmk.”]
+
+Last but not least, you need to map an attribute: {CMK} requires the email address of the users managed in Entra ID and uses the attribute [.guihint]#Email address# internally for this purpose—but which Entra ID attribute contains this information?
+
+In Entra ID, go back to the SSO configuration and open the *second box* [.guihint]#Attributes & Claims#.
+Create a new claim (key-value pair in SAML terminology) via [.guihint]#Add new claim# with the following values:
+
+* [.guihint]#Name#: for example, `email`
+* [.guihint]#Namespace#—purely optional: for example, `http://schemas.xmlsoap.org/ws/2005/05/identity/claims`
+* [.guihint]#Source attribute#: by default, `user.userprincipalname`
+
+[{image-border}]
+.The attribute must contain the email address—this is the default option
+image::sso_saas_config_03.png[alt="Mapping IdP attributes in Checkmk.”]
+
+And if you're wondering how you can tell that the email address is contained in the [.guihint]#user.principalname# attribute: Just view a user's properties in Entra ID—you'll see these attributes populated with actual data there.
+ 
+
+There are several ways to configure a correct mapping here—using simple, descriptive names is the easiest.
+
+Back to {CMK}: Under [.guihint]#Map attributes#, enter the name of the claim created in Entra ID—in this case, simply `email`.
+If you specified a [.guihint]#Namespace# above, it must appear here as well, in the form `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/email`.
+
+.The claim name refers to the users' email addresses
+image::sso_saas_config_02.png[alt="Mapping IdP attributes in Checkmk.”]
+
+This completes the [.guihint]#Configure SSO# step, and you can proceed with [.guihint]#Save & continue to sign requests#.
+
+
+[#signrequests]
+=== {CMK}/Entra ID: Sign SAML requests (optional)
+
+In the [.guihint]#Sign requests# step, you now have the option to sign SAML requests from {CMK} and/or encrypt SAML assertions from Entra ID.
+
+Both features follow the same familiar procedure: Enable the option, then display the certificate via [.guihint]#Show certificate# &#8230;
+
+.Encrypt and sign—optional, but recommended!
+image::sso_saas_config_04.png[alt="Encryption for SSO in Checkmk.”]
+
+&#8230; and download the certificate (for Entra ID) as a .cer file.
+
+[{image-border}]
+.You can choose between text or a file in .crt or .cer format
+image::sso_saas_config_04b.png[alt="Certificate for signing in Entra ID.”]
+
+In Entra ID, access the configuration again under [.guihint]#Single sign-on# in *Box 3* [.guihint]#SAML Certificates#: Under [.guihint]#Verification certificates (optional)#, enable [.guihint]#Require verification certificates# and upload the cer file.
+
+[{image-border}]
+.Entra ID always requires certificates in .cer format
+image::sso_saas_config_05.png[alt="Certificate for signing in Entra ID.”]
+
+*Token encryption* works in largely the same way.
+The first step is again to upload the certificate in .cer format—which can be found in your Entra ID Enterprise application under [.guihint]#Security > Token encryption#.
+Next, you must activate the certificate via the burger menu and [.guihint]#Activate token encryption#.
+
+In any case, continue in the {CE} admin panel by clicking [.guihint]#Save & continue to add domain(s)#.
+
+
+[#linkdomains]
+=== {CMK}: Link Domains
+
+In this step, you simply add at least one already verified domain to the SSO configuration.
+
+.You can also add unverified domains and verify them later
+image::sso_saas_config_06.png[alt="Domains for the SSO configuration.”]
+
+Continue with [.guihint]#Save & continue to activation#.
+
+
+[#activatesso]
+=== {CMK}: Activate SSO
+
+Finally, you will see an overview of the configured metadata, mapped attributes, optional signing/encryption, and the linked domains—if everything looks good, activate the SSO feature.
+
+.You can access all steps individually again via the summary
+image::sso_saas_config_07.png[alt="Summary of the SSO configuration”]
+
+
+[#usesso]
+== Using SSO
+Using SSO works as you're used to: {CE} greets users with the usual login field for their email address and then either redirects them to the Entra ID login screen or directly to the {CMK} interface, provided they are already logged in to Entra ID.
+Don't forget: Users must, of course, be assigned to your enterprise application in Entra ID!
+
+If the email address belongs to a 'break-glass' user or if SSO is disabled, the system will prompt for a password.
+
+
+[#troubleshooting]
+== Troubleshooting
+
+[#errorpassword]
+=== Password Required
+If {CMK} does not redirect to Entra ID after you enter your email address but instead asks for a password, there are three possibilities: The domain is not verified, SSO is not enabled, or it is a 'break-glass' user.
+
+
+[#errordomain]
+=== Domain verification fails
+It can take up to 48 hours for DNS TXT records to propagate—the only solutions here are to contact your provider or be patient.
+
+
+[#errorentrauth]
+=== Authentication in Entra ID fails
+A lot of data is copied back and forth between {CMK} and Entra ID, so it's easy for the wrong fields to be selected, or for characters to be truncated or reformatted.
+Carefully check all data pasted from {CMK}—if in doubt, do so in a separate text editor to rule out reformatting from the clipboard.
+
+
+[#errorcmkauth]
+=== Authentication in {CMK} fails
+If logging in to Entra ID works but {CMK} does not recognize the user, this indicates that the email attribute was not assigned correctly.
+Check the relevant information and/or try a different Entra ID claim.
+Tip: Do not rely on the default claim names!
