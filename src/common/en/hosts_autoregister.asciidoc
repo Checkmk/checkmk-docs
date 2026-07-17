@@ -1,0 +1,365 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Automated host creation
+:title: Automated host creation
+:description: The {CMK} agent can automatically register objects as hosts to be monitored by a {CMK} site. Read here how to set up the auto-registration.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:agent_windows#[Monitoring Windows]
+{related-end}
+
+
+[#autoregister]
+== Auto-registration
+
+ifdef::onprem[]
+{cce-only}
+endif::[]
+Cloud systems such as xref:monitoring_aws#[Amazon Web Services (AWS)], xref:monitoring_azure#[Microsoft Azure] or xref:monitoring_gcp#[Google Cloud Platform (GCP)] independently create and delete 'objects', 
+which correspond to the xref:glossar#host[hosts] in {CMK}.
+In order for these cloud objects, once they have been created, to be included without delay as hosts in a {CMK} monitoring, a solution without manual intervention is required.
+
+{CMK} provides the answer with its _auto-registration_ feature -- which enables hosts to be created automatically.
+ifdef::onprem[]
+As automatic host creation is mainly needed for the cloud environments referred to above, auto-registration is only available in {CCE}.
+endif::[]
+
+Auto-registration is achieved through communication between the xref:wato_monitoringagents#agents[{CMK} agent] and the {CMK} server.
+The agents' Agent Controller makes a request for registration to the server's Agent Receiver, transmitting the data required to create the host.
+If the Agent Receiver accepts the request, registration is performed and a TLS-encrypted connection is established.
+The host is then created, a xref:glossar#service_discovery[service discovery] is performed and the changes are activated,
+so that the host will be added to the xref:glossar#monitoring_environment[monitoring environment] -- a completely automatic process.
+
+For this automation to work, appropriate preparation is of course necessary.
+Let's start on the {CMK} site, with the creation of a user who has the authorization for auto-registration, a folder in which the hosts are to be created, 
+and a rule that allows the Agent Receiver to process registration requests without manual intervention.
+ifdef::onprem[]
+By the way, when configuring the folder, you can specify whether the agents for the hosts to be created there should work in xref:glossar#pull_mode[pull mode] or xref:glossar#push_mode[push mode].
+endif::[]
+
+Then comes the {CMK} agent:
+Here, the information for a registration request is specified by an agent rule and then packed (baked) into an agent package by the Agent Bakery.
+ifdef::onprem[]
+This includes selecting the {CMK} site that will monitor the host, which in a xref:glossar.html#distributed_monitoring[distributed monitoring] will usually be a remote site.
+endif::[]
+This agent package configured for auto-registration is then installed on the hosts that are to be able to perform auto-registration.
+
+How all of this actually works is explained in the following chapters.
+
+ifdef::saas[]
+[TIP]
+====
+By the way: The preconfigured agent packages that are available in {CE} for the automatic creation of hosts have been created with the feature described in this article.
+====
+endif::[]
+
+
+[#setup_autoregister]
+== Setting-up auto-registration
+
+[#user]
+=== Select user for auto-registration
+
+ifdef::onprem[]
+The permissions needed to register the agent with the {CMK} server (for TLS-encrypted data transfer) and to create hosts are contained in the xref:wato_user#roles[role] [.guihint]#Agent registration user#.
+The permissions to register _new_ hosts are available in this role only in {CE}.
+
+This role is assigned to the xref:glossar#automation_user[automation user] `agent_registration`, which is set up in every {CMK} site and whose properties can be displayed via [.guihint]#Setup > Users > Users#:
+
+.By default, this automation user only has the role [.guihint]#Agent registration user#
+image::hosts_autoregister_user.png[alt="Dialog with the properties of the automation user 'agent_registration'."]
+endif::[]
+
+ifdef::saas[]
+The permissions needed to register the agent with the {CMK} server (for TLS-encrypted data transfer) and to create hosts are assigned to the xref:glossar#automation_user[automation user] `agent_registration`, which is set up in every {CMK} site.
+endif::[]
+
+It makes sense to use this automation user for auto-registration, which is not allowed to do anything other than register hosts.
+
+
+[#new_folder]
+=== Creating a folder for the new hosts
+
+The automatically created hosts are to be created in a new folder.
+Alternatively, you can use an existing folder if you configure that folder as described below.
+
+Start the creation of a folder with [.guihint]#Setup > Hosts > Hosts > Add folder#.
+Give the new folder a name in the [.guihint]#Basic settings# box.
+
+The [.guihint]#Network address# box includes the [.guihint]#IP address family# option.
+ifdef::onprem[]
+If you want the host's {CMK} agents to be set up to use the xref:glossar#pull_mode[pull mode], you can leave the default value [.guihint]#IPv4 only# unchanged.
+endif::[]
+For xref:glossar#push_mode[push mode], select the value [.guihint]#No IP#.
+ifdef::onprem[]
+This prevents the host's accessibility from being checked via xref:cmc_differences#smartping[Smart Ping].
+endif::[]
+
+In the following [.guihint]#Monitoring agents# box, you specify two important options for the auto-registration.
+ifdef::onprem[]
+With [.guihint]#{CMK} agent connection mode# you decide whether the {CMK} agent should work in pull mode or (as in the following image) in push mode.
+This option is only available in {CE}.
+endif::[]
+ifdef::saas[]
+With [.guihint]#{CMK} agent connection mode# you decide that the {CMK} agent should work in xref:glossar#push_mode[push mode].
+endif::[]
+Finally, in [.guihint]#Bake agent packages#, activate the [.guihint]#Bake a generic agent package for this folder# checkbox.
+This allows you to use the xref:glossar#agent_bakery[Agent Bakery], 
+to create an xref:wato_monitoringagents#agent_configurations[agent configuration] for a folder and all of the hosts it contains, *and* any hosts that may be added to this folder in the future.
+
+.Configuring a folder for the push mode
+ifdef::onprem[]
+image::hosts_autoregister_new_folder.png[alt="Dialog for creating a new folder for auto-registration."]
+endif::[]
+ifdef::saas[]
+image::hosts_autoregister_new_folder_saas.png[alt="Dialog for creating a new folder for auto-registration."]
+endif::[]
+
+Complete the creation of the folder with [.guihint]#Save#.
+
+
+[#rule_autoregister_site]
+=== Creating a rule for the {CMK} site
+
+The decision on which hosts are allowed to register automatically, what names they are given and what else happens to them following registration, 
+is made in {CMK} -- not surprisingly -- with rules.
+The labels with which the host's agent will register play a decisive role in this.
+But first things first.
+
+ifdef::onprem[]
+The [.guihint]#Agent registration# rule set is only available in {CE}.
+endif::[]
+You can find [.guihint]#Agent registration# under [.guihint]#Setup > Agents# (if the xref:intro_gui#show_less_more[Show more mode] is active) or by searching the [.guihint]#Setup# menu.
+Start with [.guihint]#Add rule# the creation of a new rule and assign in the first box [.guihint]#Properties#, as usual with {CMK}, first an ID and a title.
+
+In the following [.guihint]#Matching criteria# box, you specify which labels are to be accepted when the {CMK} server receives a request for registration from an agent.
+These _agent labels_ are used exclusively for auto-registration and are different from the xref:glossar#label[labels] otherwise used in {CMK} to identify hosts and services.
+Two agent labels are supplied by the {CMK} agent and can be selected from the list:
+`cmk/os-family` contains the host's operating system which can be used, for example, to store the hosts in different folders.
+`cmk/hostname-simple` contains the host name without the domain component (hence `simple`) which is intended for designating a unique host name in {CMK}.
+There is no agent label with a Fully Qualified Domain Name (FQDN), as FQDN is not a property of the host, but of the network.
+You can also enter your own labels with [.guihint]#Custom label#. 
+
+The colon-separated key-value pair that makes up a label (e.g. `cmk/os-family:linux`) is evaluated separately.
+This way you can explicitly specify that a key (e.g. `cmk/os-family`) must exist ([.guihint]#Exists#), may not exist ([.guihint]#Does not exist#) or is only accepted with a given value ([.guihint]#Equals#).
+You can also enter a xref:regexes#[regular expression] ([.guihint]#Regex#) as the value.
+If you define multiple agent labels, they will be logically linked with AND.
+In the following example, in addition to the predefined label `cmk/hostname-simple`, the custom label `my_autoregister_label` is also to be checked: 
+
+.This checks whether labels with the `cmk/hostname-simple` and `my_autoregister_label` keys exist
+image::hosts_autoregister_rule_matching_criteria.png[alt="Auto-registration rule specifying the allowed labels."]
+
+[TIP]
+====
+Every host that has been successfully registered automatically receives the `cmk/agent_auto_registered:yes` host label appended by {CMK}.
+You cannot use this label here, however, because it is not an agent label and is only assigned _following_ the registration.
+====
+
+In the next box, [.guihint]#Action#, you determine what should happen when the evaluation of the labels takes effect: Create the host or not.
+If you select [.guihint]#Stop and do not create hosts#, the rule evaluation is then complete and the next two boxes are no longer relevant.
+In our example, however, hosts are to be created:
+
+.The default action is the creation of the hosts
+image::hosts_autoregister_rule_action.png[alt="Auto-registration rule specifying the action to be performed."]
+
+In the [.guihint]#Host name computation# box, you now specify which name the host should receive.
+In the [.guihint]#Host name template# box, enter the template.
+Here you can use macros to read the actual values from the agent labels that you selected in the [.guihint]#Matching criteria# box above -- with `$cmk/hostname-simple$`, for example, the simple host name supplied by the {CMK} agent.
+You can then modify the template, if desired, by converting to lower or upper case, and substitutions with regular expressions and with explicit host names.
+These are, by the way, the same options that are available in xref:piggyback.html#renamehosts[customizing the names of piggyback hosts].
+More information can also be found in the xref:user_interface#inline_help[inline help].
+
+.Adoption of the simple host name, supplemented by the prefix `push-`
+image::hosts_autoregister_rule_hostname_computation.png[alt="Auto-registration rule with host name specification."]
+
+Finally, in the [.guihint]#Host creation# box, select the xref:new_folder[predefined folder] in which the new hosts are to land.
+In addition, you can specify attributes that are to be given to the host.
+You can read more about these attributes in the article on xref:hosts_setup#create_hosts[host administration].
+
+.The new hosts should be created in the predefined `Autoregistered` folder
+image::hosts_autoregister_rule_host_creation.png[alt="Auto-registration rule specifying the destination folder and host attributes."]
+
+After saving the rule, return to the [.guihint]#Agent registration# page.
+Here you will find the [.guihint]#Agent labels simulator#.
+If you have defined many rules, the simulator will help you to keep track of them.
+You can enter agent labels and with [.guihint]#Try out# simulate whether and which rule applies when an agent label is sent. 
+The results will show you the colored traffic light symbols as described in the article on xref:wato_rules#analyse_traffic_light[rules].
+
+
+[#rule_autoregister_bakery]
+=== Creating a rule for the Agent Bakery
+
+After configuring the {CMK} site in the previous section, we now deal with the {CMK} Agent Controller.
+ifdef::onprem[]
+For this, you use the [.guihint]#Agent controller auto-registration# rule set in the Agent Bakery, which is only available in {CE}.
+endif::[]
+ifdef::saas[]
+For this, you use the [.guihint]#Agent controller auto-registration# rule set in the Agent Bakery.
+endif::[]
+You can find the rule set in the Agent Bakery under [.guihint]#Agent rules# or the quickest way is to search for it in the [.guihint]#Setup# menu.
+Create a new rule.
+
+In the [.guihint]#Agent controller auto-registration# box, provide the Agent Controller with all of the information it needs to make a registration request to the Agent Receiver:
+the {CMK} server ([.guihint]#Monitoring server address#), 
+if applicable, the port number for the Agent Receiver ([.guihint]#Agent receiver port#),
+the xref:user[automation user] for auto-registration ([.guihint]#Authorization#)
+and the {CMK} site ([.guihint]#Site to register with#) that is to monitor the host. 
+ifdef::onprem[]
+In a xref:glossar.html#distributed_monitoring[distributed monitoring], this will usually be a remote site.
+endif::[]
+
+You can also define your own labels here at the [.guihint]#Additional agent labels to send during registration# option.
+For the auto-registration to work, these labels must match the ones 
+which you have entered under [.guihint]#Custom label# in the xref:rule_autoregister_site[rule for the {CMK} site]:
+in the example, the previously created custom label with the `my_autoregister_label` key.
+
+With the final option [.guihint]#Keep existing connections# you determine 
+whether the Agent Controller should delete ([.guihint]#no#) or keep ([.guihint]#yes#) already existing connections.
+If you have configured manual connections to other {CMK} sites in addition to the automatic registration of a connection,
+and want to keep these even after a restart of the Agent Controller `cmk-agent-ctl`, you should set this option to [.guihint]#yes#.
+
+.The values for the Agent Bakery must match those of the {CMK} site
+image::hosts_autoregister_rule_agent_bakery.png[alt="Auto-registration rule for Agent Bakery."]
+
+*Important:* For the last box in this rule, [.guihint]#Conditions#, again select the predefined folder as [.guihint]#Folder#.
+
+
+[#bake]
+=== Baking an agent package
+
+Now continue in the Agent Bakery with [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX#.
+Click on icon:button_bake_agents[alt="Button for baking agents."] and bake yourself a new agent.
+ifdef::onprem[]
+As a result, in addition to the [.guihint]#Vanilla (factory settings)# agent configuration, you will receive a new line for the configuration
+endif::[]
+ifdef::saas[]
+As a result, you will receive a new line for the configuration
+endif::[]
+in which the rule created in the previous section has been baked in:
+
+.The [.guihint]#Agent type# column shows that the new configuration is specific to the configured folder
+image::hosts_autoregister_baked_agent.png[alt="List with the new configurations of agents for auto-registration."]
+
+
+[#install]
+=== Download and install the agent package
+
+The agent package must now be installed on each host that is to start auto-registration.
+Download the agent package appropriate for the host's operating system and install it on the host.
+The procedure is the same as usual in the Agent Bakery.
+For more on this, see the articles on the xref:wato_monitoringagents#bakery_download[monitoring agents], 
+the xref:agent_linux#install[Linux agent] and the xref:agent_windows#install[Windows agent].
+
+
+[#success]
+=== Process verification
+
+After installing the agent package, the Agent Controller evaluates the `pre_configured_connections.json` file on the host
+and issues the registration command for a connection that it contains.
+If the Agent Receiver accepts this command, the connection will be set up and the host created in the {CMK} site.
+
+.The automatically created host in the Setup
+image::hosts_autoregister_setup_new_host.png[alt="Contents of the auto-registration folder containing the automatically created host."]
+
+A xref:glossar#service_discovery[service discovery] is then performed and the xref:glossar#activate_changes[changes activated],
+so that the host will also be visible in the monitoring.
+Note that during the automatic activation, any other accumulated changes -- also from other users -- will also be activated.
+
+This process can take several (up to 5) minutes from the installation of the agent package until the host appears in the monitoring.
+You can track the individual steps in this process in [.guihint]#Setup > General > Audit log# after selecting the `wato_audit.log` file.
+
+On the host you can use a command to display the Agent Controller's connection status, which looks like this following a successful registration in push mode:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl status
+Version: 2.3.0b1
+Agent socket: operational
+IP allowlist: any
+
+
+Connection: myserver/mysite
+	UUID: b11af975-40a8-4574-b6cd-12dc11c6f273
+	Local:
+		Connection mode: push-agent
+		Connecting to receiver port: 8000
+		Certificate issuer: Site 'mysite' agent signing CA
+		Certificate validity: Tue, 13 Feb 2024 12:50:35 +0000 - Tue, 13 Feb 2029 12:50:35 +0000
+	Remote:
+		Connection mode: push-agent
+		Registration state: discoverable
+		Host name: push-myhost
+----
+
+Automatically created hosts can also be xref:hosts_setup#hosts_autoremove[automatically removed].
+{CE} thus provides the two most important components for the _lifecycle management_ of hosts.
+ifdef::onprem[]
+By the way, automatic removal also works for manually created hosts -- and in all editions.
+endif::[]
+ifdef::saas[]
+By the way, automatic removal also works for manually created hosts.
+endif::[]
+
+
+[#test]
+== Testing and fault diagnosis
+
+You can follow the individual steps in the process of the creation of the host in monitoring (creation of the host in the Setup, service discovery and activation) in the {CMK} site under [.guihint]#Setup > General > Audit log#. 
+You verify the successful automatic registration on the host with the `cmk-agent-ctl status` command.
+
+However, these verifications mentioned in the previous section will only show the desired results if the process has been successful.
+If the results are not as shown above, it may be because a registration request was submitted by the Agent Controller but not accepted by the Agent Receiver.
+
+For an overview of all registration requests that have been _rejected_ by the {CMK} site, see the [.guihint]#Agent registration# page, above,
+in which you created the xref:rule_autoregister_site[rule for the {CMK} site].
+There are many possible reasons for a rejection.
+In the following image you can see two examples -- a misspelling (`my_autoregister_labell`) in the agent label submitted by the agent, and a host that already exists:
+
+.Two rejected registration requests
+image::hosts_autoregister_declined_requests.png[alt="List of rejected auto-registration requests."]
+
+For each rejected request, in the first column, [.guihint]#Actions#, you can start a simulation, the result of which is displayed in the last column, [.guihint]#Simulation result#.
+
+For a fault diagnosis beyond this, for further information see the articles on the xref:agent_linux#test[Linux agent] and the xref:agent_windows.html[Windows agent] 
+-- among others -- on the topics of communication between an agent and a {CMK} site, as well as on (manual) registration.
+
+
+[#files]
+== Files and directories
+
+=== File paths on the monitored Linux host
+
+[cols="45,~",options="header"]
+|===
+|File path |Description
+|`/var/lib/cmk-agent/registered_connections.json` |Contains a list of connections registered with the Agent Controller.
+|`/var/lib/cmk-agent/pre_configured_connections.json` |Contains a preconfigured connection integrated into the agent package via the Agent Bakery to a site for the auto-registration in {CE}.
+|===
+
+
+=== File paths on the monitored Windows host
+
+[cols="45,~",options="header"]
+|===
+|File path |Description
+|`C:\ProgramData\checkmk\agent\registered_connections.json` |Contains a list of connections registered with the Agent Controller.
+|`C:\ProgramData\checkmk\agentregistered_connections.json` |Contains a preconfigured connection integrated into the agent package via the Agent Bakery to a site for the auto-registration in {CE}.
+|===
+
+
+ifdef::onprem[]
+=== File paths on a {CMK} server
+
+[cols="45,~",options="header"]
+|===
+|File path |Description
+|`~/var/agent-receiver/received-outputs/` |Contains for each connection its UUID as a soft link pointing to the folder containing the agent output.
+|`~/var/log/agent-registration.log` |Log file for the agent registration.
+You can control the verbosity of the messages in 6 levels via [.guihint]#Setup > General > Global settings > User interface > Logging > Agent registration#.
+|`~/var/log/agent-receiver/` |Contains the log files for the Agent Receiver.
+|===
+endif::[]

@@ -1,0 +1,248 @@
+// -*- coding: utf-8 -*-
+// IGNORE
+// NONASCII
+include::global_attr.adoc[]
+= Data source programs
+:title: Data source programs - Monitoring devices without access to an operating system
+:description: Data source programs provide monitoring data for hosts without an Agent Controller. Read here how to create and use data source programs for {CMK}.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:localchecks#[Local checks]
+xref:piggyback#[The piggyback mechanism]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+{CMK} usually accesses monitored hosts in the xref:glossar#pull_mode[pull mode] via a TCP connection to port 6556.
+Starting with version {v21}, in most cases the Agent Controller listens on this port, which forwards the agent output over a TLS encrypted connection.
+{CMK} {v22} introduced the alternative option for selecting the transmission direction with the xref:glossar#push_mode[push mode].
+
+There are environments however -- for example, stripped-down containers, legacy or embedded systems -- in which the Agent Controller cannot be used.
+In such cases the _legacy mode_ is applied in which `(x)inetd` executes the agent script after establishing a connection, the agent output is transferred as plain text and the connection is closed immediately after.
+
+In many situations security policies could require that actions such as the transmission of data as plain text must be avoided.
+For example, the fill levels of file systems might be of little use to an attacker, but process tables or lists of missing updates could help in targeting an attack.
+Moreover the practice of opening additional ports should be avoided in favor of using existing communication channels.
+
+The universal methods for connecting such transfer procedures to {CMK} are the _data source programs_.
+The idea is very simple:
+you pass a command to {CMK}.
+Instead of connecting to port 6556, {CMK} executes this command.
+This produces the agent data on the _standard output_, which is then processed by {CMK} in exactly the same way as if it had come from a ‘normal’ agent.
+Since changes to data sources usually only affect transports, it is important that you leave the host to [.guihint]#API integrations if configured, else {CMK} agent# in the xref:hosts_setup#monitoring_agents[Setup GUI].
+
+The modularity of {CMK} helps you to fulfill these requirements by transmitting the plain text agent output over arbitrary means of transport.
+Ultimately, the plain text output of the agent script can be transported by any means -- direct or indirect, pull or push.
+Here are a few examples on how to get agent data to the {CMK} server:
+
+* via email
+* via HTTP-access from the server
+* via HTTP-upload from the host
+* via access to a file that has been copied to the server using `rsync` or `scp`
+* via a script that uses HTTP to retrieve the data from a web service
+
+Another area of application for data source programs are systems that do not allow agent installation but issue status data via REST API or a Telnet interface.
+In such cases, you can write a data source program that queries the existing interface and generates agent output from the data obtained.
+
+
+[#writing]
+== Writing data source programs
+
+=== The simplest possible program
+
+The writing and installation of a data source program is not difficult.
+Any Linux-supported script and program language can be used.
+The program is best stored in the `~/local/bin/` directory, where it will always be found automatically without the need to specify a data path.
+
+The following first very basic example is called `myds` and it generates simple, fictional monitoring data.
+Instead of integrating a new transport path, it generates the monitoring data itself. 
+These consist of one section `+<<<df>>>+`, which contains the
+information for a single file system, and which has a size of 100 kB and the name `My_Disk`.
+It is coded as a shell script of three lines:
+
+.~/local/bin/myds
+[{bash}]
+----
+#!/bin/sh
+echo '<<<df>>>'
+echo 'My_Disk  foobar  100 70 30  70% /my_disk'
+----
+
+Don't forget to make the program executable:
+
+[{shell}]
+----
+{c-omd} chmod +x local/bin/myds
+----
+
+Now create a test host in the Setup – e.g., `myserver125`.
+This does not require an IP address.
+In order to avoid {CMK} attempting to resolve `myserver125` via DNS, enter this name as an explicit ‘IP address’.
+
+Next add a rule in the [.guihint]#Setup > Agents > Other integrations > Individual program call instead of agent access# rule set which applies to this host, and enter `myds` as an executable program:
+
+image::ds_program.png[alt="Input mask for an individual command."]
+
+When you now go to the host's service configuration in the Setup GUI, exactly one service ready to start monitoring should be listed:
+
+image::ds_program_discovery.png[alt="The new service has been detected."]
+
+Add this service into the monitoring, activate the changes, and your first data source program will be running.
+For a test, as soon as you alter the data being generated by the program the `My_Disk` file system's next check will immediately show this.
+
+
+=== Error diagnosis
+
+If something is not functioning correctly, the host's configuration can be checked by entering `cmk -D` in the command line and see if your rule takes effect:
+
+[{shell}]
+----
+{c-omd} cmk -D myserver125
+
+myserver125
+Addresses:              myserver125
+Tags:                   [address_family:ip-v4-only], [agent:cmk-agent], [criticality:prod], [ip-v4:ip-v4], [networking:lan], [piggyback:auto-piggyback], [site:mysite], [snmp_ds:no-snmp], [tcp:tcp]
+Host groups:            check_mk
+Agent mode:             Normal Checkmk agent, or special agent if configured
+Type of agent:
+Program: #myds#
+----
+
+With a `cmk -d` you can trigger the retrieval of the agent data as well as the execution of your program:
+
+[{shell-raw}]
+----
+{c-omd} cmk -d myserver125
+<<<df>>>
+My_Disk  foobar  100 70 30  70% /my_disk
+----
+
+A duplicated `-v` should generate a message that your program will be invoked:
+
+[{shell-raw}]
+----
+{c-omd} cmk -vvd myserver125
+Calling: myds
+<<<df>>>
+My_Disk  foobar  100 70 30  70% /my_disk
+----
+
+
+=== Transferring a host's name
+
+The program in our example actually works, but is not very useful as it always produces the same data, regardless of which host it is invoked for.
+
+A real program that, for example, retrieves data via HTTP from somewhere, requires at least the name of the host from where it should retrieve the data.
+By coding `$HOSTNAME$` as a placeholder in the command line you can allow this to be transferred:
+
+image::ds_program_host.png[alt="Passing the host name with the $HOSTNAME$ macro."]
+
+In this example the program `myds` receives the host name as its first argument.
+The following program example produces this for testing in the form of a xref:localchecks#[local check].
+Via `$1` it takes the first argument and saves it for use as an overview in the `$HOST_NAME` variable.
+This will then be inserted into the local check's plug-in output:
+
+.~/local/bin/myds
+[{bash}]
+----
+#!/bin/sh
+HOST_NAME="$1"
+
+echo '<<<local>>>'
+echo "0 Hostname - My name is ${HOST_NAME}"
+----
+
+The service discovery will then find a new service of the `local` type, in the output from which the host name will be seen:
+
+image::ds_program_discovery_host.png[alt="The service discovery finds the new service, which now outputs the passed host name as information."]
+
+From here it is only a small step to a real data source program that, for example, retrieves data over HTTP using the `curl` command.
+The following placeholders are permitted in a data source program's command line:
+
+[cols="30,~"]
+|===
+|`$HOSTNAME$` |The host name as configured in the Setup.
+|`$HOSTADDRESS$` |The IP address of the host over which it will be monitored.
+|`$_HOSTTAGS$` |The list of all xref:glossar#host_tag[host tags], separated by blank characters – enclose this argument in quotes to prevent it being split by the shell.
+|===
+
+If you have a dual-monitoring using IPv4 and IPv6, the following macros may be interesting for you:
+
+[cols="30,~"]
+|===
+|`$_HOSTADDRESS_4$` |The host's IPv4-address
+|`$_HOSTADDRESS_6$` |The host's IPv6-address
+|`$_HOSTADDRESS_FAMILY$` |The numeral `4` if the IPv4-address is used for the monitoring, otherwise `6`.
+|===
+
+
+[#error_handling]
+=== Error handling
+
+Regardless of your actual occupation in IT -- much of your time will be spent dealing with errors and problems.
+Data source programs are not spared these.
+Especially for programs that provide data over networks it is unrealistic to expect them to be error-free.
+
+In order that {CMK} can communicate an error to your program in an orderly way, the following apply:
+
+. Any exit code other than `0` will be treated as an error.
+. Error messages are expected on the standard error channel (`stderr`).
+
+If a data source program fails,
+
+* {CMK} discards the output's complete user data,
+* {CMK} sets the [.guihint]#Check_MK# service to {CRIT} and identifies the data from `stderr` as an error,
+* and the actual services remain in their old state (and will become stale over time).
+
+We can modify the above example so that it simulates an error.
+With the redirection `&gt;&amp;2` the text will be diverted to `stderr`, and `exit 1` sets the program's exit code to `1`:
+
+.~/local/bin/myds
+[{bash}]
+----
+#!/bin/sh
+HOST_NAME=$1
+
+echo "<<<local>>>"
+echo "0 Hostname - My name is $HOST_NAME"
+
+echo "This didn't work out" >&2
+exit 1
+----
+
+As [.guihint]#Check_MK# service it will look like this:
+
+image::ds_program_error.png[alt="If a script returns exit codes different from 0, the 'Check_MK' service will immediately CRIT (red)."]
+
+Should you be writing your program as a shell script, right at the beginning you can code the `set -e` option:
+
+.~/local/bin/myds
+[{bash}]
+----
+#!/bin/sh
+set -e
+----
+
+As soon as an instruction produces an error (i.e., exit code not `0`), the shell immediately stops and issues the exit code `1`.
+You have thus a generic error handling and must not check every single instruction for success.
+
+
+[#specialagents]
+== Special agents
+
+A number of often-required data source programs are delivered with {CMK}.
+These _special agents_ are presented in a xref:special_agents#[separate article].
+
+
+[#files]
+== Files and directories
+
+[cols="25,~",options="header"]
+|===
+|Path |Function 
+|`~/local/bin/` |The repository for own programs and scripts that should be in a search path, and which can be directly executed without specifying the path. If a program is in `~/bin/` as well as in `~/local/bin/`, the latter has priority.
+|===

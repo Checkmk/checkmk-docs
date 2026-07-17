@@ -1,0 +1,1487 @@
+// -*- coding: utf-8 -*-
+// IGNORE se kunde1 kunde2 kunde3 betreiber1
+// NONASCII 
+include::global_attr.adoc[]
+= Verteiltes Monitoring
+:title: Verteiltes Monitoring - {CMK} skalieren und verteilen
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Unter dem Begriff „verteiltes Monitoring“ (_distributed monitoring_) versteht wahrscheinlich nicht jeder das Gleiche.
+Und eigentlich ist Monitoring ja immer über viele Rechner verteilt
+-- solange das Monitoring-System nicht nur sich selbst überwacht, was schließlich wenig nützlich wäre.
+
+In diesem Handbuch sprechen wir immer dann von einem verteilten Monitoring, wenn das gesamte Monitoring-System aus _mehr als einer {CMK}-Instanz_ besteht.
+Dabei gibt es verschiedene Gründe für das Aufteilen in mehrere xref:glossar#site[Instanzen]:
+
+* Performance: Die Rechenlast des Monitorings soll oder muss auf mehrere Maschinen verteilt werden.
+* Organisation: Die Instanzen sollen von unterschiedlichen Personenkreisen eigenverantwortlich administriert werden.
+* Verfügbarkeit: Das Monitoring an einem Standort soll unabhängig von anderen Standorten funktionieren.
+* Sicherheit: Datenströme zwischen zwei Sicherheitsbereichen sollen getrennt und genau kontrolliert werden (DMZ etc.).
+* Netzwerk: Standorte, die nur schmalbandig oder unzuverlässig angebunden sind, können nicht zuverlässig von der Ferne aus überwacht werden.
+
+{CMK} unterstützt mehrere Verfahren für den Aufbau eines verteilten Monitorings.
+Manche davon beherrscht {CMK}, weil es mit Nagios weitgehend kompatibel ist bzw. darauf aufbaut (falls Nagios als Kern eingestellt wurde).
+Dazu gehört z.B. das Verfahren mit `mod_gearman`.
+Dieses bietet gegenüber den {CMK}-eigenen Verfahren keine Vorteile und ist noch dazu umständlicher einzurichten.
+Wir empfehlen es daher nicht.
+
+Das von {CMK} bevorzugte Verfahren basiert auf xref:livestatus[Livestatus] und einer automatischen Konfigurationsverteilung.
+Für Situationen mit stark abgeschotteten Netzen oder sogar einer _strikt unidirektionalen Datenübertragung_ von der Peripherie in die Zentrale gibt es eine Methode mit xref:livedump[Livedump bzw. CMCDump].
+Beide Methoden können kombiniert werden.
+
+
+[#livestatus]
+== Verteiltes Monitoring mit Livestatus
+
+=== Grundprinzip
+
+[#central_status]
+==== Zentraler Status
+
+xref:livestatus#[Livestatus] ist eine in den xref:cmc#[Monitoring-Kern] integrierte Schnittstelle, mit der andere Programme von außen _Statusdaten_ abfragen und _Befehle_ ausführen können.
+Livestatus kann über das Netzwerk verfügbar gemacht werden, so dass eine entfernte {CMK}-Instanz (_Remote-Instanz_) zugreifen kann.
+Die xref:user_interface#[Benutzeroberfläche] von {CMK} nutzt Livestatus, um alle angebundenen Instanzen zu einer Gesamtsicht zusammenzuführen.
+Das fühlt sich dann „wie ein großes" Monitoring-System an.
+
+Folgende Skizze zeigt schematisch den Aufbau eines verteilten Monitorings mit Livestatus über drei Standorte.
+In der Zentrale befindet sich die {CMK}-Instanz _Zentralinstanz_.
+Von dieser aus werden zentrale Systeme direkt überwacht.
+Außerdem gibt es die Instanzen _Remote-Instanz 1_ und _Remote-Instanz 2_, welche sich in anderen Netzen befinden und die dortigen Systeme überwachen:
+
+image::distributed_monitoring_overview_de.png[]
+
+Das Besondere an dieser Methode ist, dass der Monitoring-Status der entfernten Instanzen _nicht_ ständig an die Zentrale übertragen wird.
+Die GUI ruft von den entfernten Instanzen immer nur _live_ diejenigen Daten ab, die ein Benutzer in der Zentrale haben will.
+Die Daten werden dann in einer kombinierten Ansicht zusammengeführt.
+Es gibt also _keine zentrale Datenhaltung_, was riesige Vorteile für die Skalierung bedeutet!
+
+Hier sind einige der Vorteile dieser Methode:
+
+* *Skalierung*: Das Monitoring selbst erzeugt keinerlei Netzwerkverkehr zwischen der Zentralinstanz und Remote-Instanz.
+Dadurch können hundert und mehr Standorte angebunden werden.
+
+* *Zuverlässigkeit*: Fällt die Netzwerkverbindung zu einer Remote-Instanz aus, so geht das Monitoring dort trotzdem völlig normal weiter.
+Es gibt keine Lücke in der Datenaufzeichnung und auch keinen Datenstau.
+Lokale Benachrichtigungen funktionieren weiterhin.
+
+* *Einfachheit*: Instanzen können sehr einfach eingebunden und wieder entfernt werden.
+
+* *Flexibilität*: Die Remote-Instanzen sind weiterhin eigenständig und können an dem jeweiligen Standort für das Operating genutzt werden.
+Das ist insbesondere dann interessant, wenn der „Standort“ auf keinen Fall Zugriff auf den Rest des Monitorings haben darf.
+
+
+[#central_setup]
+==== Zentrales Setup
+
+Bei einem verteilten System via Livestatus, wie oben beschrieben, ist es durchaus möglich, dass die einzelnen Instanzen von unterschiedlichen Teams eigenverantwortlich gepflegt werden
+und die Zentralinstanz lediglich die Aufgabe hat, ein zentrales Dashboard bereitzustellen.
+
+Falls aber mehrere oder alle Instanzen von den gleichen Menschen administriert werden sollen, ist eine zentrale Konfiguration viel komfortabler.
+{CMK} unterstützt dies und wir sprechen dann von einem zentralen Setup.
+Dabei werden alle Hosts und Services, Benutzer und Rechte, Zeitperioden, Benachrichtigungen u.s.w. im [.guihint]#Setup# der Zentralinstanz gepflegt und dann automatisch nach Ihren Vorgaben auf die Remote-Instanzen verteilt.
+
+So ein System hat nicht nur eine gemeinsame Statusoberfläche, sondern auch eine gemeinsame Konfiguration und fühlt sich dann endgültig wie „ein großes System“ an.
+
+Sie können solch ein System sogar noch um reine xref:viewer[Viewer-Instanzen] erweitern, die nur als Statusoberflächen dienen, etwa für Teilbereiche oder bestimmte Nutzergruppen.
+
+
+[#central_setup_config]
+=== Verteiltes Monitoring aufsetzen
+
+Das Aufsetzen eines verteilten Monitorings via Livestatus und zentralem Setup geschieht in folgenden Schritten:
+
+. Zentralinstanz zunächst ganz normal wie eine Einzelinstanz aufsetzen
+. Remote-Instanzen aufsetzen und Livestatus per Netzwerk freigeben
+. Auf der Zentralinstanz die Remote-Instanzen über [.guihint]#Setup > General > Distributed monitoring# einbinden
+. Bei Hosts und Ordnern festlegen, von welcher Instanz aus diese überwacht werden sollen
+. Service-Erkennung für umgezogene Hosts neu durchführen und Änderungen aktivieren
+
+[#setting_up_central_site]
+==== Zentralinstanz aufsetzen
+
+An die Zentralinstanz werden keine speziellen Anforderungen gestellt.
+Das bedeutet, dass Sie auch eine schon länger bestehende Instanz mit nur einer einzigen Anpassung – für die korrekte xref:piggyback#distributed_piggyback[Verarbeitung von Piggyback-Daten] – zu einem verteilten Monitoring ausbauen können.
+Sie müssen lediglich unter [.guihint]#Setup > General > Global settings# im Abschnitt [.guihint]#Site management# den Piggyback-Hub aktivieren:
+
+image::distributed_monitoring_site_management.png[alt="Die Option 'Enable piggyback-hub' in den globalen Einstellungen."]
+
+Aktivieren Sie anschließend die Änderungen, da ein Ein- oder Ausschalten des Piggyback-Hubs einen Neustart der Instanz erfordert.
+
+
+[#create_remote]
+==== Remote-Instanzen aufsetzen und Livestatus per Netzwerk freigeben
+
+Die Remote-Instanzen werden zunächst als neue Instanzen wie üblich mit `omd create` erzeugt.
+Dies geschieht dann natürlich auf dem (entfernten) Server, der für die jeweilige Remote-Instanz vorgesehen ist.
+
+*Hinweise*:
+
+* Verwenden Sie für die Remote-Instanzen IDs, die in Ihrem verteilten Monitoring _eindeutig_ sind.
+* Die {CMK}-Version (z.B. {current-major}) der Remote- und Zentralinstanz ist dieselbe – ein xref:mixed_versions[Mischbetrieb] wird nur für die leichtere Durchführung von Updates unterstützt.
+* Da {CMK} mehrere Instanzen auf einem Server unterstützt, kann die Remote-Instanz auch auf dem gleichen Server laufen.
+
+Hier ist ein Beispiel für das Anlegen einer Remote-Instanz mit dem Namen `myremote1` und dem Passwort `t0p53cr3t` für den Instanz-Administrator `cmkadmin`:
+
+[{shell}]
+----
+{c-root} omd create --admin-password t0p53cr3t myremote1
+Adding /opt/omd/sites/myremote1/tmp to /etc/fstab.
+Creating temporary filesystem /omd/sites/myremote1/tmp...[green]#OK#
+Updating core configuration...
+Generating configuration for core (type cmc)...
+Starting full compilation for all hosts
+ Creating global helper config...[green]#OK#
+ Creating cmc protobuf configuration...OK
+Executing post-create script "01_create-sample-config.py"...[green]#OK#
+Executing post-create script "02_cmk-compute-api-spec"...[green]#OK#
+Executing post-create script "03_message-broker-certs"...[green]#OK#
+Restarting Apache...[green]#OK#
+Created new site myremote1 with version {current}.pro.
+
+  The site can be started with pass:q[*omd start myremote1*].
+  The default web UI is available at pass:q[*http://myserver/myremote1/*]
+
+  The admin user for the web applications is *cmkadmin* with password: *t0p53cr3t*
+  For command line administration of the site, log in with *'omd su myremote1'*
+  After logging in, you can change the password for cmkadmin with *'cmk-passwd cmkadmin'*.
+----
+
+Die wichtigsten Schritte sind jetzt, dass Sie Livestatus via TCP im Netzwerk freigeben und auch hier den Piggyback-Hub aktivieren.
+Beachten Sie dabei, dass Livestatus per se kein abgesichertes Protokoll ist und nur in einem sicheren Netzwerk (abgesichertes LAN, VPN etc.) verwendet werden darf.
+Das Freigeben geschieht als Instanzbenutzer bei noch gestoppter Instanz per `omd config`:
+
+[{shell}]
+----
+{c-root} su - myremote1
+{c-myremote1} omd config
+----
+
+Wählen Sie jetzt [.guihint]#Distributed Monitoring#:
+
+++++
+include::distributed_monitoring_omd_config.xml[]
+++++
+
+Setzen Sie `LIVESTATUS_TCP` auf `on` und tragen Sie für `LIVESTATUS_TCP_PORT` eine freie Portnummer ein, die auf diesem Server eindeutig ist.
+Der Default dafür ist 6557:
+
+++++
+include::distributed_monitoring_livestatus_tcp_activated.xml[]
+++++
+
+Nach dem Speichern starten Sie die Instanz wie gewohnt mit `omd start`:
+
+[{shell}]
+----
+{c-myremote1} omd start
+Starting agent-receiver...OK
+Starting mkeventd...OK
+Starting liveproxyd...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting redis...OK
+Starting automation-helper...OK
+Starting ui-job-scheduler...OK
+Starting cmc...OK
+Starting apache...OK
+Starting dcd...OK
+Starting rabbitmq...OK
+Starting stunnel...OK
+Starting piggyback-hub...OK
+Starting xinetd...OK
+Starting crontab...OK
+----
+
+Merken Sie sich das Passwort für `cmkadmin`.
+Sie benötigen es nur zweimal: zuerst für die Aktivierung des Piggyback-Hub und dann um die Verbindung der Zentral- zur Remote-Instanz herzustellen.
+Sobald die Remote-Instanz der Zentralinstanz untergeordnet wurde,
+werden sowieso alle Benutzer durch die von der Zentralinstanz ausgetauscht.
+
+Die Instanz ist jetzt bereit.
+Eine Kontrolle mit `netstat` zeigt, dass Port 6557 geöffnet ist.
+Die Bindung an diesen Port geschieht mit einer Instanz des Internet Superservers `xinetd`, welcher direkt in der Instanz läuft:
+
+[{shell}]
+----
+{c-root} netstat -lnp | grep 6557
+tcp6       0      0 :::6557               :::*          LISTEN      10719/xinetd
+----
+
+Melden Sie sich jetzt einmal als `cmkadmin` an der Remote-Instanz an und aktivieren Sie unter [.guihint]#Setup > General > Global settings# im Kasten [.guihint]#Site management# den Piggyback-Hub:
+
+image::distributed_monitoring_site_management.png[alt="Die Option 'Enable piggyback-hub' in den globalen Einstellungen."]
+
+Aktivieren Sie anschließend die Änderungen, da ein Ein- oder Ausschalten des Piggyback-Hubs einen Neustart der Instanz erfordert.
+
+
+[#connect_remote_sites]
+==== Remote-Instanzen in die Zentralinstanz einbinden
+
+Die Konfiguration des verteilten Monitorings wird ab jetzt ausschließlich auf der Zentralinstanz im Menü [.guihint]#Setup > General > Distributed Monitoring# vorgenommen.
+Hier verwalten Sie die Verbindungen zu den einzelnen Instanzen.
+Dabei zählt die Zentrale selbst auch als Instanz und ist bereits in der Liste eingetragen:
+
+image::distributed_monitoring_central_site.png[alt="Ansicht der Zentralinstanz in den Verbindungen."]
+
+Legen Sie jetzt mit icon:icon_new[] [.guihint]#Add connection# die Verbindung zur ersten Remote-Instanz an:
+
+image::distributed_monitoring_basic_settings.png[alt="Die Basiseinstellungen für die Remote-Instanz."]
+
+Bei den [.guihint]#Basic settings# ist es wichtig, dass Sie als [.guihint]#Site ID# exakt den Namen der Remote-Instanz verwenden, so wie diese mit `omd create` erzeugt wurde.
+Den Alias können Sie wie immer frei vergeben und auch später ändern.
+
+image::distributed_monitoring_status_connection.png[alt="Eingabe der Statusdaten."]
+
+Bei den Einstellungen der [.guihint]#Status connection# geht es darum,
+wie die Zentralinstanz den Status der Remote-Instanzen per Livestatus abfragt.
+Das Beispiel im Screenshot zeigt eine Verbindung mit der Methode [.guihint]#Connect via TCP (IPv4)#.
+Diese ist für stabile Verbindungen mit kurzen Latenzzeiten optimal (wie z.B. in einem LAN).
+Optimale Einstellungen bei WAN-Verbindungen besprechen wir xref:wan[weiter unten].
+
+Tragen Sie hier die HTTP-URL zur Weboberfläche der Remote-Instanz ein, und zwar ohne das `check_mk/` am Ende.
+Wenn Sie grundsätzlich per HTTPS auf {CMK} zugreifen, dann ersetzen Sie das `http` hier durch `https`.
+Weitere Details erfahren Sie wie immer in der icon:icon_help[] Inline-Hilfe oder dem xref:omd_https#[Handbuchartikel zu HTTPS mit {CMK}].
+
+image::distributed_monitoring_configuration_connection.png[alt="Eingabe der Konfigurationsdaten."]
+
+Das Replizieren der Konfiguration und somit die Verwendung des xref:central_setup[zentralen Setups] ist, wie eingangs besprochen, optional.
+Aktivieren Sie die Replikation durch Auswahl von [.guihint]#Push configuration to this site#, wenn Sie die Remote-Instanz von der Zentralinstanz aus mitkonfigurieren möchten.
+In diesem Fall wählen Sie genau die Einstellungen, die Sie in obiger Abbildung sehen.
+
+Ermitteln Sie dafür unbedingt, welchen [.guihint]#Message broker port# Sie angeben müssen.
+Hierfür begeben Sie sich auf der Remote-Instanz auf die Befehlszeile und rufen dort `omd config` auf.
+Begeben Sie sich in den Abschnitt [.guihint]#Basic#.
+Hier ist die Variable `RABBITMQ_PORT` die relevante:
+
+++++
+include::distributed_monitoring_rabbitmq.xml[]
+++++
+
+[TIP]
+====
+Lassen Sie sich nicht verwirren: Der [.guihint]#Message Broker Port# ist hier als Variable `RABBITMQ_PORT` hinterlegt, weil RabbitMQ die von {CMK} konkret verwendete Message Broker Software ist.
+====
+
+Sehr wichtig ist eine korrekte Einstellung für [.guihint]#URL of remote site#.
+Die URL muss immer mit `/check_mk/` enden.
+Eine Verbindung mit HTTPS ist empfehlenswert, setzt aber voraus, dass der Apache der Remote-Instanz HTTPS unterstützt.
+Dies muss auf Linux-Ebene des entfernten Servers xref:omd_https#[von Hand] aufgesetzt werden.
+Bei der {CMK} Appliance kann xref:appliance_usage#ssl[HTTPS über die webbasierte Konfigurationsoberfläche eingerichtet] werden.
+Falls Sie ein selbst signiertes Zertifikat verwenden, benötigen Sie die Checkbox [.guihint]#Ignore SSL certificate errors#.
+
+Nachdem Sie das Formular gespeichert haben, sehen Sie in der Übersicht eine zweite Instanz:
+
+image::distributed_monitoring_before_login.png[alt="Die Übersicht der Verbindungen vor der Eingabe des Passworts."]
+
+Der Monitoring-Status der (noch leeren) Remote-Instanz ist jetzt schon korrekt eingebunden.
+Für ein zentrales Setup benötigen Sie noch einen [.guihint]#Login# auf die entfernte Instanz von {CMK}.
+Dabei tauscht die Zentralinstanz mit der Remote-Instanz ein Anmeldegeheimnis aus, über das dann in Zukunft alle weitere Kommunikation abläuft.
+Das Konto `cmkadmin` auf der Instanz wird dann nicht mehr verwendet.
+
+In der folgenden Eingabemaske verwenden Sie als [.guihint]#Login credentials# `cmkadmin` und das beim Anlegen der Remote-Instanz vergebene Passwort.
+Bestätigen Sie an dieser Stelle noch per [.guihint]#Confirm overwrite#, dass Sie die Einstellungen überschreiben wollen.
+
+image::distributed_monitoring_login_credentials.png[alt="Eingabe des Logins für die Remote-Instanz."]
+
+Ein erfolgreicher Login wird so quittiert:
+
+image::distributed_monitoring_successful_login.png[alt="Erfolgsmeldung nach dem Verbindungsaufbau."]
+
+Sollte es zu einem Fehler bei der Anmeldung kommen, kann dies verschiedene Gründe haben, z.B.:
+
+* Die Remote-Instanz ist gerade gestoppt.
+* Die [.guihint]#URL of remote site# ist nicht korrekt eingestellt.
+* Die Remote-Instanz ist unter dem in der URL eingestellten Hostnamen _von der Zentralinstanz aus_ nicht erreichbar.
+* Zentralinstanz und Remote-Instanz haben (zu) unterschiedliche {CMK}-Versionen.
+* Benutzer und/oder Passwort sind falsch.
+
+Die Punkte ersten beiden Punkte können Sie einfach testen, indem Sie die URL der Remote-Instanz von Hand in Ihrem Browser
+aufrufen.
+
+Wenn alles geklappt hat, führen Sie nun ein [.guihint]#Activate pending changes# aus.
+Auf der Übersichtsseite der noch nicht aktivierten Änderungen sehen Sie auch eine Übersicht der Livestatus-Verbindungen sowie des Synchronisationszustands der einzelnen Instanzen im zentrale Setup:
+
+image::distributed_monitoring_activate_pending_changes.png[alt="Die ausstehende Änderung nach dem Aufbau der Remote-Verbindung."]
+
+Die Spalte [.guihint]#Version# zeigt die Livestatus-Version der jeweiligen Instanz an.
+
+Folgende Symbole zeigen Ihnen den Replikationsstatus der Konfigurationsumgebung:
+
+
+[cols="25,75"]
+|===
+|icon:icon_need_restart[] |Diese Instanz hat ausstehende Änderungen und muss neu gestartet werden.
+Mit einem Klick auf den Knopf icon:icon_need_restart[] können Sie dies gezielt für diese Instanz durchführen.
+|icon:icon_need_replicate[] |Die Konfigurationsumgebung dieser Instanz ist nicht synchron und muss übertragen werden.
+Danach ist dann natürlich auch ein Neustart notwendig, um die Konfiguration zu aktivieren.
+Beides zusammen erreichen Sie mit einem Klick auf den Knopf icon:icon_need_replicate[].
+|===
+
+In der Spalte [.guihint]#Status# sehen Sie den Zustand der Livestatus-Verbindung zur jeweiligen Instanz.
+Dieser wird rein informativ angezeigt, da die Konfiguration ja nicht per Livestatus, sondern per HTTP übertragen wird.
+Folgende Werte sind möglich:
+
+[cols="25,75"]
+|===
+|icon:icon_status_label_online[width=80px] |Die Instanz ist per Livestatus erreichbar.
+|icon:icon_status_label_dead[width=80px] |Die Instanz ist gerade nicht erreichbar.
+Livestatus-Anfragen laufen in einen _Timeout_.
+Dies verzögert den Seitenaufbau.
+Statusdaten dieser Instanz sind in der GUI nicht sichtbar.
+|icon:icon_status_label_down[width=80px] |Die Instanz ist gerade nicht erreichbar, aber das ist aufgrund der Einrichtung eines Status-Hosts oder durch den xref:livestatusproxy[Livestatus-Proxy] bekannt (siehe xref:wan[unten]).
+Die Nichterreichbarkeit führt *nicht* zu Timeouts.
+Statusdaten dieser Instanz sind in der GUI nicht sichtbar.
+|icon:icon_status_label_disabled[width=80px] |Die Livestatus-Verbindung zu dieser Instanz ist vorübergehend durch den Administrator (der Zentralinstanz) deaktiviert worden.
+Die Einstellung entspricht der Checkbox [.guihint]#Temporarily disable this connection# in der Einstellung dieser Verbindung.
+|===
+
+Ein Klick auf icon:icon_activate_changes[] [.guihint]#Activate on selected sites# synchronisiert nun alle Instanzen und aktiviert die Änderungen.
+Dies geschieht parallel, so dass sich die Gesamtzeit nach der Dauer bei der langsamsten Instanz richtet.
+In der Zeit enthalten sind die Erstellung eines Konfigurations-Snapshots für die jeweilige Instanz, das Übertragen per HTTP, das Auspacken des Snapshots auf der Instanz und das Aktivieren der Änderungen.
+
+*Wichtig:* Verlassen Sie die Seite nicht, bevor die Synchronisation auf alle Instanzen abgeschlossen wurde.
+Ein Verlassen der Seite unterbricht die Synchronisation.
+
+
+==== Bei Hosts und Ordnern festlegen, von welcher Instanz aus diese überwacht werden sollen
+
+Nachdem Ihre verteilte Umgebung eingerichtet ist, können Sie beginnen, diese zu nutzen.
+Eigentlich müssen Sie jetzt nur noch bei jedem Host sagen, von welcher Instanz aus dieser überwacht werden soll.
+Per Default ist die Zentralinstanz eingestellt.
+
+Das nötige Attribut dazu heißt [.guihint]#Monitored on site#.
+Sie können das für jeden einzelnen Host individuell einstellen.
+Aber natürlich bietet es sich an, das auf Ordnerebene zu konfigurieren:
+
+image::distributed_monitoring_monitored_on_site.png[alt="Auswahl der Instanz, auf der das Monitoring stattfinden soll."]
+
+
+==== Service-Erkennung für umgezogene Hosts neu durchführen und Änderungen aktivieren
+
+Das Aufnehmen von Hosts funktioniert wie gewohnt.
+Bis auf die Tatsache, dass die Überwachung und auch die Service-Erkennung von der jeweiligen Remote-Instanz durchgeführt wird, gibt es nichts Spezielles zu beachten.
+
+Beim *Umziehen* von Hosts von einer zu einer anderen Instanz gibt es einige Dinge zu beachten.
+Denn es werden _weder aktuelle noch historische Statusdaten dieser Hosts übernommen._
+Lediglich die Konfiguration des Hosts bleibt erhalten.
+Es ist quasi, als würden Sie den Host auf einer Instanz entfernen und auf der anderen _neu anlegen_.
+Das bedeutet unter anderem:
+
+* Automatisch erkannte Services werden nicht übernommen.
+Führen Sie daher nach dem Umziehen eine xref:glossar#service_discovery[Service-Erkennung] durch.
+
+* Host und Services beginnen wieder bei {PEND}.
+Zu eventuell aktuell vorhandenen Problemen werden neue Benachrichtigungen erzeugt und gegebenenfalls versendet.
+
+* Historische xref:graphing#[Metriken] gehen verloren.
+Dies können Sie vermeiden, indem Sie betroffene RRD-Dateien von Hand kopieren.
+Die Lage der Dateien finden Sie unter xref:files[Dateien und Verzeichnisse].
+
+* Daten zur Verfügbarkeit und zu historischen Ereignissen gehen verloren.
+Diese sind leider nicht so einfach zu migrieren, da diese Daten sich in einzelnen Zeilen im Monitoring-Log befinden.
+
+Wenn die Kontinuität der Historie für Sie wichtig ist, sollten Sie schon beim Aufbau des Monitorings genau planen, welcher Host von wo aus überwacht werden soll.
+
+
+[#livestatus_tls]
+=== Livestatus verschlüsselt anbinden
+
+Livestatus-Verbindungen können zwischen der Zentralinstanz und einer Remote-Instanz verschlüsselt werden.
+Bei neu erzeugten Instanzen müssen Sie nichts weiter tun.
+{CMK} kümmert sich automatisch um die nötigen Schritte.
+Sobald Sie dann mittels xref:central_setup_config[`omd config`] Livestatus aktivieren, ist die Verschlüsselung durch TLS automatisch aktiviert:
+
+++++
+include::distributed_monitoring_livestatus_tcp_tls_activated.xml[]
+++++
+
+Die Konfiguration des verteilten Monitorings bleibt daher so einfach wie bisher.
+Bei neuen Verbindungen zu anderen Instanzen ist dann die Option [.guihint]#Encryption# automatisch aktiviert.
+
+Nachdem Sie die Remote-Instanz hinzugefügt haben, werden Sie zwei Dinge bemerken:
+Zum einen wird die Verbindung durch das neue Icon icon:icon_encrypted[] als verschlüsselt markiert.
+Und zum anderen wird {CMK} Ihnen anzeigen, dass der CA der Remote-Instanz nicht vertraut wird.
+Mit einem Klick auf icon:icon_encrypted[] gelangen Sie in die Details der benutzten Zertifikate.
+Mit einem Klick auf icon:icon_trust[] können Sie die CA bequem über die Weboberfläche hinzufügen.
+Danach werden beide Zertifikate als vertrauenswürdig gelistet:
+
+image::distributed_monitoring_certificate_details.png[]
+
+
+==== Details zu den eingesetzten Technologien
+
+Um die Verschlüsselung zu realisieren, nutzt {CMK} das Programm `stunnel` zusammen mit einem eigenen Zertifikat und einer eigenen _Certificate Authority_ (CA), mit der das Zertifikat signiert wird.
+Sie werden bei einer neuen Instanz automatisch zusammen mit dieser individuell erzeugt und sind daher *keine* vordefinierten, statischen CAs oder Zertifikate.
+Das ist ein sehr wichtiger Sicherheitsfaktor, um zu verhindern, dass gefälschte Zertifikate von Angreifern benutzt werden können, weil sie Zugriff auf eine allgemein zugängliche CA bekommen konnten.
+
+Die erzeugten Zertifikate haben zusätzlich folgende Eigenschaften:
+
+* Beide Zertifikate liegen im PEM-Format vor.
+Das signierte Zertifikat der Instanz enthält außerdem die komplette Zertifikatskette.
+
+* Die Schlüssel verwenden 4096-Bit RSA und das Zertifikat wird mit SHA512 signiert.
+
+* Das Zertifikat der Instanz ist 10 Jahre gültig.
+
+Dass das Standard-Zertifikat so lange gültig ist, verhindert sehr effektiv, dass Sie nach einiger Zeit Verbindungsprobleme bekommen, die Sie nicht einordnen können.
+Gleichzeitig ist es dadurch natürlich auch möglich ein einmal kompromittiertes Zertifikat auch entsprechend lange zu missbrauchen.
+Wenn Sie also befürchten, dass ein Angreifer Zugriff auf die CA oder das damit signierte Instanz-Zertifikat bekommen hat, ersetzen Sie immer beide Zertifikate (CA und Instanz)!
+
+
+[#livestatus_tls_omd_update]
+==== Verhalten beim Update von {CMK}
+
+Im Zuge eines Updates von {CMK} werden die beiden Optionen `LIVESTATUS_TCP` und `LIVESTATUS_TCP_TLS` niemals automatisch verändert.
+Eine automatische Aktivierung von TLS könnte schließlich dazu führen, dass Ihre Remote-Instanzen nicht mehr abgefragt werden können.
+
+Sollten Sie Livestatus bisher unverschlüsselt einsetzen und sich jetzt entscheiden, die Verschlüsselung nutzen zu wollen, müssen Sie diese manuell aktivieren.
+Stoppen Sie dazu zuerst die betroffenen Instanzen und aktivieren Sie TLS anschließend mit dem folgenden Befehl:
+
+[{shell}]
+----
+{c-omd} omd config set LIVESTATUS_TCP_TLS on
+----
+
+Da die Zertifikate bei dem Update automatisch erzeugt wurden, wird die Instanz danach sofort die Verschlüsselung nutzen.
+Damit Sie also von der Zentralinstanz weiterhin auf die Remote-Instanz zugreifen können, muss gewährleistet sein, dass im Menü unter [.guihint]#Setup > General > Distributed Monitoring# bei der jeweiligen Instanz unter [.guihint]#Encryption# die Option [.guihint]#Encrypt data using TLS# ausgewählt ist.
+Prüfen Sie dies und stellen Sie die Option gegebenenfalls um, wie im folgenden Screenshot zu sehen ist:
+
+image::distributed_monitoring_enable_encryption.png[]
+
+Der letzte Schritt ist wieder derselbe wie oben beschrieben:
+Auch hier müssen Sie zunächst die CA der Remote-Instanz als vertrauenswürdig markieren.
+
+
+[#special_central_setup]
+=== Besonderheiten im zentralen Setup
+
+Ein verteiltes Monitoring via Livestatus verhält sich zwar fast wie ein einziges System, hat aber dennoch ein paar Besonderheiten:
+
+
+==== Zugriff auf die überwachten Hosts
+
+Alle Zugriffe auf einen überwachten Host geschehen konsequent von der Instanz aus, der dieser Host zugeordnet ist.
+Das betrifft nicht nur die eigentliche Überwachung, sondern auch die xref:glossar#service_discovery[Service-Erkennung,] die xref:wato_monitoringagents#diagnosticpage[Diagnoseseite,] die xref:glossar#notification[Benachrichtigungen,] xref:alert_handlers#[Alert Handler] und alles andere.
+Das ist sehr wichtig, denn es ist überhaupt nicht gesagt, dass die Zentralinstanz auf diese Hosts Zugriff hätte.
+
+
+==== Angabe der Instanz in den Ansichten
+
+Manche der mitgelieferten Standardansichten sind gruppiert nach der Instanz, von der ein Host überwacht wird.
+Das gilt z.B. auch für [.guihint]#All hosts#:
+
+image::distributed_monitoring_all_hosts.png[]
+
+Auch bei den Details eines Hosts oder Services wird die Instanz angezeigt:
+
+image::distributed_monitoring_service_check_mk.png[]
+
+Allgemein steht diese Information als Spalte beim Erzeugen von xref:views#edit[eigenen Ansichten] zur Verfügung.
+Und es gibt einen Filter, mit dem Sie eine Ansicht nach Hosts aus einer bestimmten Instanz filtern können:
+
+image::distributed_monitoring_filter_by_site.png[width=60%]
+
+
+==== Site status Snapin
+
+Es gibt für die Seitenleiste das Snapin [.guihint]#Site status#, welches Sie mit icon:button_sidebar_add_snapin[[alt="Symbol zum Anzeigen aller Snapins."] einbinden können.
+Dieses zeigt den Status der einzelnen Instanzen.
+Außerdem bietet es die Möglichkeit, vorübergehend eine einzelne Instanz durch einen Klick auf den Status zu deaktivieren und wieder zu aktivieren -- oder auch gleich alle Instanzen auf einmal durch Klick auf [.guihint]#Disable all# oder [.guihint]#Enable all#.
+
+image::distributed_monitoring_snapin_site_status.png[width=50%]
+
+Deaktivierte Instanzen werden mit dem Status icon:icon_status_label_disabled[width=70px] angezeigt.
+Sie können so auch eine Instanz, die icon:icon_status_label_dead[width=70px] ist und somit Timeouts erzeugt, deaktivieren und die Timeouts damit vermeiden.
+Diese Deaktivierung entspricht *nicht* dem Abschalten der Livestatus-Verbindung über die Verbindungskonfiguration im [.guihint]#Setup#.
+Das Abschalten hier ist lediglich für den aktuell angemeldeten Benutzer wirksam und hat eine rein optische Funktion.
+Ein Klick auf den Namen einer Instanz bringt Sie zur Ansicht aller Hosts dieser Instanz.
+
+
+==== Master control Snapin
+
+Im verteilten Monitoring ändert das Snapin [.guihint]#Master control# sein Aussehen.
+Die globalen Schalter gibt es immer _pro Instanz_:
+
+image::distributed_monitoring_master_control.png[width=50%]
+
+
+==== {CMK} Cluster Hosts
+
+Falls Sie mit {CMK} xref:clustered_services#[HA-Cluster] überwachen, so müssen die einzelnen Knoten des Clusters alle der gleichen Instanz zugeordnet sein wie das Cluster selbst.
+Dies liegt daran, dass bei der Ermittlung des Zustands der geclusterten Services auf Cache-Dateien zugegriffen wird, welche beim Überwachen der Knoten entstehen.
+Diese liegen lokal auf der jeweiligen Instanz.
+
+
+==== Piggyback-Daten
+
+Manche Check-Plugins verwenden xref:glossar#piggyback[Piggyback]-Daten, 
+um z.B. Überwachungsdaten, die „huckepack“ von einem Host geholt wurden, den einzelnen virtuellen Maschinen zuzuordnen.
+Im verteilten Monitoring werden der Piggyback-Host -- also derjenige Host, der die Piggyback-Daten empfängt -- und die davon abhängigen Hosts -- als die eigentlichen Konsumenten der Piggyback-Daten -- nicht immer von der gleichen Instanz aus überwacht.
+Für solche Fälle kann eine instanzübergreifende xref:piggyback#distributed_piggyback[Host-Zuordnung der Piggyback-Daten] aktiviert werden.
+
+Um die Kommunikation zu ermöglichen, müssen Sie lediglich sicherstellen, dass der Message Broker Port auf allen beteiligten Instanzen xref:ports#distributed_monitoring[korrekt eingestellt] und xref:setting_up_central_site[der Piggyback-Hub aktiviert] ist.
+
+Spätestens wenn Sie hier [.guihint]#Disabled# sehen, sollten Sie dies überprüfen:
+
+image::distributed_monitoring_piggyback_disabled.png[alt="Die Piggyback-Verbindung wird als 'disabled' angezeigt."]
+
+
+[#peer-to-peer]
+==== Peer-to-Peer-Verbindungen
+
+Ein Engpass in der Kommunikation ist oft der Datenverkehr.
+Werden Daten von jedem Punkt zu jedem anderen Punkt hin- und hergereicht, kann dies schnell zu einer enormen Datenflut und damit einer Überlastung des Kommunikationsnetzes führen.
+Daher empfiehlt es sich, die Kommunikationswege zu reduzieren und den Datenaustausch schwerpunktmäßig innerhalb eines lokalen Netzes zu belassen.
+Um Ihre Zentralinstanz zu entlasten oder den Netzwerkverkehr zu optimieren, können Sie daher Remote-Instanzen auch direkt miteinander kommunizieren lassen (Peer-to-Peer-Verbindung).
+Als Voraussetzung dafür müssen beide Remote-Instanzen von der Zentralinstanz mitkonfiguriert werden,
+d.h. [.guihint]#Push configuration to this site# muss, wie im Abschnitt xref:connect_remote_sites[Remote-Instanzen in die Zentralinstanz einbinden] beschrieben, bei beiden aktiviert sein.
+
+In [.guihint]#Setup > General > Distributed monitoring# wählen Sie den Menüpunkt [.guihint]#Connections > Add peer-to-peer message broker connection#.
+Vergeben Sie hier eine eindeutige ID und wählen Sie die beiden Instanzen für die Direkt-Verbindung aus.
+Beachten Sie unbedingt die Vorgaben der Inline-Hilfe.
+
+
+==== HW-/SW-Inventur
+
+Die xref:inventory#[HW-/SW-Inventur] von {CMK} funktioniert auch in verteilten Umgebungen.
+Dabei müssen die Inventurdaten regelmäßig aus dem Verzeichnis `~/var/check_mk/inventory` von den Remote-Instanzen zur Zentralinstanz übertragen werden.
+Die Benutzeroberfläche greift aus Gründen der Performance immer lokal auf dieses Verzeichnis zu.
+
+In den kommerziellen Editionen geschieht die Synchronisation automatisch auf allen Instanzen, bei denen Sie den xref:livestatusproxy[Livestatus-Proxy] zur Verbindung einsetzen.
+
+Falls Sie mit {RE} in einem verteilten System die Inventarisierung verwenden, müssen Sie das Verzeichnis mit eigenen Mitteln regelmäßig zur Zentralinstanz spiegeln (z.B. mit `rsync`).
+
+
+==== Passwortänderung
+
+Auch wenn alle Instanzen zentral administriert werden, ist eine Anmeldung auf der Oberfläche der einzelnen Instanzen durchaus möglich und oft auch sinnvoll.
+Deswegen sorgt {CMK} dafür, dass das Passwort eines Benutzers auf allen Instanzen immer gleich ist.
+
+Bei einer Änderung durch den Administrator ist das automatisch gegeben, sobald sie per [.guihint]#Activate pending changes# auf alle Instanzen verteilt wird.
+
+Etwas anderes ist eine Änderung durch den Benutzer selbst in seinen icon:button_sidebar_settings[] persönlichen Einstellungen.
+Diese darf natürlich nicht zu einem [.guihint]#Activate pending changes# führen, denn der Benutzer hat dazu im Allgemeinen keine Berechtigung.
+Daher verteilt {CMK} in so einem Fall das geänderte Passwort automatisch auf alle Instanzen -- und zwar direkt nach dem Speichern.
+
+Nun sind aber, wie wir alle wissen, Netzwerke nie zu 100{nbsp}% verfügbar.
+Ist eine Instanz zu diesem Zeitpunkt also nicht erreichbar, kann das Passwort auf diese _nicht_ übertragen werden.
+Bis zum nächsten erfolgreichen [.guihint]#Activate pending changes# durch einen Administrator bzw. der nächsten erfolgreichen Passwortänderung hat diese Instanz also noch das alte Passwort für den Benutzer.
+Der Benutzer wird über den Status der Passwortübertragung auf die einzelnen Instanzen durch ein Statussymbol informiert.
+
+image::distributed_monitoring_replicate_user_profile.png[]
+
+
+=== Anbinden von bestehenden Instanzen
+
+Wie bereits oben erwähnt, können Sie auch bestehende Instanzen nachträglich an ein verteiltes Monitoring anbinden.
+Sofern die oben beschriebenen Voraussetzungen erfüllt sind (passende {CMK}-Version), geschieht dies genau wie beim Einrichten einer neuen Remote-Instanz.
+Geben Sie Livestatus per TCP frei, tragen Sie die Instanz unter [.guihint]#Setup > General > Distributed monitoring# ein -- fertig!
+
+[IMPORTANT]
+====
+Der zweite Schritt, also die Umstellung auf ein xref:central_setup[zentrales Setup], ist etwas kniffliger.
+Bevor Sie, wie oben beschrieben, die Instanz in die zentrale Konfigurationsumgebung einbinden, sollten Sie wissen, dass dabei die komplette lokale Konfiguration der Instanz *überschrieben* wird!
+====
+
+Wenn Sie also bestehende Hosts und eventuell auch Regeln übernehmen möchten, benötigen Sie drei Schritte:
+
+. Schema der Host-Merkmale anpassen
+. (Host-)Verzeichnisse kopieren
+. Eigenschaften im Elternordner einmal editieren
+
+
+==== 1. Host-Merkmale
+
+Es versteht sich von selbst, dass die in der Remote-Instanz verwendeten Host-Merkmale (_host tags_) auch in der Zentralinstanz bekannt sein müssen, damit diese übernommen werden können.
+Kontrollieren Sie dies vor dem Umziehen und legen Sie fehlende Tags in der Zentrale von Hand an. Wichtig ist dabei, dass die Tag-ID übereinstimmt -- der Titel der Tags spielt keine Rolle.
+
+==== 2. Ordner
+
+Als Zweites ziehen die Hosts und Regeln in die Konfigurationsumgebung auf der Zentralinstanz um.
+Das funktioniert nur für Hosts und Regeln, die in Unterordnern liegen (also nicht im Ordner [.guihint]#Main#).
+Hosts im Hauptordner sollten Sie auf der Remote-Instanz einfach vorher im Menü [.guihint]#Setup > Hosts > Hosts# in einen Unterordner verschieben.
+
+Das eigentliche Umziehen geht dann recht einfach durch Kopieren der entsprechenden Verzeichnisse.
+Jeder Ordner in {CMK} entspricht einem Verzeichnis unterhalb von `~/etc/check_mk/conf.d/wato/`.
+Dieses können Sie mit einem Werkzeug Ihrer Wahl (z.B. `scp`) von der angebundenen Instanz an die gleiche Stelle in die Zentralinstanz kopieren.
+Falls es dort bereits ein gleichnamiges Verzeichnis gibt, benennen Sie es einfach um.
+Achten Sie darauf, dass Linux-Benutzer und -Gruppe von der Zentrale verwendet werden.
+
+Nach dem Kopieren sollten die Hosts in der Konfigurationsumgebung auf der Zentralinstanz auftauchen -- und ebenso Regeln, die Sie in diesen Ordnern angelegt haben.
+Auch die Eigenschaften der Ordner wurden mit kopiert.
+Diese befinden sich im Verzeichnis in der versteckten Datei `.wato`.
+
+
+==== 3. Einmal editieren und speichern
+
+Damit die Vererbung von Attributen von Elternordnern der Zentralinstanz korrekt funktioniert,
+müssen Sie als letzten Schritt nach dem Umziehen einmal die Eigenschaften des Elternordners öffnen und speichern.
+Damit werden alle Host-Attribute neu berechnet.
+
+
+[#sitespecific]
+=== Instanzspezifische globale Einstellungen
+
+Ein xref:central_setup[zentrales Setup] bedeutet zunächst einmal, dass alle Instanzen eine gemeinsame und (bis auf die Hosts) gleiche Konfiguration haben.
+Was ist aber, wenn Sie für einzelne Instanzen abweichende globale Einstellungen benötigen?
+Ein Beispiel könnte z.B. die Einstellung [.guihint]#Maximum concurrent {CMK} checks# des xref:cmc#[CMC] sein.
+Vielleicht benötigen Sie für eine besonders kleine oder große Instanz eine angepasste Einstellung.
+
+Für solche Fälle gibt es instanzspezifische globale Einstellungen.
+Zu diesen gelangen Sie über das Symbol icon:icon_configuration[] im Menü [.guihint]#Setup > General > Distributed monitoring#:
+
+image::distributed_monitoring_site_specific_global_configuration.png[]
+
+Damit gelangen Sie zur Auswahl aller globalen Einstellungen -- allerdings gilt alles, was Sie jetzt einstellen, nur für die ausgewählte Instanz.
+Die optische Hinterlegung für eine Abweichung vom Standard bezieht sich jetzt nur auf diese Instanz:
+
+image::distributed_monitoring_site_specific_global_configuration_2.png[]
+
+
+[#ec]
+=== Verteilte Event Console
+
+Die xref:ec#[Event Console] verarbeitet Syslog-Meldungen, SNMP Traps und andere Arten von Ereignissen asynchroner Natur.
+
+{CMK} bietet die Möglichkeit, die Event Console ebenfalls verteilt laufen zu lassen.
+Auf jeder Instanz läuft dann eine eigene Event-Verarbeitung, welche die Ereignisse von allen Hosts erfasst, die von dieser Instanz aus überwacht werden.
+Die Events werden dann aber _nicht_ alle zum Zentralsystem geschickt, sondern verbleiben auf den Instanzen und werden nur zentral abgefragt.
+Dies geschieht analog zu den aktiven Zuständen über Livestatus und funktioniert sowohl mit {CRE} als auch mit den kommerziellen Editionen.
+
+Eine Umstellung auf eine verteilte Event Console nach dem neuen Schema erfordert folgende Schritte:
+
+* In den Verbindungseinstellungen die Replikation EC-Konfiguration einschalten ([.guihint]#Replicate Event Console configuration to this site#).
+* Syslog-Ziele und SNMP-Trap-Destinations der betroffenen Hosts auf der Remote-Instanz umstellen.
+Das ist der aufwendigste Teil.
+* Falls Sie den Regelsatz [.guihint]#Check event state in Event Console# verwenden, diesen wieder auf [.guihint]#Connect to the local Event Console# umstellen.
+* Falls Sie den Regelsatz [.guihint]#Logwatch Event Console Forwarding# verwenden, diesen ebenfalls auf lokale Event Console umstellen.
+* In den [.guihint]#Settings# der Event Console den [.guihint]#Access to event status via TCP# wieder auf [.guihint]#no access via TCP# zurückschalten.
+
+
+=== NagVis
+
+[{image-left}]
+image::nagvis.png[width=170]
+
+Das Open Source Programm link:https://www.nagvis.org[NagVis^] visualisiert Statusdaten aus dem Monitoring auf selbst erstellten Landkarten, Diagrammen und anderen Skizzen.
+NagVis ist in {CMK} integriert und kann sofort genutzt werden.
+Am einfachsten geht der Zugriff über das xref:user_interface#sidebar[Seitenleistenelement] [.guihint]#NagVis Maps#.
+Die Integration von NagVis in {CMK} beschreibt ein xref:nagvis#[eigener Artikel].
+
+NagVis unterstützt ein verteiltes Monitoring via Livestatus in ziemlich genau der gleichen Weise, wie es auch {CMK} macht.
+Die Anbindungen der einzelnen Instanzen nennt man _Backends_ (Deutsch: _Datenquellen_).
+Die Backends werden von {CMK} automatisch korrekt angelegt, so dass Sie sofort damit loslegen können, NagVis-Karten zu erstellen -- auch im verteilten Monitoring.
+
+Wählen Sie bei jedem Objekt, das Sie auf einer Karte platzieren, das richtige Backend aus -- also die {CMK}-Instanz, von der aus das Objekt überwacht wird.
+NagVis kann den Host oder Service nicht automatisch finden, vor allem aus Gründen der Performance.
+Wenn Sie also Hosts zu einer anderen Remote-Instanz verschieben, müssen Sie danach Ihre NagVis-Karten entsprechend anpassen.
+
+Einzelheiten zu den Backends finden Sie in der Dokumentation von link:http://docs.nagvis.org/1.9/de_DE/backends.html[NagVis^].
+
+
+[#wan]
+== Instabile oder langsame Verbindungen
+
+Die gemeinsame Statusansicht in der Benutzeroberfläche erfordert einen ständig verfügbaren und zuverlässigen Zugriff auf alle angebundenen Instanzen.
+Eine Schwierigkeit dabei ist, dass eine Ansicht immer erst dann dargestellt werden kann, wenn _alle_ Instanzen geantwortet haben.
+Der Ablauf ist immer so, dass an alle Instanzen eine Livestatus-Anfrage gesendet wird (z.B. „Gib mir alle Services, deren Zustand nicht {OK} ist.").
+Erst wenn die letzte Instanz geantwortet hat, kann die Ansicht dargestellt werden.
+
+Ärgerlich wird es, wenn eine Instanz gar nicht antwortet.
+Um kurze Ausfälle zu tolerieren (z.B. durch einen Neustart einer Instanz oder verlorengegangene TCP-Pakete), wartet die GUI einen gewissen Timeout ab, bevor eine Instanz als icon:icon_status_label_dead[width=70px] deklariert wird und mit den Antworten der übrigen Instanzen fortgefahren wird.
+Das führt dann zu einer „hängenden“ GUI.
+Der Timeout ist per Default auf 10 Sekunden eingestellt.
+
+Wenn das in Ihrem Netzwerk gelegentlich passiert, sollten Sie entweder Status-Hosts oder (besser) den Livestatus-Proxy einrichten.
+
+
+=== Status-Hosts
+
+{cre-only}
+Die Konfiguration von _Status-Hosts_ ist der bei {CRE} empfohlene Weg, defekte Verbindungen zuverlässig zu erkennen.
+Die Idee dazu ist einfach:
+Die Zentrale überwacht aktiv die Verbindung zu jeder einzelnen entfernten Instanz.
+Immerhin haben wir ein Monitoring-System zur Verfügung!
+Die GUI kennt dann nicht erreichbare Instanzen und kann diese sofort ausklammern und als icon:icon_status_label_down[width=70px] werten.
+Timeouts werden so vermieden.
+
+So richten Sie für eine Verbindung einen Status-Host ein:
+
+. Nehmen Sie den Host, auf dem die Remote-Instanz läuft, auf der Zentralinstanz ins Monitoring auf.
+. Tragen Sie diesen bei der Verbindung zur Remote-Instanz als Status-Host ein:
+
+image::distributed_monitoring_status_host.png[]
+
+Eine ausgefallene Verbindung zur Remote-Instanz kann jetzt nur noch für kurze Zeit zu einem Hängen der GUI führen -- nämlich solange, bis das Monitoring das erkannt hat.
+Durch ein Reduzieren des Prüfintervalls des Status-Hosts vom Default von 60 Sekunden auf z.B. 5 Sekunden können Sie dies minimieren.
+
+Falls Sie einen Status-Host eingerichtet haben, gibt es weitere mögliche Zustände für Verbindungen:
+
+[cols="25,75"]
+|===
+|icon:pill_site_status_unreach[width=70px] |Der Rechner, auf dem die Remote-Instanz läuft, ist für das Monitoring gerade nicht erreichbar, weil ein Router dazwischen down ist (Status-Host hat den Zustand {UNREACH}).
+|icon:pill_site_status_waiting[width=70px] |Der Status-Host, der die Verbindung zur Remote-Instanz überwacht, wurde noch nicht vom Monitoring geprüft (steht noch auf {PEND}).
+|icon:pill_site_status_unknown[width=70px] |Der Zustand des Status-Hosts hat einen ungültigen Wert (sollte nie auftreten).
+|===
+
+In allen drei Fällen wird die Verbindung zu der Instanz ausgeklammert, wodurch Timeouts vermieden werden.
+
+
+[#persistent]
+=== Persistente Verbindungen
+
+{cre-only}
+Mit der Checkbox [.guihint]#Use persistent connections# können Sie die GUI dazu veranlassen, einmal aufgebaute Livestatus-Verbindungen zu Remote-Instanzen permanent aufrecht zu erhalten und für weitere Anfragen wieder zu verwenden.
+Gerade bei Verbindungen mit einer längeren Paketlaufzeit (z.B. interkontinentale) kann das die GUI deutlich reaktiver machen.
+
+Da die GUI von Apache auf mehrere unabhängige Prozesse aufgeteilt wird, ist pro gleichzeitig laufendem Apache Client-Prozess eine Verbindung notwendig.
+Fall Sie viele gleichzeitige Benutzer haben, sorgen Sie bei der Konfiguration des Nagios-Kerns der Remote-Instanz für eine ausreichende Anzahl von Livestatus-Verbindungen.
+Diese werden in der Datei `~/etc/mk-livestatus/nagios.cfg` konfiguriert.
+Der Default ist 20 (`num_client_threads=20`).
+
+Per Default ist Apache in {CMK} so konfiguriert, dass er bis zu 128 gleichzeitige Benutzerverbindungen zulässt.
+Dies wird in der Datei `~/etc/apache/apache.conf` in folgendem Abschnitt konfiguriert:
+
+.etc/apache/apache.conf
+[{apache}]
+----
+<IfModule prefork.c>
+StartServers         1
+MinSpareServers      1
+MaxSpareServers      5
+ServerLimit          128
+MaxClients           128
+MaxRequestsPerChild  4000
+</IfModule>
+----
+
+Das bedeutet, dass unter hoher Last bis zu 128 Apache-Prozesse entstehen können, welche dann auch bis zu 128 Livestatus-Verbindungen erzeugen und halten können.
+Sind die `num_client_threads` nicht entsprechend hoch eingestellt, kommt es zu Fehlern oder sehr langsamen Antwortzeiten in der GUI.
+
+Bei Verbindungen im LAN oder in schnellen WAN-Netzen empfehlen wir, die persistenten Verbindungen *nicht* zu verwenden.
+
+
+[#livestatusproxy]
+=== Der Livestatus-Proxy
+
+{cee-only}
+Die kommerziellen Editionen verfügen mit dem _Livestatus-Proxy_ über einen ausgeklügelten Mechanismus, um tote Verbindungen zu erkennen.
+Außerdem optimiert er die Performance vor allem bei Verbindungen mit hohen Round-Trip-Zeiten.
+Vorteile des Livestatus-Proxys sind:
+
+* Sehr schnelle proaktive Erkennung von nicht antwortenden Instanzen
+* Lokales Zwischenspeichern von Anfragen, die statische Daten liefern
+* Stehende TCP-Verbindungen, dadurch weniger Roundtrips notwendig und somit viel schnellere Antworten von weit entfernten Instanzen (z.B. USA ⇄ China)
+* Genaue Kontrolle der maximal nötigen Livestatus-Verbindungen
+* Ermöglicht xref:inventory#[HW-/SW-Inventur] in verteilten Umgebungen
+
+
+==== Aufsetzen
+
+Das Aufsetzen des Livestatus-Proxys ist sehr einfach.
+In den kommerziellen Editionen ist dieser per Default aktiviert, wie Sie beim Starten einer Instanz sehen können:
+
+[{shell}]
+----
+{c-local} omd start
+Temporary filesystem already mounted
+Starting mkeventd...OK
+Starting liveproxyd...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting cmc...OK
+Starting apache...OK
+Starting dcd...OK
+Starting redis...OK
+Starting stunnel...OK
+Starting xinetd...OK
+Initializing Crontab...OK
+----
+
+Wählen Sie nun bei den Verbindungen zu der Remote-Instanz anstelle von [.guihint]#Connect via TCP# die Einstellung [.guihint]#Use Livestatus Proxy-Daemon#:
+
+image::distributed_monitoring_livestatus_proxy_daemon.png[]
+
+Die Angaben zu Host und Port sind wie gehabt.
+Auf den Remote-Instanzen müssen Sie nichts ändern.
+Bei [.guihint]#Number of channels to keep open# geben Sie die Anzahl der parallelen TCP-Verbindungen an, die der Proxy zur Zielseite aufbauen _und aufrechterhalten_ soll.
+
+Der TCP-Verbindungspool wird von allen Anfragen der GUI gemeinsam genutzt.
+Die Anzahl der Verbindungen begrenzt die maximale Anzahl von gleichzeitig in Bearbeitung befindlichen Anfragen.
+Dies beschränkt indirekt die Anzahl der Benutzer.
+In Situationen, in denen alle Kanäle belegt sind, kommt es nicht sofort zu einem Fehler.
+Die GUI wartet eine gewisse Zeit auf einen freien Kanal.
+Die meisten Anfragen benötigen nämlich nur wenige Millisekunden.
+
+Falls die GUI länger als [.guihint]#Timeout waiting for a free channel# auf so einen Kanal warten muss, wird mit einem Fehler abgebrochen und der Benutzer sieht eine Fehlermeldung.
+In so einem Fall sollten Sie die Anzahl der Verbindungen erhöhen.
+Beachten Sie dabei jedoch, dass auf der Gegenstelle (der Remote-Instanz) genügend gleichzeitige eingehende Verbindungen erlaubt sein müssen.
+Per Default ist das auf 20 eingestellt.
+Sie finden diese Einstellung in den globalen Optionen unter [.guihint]#Monitoring core > Maximum concurrent Livestatus connections#.
+
+Der [.guihint]#Regular heartbeat# sorgt für eine ständige aktive Überwachung der Verbindungen direkt auf Protokollebene.
+Dabei sendet der Proxy regelmäßig eine einfache Livestatus-Anfrage, welche von der Remote-Instanz in der eingestellten Zeit (Default: 2 Sekunden) beantwortet sein muss.
+So werden auch Situationen erkannt, wo der Zielserver und der TCP-Port zwar erreichbar sind, aber der Monitoring-Kern nicht mehr antwortet.
+
+Bleibt die Antwort aus, so werden alle Verbindungen als tot deklariert und nach einer Cooldown-Zeit (Default: 4 Sekunden) wieder neu aufgebaut.
+Das Ganze geschieht proaktiv -- also _ohne_, dass ein Benutzer eine GUI-Seite abrufen muss.
+So werden Ausfälle schnell erkannt und bei einer Wiedergenesung die Verbindungen sofort wieder aufgebaut
+und stehen dann im besten Fall schon wieder zur Verfügung, bevor ein Benutzer den Ausfall mitbekommt.
+
+Das [.guihint]#Caching# sorgt dafür, dass statische Anfragen nur einmal von der Remote-Instanz beantwortet werden müssen und ab dem Zeitpunkt direkt lokal ohne Verzögerung beantwortet werden können.
+Ein Beispiel dafür ist die Liste der überwachten Hosts, welche von [.guihint]#Quicksearch# gebraucht wird.
+
+
+==== Fehlerdiagnose
+
+Der Livestatus-Proxy hat eine eigene Log-Datei `~/var/log/liveproxyd.log`.
+Bei einer korrekt eingerichteten Remote-Instanz mit fünf Kanälen (Standard), sieht das etwa so aus:
+
+.~/var/log/liveproxyd.log
+[{file}]
+----
+2025-04-30 15:58:30,624 [20] ----------------------------------------------------------
+2025-04-30 15:58:30,627 [20] [cmk.liveproxyd] Livestatus Proxy-Daemon ({current}) starting...
+2025-04-30 15:58:30,638 [20] [cmk.liveproxyd] Configured 1 sites
+2025-04-30 15:58:36,690 [20] [cmk.liveproxyd.(3236831).Manager] Reload initiated. Checking if configuration changed.
+2025-04-30 15:58:36,692 [20] [cmk.liveproxyd.(3236831).Manager] No configuration changes found, continuing.
+2025-04-30 16:00:16,989 [20] [cmk.liveproxyd.(3236831).Manager] Reload initiated. Checking if configuration changed.
+2025-04-30 16:00:16,993 [20] [cmk.liveproxyd.(3236831).Manager] Found configuration changes, triggering restart.
+2025-04-30 16:00:17,000 [20] [cmk.liveproxyd.(3236831).Manager] Restart initiated. Terminating site processes...
+2025-04-30 16:00:17,028 [20] [cmk.liveproxyd.(3236831).Manager] Restart master process
+----
+
+In die Datei `~/var/log/liveproxyd.state` schreibt der Livestatus-Proxy regelmäßig seinen
+Status:
+
+.~/var/log/liveproxyd.state
+[{file}]
+----
+Current state:
+[myremote1]
+  State:                   ready
+  State dump time:         2025-04-30 15:01:15 (0:00:00)
+  Last reset:              2025-04-30 14:58:49 (0:02:25)
+  Site's last reload:      2025-04-30 14:26:00 (0:35:15)
+  Last failed connect:     Never
+  Last failed error:       None
+  Cached responses:        1
+  Channels:
+       9 - ready             -  client: none - since: 2025-04-30 15:01:00 (0:00:14)
+      10 - ready             -  client: none - since: 2025-04-30 15:01:10 (0:00:04)
+      11 - ready             -  client: none - since: 2025-04-30 15:00:55 (0:00:19)
+      12 - ready             -  client: none - since: 2025-04-30 15:01:05 (0:00:09)
+      13 - ready             -  client: none - since: 2025-04-30 15:00:50 (0:00:24)
+  Clients:
+  Heartbeat:
+    heartbeats received: 29
+    next in 0.2s
+  Inventory:
+    State: not running
+    Last update: 2025-04-30 14:58:50 (0:02:25)
+----
+
+Und so sieht der Status aus, wenn eine Instanz gerade gestoppt ist:
+
+.~/var/log/liveproxyd.state
+[{file}]
+----
+----------------------------------------------
+Current state:
+[myremote1]
+  State:                   starting
+  State dump time:         2025-04-30 16:11:35 (0:00:00)
+  Last reset:              2025-04-30 16:11:29 (0:00:06)
+  Site's last reload:      2025-04-30 16:11:29 (0:00:06)
+  Last failed connect:     2025-04-30 16:11:33 (0:00:01)
+  Last failed error:       [Errno 111] Connection refused
+  Cached responses:        0
+  Channels:
+  Clients:
+  Heartbeat:
+    heartbeats received: 0
+    next in -1.0s
+  Inventory:
+    State: not running
+    Last update: 2025-04-30 16:00:45 (0:10:50)
+----
+
+Der Zustand ist hier `starting`.
+Der Proxy ist also gerade beim Versuch, Verbindungen aufzubauen.
+Channels gibt es noch keine.
+Während dieses Zustands werden Anfragen an die Instanz sofort mit einem Fehler beantwortet.
+
+
+[#viewer]
+== Cascading Livestatus
+
+Wie in der Einleitung bereits erwähnt, ist es möglich, das verteilte Monitoring um reine {CMK}-Viewer-Instanzen zu erweitern, die die Monitoring-Daten von Remote-Instanzen anzeigen, die selbst nicht direkt erreichbar sind.
+Einzige Voraussetzung dafür: Die Zentralinstanz muss natürlich erreichbar sein.
+Technisch wird dies über den Livestatus-Proxy umgesetzt:
+Die Zentralinstanz bekommt via Livestatus Daten von der Remote-Instanz und fungiert selbst als Proxy -- kann die Daten also an dritte Instanzen durchreichen.
+Diese Kette können Sie beliebig erweitern, also zum Beispiel eine zweite Viewer-Instanz an die erste anbinden.
+
+Praktisch ist dies beispielsweise für ein Szenario wie folgendes:
+Die Zentralinstanz kümmert sich um drei unabhängige Netze _kunde1,_ _kunde2_ und _kunde3_ und wird selbst im Netz _betreiber1_ betrieben.
+Möchte nun etwa das Management des Betreibers aus dem Netz _betreiber1_ den Monitoring-Status der Kundeninstanzen sehen, könnte dies natürlich über einen Zugang auf der Zentralinstanz selbst geregelt werden.
+Aus technischen wie rechtlichen Gründen könnte die Zentralinstanz jedoch ausschließlich den zuständigen Mitarbeitern vorbehalten sein.
+Über eine rein zur Ansicht von entfernten Instanzen aufgesetzte Viewer-Instanz lässt sich der direkte Zugriff umgehen.
+Die Viewer-Instanz zeigt dann zwar Hosts und Services verbundener Instanzen, die eigene Konfiguration bleibt jedoch komplett leer.
+
+Das Aufsetzen erfolgt in den Verbindungseinstellungen des verteilten Monitorings, zunächst auf der Zentralinstanz, dann auf der Viewer-Instanz (welche noch nicht existieren muss).
+
+Öffnen Sie auf der Zentralinstanz die Verbindungseinstellungen der gewünschten Remote-Instanz über [.guihint]#Setup > General > Distributed monitoring#.
+Unter [.guihint]#Use Livestatus Proxy Daemon# aktivieren Sie die Option [.guihint]#Allow access via TCP# und geben einen freien Port an (hier `6560`).
+So verbindet sich der Livestatus-Proxy der Zentralinstanz mit der Remote-Instanz und öffnet einen Port für Anfragen der Viewer-Instanz -- welche dann an die Remote-Instanz weitergeleitet werden.
+
+image::distributed_livestatus_cascading_master.png[alt="Verbindungseinstellungen im verteilten Monitoring mit aktiviertem TCP-Zugriff für Viewer-Instanzen."]
+
+Erstellen Sie nun eine Viewer-Instanz und öffnen Sie auch dort wieder die Verbindungseinstellungen über [.guihint]#Setup > General > Distributed monitoring#.
+In den [.guihint]#Basic settings# geben Sie -- wie immer bei Verbindungen im verteilten Monitoring -- als [.guihint]#Site ID# den exakten Namen der Zentralinstanz an.
+
+image::distributed_livestatus_cascading_viewer_01.png[alt="Instanz-ID in den Verbindungseinstellungen."]
+
+Im Bereich [.guihint]#Status connection# geben Sie als Host die Zentralinstanz an -- sowie den manuell vergebenen freien Port (hier `6560`).
+
+image::distributed_livestatus_cascading_viewer_02.png[alt="Verbindungseinstellungen mit Zentralinstanz und freiem Port für Livestatus."]
+
+Sobald die Verbindung steht, sehen Sie die gewünschten Hosts und Services der Remote-Instanz in den Monitoring-Ansichten der Viewer-Instanz.
+
+Möchten Sie weiter kaskadieren, müssen Sie auf der Viewer-Instanz, wie zuvor auf der Zentralinstanz, ebenfalls den TCP-Zugriff auf den Livestatus-Proxy erlauben, erneut mit einem anderen, freien Port.
+
+
+[#livedump]
+== Livedump und CMCDump
+
+=== Motivation
+
+Das bisher beschriebene Konzept für ein verteiltes Monitoring mit {CMK} ist in den meisten Fällen eine gute und einfache Lösung.
+Es erfordert allerdings Netzwerkzugriff _von der Zentralinstanz auf die Remote-Instanzen_.
+Es gibt Situationen, in denen das entweder nicht möglich oder nicht gewünscht ist, z.B. weil
+
+* die Instanzen in den Netzen Ihrer Kunden stehen, auf die Sie keinen Zugriff haben,
+* die Instanzen in einem Sicherheitsbereich stehen, auf den ein Zugriff strikt verboten ist oder
+* die Instanzen keine permanente Netzwerkverbindung oder keine festen IP-Adressen haben und Techniken wie link:https://de.wikipedia.org/wiki/Dynamisches_DNS[Dynamisches DNS^] keine Option sind.
+
+Das verteilte Monitoring mit Livedump bzw. CMCDump geht einen ganz anderen Weg.
+Zunächst einmal sind die Remote-Instanzen so aufgesetzt, dass sie völlig unabhängig von der Zentralinstanz arbeiten und _dezentral administriert_ werden.
+Auf ein xref:central_setup[zentrales Setup] wird verzichtet.
+
+Dann werden in der Zentralinstanz alle Hosts und Services der Remote-Instanzen als _Kopie_ angelegt.
+Dazu kann Livedump/CMCDump einen Dump der Konfiguration der Remote-Instanzen erstellen, der bei der Zentralinstanz eingespielt wird.
+
+Während des Monitorings wird nun auf jeder Remote-Instanz einmal pro definiertem Intervall (z.B. jede Minute) ein Dump des aktuellen Status in eine Datei geschrieben.
+Diese wird auf einem beliebigen Weg auf die Zentrale übertragen und dort als Statusupdate eingespielt.
+Für die Übertragung ist kein bestimmtes Protokoll vorgesehen oder vorbestimmt.
+Alle automatisierbaren Übertragungsprotokolle kommen in Frage.
+Es muss nicht unbedingt `scp` sein -- auch eine Übertragung per E-Mail ist denkbar!
+
+Ein solches Setup weist gegenüber dem „normalen“ verteilten Monitoring folgende Unterschiede auf:
+
+* Die Aktualisierung der Zustände und Messdaten in der Zentrale geschieht verzögert.
+* Eine Berechnung der Verfügbarkeit wird auf der Zentralinstanz, im Vergleich mit der Remote-Instanz, geringfügig abweichende Werte ergeben.
+* Zustandswechsel, die schneller geschehen als das Aktualisierungsintervall, sind für die Zentrale unsichtbar.
+* Ist eine Remote-Instanz „tot“, so veralten die Zustände auf der Zentralinstanz, die Services werden „stale“, sind aber immer noch sichtbar.
+Messdaten und Verfügbarkeitsdaten gehen für diesen Zeitraum verloren (auf der Remote-Instanz sind sie noch vorhanden).
+* Kommandos wie [.guihint]#Schedule downtimes# und [.guihint]#Acknowledge problems# auf der Zentralinstanz können _nicht_ auf die Remote-Instanz übertragen werden.
+* Zu keiner Zeit erfolgt ein Zugriff von der Zentralinstanz auf die Remote-Instanz.
+* Ein Zugriff auf Details der von Logwatch überwachten Log-Dateien ist nicht möglich.
+* Die Event Console wird von Livedump/CMCDump nicht unterstützt.
+
+Da kurze Zustandswechsel bedingt durch das gewählte Intervall für die Zentralinstanz eventuell nicht sichtbar sind, ist eine xref:glossar#notification[Benachrichtigung] durch die Zentrale nicht ideal.
+Wird die Zentrale jedoch als reine _Anzeigeinstanz_ verwendet -- z.B. für einen zentralen Überblick über alle Kunden -- hat die Methode durchaus ihre Vorteile.
+
+Livedump/CMCDump kann übrigens ohne Probleme _gleichzeitig_ mit dem verteilten Monitoring über Livestatus verwendet werden.
+Manche Instanzen sind dann einfach direkt über Livestatus angebunden -- andere verwenden Livedump.
+Dabei kann der Livedump auch in eine der entfernten Livestatus-Instanzen eingespielt werden.
+
+
+=== Aufsetzen von Livedump
+
+{cre-only}
+Wenn Sie {CRE} einsetzen (oder die kommerziellen Editionen mit Nagios als Kern), dann verwenden Sie das Werkzeug `livedump`.
+Der Name leitet sich ab von _Livestatus_ und _Status-Dump._
+`livedump` befindet sich direkt im Suchpfad und ist daher global als Befehl verfügbar.
+
+Wir gehen im Folgenden davon aus, dass
+
+* die Remote-Instanz bereits voll eingerichtet ist und fleißig Hosts und Services überwacht,
+* die Zentralinstanz gestartet ist und läuft und
+* auf der Zentralinstanz _mindestens ein Host_ lokal überwacht wird (z.B. weil sie sich selbst überwacht).
+
+
+==== Übertragen der Konfiguration
+
+Als Erstes erzeugen Sie auf der Remote-Instanz einen Dump der Konfiguration Ihrer Hosts und Services im Nagios-Konfigurationsformat.
+Leiten Sie dazu die Ausgabe von `livedump -TC` in eine Datei um:
+
+[{shell}]
+----
+{c-myremote1} livedump -TC > config-myremote1.cfg
+----
+
+Der Anfang der Datei sieht in etwa wie folgt aus:
+
+.config-myremote1.cfg
+[{file}]
+----
+define host {
+    name                    livedump-host
+    use                     check_mk_default
+    register                0
+    active_checks_enabled   0
+    passive_checks_enabled  1
+
+}
+
+define service {
+    name                    livedump-service
+    register                0
+    active_checks_enabled   0
+    passive_checks_enabled  1
+    check_period            0x0
+
+}
+----
+
+Übertragen Sie die Datei zu der Zentralinstanz (z.B. mit `scp`) und legen Sie sie dort in das Verzeichnis `~/etc/nagios/conf.d/`.
+In diesem erwartet Nagios die Konfiguration für Hosts und Services.
+Wählen Sie einen Dateinamen, der auf `.cfg` endet, z.B. `~/etc/nagios/conf.d/config-myremote1.cfg`.
+Wenn ein SSH-Zugang von der Remote-Instanz auf die Zentralinstanz möglich ist, geht das z.B. so:
+
+[{shell}]
+----
+{c-myremote1} scp config-myremote1.cfg central@myserver.mydomain:etc/nagios/conf.d/
+central@myserver.mydomain's password:
+config-myremote1.cfg                                             100% 8071     7.9KB/s   00:00
+----
+
+Loggen Sie sich jetzt auf der Zentralinstanz ein und aktivieren Sie die Änderungen:
+
+[{shell}]
+----
+{c-local} cmk -R
+Generating configuration for core (type nagios)...OK
+Validating Nagios configuration...OK
+Precompiling host checks...OK
+Restarting monitoring core...OK
+----
+
+Nun sollten alle Hosts und Services der Remote-Instanz in der Zentralinstanz auftauchen -- und zwar im Zustand {PEND}, in dem sie bis auf Weiteres auch bleiben:
+
+image::distributed_monitoring_livedump_pending.png[]
+
+Hinweise:
+
+* Durch die Option `-T` bei `livedump` erzeugt Livedump Template-Definitionen, auf die sich die Konfiguration bezieht.
+Ohne diese kann Nagios nicht gestartet werden.
+Sie dürfen jedoch _nur einmal_ vorhanden sein.
+Falls Sie auch von einer zweiten Remote-Instanz eine Konfiguration übertragen, so dürfen Sie die Option `-T` dort *nicht* verwenden!
+
+* Der Dump der Konfiguration ist auch auf einem xref:cmc#[{CMK} Micro Core (CMC)] möglich, das Einspielen benötigt Nagios.
+Wenn auf Ihrer Zentralinstanz der CMC läuft, dann verwenden Sie xref:cmcdump[CMCDump].
+
+* Das Erstellen des Dumps und das Übertragen der Konfiguration müssen Sie nach jeder Änderung von Hosts oder Services auf der Remote-Instanz wiederholen.
+
+
+==== Übertragung des Status
+
+Nachdem die Hosts in der Zentralinstanz sichtbar sind, geht es jetzt an die (regelmäßige) Übertragung des Monitoring-Status der Remote-Instanz.
+Wieder erzeugen Sie mit `livedump` eine Datei, allerdings diesmal ohne weitere Optionen:
+
+[{shell}]
+----
+{c-myremote1} livedump > state
+----
+
+Diese Datei enthält den Zustand aller Hosts und Services in einem Format, welches Nagios direkt aus dem Check-Ergebnis einlesen kann.
+Der Anfang sieht etwa so aus:
+
+.state
+[{file}]
+----
+host_name=myhost1900
+check_type=1
+check_options=0
+reschedule_check
+latency=0.13
+start_time=1615521257.2
+finish_time=16175521257.2
+return_code=0
+output=OK - 10.1.5.44: rta 0.066ms, lost 0%|rta=0.066ms;200.000;500.000;0; pl=0%;80;100;; rtmax=0.242ms;;;; rtmin=0.017ms;;;;
+----
+
+Übertragen Sie diese Datei auf die Zentralinstanz in das Verzeichnis `~/tmp/nagios/checkresults`.
+*Wichtig:* Der Name der Datei muss mit `c` beginnen und sieben Zeichen lang sein (Nagios-Vorgabe).
+Mit `scp` würde das etwa so aussehen:
+
+[{shell}]
+----
+{c-myremote1} scp state central@myserver.mydomain:tmp/nagios/checkresults/caabbcc
+server@myserver.mydomain's password:
+state                                                  100%   12KB  12.5KB/s   00:00
+----
+
+Anschließend erzeugen Sie auf der Zentralinstanz eine leere Datei mit dem gleichen Namen und der Endung `.ok`.
+Dadurch weiß Nagios, dass die Statusdatei komplett übertragen ist und eingelesen werden kann:
+
+[{shell}]
+----
+{c-local} touch tmp/nagios/checkresults/caabbcc.ok
+
+----
+Der Zustand der Hosts/Services der Remote-Instanz wird jetzt auf der Zentralinstanz sofort
+aktualisiert:
+
+image::distributed_monitoring_livedump_status.png[]
+
+Das Übertragen des Status muss ab jetzt natürlich regelmäßig vorgenommen werden.
+Mit einem Skript können Sie die eben beschriebenen Schritte in selbst gewählten Zeitintervallen durchführen.
+Dabei können Sie auf die Übertragung der Daten via `scp` verzichten und Ihr Skript stattdessen direkt von der Zentralinstanz regelmäßig ausführen, um die Statusdaten oder Konfigurationsdaten von der Remote-Instanz via `ssh` zu empfangen.
+
+Auf link:https://github.com/Checkmk/checkmk/tree/master/doc/treasures/livedump[GitHub^] finden Sie im `treasures`-Verzeichnis von {CMK} das Skript `livedump-ssh-recv`, das genau das tut. 
+
+include::include_treasures_admonition.asciidoc[]
+
+Sie können den Dump von Konfiguration und Status auch durch die Angabe von Livestatus-Filtern einschränken,
+z.B. die Hosts auf die Mitglieder der Host-Gruppe `mygroup`:
+
+[{shell}]
+----
+{c-myremote1} livedump -H "Filter: host_groups >= mygroup" > state
+----
+
+[#cmcdump]
+=== Aufsetzen von CMCDump
+
+Was xref:livedump[Livedump] für Nagios ist, ist CMCDump für den xref:cmc#[{CMK} Micro Core] -- und damit das Tool der Wahl für die kommerziellen Editionen.
+Im Gegensatz zu Livedump kann CMCDump den _vollständigen_ Status von Hosts und Services replizieren (Nagios bietet hier nicht die notwendigen Schnittstellen).
+
+Zum Vergleich: Bei Livedump werden folgende Daten übertragen:
+
+* Der aktuelle Zustand, also {PEND}, {OK}, {WARN}, {CRIT}, {UNKNOWN}, {UP}, {DOWN} oder {UNREACH}
+* Die Ausgabe des Check-Plugins
+* Die Messdaten
+
+Zusätzlich synchronisiert CMCDump auch noch
+
+* die _lange_ Ausgabe des Plugins,
+* ob das Objekte gerade icon:icon_flapping[] unstetig ist,
+* Zeitpunkt der letzten Check-Ausführung und des letzten Statuswechsels,
+* Dauer der Check-Ausführung,
+* Latenz der Check-Ausführung,
+* die Nummer des aktuellen Check-Versuchs und ob der aktuelle Zustand hart oder weich ist,
+* icon:icon_ack[] xref:basics_ackn#[Quittierung], falls vorhanden und
+* ob das Objekt gerade in einer icon:icon_downtime[alt="Symbol einer Wartungszeit."] xref:glossar#scheduled_downtime[Wartungszeit] ist.
+
+Das Abbild des Monitorings ist hier also viel genauer.
+Der CMC simuliert beim Einspielen des Status nicht einfach eine Check-Ausführung, sondern überträgt mittels einer dafür bestimmten Schnittstelle einen korrekten Status.
+Das bedeutet unter anderem, dass Sie in der Zentrale jederzeit sehen können, ob Probleme quittiert oder Wartungszeiten eingetragen wurden.
+
+Das Aufsetzen ist fast identisch wie bei Livedump, allerdings etwas einfacher, da Sie sich nicht um eventuelle doppelte Templates und dergleichen kümmern müssen.
+
+Der Dump der Konfiguration geschieht mit `cmcdump -C`.
+Legen Sie diese Datei auf der Zentralinstanz unterhalb von `~/etc/check_mk/conf.d/` ab.
+Die Endung muss `.mk` heißen:
+
+[{shell}]
+----
+{c-myremote1} cmcdump -C > config.mk
+{c-myremote1} scp config.mk central@mycentral.mydomain:etc/check_mk/conf.d/myremote1.mk
+----
+
+Aktivieren Sie auf der Zentralinstanz die Konfiguration:
+
+[{shell}]
+----
+{c-local} cmk -O
+----
+
+Wie bei Livedump erscheinen jetzt die Hosts und Services auf der Zentrale im Zustand {PEND}.
+Allerdings sehen Sie gleich am Symbol icon:icon_shadow[], dass es sich um _Schattenobjekte_ handelt.
+So können Sie diese von direkt auf der Zentralinstanz oder einer „normalen“ Remote-Instanz überwachten Objekte unterscheiden:
+
+image::distributed_monitoring_cmcdump_pending.png[]
+
+Das regelmäßige Erzeugen des Status geschieht mit `cmcdump` ohne weitere Argumente:
+
+[{shell}]
+----
+{c-myremote1} cmcdump > state
+{c-myremote1} scp state central@mycentral.mydomain:tmp/state_myremote1
+----
+
+Zum Einspielen des Status auf der Zentralinstanz muss der Inhalt der Datei mithilfe des Tools `unixcat` in das Unix-Socket `~/tmp/run/live` geschrieben werden:
+
+[{shell}]
+----
+{c-local} unixcat tmp/run/live < tmp/state_myremote1
+----
+
+Falls Sie per SSH einen passwortlosen Zugang von der Remote-Instanz zur Zentralinstanz haben, können Sie alle drei Befehle zu einem einzigen zusammenfassen
+-- wobei nicht mal eine temporäre Datei entsteht:
+
+[{shell}]
+----
+{c-myremote1} cmcdump | ssh central@mycentral.mydomain "unixcat tmp/run/live"
+----
+
+Es ist wirklich so einfach!
+Aber wie schon erwähnt, ist `ssh`/`scp` nicht die einzige Methode, um Dateien zu übertragen und genauso gut können Sie Konfiguration oder Status per E-Mail oder einem beliebigen anderen Protokoll übertragen.
+
+
+[#notifications]
+== Benachrichtigungen in verteilten Umgebungen
+
+=== Zentral oder dezentral
+
+In einer verteilten Umgebung stellt sich die Frage, von welcher Instanz aus Benachrichtigungen (z.B. E-Mails) verschickt werden sollen:
+von den einzelnen entfernten Instanzen oder von der Zentralinstanz aus.
+Für beide gibt es Argumente.
+
+Argumente für den Versand von den Remote-Instanzen aus:
+
+* Einfacher einzurichten.
+* Benachrichtigungen vor Ort gehen auch dann, wenn die Verbindung zur Zentrale nicht verfügbar ist.
+* Geht auch mit {CRE}.
+
+Argumente für den Versand von der Zentralinstanz aus:
+
+* Benachrichtigungen können an einer zentralen Stelle verarbeitet werden (z.B. für Weiterleitung in Ticketsystem).
+* Remote-Instanzen benötigen kein Setup für E-Mail oder SMS.
+* Bei Versand von SMS über Hardware ist diese nur einmal notwendig: auf der Zentrale.
+
+
+=== Dezentrale Benachrichtigungen
+
+Für die Einrichtung dezentraler Benachrichtigungen sind keine besonderen Schritte notwendig, denn dies ist die Standardeinstellung.
+Jede Benachrichtigung, die auf einer Remote-Instanz entsteht, durchläuft dort die xref:notifications#rule_analysis[Kette der Benachrichtigungsregeln].
+Falls Sie ein xref:central_setup[zentrales Setup] einsetzen, sind diese Regeln auf allen Instanzen gleich.
+Aus den Regeln resultierende Benachrichtigungen werden wie üblich zugestellt, indem lokal die entsprechenden Benachrichtigungsskripte aufgerufen werden.
+
+Sie müssen lediglich sicherstellen, dass die entsprechenden Dienste auf den Instanzen korrekt aufgesetzt sind, also z.B. für E-Mail ein Smarthost eingetragen ist
+-- also die gleichen Schritte wie beim Einrichten einer einzelnen {CMK}-Instanz.
+
+
+=== Zentrale Benachrichtigungen
+
+==== Grundlegendes
+
+{cee-only}
+Die kommerziellen Editionen bieten einen eingebauten Mechanismus für zentralisierte Benachrichtigungen, welcher pro Remote-Instanz einzeln aktiviert werden kann.
+Solche Remote-Instanzen leiten dann alle Benachrichtigungen zur weiteren Verarbeitung an die Zentralinstanz weiter.
+Dabei ist die zentrale Benachrichtigung unabhängig davon, ob Sie Ihr verteiltes Monitoring auf dem klassischen Weg oder mit xref:cmcdump[CMCDump] oder einer Mischung davon eingerichtet haben.
+Genau genommen muss der zentrale Benachrichtigungs-Server nicht mal die Zentralinstanz sein.
+Diese Aufgabe kann jede {CMK}-Instanz übernehmen.
+
+Ist eine Remote-Instanz auf Weiterleitung eingestellt, so werden alle Benachrichtigungen direkt wie sie vom Kern kommen -- quasi in _Rohform_ (wir sprechen hier auch von den _Rohbenachrichtigungen_) -- an die Zentralinstanz weitergereicht.
+Erst dort werden die Benachrichtigungsregeln ausgewertet, welche entscheiden, wer und wie überhaupt benachrichtigt werden soll.
+Die dazu notwendigen Benachrichtigungsskripte werden auf der Zentralinstanz aufgerufen.
+
+
+==== Einrichten der TCP-Verbindungen
+
+Die Benachrichtigung-Spooler von entfernter und zentraler (Benachrichtigungs-)Instanz tauschen sich untereinander per TCP aus.
+Benachrichtigungen werden von der Remote-Instanz zur Zentralinstanz gesendet.
+Die Zentrale quittiert empfangene Benachrichtigungen an die Remote-Instanz, was verhindert, dass Benachrichtigungen verloren gehen, selbst wenn die TCP-Verbindung abbrechen sollte.
+
+Für den _Aufbau_ der TCP-Verbindung haben Sie zwei Möglichkeiten:
+
+. TCP-Verbindung wird von Zentralinstanz zur Remote-Instanz aufgebaut.
+Hier ist die Remote-Instanz der _TCP-Server_.
+. TCP-Verbindung wird von Remote-Instanz zur Zentralinstanz aufgebaut.
+Hier ist die Zentralinstanz der _TCP-Server_.
+
+Somit steht dem Weiterleiten von Benachrichtigungen auch dann nichts im Wege, wenn aus Netzwerkgründen der Verbindungsaufbau nur in eine bestimmte Richtung möglich ist.
+Die TCP-Verbindungen werden vom Spooler mit einem Heartbeat-Signal überwacht und bei Bedarf sofort neu aufgebaut -- nicht erst im Falle einer Benachrichtigung.
+
+Da Remote-Instanz und Zentralinstanz für den Spooler unterschiedliche globale Einstellungen brauchen, müssen Sie diese für _alle_ Remote-Instanzen xref:sitespecific[instanzspezifische Einstellungen] machen.
+Die Konfiguration der Zentrale geschieht über die normalen globalen Einstellungen.
+Beachten Sie, dass diese automatisch an alle Remote-Instanzen vererbt wird, für die Sie _keine_ spezifischen Einstellungen definiert haben.
+
+Betrachten Sie zuerst den Fall, dass die Zentralinstanz die TCP-Verbindungen zu den Remote-Instanzen aufbauen soll.
+
+Schritt 1: Editieren Sie *bei der Remote-Instanz* die instanzspezifische globale Einstellung [.guihint]#Notifications > Notification Spooler Configuration# und aktivieren Sie [.guihint]#Accept incoming TCP connections#.
+Als TCP-Port wird 6555 vorgeschlagen.
+Sofern nichts dagegen spricht, übernehmen Sie diese Einstellung.
+
+image::distributed_monitoring_notification_spooler_configuration.png[]
+
+Schritt 2: Setzen Sie nun ebenfalls nur *auf der Remote-Instanz* die Einstellung [.guihint]#Notification Spooling# auf den Wert [.guihint]#Forward to remote site by notification spooler#.
+
+image::distributed_monitoring_notification_spooling.png[]
+
+Schritt 3: Auf der *Zentralinstanz* -- also in den normalen globalen Einstellungen -- richten Sie nun zu der Remote-Instanz (und später dann auch eventuell zu weiteren Remote-Instanzen) die Verbindungen ein:
+
+image::distributed_monitoring_notification_spooler_central_configuration.png[]
+
+Schritt 4: Setzen Sie die globale Einstellung [.guihint]#Notification Spooling# auf [.guihint]#Asynchronous local delivery by notification spooler#,
+damit auch die Meldungen der Zentrale über den gleichen zentralen Spooler abgewickelt werden.
+
+image::distributed_monitoring_notification_spooling_central.png[]
+
+Schritt 5: Aktivieren Sie die Änderungen.
+
+
+==== Verbindungsaufbau von der Remote-Instanz aus
+
+Soll die TCP-Verbindung von der Remote-Instanz aus aufgebaut werden, so ist das Vorgehen identisch,
+bis auf die Tatsache, dass Sie die oben gezeigten Einstellungen einfach zwischen Zentralinstanz und Remote-Instanz vertauschen.
+
+Auch eine Mischung ist möglich. In diesem Fall muss die Zentrale so aufgesetzt werden, dass sie sowohl auf eingehende Verbindungen lauscht, als auch Verbindungen zu entfernten Instanzen aufbaut.
+Für jede Beziehung zwischen Zentralinstanz und Remote-Instanz darf aber _nur einer von beiden_ die Verbindung aufbauen!
+
+
+==== Test und Diagnose
+
+Der Benachrichtigungs-Spooler loggt in die Datei `~/var/log/mknotifyd.log`.
+In den Spooler-Einstellungen können Sie das Loglevel erhöhen, so dass Sie mehr Meldungen kommen.
+Bei einem Standard-Loglevel sollten Sie auf der Zentralinstanz etwa Folgendes sehen:
+
+.~/var/log/mknotifyd.log
+[{file}]
+----
+2025-04-30 07:11:40,023 [20] [cmk.mknotifyd] -----------------------------------------------------------------
+2025-04-30 07:11:40,023 [20] [cmk.mknotifyd] Check_MK Notification Spooler version {current} starting
+2025-04-30 07:11:40,024 [20] [cmk.mknotifyd] Log verbosity: 0
+2025-04-30 07:11:40,025 [20] [cmk.mknotifyd] Daemonized with PID 31081.
+2025-04-30 07:11:40,029 [20] [cmk.mknotifyd] Connection to 10.1.8.44 port 6555 in progress
+2025-04-30 07:11:40,029 [20] [cmk.mknotifyd] Successfully connected to 10.1.8.44:6555
+----
+
+Die Datei `~/var/log/mknotifyd.state` enthält stets einen aktuellen Zustand des Spoolers und aller seiner Verbindungen:
+
+.central:~/var/log/mknotifyd.state (Auszug)
+[{file}]
+----
+Connection:               10.1.8.44:6555
+Type:                     outgoing
+State:                    established
+Status Message:           Successfully connected to 10.1.8.44:6555
+Since:                    1637129500 (2025-04-30 07:11:40, 140 sec ago)
+Connect Time:             0.002 sec
+----
+
+Die gleiche Datei gibt es auch auf der Remote-Instanz.
+Dort sieht die Verbindung etwa so aus:
+
+.remote-1:~/var/log/mknotifyd.state (Auszug)
+[{file}]
+----
+Connection:               10.22.4.12:56546
+Type:                     incoming
+State:                    established
+Since:                    1637129500 (2025-04-30 07:11:40, 330 sec ago)
+----
+
+Zum Testen wählen Sie z.B. einen beliebigen Service, der auf der Remote-Instanz überwacht wird, und setzen diesen per Kommando [.guihint]#Fake check results# auf {CRIT}.
+
+Auf der _Zentrale_ sollen Sie nun in der entsprechenden Log-Datei (`notify.log`) die eingehenden Benachrichtigung sehen:
+
+.central:~/var/log/notify.log
+[{file}]
+----
+2025-04-30 07:59:36,231 ----------------------------------------------------------------------
+2025-04-30 07:59:36,232 [20] [cmk.base.notify] Got spool file 307ad477 (myremotehost123;Check_MK) from remote host for local delivery.
+----
+
+Das gleiche Ereignis sieht bei der Remote-Instanz so aus:
+
+.myremote1:~/var/log/notify.log
+[{file}]
+----
+2025-04-30 07:59:28,161 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-04-30 07:59:28,161 [20] [cmk.base.notify] Got raw notification (myremotehost123;Check_MK) context with 71 variables
+2025-04-30 07:59:28,162 [20] [cmk.base.notify] Creating spoolfile: /omd/sites/myremote1/var/check_mk/notify/spool/307ad477-b534-4cc0-99c9-db1c517b31f3
+----
+
+In den globalen Einstellungen können Sie sowohl die normale Log-Datei für Benachrichtigungen (`notify.log`) als auch die Log-Datei des Benachrichtigungs-Spoolers auf ein höheres Loglevel umstellen.
+
+
+==== Überwachung des Spoolings
+
+Nachdem Sie alles wie beschrieben aufgesetzt haben, werden Sie feststellen, dass sowohl auf der Zentralinstanz, als auch auf den Remote-Instanzen jeweils ein neuer Service gefunden wird, den Sie unbedingt in die Überwachung aufnehmen sollten.
+Dieser überwacht den Benachrichtigungs-Spooler und dessen TCP-Verbindungen.
+Dabei wird jede Verbindung zweimal überwacht: einmal durch die Zentralinstanz und einmal durch die Remote-Instanz:
+
+image::distributed_monitoring_notification_services.png[]
+
+
+[#mixed_versions]
+== Updates im verteilten Monitoring
+
+Grundsätzlich müssen die Versionen aller Remote-Instanzen und der Zentralinstanz übereinstimmen.
+Ausnahmen gelten lediglich während der Durchführung von xref:update#[Updates].
+Hier ist zwischen folgenden Fällen zu unterscheiden:
+
+
+=== Vorübergehend abweichende Patchlevel (gleiche Major-Version)
+
+Die Patchlevel (z.B. p11) dürfen in den meisten Fällen unterschiedlich sein.
+In seltenen Fällen sind aber auch diese untereinander inkompatibel, so dass Sie den exakten Versionsstand (z.B. {current-major}p11) auf allen Seiten einhalten müssen, damit eine fehlerfreie Zusammenarbeit der Instanzen möglich ist.
+Beachten Sie daher immer die inkompatiblen Änderungen zu jeder Patchversion in den link:https://checkmk.com/de/werks[Werks^].
+
+Im Regelfall -- Ausnahmen sind möglich und werden in den Werks angegeben -- aktualisieren Sie zunächst die Remote-Instanzen und als letztes die Zentralinstanz.
+
+=== Vorübergehend abweichende Major-Versionen
+
+Für die reibungslose Durchführung von xref:update_major#[Major-Updates] (beispielsweise von {oldstable} auf {current-major}) in großen verteilten Umgebungen erlaubt {CMK} seit {v20} einen Mischbetrieb, bei dem die Differenz genau eine Major-Version sein darf.
+Dabei ist darauf zu achten, dass Sie die Remote-Instanzen zuerst aktualisieren.
+Die Zentralinstanz aktualisieren Sie erst, wenn alle Remote-Instanzen auf dem höheren Versionsstand sind.
+
+Auch hier gilt: Prüfen Sie unbedingt die Werks sowie die Hinweise zum Versions-Update, _bevor_ Sie mit dem Update beginnen!
+Es ist immer ein bestimmtes Patchlevel der älteren Version auf der Zentralinstanz erforderlich, um einen reibungslosen Mischbetrieb zu gewährleisten.
+
+Eine Besonderheit im Mischbetrieb ist die zentrale Verwaltung von Erweiterungspaketen, welche nun in Varianten für sowohl die ältere, als auch die neuere {CMK}-Version vorgehalten werden können.
+Details erklärt der Artikel zur Verwaltung von xref:mkps#[MKPs].
+
+[#mixed_editions]
+== Editionsunterschiede zwischen Zentralinstanz und Remote-Instanzen
+
+Seit Version {v25} von {CMK} kann eine Zentralinstanz mit Remote-Instanzen anderer Editionen verbunden werden, solange die Remote-Instanzen mit einer Edition mit geringerem Funktionsumfang betrieben werden.
+Bis {CMK} {v24} war ein Mischbetrieb mit unterschiedlichen Editionen nur möglich, wenn die zentrale Instanz mit {CSE} betrieben wurde und die Remote-Instanzen mit {CRE}.
+
+Für Remote-Instanzen mit geringerem Funktionsumfang ist es nicht möglich, die Konfiguration von der zentralen Instanz aus zu replizieren.
+Die Einstellung [.guihint]#Enable replication# muss also zwingend auf [.guihint]#No replication with this site# gesetzt werden.
+In der Praxis bedeutet das, dass ein solches Szenario ausschließlich rein lesenden Zugriff erlaubt.
+
+Für die xref:license#distributed[Lizenzverifizierung und die Übermittlung der Lizenznutzung] wird die Edition der zentralen Instanz berücksichtigt.
+
+Beachten Sie auch die Hinweise zum Umgang mit xref:upgrade#editiondistributed[Upgrades] im verteilten Monitoring.
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Konfigurationsdateien
+
+[cols="44,~"]
+|===
+|Pfad |Bedeutung
+
+|`~/etc/check_mk/multisite.d/sites.mk` |Hier speichert {CMK} die Konfiguration der Verbindungen zu den einzelnen Instanzen. Sollte aufgrund von Fehlkonfiguration die Oberfläche so „hängen“, dass sie nicht mehr bedienbar ist, können Sie die störenden Einträge direkt in dieser Datei editieren. Falls der Livestatus-Proxy zum Einsatz kommt, ist anschließend jedoch ein Editieren und Speichern mindestens einer Verbindung notwendig, da erst hierbei für diesen Daemon eine passende Konfiguration erzeugt wird.
+|`~/etc/check_mk/liveproxyd.mk` |Konfiguration für den Livestatus-Proxy. Diese Datei wird von {CMK} bei jeder Änderung an der Konfiguration des verteilten Monitorings neu generiert.
+|`~/etc/check_mk/mknotifyd.d/wato/global.mk` |Konfiguration für den Benachrichtigungs-Spooler. Diese Datei wird von {CMK} beim Speichern der globalen Einstellungen erzeugt.
+|`~/etc/check_mk/conf.d/distributed_wato.mk` |Wird auf den Remote-Instanzen erzeugt und sorgt dafür, dass diese nur ihre eigenen Hosts überwachen.
+|`~/etc/nagios/conf.d/` |Ablageort für selbst erstellte Nagios-Konfigurationsdateien mit Hosts und Services. Dies wird beim Einsatz von xref:livedump[Livedump] auf der Zentralinstanz benötigt.
+|`~/etc/mk-livestatus/nagios.cfg` |Konfiguration von Livestatus bei Verwendung von Nagios als Kern. Hier können Sie die maximale gleichzeitige Anzahl von Verbindungen konfigurieren.
+|`~/etc/check_mk/conf.d/` |Konfiguration von Hosts und Regeln für {CMK}. Legen Sie hier Konfigurationsdateien ab, die per xref:cmcdump[CMCDump] erzeugt wurden. Nur das Unterverzeichnis `wato/` wird in der Konfigurationsumgebung verwaltet und ist dort sichtbar.
+|`~/var/check_mk/autochecks/` |Von der Service-Erkennung gefundene Services. Dieses werden immer lokal auf der Remote-Instanz gespeichert.
+|`~/var/check_mk/rrds/` |Ablage der Round-Robin-Datenbanken für die Archivierung der Messwerte beim Einsatz des {CMK}-RRD-Formats (Default bei den kommerziellen Editionen).
+|`~/var/pnp4nagios/perfdata/` |Ablage der Round-Robin-Datenbanken bei PNP4Nagios-Format ({RE}).
+|`~/var/log/liveproxyd.log` |Log-Datei des Livestatus-Proxys.
+|`~/var/log/liveproxyd.state` |Aktueller Zustand des Livestatus-Proxys in lesbarer Form. Diese Datei wird alle fünf Sekunden aktualisiert.
+|`~/var/log/notify.log` |Log-Datei des {CMK}-Benachrichtigungssystems.
+|`~/var/log/mknotifyd.log` |Log-Datei des Benachrichtigungs-Spoolers.
+|`~/var/log/mknotifyd.state` |Aktueller Zustand des Benachrichtigungs-Spoolers in lesbarer Form.
+Diese Datei wird alle 20 Sekunden aktualisiert.
+|===

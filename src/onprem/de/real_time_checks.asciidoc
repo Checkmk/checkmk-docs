@@ -1,0 +1,477 @@
+// -*- coding: utf-8 -*-
+// NO-LUNR
+// IGNORE sekündlich echtzeitüberwachte echtzeitüberwachten nachgehalten cpu Pre winperf_processor WinPerf 0m 1m Zoomstufen @ sekündliche nachhalten
+include::global_attr.adoc[]
+= Echtzeit-Checks (Real-time Checks)
+:title: Echtzeit-Checks (Real-time Checks)
+:description: Mit Echtzeit-Checks (Real-time Checks) ruft {CMK} die Metriken bestimmter Services sekündlich ab. Lesen Sie hier, wie Sie Echtzeit-Checks einrichten.
+
+{related-start}
+{related-end}
+
+[IMPORTANT]
+====
+Dieser Artikel ist ein Entwurf zu einem Feature, das noch in der Entwicklung befindlich ist.
+Es besteht keine Garantie auf Korrektheit und Vollständigkeit.
+====
+
+[#intro]
+== Einleitung
+
+{CMK} überwacht Hosts standardmäßig in einem Intervall von einer Minute.
+Die Wahl eines Abfrageintervalls ist eine Art Balanceakt zwischen Genauigkeit und Performance:
+würde der {CMK}-Server alle Services von allen überwachten Hosts ständig abfragen, würde das zu einer enormen Netzwerk-Last und einem beachtlichen Bedarf an Speicherplatz für die übermittelten Monitoring-Daten führen.
+Auf der anderen Seite wäre eine Überwachung in deutlich _größeren_ Intervallen möglicherweise nicht mehr aussagekräftig, weil etwa Zustandsänderungen von Hosts und Services im Monitoring nicht mehr sichtbar wären.
+
+{cce-only}
+Für den Fall, dass Sie bestimmte Services besonders engmaschig überwachen möchten, bieten kommerzielle Editionen von {CMK} Echtzeit-Checks an.
+Mit diesen Checks können Sie Daten über eine kleine Auswahl von Services separat von der regulären Agenten-Ausgabe sekündlich an den {CMK}-Server schicken.
+Diese Echtzeit-Daten werden in Form von UDP-Paketen direkt vom Host zum {CMK}-Server geschickt.
+Aktuell sind Echtzeit-Checks nur für Linux-Hosts und Windows-Hosts verfügbar.
+
+Dieser Artikel beschreibt, wie Sie Echtzeit-Checks für Linux- oder Windows-Hosts einrichten und nutzen.
+Im xref:#rtc_sections[einfachsten Fall] lassen Sie eine Auswahl von Agenten-Sektionen als Echtzeit-Checks einmal pro Sekunde verschicken.
+Für xref:#rtc_plugins[komplexere Szenarien] haben Sie die Möglichkeit, Plugins im Rahmen der Echtzeit-Checks auszuführen.
+
+[#rtc_sections]
+== Echtzeit-Check für einen Host einrichten
+
+Um Echtzeit-Daten über geeignete Services eines Hosts abzufragen, sind Änderungen in Ihrer {CMK}-Instanz und in der Agentenkonfiguration auf dem Host nötig.
+
+=== Instanz vorbereiten
+
+==== Verarbeitung von Echtzeit-Checks aktivieren
+
+Aktivieren Sie die Verarbeitung von Echtzeit-Checks unter [.guihint]#Setup > Global Settings > Monitoring core > Enable handling of real-time checks#.
+Hier stellen Sie auch den xref:ports#cmk_incoming_host_outgoing[UDP-Port] ein, auf dem die Instanz nach Echtzeit-Daten lauschen soll.
+Als Default steht diese Einstellung auf Port 6559.
+
+image::real_time_checks_enable.png[]
+
+[#rule_rtc]
+==== Agentenregel anlegen
+
+Mit der Aktivierung von Echtzeit-Checks haben Sie noch nicht konfiguriert, _wie_ Ihr Agent die Echtzeit-Checks ausführen soll.
+Dieser Schritt folgt jetzt.
+
+Unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules# finden Sie die Regel [.guihint]#Real-time Checks#.
+Mit dieser Regel spezifizieren Sie jetzt, welche Services von welchen Hosts mit Echtzeit-Checks überwacht werden sollen.
+
+// ES: chronologisch durch die Einstellungen durchgehen -> Sections erst nach Encryption erwähnen und kommentieren
+Ein Überwachungsintervall von einer Sekunde ist nicht für jede Art von Service sinnvoll.
+Deshalb stehen unter [.guihint]#Sections to send# nur drei Services zur Auswahl:
+
+* [.guihint]#mem# für den Service [.guihint]#Memory# (verfügbar für Linux- und Windows-Hosts)
+* [.guihint]#cpu# für den Service [.guihint]#CPU load# (verfügbar für Linux-Hosts)
+* [.guihint]#winperf_processor# für den Service [.guihint]#Processor Queue# (verfügbar für Windows-Hosts)
+// ES: TODO
+
+image::real_time_checks_agent_rule.png[]
+
+Unter [.guihint]#Encryption# wählen Sie aus, ob die UDP-Pakete mit den Echtzeit-Daten verschlüsselt werden sollen.
+Falls ja, wählen Sie [.guihint]#Pre-shared secret# und geben Sie das gewünschte _secret_ an.
+Eine Nutzung von Echtzeit-Checks ohne Verschlüsselung ist ebenfalls möglich.
+Hierfür wählen Sie [.guihint]#No encryption (send plaintext)#.
+
+// ES: "zuletzt" entfernen bzw. noch kommentieren, dass die übrigen Einstellungen auf Default belassen werden.
+
+// ES: sobald das Kapitel zu Plugins geschrieben ist, hier kurz darauf verweisen.
+
+Zuletzt wählen Sie noch unter [.guihint]#Sections to send# diejenigen Sektionen aus, die in den Echtzeit-Check-Paketen gesendet werden sollen.
+Beispielhaft wird hier eine Echtzeit-Überwachung für die Services [.guihint]#CPU load# und [.guihint]#Memory# für einen Host namens `myhost` eingerichtet.
+Dieser Host ist ein Linux-Client und wird bereits mit dem xref:agent_linux#install[Linux-Agenten] überwacht.
+Die Echtzeit-Daten werden hier mit dem Secret `mysecret` verschlüsselt.
+
+Im unteren Bereich der Regel, im Kasten [.guihint]#Conditions#, geben Sie noch an, für welche Hosts die Regel greifen soll.
+Für das Beispiel wurde der explizite Host `myhost` angegeben.
+
+[#configure_rrds]
+==== Round-Robin-Datenbanken konfigurieren
+
+Wenn Sie Echtzeit-Daten über die gewählten Services erheben, möchten Sie sie wahrscheinlich auch darstellen und nachhalten.
+Das zu ermöglichen, ist der nächste Schritt.
+
+Das normale Check-Intervall für Services, die mit dem aktiven {CMK}-Check überwacht werden, ist auf eine Minute eingestellt.
+Die xref:graphing#rrds[Round-Robin-Datenbanken (RRDs)] für überwachte Services haben standardmäßig ebenfalls eine Auflösung von einer Minute.
+
+Legen Sie unter [.guihint]#Setup > Services > Service monitoring rules > Configuration of RRD databases of services# eine neue Regel an.
+Die Aufgabe dieser Regel ist es, für genau diejenigen Services, die im Echtzeit-Check enthalten sein sollen, Metrikwerte in sekundengenauer Auflösung abzuspeichern.
+
+image::real_time_checks_rrd_config.png[]
+
+Geben Sie unter [.guihint]#Step (precision)# den Wert 1 ein, damit die Round-Robin-Datenbank mit Ein-Sekunden-Intervallen arbeiten kann.
+Wählen Sie dann als Verdichtungsphasen unter [.guihint]#RRA configuration# beispielsweise die folgenden Werte:
+
+[cols=2]
+|===
+|Genauigkeit von 1 Sekunde für 4 Stunden |[.guihint]#Number of steps aggregated into one data point# -- 1
+
+[.guihint]#Number of data points# -- 14400
+|Genauigkeit von 1 Minute für 2 Tage |[.guihint]#Number of steps aggregated into one data point# -- 60
+
+[.guihint]#Number of data points# -- 2880
+|Genauigkeit von 5 Minuten für 10 Tage |[.guihint]#Number of steps aggregated into one data point# -- 300
+
+[.guihint]#Number of data points# -- 2880
+|Genauigkeit von 30 Minuten für 90 Tage |[.guihint]#Number of steps aggregated into one data point# -- 1800
+
+[.guihint]#Number of data points# -- 4320
+|Genauigkeit von 6 Stunden für 4 Jahre |[.guihint]#Number of steps aggregated into one data point# -- 21600
+
+[.guihint]#Number of data points# -- 5840
+|===
+
+Beim Verdichten der historischen Werte haben Sie verschiedene Möglichkeiten, die gespeicherten Werte zu aggregieren.
+Unter [.guihint]#Consolidation functions# wählen Sie zwischen [.guihint]#Minimum#, [.guihint]#Maximum# und [.guihint]#Average#.
+Hinweise zur Auswahl zwischen diesen Funktionen finden Sie im Artikel über xref:graphing#customize_rrds[Messwerte und Graphing].
+
+
+[TIP]
+====
+Es ist äußerst wichtig, dass Sie in der Regel genau spezifizieren, für welche Hosts und Services sie gelten soll!
+RRDs, die pro Sekunde einen Wert aufnehmen, brauchen mehr Speicherplatz als die Standard-RRDs, die nur einen Wert pro Minute speichern.
+Überlegen Sie auch gut, wie lange Sie die sekündlich abgerufenen Werte in Ihren RRDs nachhalten wollen bzw. müssen.
+
+Die Eingabefelder für Services, auf die die Regel angewendet werden soll, sind _case sensitive_.
+Die Regel greift also nur für Services mit genau der angegebenen Groß- und Kleinschreibung.
+====
+
+Nachdem Sie die Regel abgespeichert haben, müssen Sie sie möglicherweise in der Liste der aktiven Regeln vom Typ [.guihint]#Configuration of RRD databases of services# nach oben schieben.
+Da für diesen Regeltyp die _erste passende_ Regel greift, ist es wichtig, dass Ihre soeben angelegte Regel _vor_ der bedingungslosen Standardregel zur Anwendung kommt.
+
+Aktivieren Sie nun alle Änderungen.
+
+Zum Schluss müssen Sie noch die bisherigen RRDs xref:graphing#customize_rrds[konvertieren].
+Stoppen Sie dazu Ihre Instanz mit dem Befehl `omd stop` und führen Sie dann als Instanzbenutzer den Befehl `cmk-convert-rrds` aus.
+Mit der Option `-v` (_verbose_) erhalten Sie zusätzliche Informationen.
+
+In der folgenden Ausgabe ist zu erkennen, dass die Konvertierung für die Services `CPU load` und `Memory` Änderungen erfordert.
+Für die übrigen Services ist keine Konvertierung nötig:
+hier greift die eben angelegte RRD-Regel nicht, sodass die bisherigen RRD-Einstellungen weiterhin gültig bleiben.
+
+[{shell}]
+----
+{c-omd} cmk-convert-rrds -v
+myhost:
+  CPU load ([bold]#CMC#).....[green]#converted#, 1125 KB -> 2138 KB
+  CPU utilization (CMC).....[darkblue]#uptodate#
+  Check_MK (CMC).....[darkblue]#uptodate#
+  Check_MK Discovery (CMC).....[darkblue]#uptodate#
+  Check_MK HW/SW Inventory (CMC).....[darkblue]#uptodate#
+  Disk IO SUMMARY (CMC).....[darkblue]#uptodate#
+  Filesystem / (CMC).....[darkblue]#uptodate#
+  Filesystem /boot (CMC).....[darkblue]#uptodate#
+  Filesystem /boot/efi (CMC).....[darkblue]#uptodate#
+  Filesystem /sys/firmware/efi/efivars (CMC).....[darkblue]#uptodate#
+  Interface 3 (CMC).....[darkblue]#uptodate#
+  Interface 7 (CMC).....[darkblue]#uptodate#
+  Kernel Performance (CMC).....[darkblue]#uptodate#
+  Memory (CMC).....[green]#converted#, 18716 KB -> 35603 KB
+  Number of threads (CMC).....[darkblue]#uptodate#
+  OMD mysite Event Console (CMC).....[darkblue]#uptodate#
+  OMD mysite Notification Spooler (CMC).....[darkblue]#uptodate#
+  OMD mysite apache (CMC).....[darkblue]#uptodate#
+  OMD mysite disk usage (CMC).....[darkblue]#uptodate#
+  OMD mysite performance (CMC).....[darkblue]#uptodate#
+  OMD site disk usage (CMC).....[darkblue]#uptodate#
+  Site mysite statistics (CMC).....[darkblue]#uptodate#
+  Systemd Timesyncd Time (CMC).....[darkblue]#uptodate#
+  TCP Connections (CMC).....[darkblue]#uptodate#
+  Temperature Zone 0 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 1 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 2 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 3 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 4 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 5 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 6 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 7 (CMC).....[darkblue]#uptodate#
+  Temperature Zone 8 (CMC).....[darkblue]#uptodate#
+  Uptime (CMC).....[darkblue]#uptodate#
+----
+
+// Alternative Ausgabe - mit Site in der Ubuntu-VM und Konvertierung von RRDs für zwei Dienste eines Windows-Hosts:
+////
+
+OMD[mysite]:~$ cmk-convert-rrds -v
+localhost:
+  CPU load (CMC).....[green]#converted#, 1125 KB -> 713 KB
+  CPU utilization (CMC).....[darkblue]#uptodate#
+  Check_MK (CMC).....[darkblue]#uptodate#
+  Check_MK Discovery (CMC).....[darkblue]#uptodate#
+  Check_MK HW/SW Inventory (CMC).....[darkblue]#uptodate#
+  Disk IO SUMMARY (CMC).....[darkblue]#uptodate#
+  Filesystem /opt/omd/sites/mysite/tmp (CMC).....[darkblue]#uptodate#
+  Filesystem btrfs /dev/vda1 (CMC).....[darkblue]#uptodate#
+  Interface 2 (CMC).....[darkblue]#uptodate#
+  Kernel Performance (CMC).....[darkblue]#uptodate#
+  Memory (CMC).....[green]#converted#, 18716 KB -> 11875 KB
+  Number of threads (CMC).....[darkblue]#uptodate#
+  OMD mysite Event Console (CMC).....[darkblue]#uptodate#
+  OMD mysite Notification Spooler (CMC).....[darkblue]#uptodate#
+  OMD mysite apache (CMC).....[darkblue]#uptodate#
+  OMD mysite disk usage (CMC).....[darkblue]#uptodate#
+  OMD mysite performance (CMC).....[darkblue]#uptodate#
+  Process mysite active check helpers (CMC).....[darkblue]#uptodate#
+  Process mysite agent receiver (CMC).....[darkblue]#uptodate#
+  Process mysite alert helper (CMC).....[darkblue]#uptodate#
+  Process mysite apache (CMC).....[darkblue]#uptodate#
+  Process mysite automation helpers (CMC).....[darkblue]#uptodate#
+  Process mysite checker helpers (CMC).....[darkblue]#uptodate#
+  Process mysite cmc (CMC).....[darkblue]#uptodate#
+  Process mysite dcd (CMC).....[darkblue]#uptodate#
+  Process mysite event console (CMC).....[darkblue]#uptodate#
+  Process mysite fetcher helpers (CMC).....[darkblue]#uptodate#
+  Process mysite livestatus proxy (CMC).....[darkblue]#uptodate#
+  Process mysite notification spooler (CMC).....[darkblue]#uptodate#
+  Process mysite notify helper (CMC).....[darkblue]#uptodate#
+  Process mysite real-time helper (CMC).....[darkblue]#uptodate#
+  Process mysite redis-server (CMC).....[darkblue]#uptodate#
+  Process mysite rrd helper (CMC).....[darkblue]#uptodate#
+  Process mysite rrdcached (CMC).....[darkblue]#uptodate#
+  Site mysite statistics (CMC).....[darkblue]#uptodate#
+  TCP Connections (CMC).....[darkblue]#uptodate#
+  Uptime (CMC).....[darkblue]#uptodate#
+
+mywin:
+  CPU utilization (CMC).....converted, 1125 KB -> 713 KB
+  Check_MK (CMC).....[darkblue]#uptodate#
+  Check_MK Discovery (CMC).....[darkblue]#uptodate#
+  Disk IO SUMMARY (CMC).....[darkblue]#uptodate#
+  DotNet Memory Management _Global_ (CMC).....[darkblue]#uptodate#
+  Filesystem C:/ (CMC).....[darkblue]#uptodate#
+  Interface 1 (CMC).....[darkblue]#uptodate#
+  Memory (CMC).....[green]#converted#, 2247 KB -> 1426 KB
+  Processor Queue (CMC).....[green]#converted#, 1125 KB -> 713 KB
+  System Time (CMC).....[darkblue]#uptodate#
+  Uptime (CMC).....[darkblue]#uptodate#
+
+////
+
+
+
+
+Nach der erfolgreichen Konvertierung können Sie Ihre Instanz mit `omd start` wieder starten.
+
+=== Agentenkonfiguration auf dem Host
+
+Ihre Instanz ist jetzt in der Lage, Werte zu den ausgewählten Services in einem Intervall von einer Sekunde zu verarbeiten.
+Als nächstes sorgen Sie auf der Host-Seite dafür, dass die relevanten Werte auch tatsächlich sekündlich bereitgestellt werden.
+
+Echtzeit-Checks sind in kommerziellen Editionen von {CMK} standardmäßig im Funktionsumfang der {CMK}-Agenten für Linux und Windows enthalten.
+Allerdings müssen Sie Ihre gewünschten Einstellungen auf dem Host hinterlegen, damit der Host wirklich sekündlich die benötigten UDP-Pakete sendet.
+Sobald Ihre Instanz fertig vorbereitet ist und die Konfiguration auf dem Host vorhanden und korrekt ist, sollten nach kurzer Wartezeit Echtzeit-Daten im Monitoring zu sehen sein.
+
+[#bakery]
+==== Konfiguration mit der Agent Bakery
+
+Wenn Sie die xref:wato_monitoringagents#bakery[Agentenbäckerei] nutzen, ist Ihre xref:#rule_rtc[eben angelegte Regel] [.guihint]#Real-time checks# alles, was Sie für die Konfiguration des Agenten auf dem Host brauchen.
+Sie können jetzt den Agenten neu backen und dann auf den Host bringen.
+Anhand der eingestellten Werte in der Regel [.guihint]#Real-time checks# wird automatisch eine Konfigurationsdatei auf dem überwachten Host angelegt, deren Inhalt den Einstellungen in Ihrer Regel entspricht.
+
+==== Manuelle Konfiguration
+
+Falls Sie die Agentenbäckerei nicht nutzen, können Sie auf dem überwachten Host manuell eine Konfigurationsdatei für die Echtzeit-Checks anlegen.
+Diese Datei heißt `real_time_checks.cfg` und muss im Verzeichnis `/etc/check_mk/` hinterlegt werden.
+Der Inhalt der Datei muss analog zu den Einstellungen in Ihrer Regel [.guihint]#Real-time checks# sein.
+Das folgende Beispiel legt die Werte genau so fest, wie sie auch in der Regel in der {CMK}-Instanz definiert wurden:
+
+* Für die Verschlüsselung wird das Secret `mysecret` verwendet.
+* Die Sektionen `mem` und `cpu` werden versendet.
+* Die Daten werden zum UDP-Port 6559 des {CMK}-Servers geschickt.
+* Für die Echtzeit-Checks gilt ein Timeout von 90 Sekunden.
+
+// ES: Unterschiede Linux/Windows beschreiben
+./etc/check_mk/real_time_checks.cfg
+[{file}]
+----
+RTC_SECRET='mysecret'
+RTC_SECTIONS=""
+RTC_SECTIONS+="mem "
+RTC_SECTIONS+="cpu "
+RTC_PORT=6559
+RTC_TIMEOUT=90
+----
+
+=== Echtzeit-Daten anzeigen
+
+Ihre {CMK}-Instanz lauscht sekündlich nach Echtzeit-Daten für die ausgewählten Services.
+Ihr überwachter Host sendet sekündlich diese Echtzeit-Daten.
+Sie können jetzt überprüfen, ob die eingerichteten Echtzeit-Checks aktiv sind und tatsächlich im gewünschten Intervall Daten senden.
+
+In der Übersicht aller Services für Ihren Linux-Host können Sie in der Spalte [.guihint]#Checked# sehen, wann jeder Service zuletzt geprüft wurde.
+Nach erfolgreicher Einrichtung ist dieser Wert für diejenigen Services, die in Ihrer Regel für Echtzeit-Checks enthalten sind, zu jedem Zeitpunkt sehr gering.
+
+// ES: wenn der Screenshot neu erzeugt wird, Name der Site anpassen
+
+image::real_time_checks_service_overview.png[]
+
+[TIP]
+====
+Echtzeit-Checks versprechen eine sekündliche Abfrage der Werte für bestimmte Services.
+Da diese Werte über UDP verschickt werden, kann es aber passieren, dass einzelne Pakete verloren gehen und dadurch Lücken in der Abdeckung entstehen.
+Es ist also zu erwarten, dass auch ein Service mit einer „Echtzeit-Überwachung“ Werte haben kann, die mehrere Sekunden alt sind.
+Falls Sie aber für einen vermeintlich echtzeitüberwachten Service ein Alter von über 91 Sekunden entdecken, liegt noch ein xref:#debugging[Fehler] in der Einrichtung vor, den es zu beheben gilt.
+====
+
+==== Graphen für echtzeitüberwachte Services
+
+In der Detailansicht für einen echtzeitüberwachten Service können Sie einen Blick auf den xref:graphing#[Graph] werfen.
+Der Graph spiegelt wider, welche Werte für den gewählten Service in der Round-Robin-Datenbank gespeichert sind.
+In der Standardeinstellung wurde der Graph mit einer Auflösung von einer Minute dargestellt.
+Da Sie die Auflösung für die RRDs für die Echtzeit-Checks xref:#configure_rrds[angepasst haben], zeigt der Graph für einen echtzeitüberwachten Service jetzt eine höhere Auflösung.
+Die Auflösung wird in der oberen rechten Ecke des Graphen als Legende angezeigt:
+bei Echtzeit-Checks steht hier nicht wie sonst „@{nbsp}1m“, sondern jetzt „@{nbsp}0m“.
+
+Im Graph selbst sehen Sie pro Minute viele Zwischenschritte und einen entsprechend lebhaften Kurvenverlauf.
+
+.Der Graph zum Service 'CPU load' hat einen hoch aufgelösten Verlauf, weil er etwa einmal pro Sekunde aktualisiert wird
+image::real_time_checks_cpu_load_graph.png[]
+
+==== Benachrichtigungen für echtzeitüberwachte Services
+
+Eine Echtzeit-Überwachung für Services ist genau dann nützlich, wenn sekündliche Aktualisierungen für Sie einen konkreten Mehrwert haben.
+Beispielsweise können Sie im Nachhinein genauer zuordnen, zu welchem Zeitpunkt Lastspitzen aufgetreten sind.
+
+Ein anderer Nutzen von Echtzeit-Checks ist es, dass Sie schnell reagieren können, wenn die gewählten Services ihren Zustand wechseln.
+Hierfür kann es wichtig sein, dass Benachrichtigungen auch in Echtzeit ausgelöst werden.
+
+Die Logdatei für Benachrichtigungen finden Sie als Instanzbenutzer unter `~/var/log/notify.log`.
+In einem Szenario, in dem Ihr überwachter Host etwa eine besonders hohe CPU-Auslastung hat, sollte diese Datei Benachrichtigungen über Zustandsübergänge für die Services `CPU load` und `CPU utilization` enthalten.
+Allerdings werden Aktualisierungen für `CPU load` schneller angezeigt -- schließlich können hierfür dank der Echtzeitüberwachung auch zwischen regulären Checks neue Informationen eintreffen, die Benachrichtigungen auslösen.
+
+Hier ist ein Beispiel für eine Logdatei für Benachrichtigungen.
+Im abgebildeten Szenario hat der {CMK}-Check um 11:41:50 eine erhöhte CPU-Auslastung beim Host `myhost` festgestellt.
+Dieser Check hat die ersten beiden Benachrichtigungen, für die Services `CPU utilization` und `CPU load`, etwa gleichzeitig ausgelöst.
+Der Service `CPU load` ist hier in den Zustand {WARN} übergegangen.
+
+Kurz darauf wurde die CPU-Auslastung des Hosts noch höher.
+Um 11:42:06 wurde eine dritte Benachrichtigung, nämlich eine über den Zustandswechsel des Service `CPU load` in den Zustand {CRIT}, ausgelöst.
+Diese Benachrichtigung erfolgte außerhalb des regulären Check-Intervalls von einer Minute.
+
+Noch etwas später ist die CPU-Auslastung des Hosts wieder gesunken.
+Um 11:43:06 wurde eine Benachrichtigung ausgelöst, dass der Service `CPU load` in den Zustand {WARN} übergegangen ist.
+Darauf folgt die Benachrichtigung um 11:43:25, die einen Wechsel dieses Service in den Zustand {OK} übermittelt.
+
+Schließlich schlägt sich die niedrigere CPU-Auslastung auch im Zustand des Service `CPU utilization` nieder.
+Für diesen Service wurde um 11:43:52 -- im Rahmen des minütlichen {CMK}-Checks -- eine Benachrichtigung ausgelöst, dass er wieder in den Zustand {OK} gewechselt ist.
+
+.~/var/log/notify.log
+[{file}, highlight=2;7;12;22;27;32]
+----
+2025-10-06 11:41:50,779 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:41:50,779 [20] [cmk.base.notify] Got raw notification (myhost;CPU utilization) context with 73 variables
+2025-10-06 11:41:50,780 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:41:50,780 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:41:50,780 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+2025-10-06 11:41:50,798 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:41:50,798 [20] [cmk.base.notify] Got raw notification (myhost;CPU load) context with 73 variables
+2025-10-06 11:41:50,799 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:41:50,799 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:41:50,799 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+2025-10-06 11:42:06,506 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:42:06,507 [20] [cmk.base.notify] Got raw notification (myhost;CPU load) context with 73 variables
+2025-10-06 11:42:06,507 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:42:06,507 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:42:06,507 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+2025-10-06 11:42:51,699 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:42:51,699 [20] [cmk.base.notify] Got raw notification (myhost;Temperature Zone 8) context with 73 variables
+2025-10-06 11:42:51,699 [15] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:42:51,699 [15] [cmk.base.notify]  -> does not match: The service's description 'Temperature Zone 8' does not match by the list of allowed services (CPU)
+2025-10-06 11:42:51,699 [20] [cmk.base.notify] No rule matched, would notify fallback contacts, but none configured
+2025-10-06 11:43:06,739 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:43:06,739 [20] [cmk.base.notify] Got raw notification (myhost;CPU load) context with 73 variables
+2025-10-06 11:43:06,739 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:43:06,739 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:43:06,739 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+2025-10-06 11:43:25,310 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:43:25,310 [20] [cmk.base.notify] Got raw notification (myhost;CPU load) context with 73 variables
+2025-10-06 11:43:25,311 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:43:25,311 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:43:25,311 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+2025-10-06 11:43:52,134 [20] [cmk.base.notify] ----------------------------------------------------------------------
+2025-10-06 11:43:52,134 [20] [cmk.base.notify] Got raw notification (myhost;CPU utilization) context with 73 variables
+2025-10-06 11:43:52,134 [20] [cmk.base.notify] Global rule 'HTML email to all contacts about service/host status changes'...
+2025-10-06 11:43:52,134 [20] [cmk.base.notify]  -> matches!
+2025-10-06 11:43:52,134 [20] [cmk.base.notify] 1 rules matched, but no notification has been created.
+----
+
+Das Beispiel zeigt, dass Aktualisierungen für echtzeitüberwachte Services außerhalb des regulären Check-Intervalls Benachrichtigungen auslösen können.
+
+[#debugging]
+=== Debugging
+
+Falls die gewünschten Services noch nicht in einem Intervall von etwa einer Sekunde aktualisiert werden, lohnt sich zuerst ein Blick auf die ausgehenden UDP-Pakete vom überwachten Host.
+So finden Sie heraus, ob die Daten überhaupt verschickt werden.
+Lassen Sie sich zum Beispiel in der Befehlszeile auf dem Host alle ausgehenden UDP-Pakete zu Port 6559 anzeigen:
+
+[{shell}]
+----
+{c-root} tcpdump -i any udp and port 6559
+tcpdump: data link type LINUX_SLL2
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on any, link-type LINUX_SLL2 (Linux cooked v2), snapshot length 262144 bytes
+12:50:18.396890 lo    In  IP myhost.48924 > mysite.6559: UDP, length 116
+12:50:18.713236 lo    In  IP myhost.59443 > mysite.6559: UDP, length 1604
+12:50:20.059287 lo    In  IP myhost.57457 > mysite.6559: UDP, length 116
+12:50:20.375996 lo    In  IP myhost.50997 > mysite.6559: UDP, length 1604
+12:50:21.716333 lo    In  IP myhost.41361 > mysite.6559: UDP, length 116
+12:50:22.034675 lo    In  IP myhost.34444 > mysite.6559: UDP, length 1604
+^C
+6 packets captured
+12 packets received by filter
+0 packets dropped by kernel
+----
+
+// ES: in meiner ursprünglichen Ausgabe standen da Zeilen wie: 12:50:18.396890 lo    In  IP localhost.48924 > localhost.6559: UDP, length 116
+// ES: ich habe hier den ersten localhost durch myhost ersetzt. Bin mir aber nicht sicher, ob die Ersetzung des zweiten localhost (CMK-Server) durch "mysite" wirklich genau richtig ist. Besser "my(cmk)server"?
+// ES: in der Ausgabe anderes Interface statt lo einfügen?
+
+In der Beispielausgabe ist zu erkennen, dass etwa im Abstand von einer Sekunde immer wieder jeweils zwei Pakete an den {CMK}-Server gesendet werden: eines mit einer Länge von 116 und eines mit einer Länge von 1604.
+Die genaue Größe der Pakete ist variabel.
+Sie hängt unter anderem davon ab, ob Sie die Pakete verschlüsselt oder unverschlüsselt versenden und davon, welche tatsächlichen Werte in den gewählten Sektionen stehen.
+Den Inhalt der UDP-Pakete können Sie bei Bedarf mit einem Netzwerk-Analysewerkzeug einsehen.
+
+Haben Sie festgestellt, dass die UDP-Pakete wie gewünscht versendet werden, können Sie als nächstes prüfen, ob die Echtzeit-Daten auch in Ihrer {CMK}-Instanz ankommen.
+Setzen Sie dafür vorübergehend unter [.guihint]#Setup > Global settings > Monitoring core > Logging of the core# das Logging-Level für [.guihint]#{CMK} check helpers# auf den Wert [.guihint]#Informational# und speichern und aktivieren Sie die Änderungen.
+
+Jetzt erscheinen Informationen über die eingehenden Echtzeit-Checks in der Logdatei des Monitoring-Kerns.
+Sie finden diese Datei als Instanzbenutzer unter `~/var/log/cmc.log`.
+Wenn alles richtig eingerichtet ist, sollten Sie in dieser Datei Zeilen wie die folgenden sehen:
+
+./var/log/cmc.log
+[{file}]
+----
+2025-10-01 12:50:18 [6] [real-time pool] [host "myhost"] [helper 460964] sending 139-byte message
+2025-10-01 12:50:18 [4] [real-time pool] [host "myhost"] [helper 460964] [log] CPU load             15 min load: 2.22, 15 min load per core: 0.28 (8 cores)
+2025-10-01 12:50:18 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Number of threads    2289 (warn/crit at 2000/4000)(!), Usage: 1.85%
+2025-10-01 12:50:18 [6] [real-time pool] [host "myhost"] [helper 460964] received 466 bytes of check results, status 0
+2025-10-01 12:50:18 [6] [real-time pool] [host "myhost"] [helper 460964] sending 1628-byte message
+2025-10-01 12:50:18 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Memory               Total virtual memory: 67.53% - 13.1 GiB of 19.3 GiB, Committed: 280.12% - 54.2 GiB of 19.3 GiB virtual memory (warn/crit at 100.00%/150.00% used)(!!), 8 additional details available
+2025-10-01 12:50:18 [6] [real-time pool] [host "myhost"] [helper 460964] received 2049 bytes of check results, status 0
+2025-10-01 12:50:20 [6] [real-time pool] [host "myhost"] [helper 460964] sending 139-byte message
+2025-10-01 12:50:20 [4] [real-time pool] [host "myhost"] [helper 460964] [log] CPU load             15 min load: 2.22, 15 min load per core: 0.28 (8 cores)
+2025-10-01 12:50:20 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Number of threads    2291 (warn/crit at 2000/4000)(!), Usage: 1.85%
+2025-10-01 12:50:20 [6] [real-time pool] [host "myhost"] [helper 460964] received 465 bytes of check results, status 0
+2025-10-01 12:50:20 [6] [real-time pool] [host "myhost"] [helper 460964] sending 1628-byte message
+2025-10-01 12:50:20 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Memory               Total virtual memory: 67.50% - 13.1 GiB of 19.3 GiB, Committed: 280.12% - 54.2 GiB of 19.3 GiB virtual memory (warn/crit at 100.00%/150.00% used)(!!), 8 additional details available
+2025-10-01 12:50:20 [6] [real-time pool] [host "myhost"] [helper 460964] received 2050 bytes of check results, status 0
+2025-10-01 12:50:21 [6] [real-time pool] [host "myhost"] [helper 460964] sending 139-byte message
+2025-10-01 12:50:21 [4] [real-time pool] [host "myhost"] [helper 460964] [log] CPU load             15 min load: 2.22, 15 min load per core: 0.28 (8 cores)
+2025-10-01 12:50:21 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Number of threads    2293 (warn/crit at 2000/4000)(!), Usage: 1.85%
+2025-10-01 12:50:21 [6] [real-time pool] [host "myhost"] [helper 460964] received 466 bytes of check results, status 0
+2025-10-01 12:50:22 [6] [real-time pool] [host "myhost"] [helper 460964] sending 1628-byte message
+2025-10-01 12:50:22 [4] [real-time pool] [host "myhost"] [helper 460964] [log] Memory               Total virtual memory: 67.50% - 13.1 GiB of 19.3 GiB, Committed: 280.20% - 54.2 GiB of 19.3 GiB virtual memory (warn/crit at 100.00%/150.00% used)(!!), 8 additional details available
+2025-10-01 12:50:22 [6] [real-time pool] [host "myhost"] [helper 460964] received 2049 bytes of check results, status 0
+----
+
+[TIP]
+====
+Neben den Services [.guihint]#CPU load# und [.guihint]#Memory# sehen Sie -- hier in der Logdatei, aber auch im Screenshot oben, der die Übersicht aller Services zeigt -- , dass auch der Service [.guihint]#Number of threads# sekündliche Aktualisierungen erhält.
+Die Daten für diesen Service sind in der `+<<<cpu>>>+`-Sektion der Agentenausgabe enthalten und werden deshalb gemeinsam mit den Daten über [.guihint]#CPU load# versendet und empfangen.
+Da [.guihint]#Number of threads# in diesem Beispiel nicht von Interesse ist, wurde dieser Service bei der Konfiguration der RRDs nicht berücksichtigt.
+Die Echtzeit-Daten dafür werden zwar empfangen und können auch Benachrichtigungen auslösen, sie werden aber nicht in sekundengenauen Schritten abgespeichert.
+====
+
+
+[#rtc_plugins]
+== Plugins in Echtzeit-Checks ausführen

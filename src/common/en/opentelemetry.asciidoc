@@ -1,0 +1,414 @@
+// -*- coding: utf-8 -*-
+// IGNORE OTel
+// NONASCII
+include::global_attr.adoc[]
+
+= Monitoring OpenTelemetry metrics
+:title: Monitoring OpenTelemetry metrics
+:description: In {CMK}, OpenTelemetry metrics can be received by monitoring sites. Read here how to configure and use the OpenTelemetry Collector.
+
+{related-start}
+xref:metric_backend#[Metrics backend]
+xref:special_agents#[Special agents]
+xref:dcd#[Dynamic host management]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+ifdef::onprem[]
+{cee-only}
+In {CUE}
+endif::[]
+ifdef::saas[]
+In {CMK}
+endif::[]
+you can receive link:https://opentelemetry.io/[OpenTelemetry^] metrics and process them in monitoring.
+For this purpose, {CMK} includes an OpenTelemetry Collector.
+This supports the _reception_ of OTLP data via the transport protocols _gRPC_ and _HTTP(S)_ (push configuration).
+ifdef::onprem[]
+It can also act as a _scraper_ to collect data from _Prometheus endpoints_ (pull configuration).
+endif::[]
+
+Support for OpenTelemetry data types (_signals_) is as follows:
+
+* _Metrics_ are extensively supported by {CMK}--these can be flexibly assigned to existing objects in monitoring or used to create custom objects.
+ifdef::onprem[]
+* _Logs_ are partially supported--they can be forwarded to the xref:glossar#ec[Event Console] and processed there.
+* _Traces_ are currently not supported by {CMK}.
+endif::[]
+ifdef::saas[]
+* _Logs_ and _traces_ are currently not supported by {CE}.
+endif::[]
+
+There are two ways to set this up:
+
+ifdef::onprem[]
+* Starting with {CMK} {v25}p9, a xref:setup[wizard] is available that guides you step by step through the setup process and configures the xref:metric_backend#[metric backend] and xref:dcd[dynamic host management] components with appropriate default settings.
+endif::[]
+ifdef::saas[]
+* Since July 2026, a xref:setup[wizard] is available that guides you step by step through the setup process and configures all components—including xref:dcd[dynamic host management]—with appropriate default settings.
+endif::[]
+* Alternatively, you can xref:setup_manual[manually configure] the relevant components, which of course requires knowledge of how these interact.
+
+ifdef::onprem[]
+If you _only_ want to send logs to the Event Console, you do not need a metrics backend.
+endif::[]
+If you do _not_ want to automatically generate hosts from the OpenTelemetry metrics, you do not need dynamic host management.
+In both of these cases, configure the required components manually.
+
+
+[TIP]
+====
+ifdef::onprem[]
+This article describes the status of the OpenTelemetry integration as of the release of {CMK} {v25}p9.
+endif::[]
+ifdef::saas[]
+This article describes the status of the OpenTelemetry integration as of July 2026.
+endif::[]
+We are continuing to work on incorporating changes made since then.
+Please make use of the link:https://checkmk.com/werks?search=otel&product=cmk&cmk_version%5B%5D=2.5&level%5B%5D=1&level%5B%5D=2&level%5B%5D=3&class%5B%5D=feature&class%5B%5D=fix&class%5B%5D=security&edition=all[OpenTelemetry-related works^] to determine the current status of the {CMK} version you are using.
+====
+
+
+[#setup]
+== Guided Setup
+
+ifdef::onprem[]
+You can find the setup wizard under [.guihint]#Setup > Open Telemetry Quick Setup#, and the OpenTelemetry Collector—which is configured in the same way—as a Prometheus scraper under [.guihint]#Setup > Prometheus Quick Setup#.
+In the wizard, specify the interfaces, ports, and protocols, or configure scraping endpoints.
+endif::[]
+ifdef::saas[]
+You can find the setup wizard under [.guihint]#Setup > Open Telemetry Quick Setup#.
+In the wizard, specify the ports and protocols.
+endif::[]
+When setting up the OpenTelemetry Collector, a sample configuration for intermediate collectors is displayed in the third step.
+You can extend this to include filtering or limiting the transmission intervals.
+The documentation at link:https://opentelemetry.io/docs/collector/transforming-telemetry/[_Transforming telemetry_^] of the OpenTelemetry project will help you with this.
+
+.The wizard prompts you for relevant options and automatically configures the necessary components with appropriate default settings.
+image::opentelemetry_quick_setup_onprem.png[alt="The OpenTelemetry setup wizard with the step for configuring the GRPC receiver open."]
+
+// Once the initial setup is complete, i
+If you select [.guihint]#Setup > Open Telemetry Quick Setup#
+ifdef::onprem[]
+or [.guihint]#Setup > Prometheus Quick Setup#
+endif::[]
+after having completed the initial setup, you will have the option to customize your existing configuration.
+Instead of going through a guided setup again, the two buttons [.guihint]#OpenTelemetry Collector# and [.guihint]#Dynamic host management# allow you to proceed directly to setting up the respective component.
+
+.Once the _Quick Setup_ is complete, you can switch to configuring the individual components.
+image::opentelemetry_quick_setup_edit.png[alt="Quick Setup page after the wizard has completed: two buttons for 'OpenTelemetry Collector' and 'Dynamic host management'."]
+
+We will show you the wider range of configuration options available when customizing individual components directly in the following sections on xref:setup_manual[manual setup] and xref:dcd[setting up dynamic host management].
+
+
+ifdef::onprem[]
+[#setup_manual]
+== Manual setup
+
+Before enabling the OpenTelemetry Collector, you should already have enabled one or both of the following components to avoid errors:
+
+* The xref:metric_backend#[metrics backend], if you want to display OpenTelemetry metrics in monitoring
+* The xref:ec#[Event Console] with a Syslog receiver, if you want to process OpenTelemetry logs
+
+You can enable both of these in the [.guihint]#Global settings#.
+In both cases, the default settings are sufficient for first use.
+endif::[]
+
+
+ifdef::onprem[]
+[#collector_activation]
+=== Activating the OpenTelemetry Collector
+
+To process OpenTelemetry data, you must activate the collector in [.guihint]#Global settings > Telemetry#.
+You can also set the memory limit for the collector in the global settings.
+This ensures that large volumes of incoming data only overload the OpenTelemetry Collector, not your entire {CMK} system.
+
+The collector starts automatically after you have saved the settings.
+endif::[]
+
+
+ifdef::onprem[]
+[#collector_configuration]
+=== Setting up the OpenTelemetry Collector (passive)
+
+To set up the collector, navigate to [.guihint]#Setup > Telemetry > OpenTelemetry Collector# if the collector is to operate in passive mode and _receive_ data.
+Click the [.guihint]#Add OpenTelemetry Collector configuration# button to start configuring a collector.
+In the [.guihint]#General properties#, assign a name for the new collector.
+
+image::opentelemetry_collector_collector_properties.png[alt="The specific properties of the OpenTelemetry Collector."]
+
+In the collector's properties, you must configure at least one of the two push endpoints (via gRPC or HTTP).
+There, you then define the IP addresses and ports to be used.
+You also specify whether authentication and encryption are enabled.
+Note: If you activate [.guihint]#Basic authentication#, TLS encryption _must_ be activated, since user name and password are transmitted in plain text and can be easily intercepted.
+
+[TIP]
+====
+In many cases, applications sending OpenTelemetry data will refuse to communicate with TLS-encrypted collectors if the certificate used does not include the host name to that the sender is attempting to communicate. 
+Navigate to [.guihint]#Global settings# and edit the option [.guihint]#Site certificate subject alternative names# to specify all the host names for which the server certificate should be valid.
+====
+endif::[]
+
+
+ifdef::saas[]
+[#setup_manual]
+== Manual setup
+
+To set up the collector, navigate to [.guihint]#Setup > Telemetry > OpenTelemetry Collector#.
+In all cases the collector will operate in passive mode and is only able to _receive_ data.
+Click the [.guihint]#Add OpenTelemetry Collector configuration# button to start configuring the collector.
+In the [.guihint]#General properties#, assign a name for the collector.
+
+image::opentelemetry_collector_collector_properties_saas.png[alt="The specific properties of the OpenTelemetry Collector."]
+
+In the collector's properties, you must configure at least one of the two push endpoints (via gRPC or HTTP).
+The collector is then accessible from the outside via your host name on ports 4317 (gRPC) and 4318 (HTTPS), respectively.
+TLS encryption is always enabled.
+To prevent anyone from sending OpenTelemetry data to your {CMK} site, you must set up at least one user name and password pair.
+endif::[]
+
+
+ifdef::onprem[]
+[#ec]
+==== Sending logs to the Event Console
+
+OpenTelemetry also provides ways to transmit log messages.
+The collector can forward these in Syslog format to any applications capable of receiving Syslog messages.
+This enables the processing of OpenTelemetry logs by the xref:glossar#ec[Event Console] in {CMK}.
+You can enable this feature using the [.guihint]#Send log messages to event console# checkbox.
+
+A [.guihint]#Resource attribute for host name lookup# is absolutely required.
+In the simplest case, this is `service.name`, i.e., the name of the OpenTelemetry service, which in many cases can be easily mapped to {CMK} hosts.
+
+Click [.guihint]#Save# to save the collector.
+endif::[]
+
+
+ifdef::onprem[]
+[#prometheus_scraper]
+=== Setting up the Prometheus scraper (active)
+
+If you want the collector to behave _actively_ — that is, to query Prometheus endpoints — use [.guihint]#Setup > Telemetry > Prometheus scraper#.
+Click the [.guihint]#Add Prometheus scraper configuration# button to start setting up a new scraper.
+
+The [.guihint]#Job name# specified here is converted by the OpenTelemetry Collector to the `service.name` attribute.
+In many cases, you will later want to assign this to a host name.
+
+The other parameters specify access to the scraping endpoint:
+For example, an endpoint accessible at `\http://198.51.100.252:9100/metrics` results in setting [.guihint]#IP address or host name# to `198.51.100.252`, [.guihint]#Port# to `9100`, and [.guihint]#Metrics path# to `/metrics`.
+For unencrypted HTTP, leave the checkbox next to [.guihint]#Encrypt communication with TLS# unchecked.
+ 
+image::opentelemetry_collector_prometheus_scraper_properties.png[alt="The specific properties of the Prometheus scraper."]
+endif::[]
+
+
+[#test]
+== Sending test data to the collector
+
+You will likely want to set up the OpenTelemetry Collector for {CMK} because _somewhere_ in your IT environment, _something_ is already generating _some_ OpenTelemetry metrics.
+If this is not (yet) the case, or if you simply want to try out the setup on a test system, we present two quick-to-set-up sample applications in this chapter.
+ifdef::onprem[]
+With the setup completed up to this point, you can first check the xref:self_monitoring[Self-monitoring of the collector] to verify that data is being received and forwarded.
+The received data ultimately ends up in xref:metric_backend#[metrics backend]—where you can, for example, view raw data in the SQL console.
+endif::[]
+ifdef::saas[]
+With the setup completed up to this point, the received data first ends up in xref:metric_backend#[metrics backend].
+endif::[]
+In the following steps, you can use the data directly in monitoring.
+
+We provide the simplest example application in our GitHub repository as link:https://github.com/Checkmk/checkmk-docs/tree/{gitbranch}/examples/opentelemetry[Hello metric^].
+This runs in a virtual Python environment and creates an OpenTelemetry service with an OpenTelemetry metric. 
+Notes on required Python modules and how to get started can be found in the repository.
+
+The 'Dice Roll' sample application featured on the OpenTelemetry website works very similarly to 'Hello metric'.
+This sample application is more practical than 'Hello metric' in many respects.
+For example, 'Dice Roll' sends OpenTelemetry metrics every time the application server is called (and only then!) and introduces the 'Counter' data type.
+You can use the virtual Python environment created for the 'Hello metric' example to try out the 'Dice Roll' example as well.
+However, to do so, you must also install the Python module `flask` (`pip install flask`) and create the `app.py` file in the version extended with metrics, as described in this link:https://opentelemetry.io/docs/languages/python/getting-started/#metrics[guide^].
+
+In the following call, replace the {CMK} server as the target (here `198.51.100.42` with gRPC port `4317`):
+
+[{shell-raw}]
+----
+{c-user} opentelemetry-instrument \
+    --traces_exporter console \
+    --metrics_exporter otlp \
+    --exporter_otlp_metrics_endpoint http://198.51.100.42:4317 \
+    --logs_exporter console \
+    --service_name dice-server \
+    flask run -p 8080
+----
+
+Your Flask server is now ready and can be accessed via the selected port (in this case, `8080`) to roll a die with each request.
+You can view the die roll data, for example, by running `curl -v \http://localhost:8080/rolldice`.
+Each die roll you trigger in this way is transmitted to {CMK} as a data point.
+
+
+[#otel_monitoring]
+== OpenTelemetry data in monitoring
+
+There are three main ways to make use of incoming data in monitoring.
+This chapter introduces these three options.
+The amount of the generated services and visible metrics, as well as the flexibility and system load, differ across all of the methods.
+For this reason, it is important to choose the appropriate monitoring method for each application scenario.
+
+* The xref:graphing#custom_graphs[custom graphs] visualize data directly from the metrics backend in dashboards—without going through services and without even involving the monitoring core.
+You can create rules for the special agent described in the following list item directly from custom graphs.
+
+* Using xref:special_agent_option[Custom Metrics] (by creating _custom queries_) is useful when you want to map certain data points received via OpenTelemetry to existing or newly created hosts.
+This makes it possible to map data from different sources to the hosts to which they belong, either organizationally or technically.
+The overhead of this method is slightly higher, but this is usually offset by the fact that a smaller volume of data is queried.
+
+* Using xref:dcd[dynamic host management] is ideal when it is possible to precisely map OpenTelemetry services to {CMK} hosts and OpenTelemetry metrics to {CMK} services.
+Since a dedicated fetcher is used and data therefore takes a very direct path, this approach is highly efficient.
+
+
+[#custom_graphs]
+=== Creating custom graphs
+
+Under [.guihint]#Customize > Custom graphs#, you can create a xref:graphing#custom_graphs[custom graph].
+The process differs slightly in some respects from graphs created from metrics stored in RRDs.
+For more details, see the article on xref:graphing#[measured values and graphing].
+
+.First, select a suitable metric to add
+image::opentelemetry_custom_graph1.png[alt="First, select a suitable metric to add.",fullscreen=1]
+
+.Click through the individual metrics to find the relevant ones
+image::opentelemetry_custom_graph2.png[alt="Click through the individual metrics to find the relevant ones.",fullscreen=1]
+
+.Here, the view has been narrowed down to a single data point
+image::opentelemetry_custom_graph3.png[alt="Here, the view has been narrowed down to a single data point.",fullscreen=1]
+
+.Clicking the export icon opens the dialog for creating a special agent rule
+image::opentelemetry_custom_graph4.png[alt="Clicking the export icon opens the dialog for creating a special agent rule.",fullscreen=1]
+
+Once you have narrowed down the OpenTelemetry data points displayed in the graph sufficiently using the available attribute filters, you can use the export icon to export the created filters as filters for a special agent, which we will introduce in the following section.
+
+.Differences between custom graphs from RRDs and the metrics backend
+[%collapsible]
+====
+The two most noticeable differences between custom graphs created from RRDs and those created from the metrics backend are:
+
+* The resolution: for RRDs, after two days the resolution is typically reduced to ten minutes; in the metrics backend, however, there is no change in resolution.
+* The retention period: for RRDs, the retention period is typically four years (configurable); for the metrics backend, it is two weeks (currently not configurable).
+====
+
+
+[#special_agent_option]
+=== Assigning custom metrics to any host
+
+As an alternative to the method via [.guihint]#Customize > Custom graphs#, you can configure the special agent under [.guihint]#Setup > Agents > Other integrations > Metric backend (custom query)#, which makes individual metrics from the metrics backend available as {CMK} services.
+Under this menu item, you can also access configurations created from custom graphs for modifications with the special agent--with custom graphs only the creation of new configurations is possible.
+You can assign a custom metric created using a [.guihint]#custom query# to any host.
+
+[TIP]
+====
+Custom metrics created from custom graphs are limited to a single OpenTelemetry metric as a source.
+If you need multiple OpenTelemetry metrics as sources, you must use the rules for configuring the special agent described in this section to add additional ones.
+If you create multiple rules for special agents from custom graphs, only the first matching rule will be executed.
+====
+
+.In the rules for special agents you can edit or create new custom metrics
+image::opentelemetry_special_agent_rule.png[alt="In the rules for special agents you can edit or create new custom metrics."]
+
+ifdef::onprem[]
+Since the metrics generated by the special agent follow the 'classic' path through the monitoring core and RRDs, they are not affected by the xref:metric_backend#distributed[restrictions in distributed monitoring].
+You also have extensive options for naming; for example, you can combine free text with various macros, such as the original OpenTelemetry metric name.
+endif::[]
+
+
+[#threshold_query]
+==== Configure thresholds
+
+To assign thresholds to these custom services, you can create rules via [.guihint]#Setup > Services > Service monitoring rules > Metric backend (custom query)#.
+The assignment follows the standard convention:
+You can define upper and lower thresholds for {WARN} and {CRIT}.
+The conditions for hosts and the matching of service names also correspond to what you are familiar with from other parts of {CMK}.
+
+.If too many sixes are rolled, we should be vigilant
+image::opentelemetry_service_rules_custom_query.png[alt="If too many sixes are rolled, we should be vigilant."]
+
+
+[#dcd]
+=== Setting up dynamic host management
+
+To automatically create hosts, set up a new xref:dcd#connection_opentelemetry[OpenTelemetry connection] with dynamic host management.
+As a preliminary step, (at least for initial testing) we recommend creating a separate folder where the automatically-generated OpenTelemetry hosts will be stored.
+
+You can set up the new connection for dynamic host management under [.guihint]#Setup > Hosts > Dynamic host management > Add connection#:
+
+In the [.guihint]#Connection properties# box, configure at least the following settings:
+
+* Set [.guihint]#Connector type# to [.guihint]#OpenTelemetry data - Metric backend#.
+
+* Next, define the [.guihint]#Attribute filters#, which you use to preselect the criteria for creating hosts.
+These can be left blank.
+A value must be entered only for [.guihint]#Resource attribute for hostname lookup#.
+
+* In the example, the folder `OpenTelemetryTest` is used as the target folder for the new hosts ([.guihint]#Create hosts in#).
+
+* Select the [.guihint]#Host attributes to set# according to your system environment.
+In most cases, the hosts generated from [.guihint]#Resource attributes# will be _virtual_ and used only in the context of OpenTelemetry.
+Consequently, you can generally use only special agents as monitoring agents ([.guihint]#Configured API integrations, no {CMK} agent#) and leave the settings for IP addresses set to [.guihint]#No IP#.
+
+* Since many hosts can sometimes be created (and deleted) in dynamic environments, you should set appropriate values for the retention period of deleted hosts and the maximum number of hosts retained by this OpenTelemetry connection.
+
+For more information on the other parameters, see the article on xref:dcd#connection_properties_opentelemetry[dynamic host management].
+
+Save the new connection using [.guihint]#Save# and activate the changes.
+
+.[#special_agent]#Is a special agent still required?#
+[%collapsible]
+====
+Once the dynamic host management has been set up, the changes have been activated, and OpenTelemetry data is being received, hosts with the expected services will appear automatically.
+Configuring a special agent is no longer necessary:
+Instead of the long processing chain involving special agents and check plug-in, special fetchers now query the metrics backend and pass {CMK} metrics and service states directly to the monitoring core.
+====
+
+
+[#threshold]
+==== Configuring thresholds
+
+You can set thresholds, and more, for services using the [.guihint]#Setup > Services > Service monitoring rules > OpenTelemetry# rule.
+Here, you can define rules for individual metrics or all metrics for a service.
+At this point, the configuration options are significantly greater than for custom metrics created via a [.guihint]#custom query#.
+The example screenshot shows the selection of the counter shown above for the OpenTelemetry metric `dice.rolls`.
+
+.More metadata than when using the special agent allows for more precise filtering and aggregations
+image::opentelemetry_service_rules.png[alt="More metadata allows for more precise filtering and aggregations."]
+
+If multiple sources provide data assigned to the same {CMK} service, you can also specify whether an aggregation (such as a sum or average) should be performed, or whether the most recent, largest, or smallest data points within an interval should take precedence.
+
+
+[#red]
+==== RED (Rate, Errors, Duration)
+
+If OpenTelemetry metrics contain the data points `pass:[*.http.server.request.duration]` (for HTTP-based services) or `pass:[*.rpc.server.duration]` (for RPC-based services), {CMK} will automatically generate services that calculate rates (events per second).
+If these data points are missing, `pass:[*.traces.span.metrics.duration]` will instead be used for the calculation of metrics that include spans.
+
+By default, a 5-minute interval is set.
+Under [.guihint]#Setup > Services > Service monitoring rules#, you will find the rules [.guihint]#OpenTelemetry RED Requests#, [.guihint]#OpenTelemetry RED Errors#, and [.guihint]#OpenTelemetry RED Latency#, which you can use to adjust this interval.
+
+Rates are always calculated using the first and last data points of the specified interval.
+This means that, with OpenTelemetry data arriving every minute, there are four minutes between the first and last data points.
+This should make it clear that significantly shorter intervals make little sense:
+With data arriving every minute and a one-minute interval, the first and last data points would be identical, and the calculated rate would therefore always be zero.
+
+If a metric does not contain the aforementioned data points, you can force rate calculations for counters using the xref:threshold[rule shown above] [.guihint]#Setup > Services > Service monitoring rules > OpenTelemetry#.
+This is useful, for example, for dropped network packets or failed requests.
+
+
+ifdef::onprem[]
+[#self_monitoring]
+== Self-monitoring of the collector
+
+If a {CMK} agent version {v25} or higher is installed, {CMK} will detect the [.guihint]#OMD mysite OTel collector# service while monitoring the {CMK} server on which the {CMK} site `mysite` is running and which has an OpenTelemetry Collector enabled.
+If multiple {CMK} sites are running on the {CMK} server, multiple examples of this service will also be found. 
+The thresholds for transitioning to {WARN} and {CRIT} are the memory usage thresholds specified in the global settings ([.guihint]#OpenTelemetry Collector memory limit#).
+
+In addition to memory usage, the service displays graphs for incoming OpenTelemetry metrics, those forwarded to the metrics backend, and those rejected.
+This can help with debugging ("Is any data even reaching the collector?") or be useful for identifying bottlenecks ("Whoa, there's always a lot of activity here at 2 a.m.!").
+endif::[]

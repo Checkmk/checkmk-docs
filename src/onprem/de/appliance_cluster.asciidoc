@@ -1,0 +1,336 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Appliance im Cluster-Betrieb
+:title: Appliance im Cluster-Betrieb
+:description: Zwei {CMK} Appliances können Sie zu einem Failover-Cluster zusammenschließen. Lesen Sie hier, wie Sie solche Cluster einrichten, nutzen und warten.
+
+{related-start}
+xref:appliance_usage#[Appliance einrichten und nutzen]
+xref:appliance_rack_config#[Besonderheiten der Appliance auf Racks]
+{related-end}
+
+
+[#basics]
+== Grundlagen
+
+Sie können zwei {CMK} Appliances zu einem Failover-Cluster zusammenschließen.
+Dabei werden alle Konfigurationen und Daten zwischen den beiden Geräten abgeglichen.
+Die Geräte, die als Cluster verbunden sind, nennt man auch Knoten (Nodes).
+Einer der Knoten im Cluster übernimmt die aktive Rolle, führt also die Aufgaben des Clusters aus.
+Beide Knoten tauschen sich ständig über ihren Zustand aus.
+Sobald der inaktive Knoten erkennt, dass der aktive Knoten seine Aufgaben nicht mehr erfüllen kann, z.B. aufgrund eines Ausfalls,
+übernimmt er dessen Aufgaben und wird selbst zum aktiven Knoten.
+
+Der Failover-Cluster ist dazu da, die Verfügbarkeit Ihrer Monitoring-Installation zu erhöhen, indem diese gegen Hardwareausfälle eines Geräts oder einzelner Komponenten abgesichert wird.
+Das Clustern ersetzt hingegen keine Datensicherung und fängt keine logischen Fehler ab.
+
+In den folgenden Situationen sorgt der Cluster für eine geringere Ausfallzeit, indem der inaktive Knoten die Ressourcen übernimmt:
+
+* Wenn das RAID in einem {CMK}-Rack nicht mehr zugreifbar ist.
+* Wenn das bisher aktive Gerät nicht mehr erreichbar (ausgefallen) ist.
+* Wenn das bisher aktive Gerät das „externe“ Netzwerk nicht mehr erreichen kann, der inaktive Knoten hingegen schon.
+* Wenn Sie ein Firmware-Update auf den Knoten durchführen.
+
+Funktionieren kann der Cluster im Ernstfall natürlich nur, wenn die Knoten über _separate_ Switches und Stromversorgungen betrieben werden!
+
+
+[#prerequisites]
+== Voraussetzungen
+
+Damit Sie einen Cluster aufbauen können, brauchen Sie zunächst zwei kompatible {CMK} Appliances.
+Folgende Modelle können miteinander geclustert werden:
+
+* 2 x {CMK} rack1
+* 2 x {CMK} rack5
+* 2 x {CMK} virt1 (Technisch möglich, aber nicht unterstützt bzw. empfohlen. Siehe xref:cluster_virt1[unten] für Details.)
+* 1 x {CMK} rack1/rack5 und 1 x {CMK} virt1
+
+Weiterhin müssen die beiden Geräte eine xref:appliance_usage#cma_webconf_firmware[kompatible Firmware] nutzen.
+Kombinieren Sie eine virt1-Appliance mit einem physischen Rack, muss die virtuelle Maschine die gleichen Spezifikationen wie der physische Server aufweisen -- ansonsten könnte sie abstürzen, wenn sie die Last vom Rack übernimmt.
+
+Die Geräte müssen mit mindestens zwei voneinander unabhängigen Netzwerkverbindungen verkabelt sein.
+Eine dieser Verbindungen dient der normalen Netzwerkanbindung, die zweite der Synchronisation zwischen den Cluster-Knoten.
+Die Sync-Verbindung sollte möglichst direkt zwischen den Geräten laufen, zumindest aber über ein separates Netzwerk.
+
+//SK: Der folgende Anker ist ein Hack, damit der Browser richtig zur richtigen Überschrift springt.
+[#cluster_virt1]#Um# die Verfügbarkeit der Netzwerkverbindungen zu erhöhen, sollten Sie eine Bonding-Konfiguration erstellen.
+Wie diese Bonding-Konfiguration konkret aussehen sollte, hängt in erster Linie von Ihrer Umgebung ab.
+Konsultieren Sie dazu ggf. Ihre Kolleginnen und Kollegen aus dem Rechenzentrum bzw. der Netzwerkabteilung.
+
+
+[discrete]
+=== Virtuelle Appliances clustern
+
+Technisch ist es durchaus möglich, zwei virt1-Instanzen zu clustern.
+Da die Cluster-Funktion jedoch darauf ausgelegt ist, Hardwareausfälle zu kompensieren, empfehlen wir dies nicht für den produktiven Betrieb.
+Für Hochverfügbarkeit bieten Virtualisierungsplattformen wie VMware vSphere eigene Funktionen.
+Jedoch können Sie die Verhaltensweise und Konfiguration eines Clusters mit zwei virtuellen Maschinen sehr einfach testen.
+Dazu eignen sich auch "Desktop-Virtualisierer" wie VirtualBox oder VMware Workstation Player.
+Auf die Bonding-Konfiguration können Sie dabei verzichten.
+Statt also wie im Folgenden gezeigt das Bonding einzurichten, nutzen Sie einfach die ungenutzte zweite Netzwerkschnittstelle.
+Beim eigentlichen Clustern wählen Sie dann schlicht Ihre beiden einzelnen Schnittstellen statt der Bonding-Schnittstellen.
+
+
+[#configure]
+== Konfiguration des Clusters
+
+Diese Anleitung geht davon aus, dass Sie beide Geräte bereits so weit vorkonfiguriert haben, dass Sie die Weboberfläche mit einem Webbrowser öffnen können.
+
+Vor der eigentlichen Einrichtung des Clusters müssen Sie zunächst beide Geräte vorbereiten.
+Dabei müssen Sie hauptsächlich die Netzwerkkonfiguration so anpassen, dass die oben genannten Anforderungen erfüllt werden.
+Beachten Sie gegebenenfalls die für das Clustering genutzten xref:ports#appliance_cluster[Ports].
+
+Im Folgenden wird eine Referenzimplementierung eines Clusters mit zwei Bonding-Schnittstellen gezeigt, das dem folgendem Schaubild entspricht:
+
+image::cluster.png[]
+
+Die im Schaubild verwendeten Schnittstellenbezeichnungen [.guihint]#LAN1#, [.guihint]#LAN2# usw. repräsentieren die physischen Schnittstellen am Gerät.
+Die tatsächlichen Bezeichnungen hängen von der jeweiligen Hardware ab.
+
+Die verwendeten IP-Adressen sind freilich beliebig.
+Achten Sie jedoch darauf, dass das interne Cluster-Netz ([.guihint]#bond1# im Schaubild) ein anderes IP-Netz verwendet, als das „externe“ Netz ([.guihint]#bond0# im Schaubild).
+
+
+=== Netzwerkkonfiguration
+
+Öffnen Sie die Weboberfläche des ersten Knotens, wählen Sie die [.guihint]#Device settings# und oben [.guihint]#Network Settings#.
+In diesen [.guihint]#Network Settings# stehen Ihnen zwei Modi zur Verfügung.
+
+Der [.guihint]#Simple Mode#, mit dem Sie nur die Standardschnittstelle Ihres Geräts konfigurieren können, ist standardmäßig aktiviert.
+(Dieser Modus entspricht der Konfiguration über die Textkonsole, die Sie während der initialen Einrichtung der Appliance durchgeführt haben.)
+
+image::appliance_cluster_edit_simple_network.png[]
+
+Für das Clustern wird der _erweiterte Modus_ benötigt.
+Um diesen Modus zu aktivieren, klicken Sie oben auf den Button [.guihint]#Advanced Mode# und akzeptieren Sie den Bestätigungsdialog.
+
+Auf der folgenden Seite werden Ihnen alle im Gerät verfügbaren Netzwerkschnittstellen angezeigt.
+Nur die Standardschnittstelle, hier im Screenshot _ens32_, hat aktuell eine Konfiguration.
+Diese wurde vom _einfachen Modus_ übernommen.
+
+[{image-border}]
+image::appliance_cluster_advanced_mode.png[]
+
+Erstellen Sie nun durch Klick auf [.guihint]#Create Bonding# die erste Bonding-Schnittstelle [.guihint]#bond0#.
+Tragen Sie dazu im darauf folgenden Dialog alle Daten entsprechend des folgenden Screenshots ein und bestätigen Sie den Dialog mit [.guihint]#Save#.
+
+image::appliance_cluster_create_bond0.png[]
+
+Erstellen Sie nun die zweite Bonding-Schnittstelle [.guihint]#bond1# mit der passenden Konfiguration für die direkte Sync-Verbindung.
+
+image::appliance_cluster_create_bond1.png[]
+
+Nachdem Sie die beiden Bonding-Schnittstellen erstellt haben, sehen Sie im Dialog zur Netzwerkkonfiguration noch einmal alle getätigten Einstellungen zu den Netzwerkschnittstellen &#8230;
+
+image::appliance_cluster_create_bonds_pending_interfaces.png[]
+
+&#8230; sowie zu den erstellten Bondings:
+
+image::appliance_cluster_create_bonds_pending_bonds.png[]
+
+Wenn Sie alle Schritte zur Konfiguration erfolgreich abgeschlossen haben, machen Sie die Einstellungen mit einem Klick auf [.guihint]#Activate Changes#
+wirksam.
+Daraufhin werden die neuen Netzwerkeinstellungen geladen.
+Nach wenigen Sekunden zeigt die Netzwerkkonfiguration überall den Status OK, bei den echten Netzwerkschnittstellen ...
+
+image::appliance_cluster_create_bonds_no_pending_interfaces.png[]
+
+&#8230; sowie wiederum bei den Bondings:
+
+image::appliance_cluster_create_bonds_no_pending_bonds.png[]
+
+Wiederholen Sie die Konfiguration der Netzwerkeinstellungen mit den passenden Einstellungen nun auch auf Ihrem zweiten Gerät.
+
+
+=== Host-Namen
+
+Geräte, die in einem Cluster verbunden werden sollen, müssen unterschiedliche Host-Namen haben.
+Diese können Sie jetzt in den xref:appliance_usage#cma_webconf_system_settings[Geräteeinstellungen] festlegen.
+Im Beispiel bekommen die Geräte die Namen `cma1` und `cma2`.
+
+
+=== Cluster verbinden
+
+Nachdem Sie nun die Vorbereitungen abgeschlossen haben, können Sie mit dem Einrichten des Clusters fortfahren.
+Öffnen Sie dazu in der Weboberfläche im Hauptmenü des ersten Geräts (hier `cma1`) das Modul [.guihint]#Clustering# und klicken Sie dort auf [.guihint]#Create Cluster#.
+
+Tragen Sie im Dialog zum Erstellen des Clusters die entsprechende Konfiguration ein und bestätigen Sie den Dialog mit [.guihint]#Save#.
+Wichtig ist hier vor allem die [.guihint]#Cluster IP-Address#, über die Sie später auf den Cluster zugreifen.
+Wenn Sie zu diesem Dialog weiterführende Informationen benötigen, rufen Sie die Inline-Hilfe über das Symbol neben dem {CMK}-Logo auf.
+
+image::appliance_cluster_create_cluster.png[]
+
+Auf der folgenden Seite können Sie die beiden Geräte zu einem Cluster verbinden.
+Hierzu müssen Sie das Passwort der Weboberfläche des zweiten Geräts eingeben.
+Dieses wird einmalig dazu genutzt, die Verbindung zwischen den beiden Geräten herzustellen.
+Akzeptieren Sie anschließend den Bestätigungsdialog, wenn Sie sich sicher sind, dass Sie die Daten des angezeigten Zielgeräts überschreiben wollen.
+
+image::cma_de_cluster_2_2.png[]
+
+Nachdem dieser Verbindungsaufbau erfolgreich war, wird mit der Synchronisation des Clusters begonnen.
+Den aktuellen Status können Sie sich auf der Cluster-Seite anzeigen lassen.
+Noch während dieser Synchronisation werden alle Ressourcen, u.a. auch Ihre möglicherweise bestehenden Monitoring-Instanzen, auf dem ersten Knoten gestartet.
+
+image::appliance_cluster_cluster_resources.png[]
+
+Ab sofort können Sie mit Hilfe der Cluster-IP-Adresse (hier `10.3.3.30`) auf die Ressourcen des Clusters, z.B. Ihre Monitoring-Instanzen, zugreifen -- egal von welchem Knoten die Ressourcen gerade gehalten werden.
+
+
+[#status]
+== Der Status des Clusters
+
+Nach Abschluss der ersten Synchronisation ist Ihr Cluster voll einsatzbereit.
+Auf der Cluster-Seite können Sie den Zustand jederzeit einsehen.
+
+image::appliance_cluster_cluster_status.png[]
+
+Auch mit Hilfe der Statusansicht der Konsole können Sie den aktuellen Zustand des Clusters im Kasten [.guihint]#Cluster# in zusammengefasster Form einsehen.
+Die Rolle des jeweiligen Knotens wird hinter dem aktuellen Status in Klammern angezeigt: beim aktiven Knoten [.guihint]#M# (für _Main_) und beim passiven Knoten [.guihint]#S# (für _Subordinate_).
+
+image::appliance_cluster_tui_cluster.png[width=80%]
+
+
+[#special_features]
+== Besonderheiten im Cluster
+
+=== Zugriff auf Ressourcen
+
+Alle Anfragen an die Monitoring-Instanzen, wie z.B. Zugriffe auf die Weboberfläche, aber auch eingehende Meldungen wie z.B. SNMP-Traps oder
+Syslog-Meldungen an die Event-Console oder Anfragen an den Livestatus, sollten im Normalfall immer über die Cluster-IP-Adresse gehen.
+
+Nur in Ausnahmefällen, wie z.B. Fehlerdiagnosen oder Updates eines bestimmten Knotens, sollten Sie direkt auf die einzelnen Knoten zugreifen müssen.
+
+
+=== Geräteeinstellungen
+
+Die Einstellungen, wie z.B. für die Zeitsynchronisation oder zur Namensauflösung, die bisher auf den einzelnen Geräten unabhängig voneinander gemacht wurden, werden im Cluster zwischen den beiden Knoten synchronisiert.
+
+Sie können diese Einstellungen aber nur auf dem jeweils aktiven Knoten bearbeiten.
+Auf dem inaktiven Knoten sind die Einstellungen gesperrt.
+
+Es gibt einige gerätespezifische Einstellungen, wie z.B. die des Management-Interfaces des {CMK} rack1, die Sie zu jeder Zeit auf den einzelnen
+Geräten anpassen können.
+
+=== IP-Adressen oder Host-Namen der Knoten
+
+Um die IP-Konfiguration der einzelnen Knoten bearbeiten zu können, müssen Sie zunächst die Verbindung zwischen den Knoten lösen.
+Hierzu klicken Sie auf der Cluster-Seite auf [.guihint]#Disconnect Cluster#.
+Anschließend können Sie über die Weboberfläche der einzelnen Knoten die gewünschten Einstellungen anpassen.
+
+Nachdem Sie die Anpassungen abgeschlossen haben, müssen Sie nun auf der Cluster-Seite [.guihint]#Reconnect Cluster# wählen.
+Wenn sich die Knoten wieder erfolgreich verbinden können, nimmt der Cluster den Betrieb nach wenigen Minuten wieder auf.
+Den Status können Sie auf der Cluster-Seite einsehen.
+
+
+=== {CMK}-Versionen und Monitoring-Instanzen verwalten
+
+Auch die Monitoring-Instanzen und {CMK}-Versionen werden zwischen den beiden Knoten synchronisiert.
+Diese können Sie nur in der Weboberfläche des aktiven Knotens modifizieren -- sowohl über dessen eigene als auch über die Cluster-IP-Adresse.
+
+
+[#admincluster]
+== Administrative Aufgaben im Cluster
+
+[#majorfirmwareupdate]
+=== Firmware-Update (Major-Version)
+
+Im Gegensatz zum nachfolgend beschriebenen Firmware-Update innerhalb kompatibler Versionen, also beispielsweise 1.6.1 auf 1.6.2, müssen Sie beim Update von einer Major-Versionen auf die nächste Major-Version (bspw. von 1.6.x auf 1.7.y) etwas anders vorgehen.
+// MFS: Hier könnte man tiefer gehen und ...wie das verwendete Overlay-Dateisystem... schreiben, aber das sind Implementierungsdetails.
+Der Grund: Die Major-Updates aktualisieren entweder die als Basis verwendete Betriebssystemversion oder ändern grundlegende Konzepte.
+Kurz gesagt heißt das, dass Sie den Cluster kurzzeitig komplett offline nehmen müssen -- Sie bekommen also eine Wartungszeit (_downtime_).
+Bei xref:minorfirmwareupdate[Minor-Updates] genügt es, einzelne Knoten des Clusters in den Wartungszustand zu versetzen, um die Aktualisierung durchzuführen.
+Um ein Major-Update durchzuführen, gehen Sie wie folgt vor:
+
+. Führen Sie vorbereitend ein Update auf die neueste {CMK}-Minor-Version durch und schließlich ein Update auf die neueste Minor-Version der Appliance-Firmware.
+. Trennen Sie die Knoten mit [.guihint]#Clustering > Disconnect Cluster# vom Cluster.
+. Aktualisieren Sie alle Knoten wie im xref:appliance_usage#cma_webconf_firmware[Appliance-Hauptartikel] beschrieben.
+. Wenn alle Knoten aktualisiert sind, verbinden Sie diese über [.guihint]#Clustering > Reconnect Cluster# wieder zum Cluster.
+. Prüfen Sie, ob Ihre Instanzen kompatible {CMK}-Versionen nutzen (dies wird meist _nicht_ der Fall sein) und installieren Sie bei Bedarf für alle {CMK} Instanzen das jeweils zur Firmware der Appliance passende {CMK}-Paket wie im xref:appliance_usage#update_site[Appliance-Hauptartikel] beschrieben.
+
+
+[#minorfirmwareupdate]
+=== Firmware-Update (Minor-Version)
+
+Die Firmware-Version eines Geräts wird auch im Cluster-Betrieb nicht synchronisiert.
+Das Update geschieht also pro Knoten.
+Sie haben jedoch den Vorteil, dass der eine Knoten weiterhin das Monitoring durchführen kann, während der andere Knoten aktualisiert wird.
+
+Bei einem Update auf eine kompatible Firmware-Version sollten Sie stets wie folgt vorgehen:
+
+Öffnen Sie zunächst das Modul [.guihint]#Clustering# in der Weboberfläche des Knotens, der aktualisiert werden soll.
+
+Klicken Sie nun auf das Herz-Symbol in der Spalte dieses Knotens und akzeptieren Sie den folgenden Bestätigungsdialog.
+Dadurch setzen Sie den Knoten in den Wartungszustand.
+
+Knoten, die sich im Wartungszustand befinden, geben alle Ressourcen frei, die aktuell auf dem Knoten aktiv sind, woraufhin der andere Knoten diese 	übernimmt.
+
+Während sich ein Knoten im Wartungszustand befindet, ist der Cluster nicht ausfallsicher.
+Wenn jetzt also der aktive Knoten ausgeschaltet wird, übernimmt der inaktive Knoten, der sich im Wartungszustand befindet, _nicht_ die Ressourcen.
+Sollten Sie nun auch noch den zweiten Knoten in den Wartungszustand setzen, werden alle Ressourcen heruntergefahren.
+Diese werden erst wieder aktiviert, wenn ein Knoten aus dem Wartungszustand geholt wird.
+Den Wartungszustand müssen Sie stets wieder manuell entfernen.
+
+Wenn die Cluster-Seite Folgendes zeigt, sehen Sie, dass sich der Knoten im Wartungszustand befindet:
+
+image::appliance_cluster_cluster_maintenance.png[]
+
+Nun können Sie auf diesem Knoten, wie auf nicht-geclusterten Geräten auch, das link:appliance_usage.html#cma_webconf_firmware[Firmware-Update] durchführen.
+
+Öffnen Sie, nachdem Sie das Firmware-Update erfolgreich durchgeführt haben, wieder die Cluster-Seite.
+Entfernen Sie den Wartungszustand des aktualisierten Geräts.
+Das Gerät fügt sich anschließend automatisch wieder in den Cluster ein, womit der Cluster wieder voll funktionsfähig ist.
+
+image::appliance_cluster_cluster_status.png[]
+
+Wir empfehlen, auf beiden Knoten die gleiche Firmware-Version zu betreiben.
+Daher sollten Sie im Anschluss die gleiche Prozedur für den anderen Knoten wiederholen, nachdem der Cluster sich vollständig synchronisiert hat.
+
+
+[#dissolve]
+=== Cluster auflösen
+
+Es ist möglich, die Knoten aus einem Cluster zu lösen und einzeln weiter zu betreiben.
+Dabei können Sie auf beiden Geräten die synchronisierte Konfiguration weiter nutzen oder z.B. eines der Geräte wieder auf den Werkszustand zurücksetzen und neu konfigurieren.
+
+Sie können einen oder beide Knoten im laufenden Betrieb aus dem Cluster entfernen.
+Wenn Sie beide Knoten mit den aktuellen Daten weiterverwenden wollen, müssen Sie vorher sicherstellen, dass die Synchronisation der Daten ordnungsgemäß funktioniert.
+Dies sehen Sie auf der Cluster-Seite.
+
+Um einen Cluster aufzulösen, klicken Sie auf der Cluster-Seite der Weboberfläche auf [.guihint]#Disband Cluster#.
+Beachten Sie den Text des folgenden Bestätigungsdialogs.
+Dieser gibt in den verschiedenen Situationen Aufschluss darüber, in welchem Zustand sich das jeweilige Gerät nach dem Auflösen der Verbindung befinden wird.
+
+image::appliance_cluster_disband_cluster.png[]
+
+Die Trennung der Geräte muss auf beiden Knoten separat durchgeführt werden, damit zukünftig beide Geräte einzeln betrieben werden können.
+
+Wenn Sie nur eines der Geräte zukünftig verwenden wollen, lösen Sie den Cluster auf dem Gerät, das Sie weiterhin verwenden wollen und stellen Sie auf dem anderen Gerät anschließend den Werkszustand wieder her.
+
+Nachdem Sie einen Knoten aus dem Cluster getrennt haben, werden die Monitoring-Instanzen nicht automatisch gestartet.
+Das müssen Sie im Anschluss bei Bedarf manuell erledigen.
+
+
+=== Ein Gerät austauschen
+
+Wenn die Festplatten des alten Geräts in Ordnung sind, können Sie diese aus dem alten Gerät in das neue Gerät einbauen und das neue Gerät genau so verkabeln, wie das alte Gerät verkabelt war -- und es anschließend einschalten.
+Nach dem Start fügt sich das neue Gerät wieder so in den Cluster ein wie das alte Gerät.
+
+Wenn Sie ein altes Gerät komplett durch ein neues Gerät ersetzen wollen, sollten Sie so vorgehen, wie wenn Sie den xref:dissolve[Cluster komplett auflösen].
+Wählen Sie dazu eines der bisherigen Geräte aus, lösen Sie dieses aus dem Cluster und erstellen Sie einen neuen Cluster mit diesem und dem neuen Gerät.
+
+
+[#diagnosis]
+== Fehlerdiagnose
+
+=== Logging
+
+Die Cluster-Verwaltung geschieht weitestgehend automatisch.
+Dabei entscheiden automatische Prozesse auf den Knoten, auf welchem Gerät welche Ressourcen gestartet und gestoppt werden sollen.
+Dieses Verhalten wird in Form von Log-Einträgen detailliert protokolliert.
+Diese Einträge erreichen Sie von der Cluster-Seite aus über den Knopf [.guihint]#Cluster Log#.
+
+Beachten Sie, dass diese Einträge, genau wie die anderen Systemmeldungen, bei einem Neustart des Geräts verloren gehen.
+Wenn Sie die Meldungen darüber hinaus erhalten möchten, können Sie sich die aktuelle Logdatei über Ihren Browser herunterladen oder dauerhaft eine Weiterleitung der Log-Meldungen an einen Syslog-Server einrichten.
+

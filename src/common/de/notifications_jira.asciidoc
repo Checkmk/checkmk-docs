@@ -1,0 +1,399 @@
+// -*- coding: utf-8 -*-
+// IGNORE Toolchain
+include::global_attr.adoc[]
+= Benachrichtigungen per Jira
+:title: Benachrichtigungen per Jira (notifications)
+:description: {CMK} kann Benachrichtigungen an Jira senden, wo sie als Issues weiterverarbeitet werden können. Lesen Sie hier, wie Sie die Anbindung durchführen.
+
+{related-start}
+xref:notifications#[Grundlagen zu Benachrichtigungen]
+{related-end}
+
+[#introduction]
+== Einleitung
+ifdef::onprem[]
+{cee-only}
+endif::[]
+Wenn Sie die Software Jira zum Projektmanagement, zur Software-Entwicklung oder zur Fehlerverfolgung verwenden, können Sie
+ifdef::onprem[]
+mit den kommerziellen Editionen
+endif::[]
+Benachrichtigungen aus {CMK} heraus an Jira senden und dort _Issues_ erzeugen oder aktualisieren.
+Dies funktioniert für die Produkte Jira Work Management (ehemals Jira Core), Jira Software und Jira Service Management (ehemals Jira Service Desk).
+
+Unterstützt werden dabei folgende Optionen:
+
+* Issues für Host- und Service-Probleme erzeugen.
+* Issues mit definierter Priorität (_priority_) erstellen.
+* Issues mit einem definierten _Label_ erstellen.
+* Links auf Host/Services in {CMK} aus den erzeugten Jira-Issues setzen.
+* Eine _Resolution_ im Issue bei eintretenden {OK}-Zuständen setzen.
+
+Um die Anbindung von {CMK} an Jira einzurichten, legen Sie in Jira zunächst einige neue Felder (_Fields_) an und ermitteln bestimmte Jira-_IDs._
+
+Anschließend konfigurieren Sie die Benachrichtigungsmethode für Jira in {CMK}, wobei Sie die erstellten und ausgelesenen Jira-IDs eintragen.
+Mehr Flexibilität erhalten Sie, wenn Sie zusätzlich xref:wato_user#custom_user_attributes[benutzerdefinierte Attribute] verwenden.
+Denn statt die Jira-IDs direkt in die Benachrichtigungsmethode einzutragen, können Sie einige Jira-IDs als benutzerdefinierte Attribute definieren.
+Damit ist es dann einfach möglich, dass verschiedene Benutzer Issues in verschiedenen Jira-Projekten erstellen können.
+
+
+[#config_jira]
+== Jira konfigurieren
+
+{CMK} muss bei der Interaktion mit Jira wissen, welche Benachrichtigungen bereits einen Issue erzeugt haben und welche nicht.
+Damit das möglich wird, müssen Sie in Jira zwei sogenannte _Custom fields_, also benutzerdefinierte Felder, erstellen -- eines für Benachrichtigungen über Host-Probleme, und eines über Service-Probleme.
+
+Um die Host- und Service-Probleme zuordnen zu können, müssen deren IDs eindeutig sein.
+Dies ist der Fall, wenn Ihre Jira-Instanz von genau _einer_ {CMK}-Instanz Benachrichtigungen erhält, da der Monitoring-Kern einer {CMK}-Instanz für die Eindeutigkeit sorgt.
+ifdef::onprem[]
+Nun kann es aber sein, dass im verteilten Monitoring mehrere {CMK}-Instanzen Benachrichtigungen senden, falls xref:distributed_monitoring#notifications[dezentrale Benachrichtigungen] konfiguriert sind.
+endif::[]
+Erhält Ihre Jira-Instanz von mehreren {CMK}-Instanzen Benachrichtigungen, ist es höchstwahrscheinlich mit der Eindeutigkeit vorbei -- spätestens dann, wenn die ID eines Host-Problems bereits von einer anderen {CMK}-Instanz verwendet wurde.
+In einer solchen Konfiguration benötigen Sie ein weiteres benutzerdefiniertes Feld für die {CMK}-Instanz, mit dem die eindeutige Zuordnung wieder möglich wird.
+
+Für die Konfiguration in {CMK} benötigen Sie die Jira-IDs der erstellten benutzerdefinierten Felder -- und zusätzlich die von einigen anderen Feldern, im Ganzen also die folgende Liste:
+
+* Project/Space ID
+* Issue type ID
+* Priority ID (optional)
+* Host custom field ID
+* Service custom field ID
+* Site custom field ID (optional)
+* (Workflow) Transition ID (optional)
+
+Die allermeisten dieser IDs können mit dem unten angegebenem Skript über eine der REST APIs von Jira ausgelesen werden.
+Jira-Administratoren können die IDs -- auch solche, die über die API und somit das Skript nicht abrufbar sind -- über die GUI von Jira ermitteln.
+
+
+[#jira_custom_fields]
+=== Einrichten der benutzerdefinierten Felder in Jira
+
+Wie Sie benutzerdefinierte Felder (_custom fields_) in Jira erstellen, können Sie in der link:https://confluence.atlassian.com/adminjiraserver/adding-custom-fields-1047552713.html[Jira-Dokumentation^] nachlesen, 
+inklusive der Zuweisung des Feldes zu den sogenannten _Issue Screens_ in Jira.
+
+Bei der Erstellung der für {CMK} notwendigen Felder beachten Sie dabei die folgenden Punkte zum Feldtyp (_field type_).
+Die Feldnamen können Sie frei wählen.
+Die in der folgenden Tabelle enthaltenen Namen passen aber zum Skript, mit dem Sie im nächsten Abschnitt xref:jira_ids_script[Jira-IDs über externes Skript ermitteln] die Jira-IDs auslesen können.
+
+[cols="~,~,~",options="header"]
+|===
+|Benutzerdefiniertes Feld |Feldtyp |Name
+|Host custom field |`Short text (plain text only)` |`CMK_HOST_FIELD` (Beispiel)
+|Service custom field |`Short text (plain text only)` |`CMK_SVC_FIELD` (Beispiel)
+|Site custom field (optional) |`Short text (plain text only)` |`CMK_SITE_FIELD` (Beispiel)
+|===
+
+[TIP]
+====
+Der Feldtyp `Short text (plain text only)` für „Host custom field“ und „Service custom field“ ist ab der {CMK}-Version {v24} notwendig,
+ifdef::onprem[]
+wenn Sie Jira-Benachrichtigungen xref:notification_rules#notification_testing[testen] oder über die xref:ec.html#notifications[Event Console] erzeugen möchten.
+endif::[]
+ifdef::saas[]
+wenn Sie Jira-Benachrichtigungen xref:notification_rules#notification_testing[testen] möchten.
+endif::[]
+Falls Sie diese Felder bereits in älteren {CMK}-Versionen als `Number field` eingerichtet haben, können Sie diese Felder weiterhin nutzen, sofern Sie nur Benachrichtigungen für Host- und Service-Probleme mit der Jira-Benachrichtigungsmethode versenden wollen, so wie es in diesem Artikel beschrieben ist.
+====
+
+Achten Sie außerdem darauf, dass der Jira-Benutzer, der von {CMK} zum Erstellen von Issues verwendet wird, d.h. in der xref:config_cmk[{CMK}-Benachrichtigungsregel] eingetragen ist, Lese- _und Schreibzugriff_ auf diese benutzerdefinierten Felder hat.
+
+
+[#jira_ids_script]
+=== Jira-IDs über externes Skript ermitteln
+
+Sie können die IDs gesammelt mit folgendem Skript abfragen, das die link:https://docs.atlassian.com/software/jira/docs/api/REST/latest[Jira REST-API^] nutzt.
+
+Ersetzen Sie dazu die Beispielwerte der folgenden Variablen:
+
+- `user`: Jira-Nutzer in Form einer Email-Adresse.
+- `api_token`: Die Erstellung eines Tokens zeigt die link:https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/[Jira-Dokumentation.^] 
+- `space_key`: Schlüssel des Space wie in der Weboberfläche und der URL zu sehen (häufig ein 3-Buchstaben-Kürzel).
+- `jira_url`: Die URL zur Jira-Instanz (häufig etwa `pass:[https://MY_JIRA_URL.atlassian.net]`)
+
+[IMPORTANT]
+====
+Das Skript ist auf Jira Cloud und API-Version 3 ausgelegt.
+On-Prem-Versionen von Jira verlangen eine Authentifizierung per Passwort statt API-Token und setzen gegebenenfalls auf API-Version 2.
+Sollten Sie das Skript für ältere On-Prem-Versionen einsetzen wollen, ändern Sie die Variable `api_version` und verwenden Sie statt Email/API-Token die Kombination Nutzername/Passwort.
+Voraussetzung ist, dass die Basic-Authentifizierung noch unterstützt wird.
+====
+
+.example_script.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+import sys
+import re
+import requests
+
+# Jira (self-hosted): use username + password instead, and maybe API version 2
+user = "myuser@example.com"
+api_token = "MY_API_TOKEN_ABCDE12345"
+
+
+space_key = "MY_SPACE_KEY"
+jira_url = "https://MY_JIRA_URL.atlassian.net"
+
+custom_field_1 = "CMK_HOST_FIELD"
+custom_field_2 = "CMK_SVC_FIELD"
+custom_field_3 = "CMK_SITE_FIELD"  # leave as-is if unused
+
+# Jira API version (change if using older on-prem versions of Jira)
+api_version = "3"   # Cloud
+# api_version = "2" # Server/DC
+
+def get_json(session, jira_url, resource_name):
+    url = f"{jira_url.rstrip('/')}/rest/api/{api_version}/{resource_name}"
+
+    response = session.get(
+        url,
+        headers={"Accept": "application/json"},
+        timeout=30,
+    )
+
+    if not response.ok:
+        print(f"\nERROR calling: {url}")
+        print(f"HTTP status: {response.status_code}")
+        print(f"Content-Type: {response.headers.get('content-type')}")
+        print("Response start:")
+        print(response.text[:1000])
+        sys.exit(1)
+
+    try:
+        return response.json()
+    except ValueError:
+        print(f"\nERROR: Jira did not return JSON for: {url}")
+        print(f"HTTP status: {response.status_code}")
+        print(f"Content-Type: {response.headers.get('content-type')}")
+        print("Response start:")
+        print(response.text[:1000])
+        sys.exit(1)
+
+
+def main():
+    session = requests.Session()
+    session.auth = (user, api_token)
+
+    custom_fields_lower = [
+        cf.lower()
+        for cf in [
+            custom_field_1,
+            custom_field_2,
+            custom_field_3,
+        ]
+    ]
+
+    sys.stdout.write(f"=== IDs for space {space_key} ===\n")
+    infotext = ""
+
+    for section, id_name in [
+        ("Space_ID", "project"),
+        ("Issue", f"project/{space_key}"),
+        ("Priority", "priority"),
+        ("Field", "field"),
+    ]:
+        json_response = get_json(session, jira_url, id_name)
+
+        if id_name == "project":
+            found = False
+
+            for space in json_response:
+                if space.get("key") == space_key:
+                    infotext += f"{space.get('id', 'Space ID not found')}\n\n"
+                    found = True
+                    break
+
+            if not found:
+                infotext += (
+                    "Space ID not found, space key existing / accessible?\n\n"
+                )
+                
+        elif section == "Issue":
+            types = ""
+        
+            for item in json_response.get("issueTypes", []):
+                types += f"{item.get('name')}: {item.get('id')}\n"
+        
+            infotext += f"=== {section} types\n{types}\n"        
+
+        else:
+            types = ""
+
+            for item in json_response:
+                if id_name == "field":
+                    field_name = item.get("name", "")
+                    field_id = item.get("id", "")
+                    if field_name.lower() in custom_fields_lower:
+                        field_id = re.sub(r"^customfield_(.*)$", r"\1", field_id)
+                        types += f"{field_name}: {field_id}\n"
+
+                else:
+                    types += f"{item.get('name')}: {item.get('id')}\n"
+
+            infotext += f"=== {section} types\n{types}\n"
+
+    sys.stdout.write(infotext)
+
+
+if __name__ == "__main__":
+    main()
+
+----
+
+Die Ausgabe des Skripts sieht dann ungefähr so aus:
+
+[{shell}]
+----
+=== IDs for space MY_SPACE ===
+10401
+
+=== Issue types
+Test case: 10600
+Epic: 10000
+Task: 10003
+Sub-task: 10004
+Bug: 10006
+Story: 10001
+Feedback: 10200
+New Feature: 10005
+Support: 10500
+Improvement: 10002
+
+=== Priority types
+Blocker: 1
+High: 2
+Medium: 3
+Low: 4
+Lowest: 5
+Informational: 10000
+Critical impact: 10101
+Significant impact: 10102
+Limited impact: 10103
+Minimal impact: 10104
+
+=== Field types
+CMK_HOST_FIELD: 11400
+CMK_SVC_FIELD: 11401
+CMK_SITE_FIELD: 11403
+----
+
+
+[#jira_ids_gui]
+=== Jira-IDs über die GUI ermitteln
+
+Als Alternative zur Skriptausführung können Sie die IDs auch über die Jira-GUI auslesen, wofür Sie sich aber mit einem administrativen Konto in Jira anmelden müssen.
+
+*Projekt vs. Space:* Atlassian hat vor einiger Zeit den Begriff `Project` durch `Space` ersetzt -- allerdings nur in der GUI, nicht im technischen Unterbau, sprich URLs und APIs.
+Daher entspricht die Space-ID in technischen Ausgaben der `projectid`.
+
+Die `projectid` zu finden ist etwas umständlich: Öffnen Sie die [.guihint]#Space settings# und klicken Sie in der Navigationsleiste links auf den Punkt [.guihint]#Toolchain# -- die aufgerufene URL enthält dann ganz am Ende einen Eintrag in der Art `projectId=10000`.
+Alternativ können Sie auch die URL `MY_JIRA_URL.atlassian.net/rest/api/3/project/MY_SPACE_KEY` aufrufen und im angezeigten JSON-Dokument nachschauen.
+
+Die IDs der weiteren Felder und Issues types lassen sich ablesen, in dem Sie das jeweilige Element in der Administrator-GUI von Jira editieren.
+Die Felder finden Sie über [.guihint]#Settings > Work types > Fields#.
+Die ID steht dann im Regelfall wieder als letzter Wert in der Adressleiste Ihres Browsers.
+
+
+[#config_cmk]
+== {CMK} konfigurieren
+
+Wie Sie Benachrichtigungen im Allgemeinen in {CMK} einrichten, haben Sie bereits im Artikel über xref:notifications#[Benachrichtigungen] erfahren.
+
+Um nun die Jira-Benachrichtigungen zu nutzen, gehen Sie in {CMK} wie folgt vor:
+
+. Wenn Sie xref:wato_user#custom_user_attributes[benutzerdefinierte Attribute] verwenden möchten, können Sie diese für die folgenden Jira-IDs erstellen:
+Project/Space ID (`jiraproject`), Issue type ID (`jiraissuetype`), Priority ID (`jirapriority`) und Transition ID (`jiraresolution`).
+// TK: Das benutzerdefinierte Attribut zur Transition ID (`jiraresolution`) wird in der Hilfe der Benachrichtigungsregel aber *nicht* erwähnt.
+In den Klammern sind die Namen angegeben, die Sie als [.guihint]#Name# eines Attributs eingeben können.
+Ein benutzerdefiniertes Attribut legen Sie mit [.guihint]#Setup > Users > Custom user attributes > Add attribute# an: +
++
+image::jira_notification_custom_user_attribute.png[alt="Ein benutzerdefiniertes Attribut für die Jira Project ID."]
++
+Achten Sie darauf, dass bei allen diesen für Jira erstellten benutzerdefinierten Attributen die Checkbox [.guihint]#Make this variable available in notifications# gesetzt ist. +
+In den Eigenschaften eines Benutzers können Sie dann in diese Attribute die Jira-IDs eintragen, für die dieser Benutzer zuständig ist. +
+Für jedes benutzerdefinierte Attribut lassen Sie in der Benachrichtigungsregel, die in den folgenden Schritten erstellt wird, das Feld der zugehörigen Jira-ID _leer._
+Diese Felder werden dann mit den benutzerdefinierten Attributen gefüllt.
+
+. Erstellen Sie neue Parameter für Jira mit [.guihint]#Setup > Events >  Notifications > Parameters for notification methods > Parameters for Jira > Add parameter.#
++
+image::notifications_parameter_jira.png[alt="Die Einstellungen zur Benachrichtigungsmethode für Jira."]
++
+. Im Feld [.guihint]#Jira URL# tragen Sie die URL Ihrer Jira-Instanz ein, also z.B. `jira.server.your-domain.com`.
+
+. Im Bereich [.guihint]#Authentication# hinterlegen Sie die Zugangsdaten des Jira-Kontos für den Zugriff.
++
+Jira Data Center und Jira Server: [.guihint]#API/PAT token#.
++
+Jira-Cloud-Produkte: [.guihint]#Basic authentication# mit Nutzername und Passwort -- wobei hier hier unter [.guihint]#Password# ein API-Token einzutragen ist (mehr dazu bei link:https://developer.atlassian.com/cloud/jira/platform/deprecation-notice-basic-auth-and-cookie-based-auth/[Atlassian^])
+
+. Für [.guihint]#Project ID# und [.guihint]#Issue type ID# benötigen Sie die vorher ermittelten IDs in Jira, im Beispiel `10401` für die Project ID und `10006` für den Issue-Typ `Bug`.
+
+. Bei [.guihint]#Host custom field ID#, [.guihint]#Service custom field ID# und (optional) [.guihint]#Site custom field ID# tragen Sie IDs der von Ihnen in Jira angelegten, benutzerdefinierten Felder ein.
+
+. Um in den erzeugten Issues direkt nach {CMK} verlinken zu können, tragen Sie
+unter [.guihint]#Monitoring URL# die URL Ihrer {CMK}-Instanz ein, also z.B. `\https://mycmkserver/mysite/`, wobei die Eingabe des abschließenden Schrägstrichs (`/`) wichtig ist.
+
+Unter anderem haben Sie noch die folgenden optionalen Einstellungsmöglichkeiten:
+
+* Mit der [.guihint]#Priority ID# können Sie definieren, mit welcher Priorität die Issues in Jira angelegt werden.
+Hier können Sie einen der im Skript ausgelesenen `Priority types` eintragen, von `1` bis `5`.
+
+* Die Beschreibungen, die in den Issues für Host- und Service-Probleme erzeugt werden, können Sie über die Optionen [.guihint]#Summary for host notifications# und [.guihint]#Summary for service notifications# ändern.
+
+* Über den Punkt [.guihint]#Label# können Sie definieren, ob Sie bei der Issue-Erzeugung in Jira Labels mit übergeben möchten.
+Wenn Sie Labels aktivieren, ohne einen Wert einzutragen, wird `monitoring` gesetzt. +
+{CMK} schreibt den Wert des Labels in das Jira-Feld `labels`, was nur gelingt, wenn dieses Feld in Ihrer Jira-Applikation existiert, was z.B. bei _Jira Software_ der Fall ist, nicht aber bei _Jira Service Desk_.
+
+* Die Option [.guihint]#Attach graphs# fügt zugehörige Graphen mit dem aktuellen Stand zu neuen Issues hinzu.
+
+* Wenn Sie bei Benachrichtigungen über eine Zustandsänderung auf {OK} in {CMK} auch eine [.guihint]#Resolution# in den Issue in Jira eintragen lassen wollen, können Sie diese unter [.guihint]#Activate resolution with following resolution transition ID# definieren. +
+Um hier die richtige ID ermitteln zu können, benötigen Sie ebenfalls Administrator-Rechte in Jira.
+Navigieren Sie wieder in den Bereich [.guihint]#Issues# und klicken Sie hier auf [.guihint]#Workflows#.
+Klicken Sie anschließend in der Zeile des Standard-Workflows des verwendeten Jira-Projekts auf [.guihint]#View#.
+Sollten Sie nun ein Flowchart sehen, stellen Sie die Anzeige durch einen Klick auf [.guihint]#Text# um.
+Nun können Sie die gewünschte ID in der Spalte [.guihint]#Transitions (id)# ablesen.
+
+* Mit [.guihint]#Set optional timeout for connections to JIRA# können Sie den Timeout für Verbindungen zu Jira konfigurieren.
+Wenn Sie hier nichts eintragen, gilt der Standardwert von 10 Sekunden.
+
+Bei der Kontaktauswahl im folgenden Kasten [.guihint]#Contact selection# beachten Sie die folgenden Punkte:
+
+include::include_ticketsystem.asciidoc[]
+
+. Etwas anders stellt sich das Thema Kontaktauswahl bei der Nutzung benutzerdefinierter Attribute dar, denn damit sollen ja gerade verschiedenen Benutzern verschiedene Jira-IDs zugewiesen werden.
+Daher werden Sie in diesem Fall in der Regel _mehrere_ Kontakte informieren wollen, und zwar diejenigen Benutzer, denen Sie die benutzerdefinierten Attribute zugewiesen haben.
+Wenn diese Benutzern verschiedene Jira-IDs verwenden, werden auch keine identischen Benachrichtigungen generiert.
+
+Wie Sie die neue Benachrichtigungsmethode testen können, erfahren Sie im Artikel zu den xref:notification_rules#notification_testing[Benachrichtigungsregeln.]
+
+
+ifdef::onprem[]
+[#diagnosis]
+== Diagnosemöglichkeiten
+
+Sollten nach der Einrichtung der Benachrichtigungsregel in {CMK} keine Tickets in Jira ankommen, prüfen Sie die zugehörige Log-Datei `~/var/log/notify.log`.
+Von Jira kommen hier im Regelfall recht brauchbare Fehlermeldungen zurück, die Ihnen bei der Diagnose tatsächlich helfen können.
+Im folgenden listen wir einige Beispiele auf.
+
+
+[discrete]
+=== Fehlermeldung: Unable to create issue, JIRA response code 400, Field 'labels' cannot be set.
+
+Eventuell verfügt Ihr verwendetes Jira-Produkt nicht über Labels.
+Schalten Sie in {CMK} die Verwendung von Labels in Ihrer Benachrichtigungsregel einfach ab, indem Sie den Haken vor [.guihint]#Label# wieder entfernen.
+
+
+[discrete]
+=== Fehlermeldung: Unable to create issue, JIRA response code 400, b'project is required'.
+
+Diese Fehlermeldung weist darauf hin, dass die ID nicht korrekt ist, welche Sie in der Benachrichtigungsregel für das betreffende Feld (hier: Project ID) eingetragen haben.
+
+
+[discrete]
+=== Fehlermeldung: Unable to resolve `\https://jira.server.your-domain.de/browse/ISSUE-123`, JIRA response code 500, b'Internal server error'
+
+Erhalten Sie diese Fehlermeldung, wenn ein Ticket in Jira von {CMK} automatisch geschlossen bzw. in einen anderen Status versetzt werden soll, dann *kann* dies ein Hinweis darauf sein, das die von Ihnen eingetragene Transition ID nicht korrekt ist.
+Die Transition ID steht in der Benachrichtigungsregel im Feld [.guihint]#Activate resolution with following resolution transition ID#.
+Gleichen Sie diese ID in der Regel erneut mit der Weboberfläche von Jira ab.
+endif::[]

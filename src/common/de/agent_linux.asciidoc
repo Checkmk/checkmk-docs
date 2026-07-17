@@ -1,0 +1,1699 @@
+// -*- coding: utf-8 -*-
+// IGNORE se Ver
+// NONASCII →
+include::global_attr.adoc[]
+= Linux überwachen
+:title: Linux überwachen - Der neue Agent für Linux im Detail
+:description: Der Agent Controller übermittelt die gesammelten Monitoring-Daten vom Linux-Agentenskript an {CMK}. Lesen Sie hier, wie Sie die Überwachung einrichten.
+:experimental:
+
+{related-start}
+ifdef::onprem[]
+xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus]
+endif::[]
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:agent_deployment#[Automatische Agenten-Updates]
+{related-end}
+
+
+[#intro]
+== Der Linux-Agent
+
+[{image-left}]
+image::linux.png[alt="Linux-Logo.",width=120]
+Linux-Systeme können Sie mit {CMK} besonders gut überwachen.
+Das liegt weniger daran, dass sich das {CMK}-Entwicklerteam auf Linux „zu Hause“ fühlt, sondern vielmehr daran, dass Linux ein sehr offenes System ist und zahlreiche gut dokumentierte und einfach abzufragende Schnittstellen für eine detaillierte Überwachung bereitstellt.
+
+ifdef::onprem[]
+Da die meisten der Schnittstellen per se nicht über das Netzwerk erreichbar sind, ist die Installation eines Monitoring-Agenten unumgänglich.
+Deswegen hat {CMK} einen eigenen Agenten für die Überwachung von Linux.
+Dieser ist ein simples Shellskript, das minimalistisch, transparent und sicher ist.
+
+Dem *Agentenskript* ist mit dem *Agent Controller* eine Komponente zur Seite gestellt, die mit dem *Agent Receiver*, einem Prozess, der auf dem {CMK}-Server läuft, verschlüsselt kommuniziert.
+Dazu registriert sich der Agent Controller beim *Agent Receiver*.
+Der Linux-Agent kann mit dem Agent Controller Funktionen realisieren wie die TLS-Verschlüsselung der Kommunikation oder die Datenkomprimierung und ist vorbereitet für zukünftige Erweiterungen.
+
+Der registrierte, verschlüsselte und komprimierte xref:glossar#pull_mode[Pull-Modus] mit dem Agent Controller ist für alle {CMK}-Editionen verfügbar.
+Den xref:glossar#push_mode[Push-Modus] gibt es in {CCE}.
+Die Umkehrung der Kommunikationsrichtung erleichtert die Überwachung von Hosts, die sich hinter Firewalls befinden.
+Kombiniert wird der Push-Modus meist mit der xref:hosts_autoregister#[automatischen Registrierung] des {CMK}-Agenten, die ebenfalls in {CE} verfügbar ist.
+
+[TIP]
+====
+Standard-Agentenpakete öffnen sofort nach der Installation Port 6556.
+Sie geben darüber die unverschlüsselte Agentenausgabe an jeden, der sie anfordert, aus.
+Bei Hosts, die aus dem Internet erreichbar sind, sollten Sie daher _vor_ der Installation per Firewall sicherstellen, dass der Zugriff auf diesen Port nur ausgewählten Hosts erlaubt ist.
+Führen Sie die Registrierung und die damit verbundene Aktivierung der TLS-Verschlüsselung zeitnah nach der Installation durch.
+====
+
+Der Agent Controller wird als Hintergrundprozess (_Daemon_) vom init-System `systemd` gestartet, daher setzt der Agent eine Linux-Distribution mit `systemd` voraus.
+Wahrscheinlich wird diese Voraussetzung auf Ihrem Host erfüllt sein, da seit 2015 die meisten Linux-Distributionen `systemd` als init-System übernommen haben.
+
+Allerdings beherrscht der Agent auch einen sogenannten *Legacy-Modus*, um Linux-Systeme zu unterstützen mit einer anderen Rechnerarchitektur als `x86_64` oder `aarch64`, ohne RPM- bzw. DEB-Paketmanagement und ohne init-System `systemd`.
+In diesem Legacy-Modus arbeitet der Agent nur als Agentenskript, d.h. ohne Agent Controller und damit auch ohne Registrierung am {CMK}-Server.
+
+Der Artikel, den Sie gerade lesen, behandelt Installation, Konfiguration und Erweiterungen des Linux-Agenten *mit* Agent Controller.
+Er zeigt Ihnen aber auch, wie Sie herausfinden können, ob der Agent auf Ihrem Linux-System ohne Agent Controller im Legacy-Modus eingerichtet werden muss.
+Im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] finden Sie dann dazu alle Informationen.
+endif::[]
+
+ifdef::saas[]
+Da die meisten der Schnittstellen per se nicht über das Netzwerk erreichbar sind, ist die Installation eines Monitoring-Agenten unumgänglich.
+Deswegen hat {CMK} einen eigenen Agenten für die Überwachung von Linux.
+
+Der Agent selbst ist ein simples Shellskript, welches minimalistisch, transparent und sicher ist.
+Dem *Agentenskript* ist mit dem *Agent Controller* eine Komponente zur Seite gestellt, die mit dem *Agent Receiver*, einem Prozess, der auf dem {CMK}-Server läuft, verschlüsselt kommuniziert.
+Neben der initialen Authentifizierung und Registrierung ist die Aufgabe des Agent Controller, einmal pro Minute das Agentenskript aufzurufen und die Agentendaten zur Checkmk-xref:glossar#site[Instanz] zu übertragen.  
+
+// ES: The following admonition needs attention for KNW-2113
+[TIP]
+====
+Dieser Artikel behandelt den Agenten von {CE-saas}.
+{CE-saas} erwartet aus Gründen von Performance und Sicherheit ausschließlich den verschlüsselten xref:glossar#push_mode[Push-Modus] zur Kommunikation zwischen Agent und Instanz.
+Anders sieht dies bei den _On-Premises_-Editionen von {CMK} aus.
+In {RE} und {SE} steht ausschließlich der xref:glossar#pull_mode[Pull-Modus] zur Verfügung (verschlüsselt und – wo es aus Kompatibilitätsgründen erforderlich ist – unverschlüsselt).
+{UE} ist am flexibelsten und unterstützt beide Modi.
+====
+
+Da der Push-Modus zwingend den Agent Controller benötigt, ist die Installation derzeit nur auf modernen Linux-Systemen möglich, die `systemd` nutzen und auf der `x86_64`- oder `aarch64`-Architektur aufbauen.
+Legacy-Systeme ohne `systemd` oder auf `i686`-Prozessoren werden nicht unterstützt.
+endif::[]
+
+
+[#agent_architecture]
+== Architektur des Agenten
+
+Der {CMK}-Agent besteht aus dem Agentenskript und dem Agent Controller, der mit dem Agent Receiver auf dem {CMK}-Server kommuniziert.
+Im allgemeinen Artikel über die xref:wato_monitoringagents#agents[Monitoring-Agenten] finden Sie Einzelheiten zur gemeinsamen Architektur von Linux-Agent und xref:agent_windows#[Windows-Agent].
+In diesem Kapitel geht es um die für Linux spezifische Implementierung.
+
+Das *Agentenskript* `check_mk_agent` ist zuständig für die Sammlung der Monitoring-Daten und ruft für die Datensammlung der Reihe nach vorhandene Systembefehle auf.
+Um auch diejenigen Informationen zu erhalten, zu deren Beschaffung `root`-Rechte erforderlich sind, wird `check_mk_agent` unter `root` ausgeführt.
+
+Das Agentenskript ist minimalistisch, sicher, leicht erweiterbar und transparent, denn es ist ein Shellskript, in dem Sie sehen können, welche Befehle es aufruft.
+
+Der *Agent Controller* `cmk-agent-ctl` kümmert sich um den Transport der vom Agentenskript gesammelten Daten.
+Er wird unter dem Benutzer `cmk-agent` ausgeführt, der nur beschränkte Rechte besitzt, z.B. keine Login-Shell hat und nur zur Datenübertragung genutzt wird.
+Der Benutzer `cmk-agent` wird während der Installation des Agentenpakets angelegt.
+Der Agent Controller wird als Daemon von `systemd` gestartet und ist als Service an diesen gekoppelt.
+Im Pull-Modus lauscht er am TCP-Port 6556 auf eingehende Verbindungen der {CMK}-xref:glossar#site[Instanz] und fragt das Agentenskript über einen Unix-Socket (einer `systemd` Unit) ab.
+
+
+[#slideout]
+== Schnellinstallation
+
+ifdef::onprem[]
+{CMK} unterstützt Sie in der Benutzeroberfläche dabei, den {CMK}-Agenten auf einen Host herunterzuladen, zu installieren und zu registrieren und damit in die xref:glossar#configuration_environment[Konfigurationsumgebung] aufzunehmen.
+Ein Assistent führt Sie dabei in einem _Slideout_ durch die notwendigen Schritte.
+Im Slideout können Sie als Betriebssystem für den Host zwischen Windows, Linux, Solaris und AIX auswählen.
+Im xref:intro_setup_monitor#linux[Leitfaden für Einsteiger] ist der Ablauf ausführlich für einen Linux-Host im Pull-Modus beschrieben.
+
+Der große Vorteil des Slideouts ist, dass Ihnen die passenden Befehle zum Download, zur Installation und zur Registrierung eines Linux-Hosts in der GUI angezeigt werden.
+Sie können jeden Befehl in die Zwischenablage kopieren, und ihn dann auf dem Host ausführen.
+Für einen Linux-Host wird dabei das Agentenpaket mit Curl über die REST-API heruntergeladen, mit dem `dpkg`- oder `rpm`-Befehl installiert und der Host schließlich mit `cmk-agent-ctl` registriert.
+endif::[]
+
+
+ifdef::saas[]
+{CMK} unterstützt Sie in der Benutzeroberfläche dabei, den {CMK}-Agenten auf einen Host herunterzuladen, zu installieren und zu registrieren -- und sogar ins Monitoring aufzunehmen.
+Dafür gibt es in {CE} zwei Assistenten, die Sie dabei jeweils in einem _Slideout_ durch die notwendigen Schritte führen.
+
+* Das eine Slideout hilft dabei, einen Host automatisch in die xref:glossar#configuration_environment[Konfigurationsumgebung] und in die xref:glossar#monitoring_environment[Monitoring-Umgebung] aufzunehmen. +
+Dabei werden die für die Autoregistrierung vorbereiteten Agentenpakete für Linux und Windows verwendet.
+
+* Das andere Slideout führt Sie durch den manuellen Ablauf, einen Host in die Konfigurationsumgebung aufzunehmen.
+Hier werden die Standard-Pakete verwendet, die es für Windows und Linux gibt. 
+
+Beide Slideouts für die xref:intro_setup_monitor#first_auto[automatische Erstellung] und für die xref:intro_setup_monitor#first[manuelle Erstellung] werden im Leitfaden für Einsteiger vorgestellt.
+
+Der große Vorteil der Slideouts ist, dass Ihnen die passenden Befehle zum Download, zur Installation und zur Registrierung eines Linux-Hosts in der GUI angezeigt werden.
+Sie können jeden Befehl in die Zwischenablage kopieren, und ihn dann auf dem Host ausführen.
+endif::[]
+
+
+Um den Ablauf so einfach wie möglich zu gestalten, wird die Authentisierung in den Befehlen, die für Download und Registrierung notwendig sind, mit einem Einmal-Token (_one-time token_) durchgeführt.
+Dieses Token ist für eine erfolgreiche Ausführung innerhalb eines begrenzten Zeitraums gültig.
+Es wird dabei zuerst generiert, bevor es in den genannten Befehlen verwendet wird.
+
+Download, Installation und Registrierung im Schnelldurchlauf per Slideout eignen sich besonders gut dazu, schnell die ersten Hosts in {CMK} zu erstellen.
+Ausführliche Informationen über alle möglichen Wege zur Installation eines Standard-Agenten (zum Beispiel ohne Einmal-Token, mit xref:glossar#agent_plugin[Agentenplugins] und mit Fehlersuche) erhalten Sie in den folgenden Kapiteln.
+
+
+[#install]
+== Installation
+
+ifdef::onprem[]
+{CMK} bietet Ihnen für die Installation des Linux-Agenten verschiedene Wege -- von der manuellen Installation des Software-Pakets bis hin zur vollautomatischen Verteilung inklusive Update-Funktion.
+Manche davon stehen nur in den kommerziellen Editionen zur Verfügung:
+
+[cols="30,50,~,~",options="header"]
+|===
+|Methode |Beschreibung |{RE} |Kommerzielle Editionen
+|Mitgeliefertes RPM/DEB-Paket |Einfache Installation eines Standard-Agenten mit manueller Konfiguration über Konfigurationsdateien. 
+Die Installationsroutine überprüft und konfiguriert in allen Editionen `systemd` und `xinetd` -- in dieser Reihenfolge. |X |X
+|RPM/DEB-Paket aus der xref:glossar#agent_bakery[Agentenbäckerei] |Konfiguration über die GUI, individuelle Konfiguration pro Host möglich. | |X
+|xref:agent_deployment#[Automatisches Update] |Das Paket aus der Agentenbäckerei wird erstmalig von Hand oder per Skript installiert und von da an automatisch aktualisiert. | |X
+|===
+endif::[]
+
+ifdef::saas[]
+In {CE-saas} ist es besonders einfach, für die Autoregistrierung vorkonfigurierte Agentenpakete zu installieren und zu nutzen.
+Neben diesen stehen die sogenannten „Vanilla-Agenten“ ohne Vorkonfiguration zur Verfügung, die mehr Aufwand bei der Einrichtung erfordern.
+
+Die Verwendung der Vanilla-Agenten kann für das Debugging sinnvoll sein, oder wenn Sie Betriebssystem-Images erstellen wollen, die unabhängig von einer {CMK}-Edition oder -Instanz verwendet werden können.
+Dazu xref:post_install[später mehr].
+endif::[]
+
+
+[#download]
+=== Download des RPM/DEB-Pakets
+
+Sie installieren den Linux-Agenten durch Installation des RPM- oder des DEB-Pakets.
+Ob Sie RPM oder DEB benötigen, hängt von der Linux-Distribution ab, auf der Sie das Paket installieren möchten:
+
+[cols="10,10,~",options="header"]
+|===
+|Paket |Endung |Installation auf
+|RPM |`.rpm` |Red Hat Enterprise Linux (RHEL) basierte Systeme, SLES, Fedora, openSUSE, etc.
+|DEB |`.deb` |Debian, Ubuntu, alle anderen DEB-basierten Distributionen
+|===
+
+Beide Paketformate stehen für verschiedene Prozessorarchitekturen zur Verfügung:
+
+- Pakete mit `all` oder `noarch` im Namen lassen sich auf allen Linux-Systemen installieren, sie bringen den Agent Controller aber nur für `x86_64` (auch `amd64` genannt) mit, auf anderen Prozessoren arbeitet der Agent im xref:agent_linux_legacy#[Legacy-Modus]
+
+- Pakete mit `aarch64` oder  `arm64` im Namen lassen sich nur auf Linux-Systemen installieren, die einen 64-Bit-ARM-Prozessor verwenden, dort aktivieren Sie auch den Agent Controller, wenn Systemd als Init-System verwendet wird
+
+Vor der Installation müssen Sie das Paket holen und auf den Host bringen (zum Beispiel mit `scp` oder WinSCP), auf dem der Agent laufen soll.
+
+////
+[IMPORTANT]
+====
+Die von {CMK} mitgelieferten Agentenpakete enthalten (Stand 31. März 2026) noch keinen Agent Controller für `aarch64` (ARM mit 64-Bit-Befehlssatz).
+Verwenden Sie die xref:glossar#agent_bakery[Agentenbäckerei], um angepasste Pakete zu erstellen, die den Agent Controller für `aarch64` oder beide Architekturen enthalten.
+Die enthaltene Architektur des Agent Controllers legen Sie über die Regel [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Customize agent package (Linux)# fest.
+====
+////
+
+
+[#download_gui]
+==== Paket per {CMK}-GUI holen
+
+ifdef::onprem[]
+In {CRE} finden Sie die Linux-Pakete des Agenten über [.guihint]#Setup > Agents > Linux#.
+In den kommerziellen Editionen gelangen Sie im [.guihint]#Setup#-Menü über [.guihint]#Agents > Windows, Linux, Solaris, AIX# zunächst in die xref:wato_monitoringagents#bakery[Agentenbäckerei], wo Sie die gebackenen Pakete finden.
+Von dort aus kommen Sie mit dem Menüeintrag [.guihint]#Related > Linux, Solaris, AIX files# zur Liste der Agentendateien:
+
+.Auf der Download-Seite finden Sie die RPM- und DEB-Pakete
+image::agent_linux_agent_files.png[alt="Download-Seite mit den RPM/DEB-Paketen."]
+
+Alles was Sie brauchen, finden Sie gleich im ersten Kasten mit dem Namen [.guihint]#Packaged Agents#:
+die fertigen RPM- und DEB-Paketdateien für die Installation des Linux-Agenten mit Standardeinstellungen.
+endif::[]
+
+ifdef::saas[]
+{CE} verfügt mit der xref:glossar#agent_bakery[Agentenbäckerei] über ein Software-Modul zum automatischen Paketieren von individuell angepassten Agenten.
+Sie gelangen im [.guihint]#Setup#-Menü über [.guihint]#Agents > Windows, Linux, Solaris, AIX# in die Agentenbäckerei.
+
+Dort finden Sie vorbereitete Pakete für jeden Ordner, der für die Autoregistrierung konfiguriert ist.
+Im Auslieferungszustand ist das der Ordner `preconfigured_agent`.
+Hier erfolgt die Registrierung des Agenten automatisch nach der Installation des Agentenpakets.
+Eine manuelle Registrierung, wie im folgenden xref:registration[Kapitel] beschrieben, ist _nicht_ notwendig.
+
+Die Vanilla-Agenten ohne Vorkonfiguration finden Sie in der ersten Zeile [.guihint]#Default configuration# der Tabelle.
+
+.In der Agentenbäckerei können Sie vorkonfigurierte und Vanilla-Agentenpakete herunterladen
+image::agent_linux_bakery_saas.png[alt="Agentenpakete in der Agentenbäckerei.",fullscreen=1]
+
+Eine ausführliche Beschreibung der Konfiguration individueller Agentenpakete mit der Agentenbäckerei finden Sie im allgemeinen Artikel über die xref:wato_monitoringagents#[Agenten].
+endif::[]
+
+
+ifdef::onprem[]
+==== Paket per HTTP holen
+
+Manchmal ist der Download auf einen Rechner und das anschließende Kopieren auf den Zielrechner mit `scp` oder WinSCP sehr umständlich.
+Sie können das Paket vom {CMK}-Server auch direkt per HTTP auf das Zielsystem laden.
+Für diesen Zweck sind die Downloads der Agentendateien bewusst _ohne Anmeldung_ möglich.
+Immerhin enthalten die Dateien keine Geheimnisse.
+Jeder kann sich {CMK} selbst herunterladen und installieren und so auf die Dateien zugreifen.
+
+Am einfachsten geht das mit `wget`.
+Die URL können Sie über den Browser ermitteln.
+Wenn Sie den Namen des Pakets bereits kennen, können Sie die URL einfach selbst zusammensetzen.
+Setzen Sie `/mysite/check_mk/agents/` vor den Dateinamen, im folgenden Beispiel für das RPM-Paket:
+
+[{shell-raw}]
+----
+{c-root} wget http://mycmkserver/mysite/check_mk/agents/check-mk-agent-{current}-1.noarch.rpm
+----
+
+*Tipp:* RPM hat sogar ein eingebautes `wget`.
+Hier können Sie Download und xref:install_package[Installation] mit einem Befehl durchführen:
+
+[{shell-raw}]
+----
+{c-root} rpm -U http://mycmkserver/mysite/check_mk/agents/check-mk-agent-{current}-1.noarch.rpm
+----
+endif::[]
+
+
+==== Paket per REST-API holen
+
+Die xref:rest_api#[REST-API] von {CMK} bietet die folgenden Möglichkeiten Agentenpakete vom {CMK}-Server herunterzuladen:
+
+* Herunterladen des mitgelieferten Agenten.
+* Herunterladen eines individuell vorbereiteten Agenten nach Host-Name und Betriebssystem.
+* Herunterladen eines individuell vorbereiteten Agenten nach Hash des Agenten und Betriebssystems.
+
+Per REST-API haben Sie die Möglichkeit, das Paket vom {CMK}-Server direkt auf den Zielrechner zu holen.
+
+Das mitgelieferte DEB-Paket des Linux-Agenten lässt sich beispielsweise mit dem folgenden `curl`-Befehl holen, in dem die Authentifizierung mit einem xref:glossar#automation_user[Automationsbenutzer] erfolgt:
+
+ifdef::onprem[]
+[{shell}]
+----
+{c-root} curl -OJG "\http://mycmkserver/mysite/check_mk/api/v1/domain-types/agent/actions/download/invoke" \
+--header 'Accept: application/octet-stream' \
+--header 'Authorization: Bearer automation myautomationsecret' \
+--data-urlencode 'os_type=linux_deb'
+----
+endif::[]
+
+ifdef::saas[]
+[{shell}]
+----
+{c-root} curl -OJG "\https://mycmkserver/mysite/check_mk/api/v1/domain-types/agent/actions/download/invoke" \
+--header 'Accept: application/octet-stream' \
+--header 'Authorization: Bearer api_user myautomationsecret' \
+--data-urlencode 'os_type=linux_deb'
+----
+endif::[]
+
+*Hinweis:* Der Befehl wurde zugunsten der Lesbarkeit in vier Zeilen aufgeteilt.
+
+Hierbei handelt es sich nur um ein einfaches Beispiel, um die Funktionsweise dieses einen REST-API-Endpunkts zum Herunterladen des Agenten zu demonstrieren.
+Details zu diesem und anderen REST-API-Endpunkten finden Sie in der API-Dokumentation, die Sie in {CMK} über [.guihint]#Help > Developer resources > REST API > Version 1 > Documentation# aufrufen können.
+
+
+[#install_package]
+=== Paket installieren
+
+Nachdem Sie das RPM- oder das DEB-Paket geholt und -- falls nötig -- mit `scp`, WinSCP oder anderen Mitteln auf den zu überwachenden Host kopiert haben, ist die Installation mit einem Befehl erledigt.
+
+[TIP]
+====
+Die in den gezeigten Befehlen verwendeten Paketnamen können leicht abweichen, je nachdem auf welche Weise Sie das Agentenpaket heruntergeladen haben.
+====
+
+Die Installation des RPM-Pakets erfolgt unter `root` mit dem Befehl `rpm -U`:
+
+[{shell}]
+----
+{c-root} rpm -U check-mk-agent-{current}-1.noarch.rpm
+----
+
+Die Option `-U` steht übrigens für „Update“, kann aber auch eine Erstinstallation korrekt durchführen.
+Das bedeutet auch, dass Sie mit diesem Befehl einen bereits installierten Agenten auf die aktuelle Version updaten können -- und ihn auch zukünftig für Updates des Agentenpakets nutzen können.
+
+Die Installation des DEB-Pakets -- und ein Update -- erfolgt unter `root` mit dem Befehl `dpkg -i`:
+
+// Ausgabe für dpkg -i check-mk-agent_2.5.0b4-1_all.deb
+[{shell}]
+----
+{c-root} dpkg -i check-mk-agent_{current}-1_all.deb
+pass:[(]Reading database ... 739920 files and directories currently installed.)
+Preparing to unpack check-mk-agent_{current}-1_all.deb ...
+Unpacking check-mk-agent ({current}-1) ...
+Setting up check-mk-agent ({current}-1) ...
+
+Deploying agent controller: /usr/bin/cmk-agent-ctl
+Deploying systemd units: check-mk-agent-async.service check-mk-agent.socket cmk-agent-ctl-daemon.service check-mk-agent@.service
+Deployed systemd
+Creating/updating 'cmk-agent' user account ...
+
+WARNING: The agent controller is operating in an insecure mode! To secure the connection run pass:[`]cmk-agent-ctl registerpass:[`].
+
+Activating systemd unit 'check-mk-agent-async.service'...
+Created symlink /etc/systemd/system/multi-user.target.wants/check-mk-agent-async.service → /usr/lib/systemd/system/check-mk-agent-async.service.
+Activating systemd unit 'check-mk-agent.socket'...
+Created symlink /etc/systemd/system/sockets.target.wants/check-mk-agent.socket → /usr/lib/systemd/system/check-mk-agent.socket.
+Activating systemd unit 'cmk-agent-ctl-daemon.service'...
+Created symlink /etc/systemd/system/multi-user.target.wants/cmk-agent-ctl-daemon.service → /usr/lib/systemd/system/cmk-agent-ctl-daemon.service.
+----
+
+Hier wurde das Paket auf einem zuvor agentenlosen Host erstmalig installiert.
+Der Benutzer `cmk-agent` wurde erstellt und `systemd` konfiguriert.
+Auf die dazwischen angezeigte Warnung zum `insecure mode`, also dem Legacy-Pull-Modus, gehen wir xref:post_install[gleich] ein.
+
+
+ifdef::onprem[]
+[#install_bakery]
+=== Installation mit der Agentenbäckerei
+
+{cee-only}
+Die kommerziellen Editionen verfügen mit der xref:glossar#agent_bakery[Agentenbäckerei] über ein Software-Modul zum automatischen Paketieren von individuell angepassten Agenten.
+Eine ausführliche Beschreibung dazu finden Sie im allgemeinen Artikel über die xref:wato_monitoringagents#[Agenten].
+Die Installation der gebackenen Pakete geschieht genauso wie es für die mitgelieferten Pakete xref:install_package[oben] beschrieben ist.
+
+In {CE} können Sie die Agentenbäckerei zusätzlich nutzen, um Agentenpakete mit einer Konfiguration für die Autoregistrierung zu versehen,
+was die xref:hosts_autoregister#[automatische Erstellung von Hosts] ermöglicht.
+In diesem Fall erfolgt die Registrierung des Agenten automatisch nach der Installation des Agentenpakets
+und eine manuelle Registrierung, wie im folgenden xref:registration[Kapitel] beschrieben, ist _nicht_ mehr notwendig.
+
+==== Prozessorarchitektur und Verzeichnishierarchie
+
+Die in gebackenen Agentenpaketen enthaltene Prozessorarchitektur (`aarch64`/`arm64` oder `x86_64`/`amd64` oder keine oder beide) des Agent Controllers legen Sie über die Regel [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Customize agent package (Linux)# fest.
+Analog legen Sie Einstellungen zur Installation in einem xref:agent_single_folder#[einzigen Verzeichnis], beziehungsweise zur unprivilegierten Ausführung, unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Linux/Unix agent options# fest.
+endif::[]
+
+
+[#automatic_updates]
+=== Automatisches Update
+
+ifdef::onprem[]
+{cee-only}
+endif::[]
+Wenn Sie die Agentenbäckerei verwenden, können Sie automatische Updates des Agenten einrichten.
+Diese werden in einem xref:agent_deployment#[eigenen Artikel] beschrieben.
+
+
+[#post_install]
+=== Wie geht es weiter nach der Installation?
+
+ifdef::saas[]
+[TIP]
+====
+Dieser Abschnitt ist für Sie nur relevant, wenn Sie einen nicht für die Autoregistrierung vorkonfigurierten Vanilla-Agenten installiert haben. 
+====
+endif::[]
+
+Falls der Agent Controller bei der Installation mit `systemd` konfiguriert werden konnte, ist der nächste Schritt die xref:registration[Registrierung], mit der die TLS-Verschlüsselung eingerichtet wird, so dass die verschlüsselte Agentenausgabe vom {CMK}-Server entschlüsselt und im Monitoring angezeigt werden kann.
+
+Eine Besonderheit gibt es, falls der Agent mit Agent Controller erstmalig installiert wurde.
+Dann schaltet der Agent in den unverschlüsselten *Legacy-Pull-Modus*,
+ifdef::onprem[]
+damit der {CMK}-Server nicht von den Monitoring-Daten abgeschnitten wird und diese weiterhin anzeigen kann.
+endif::[]
+ifdef::saas[]
+// ES: This fragment may need attention for KNW-2113
+damit ein {CMK}-Server einer On-Premises-Edition nicht von den Monitoring-Daten abgeschnitten wird und diese weiterhin anzeigen kann.
+endif::[]
+Das betrifft sowohl eine Neuinstallation als auch das Update eines sehr alten Agenten (älter als Version {v21}).
+
+ifdef::onprem[]
+Einen Hinweis auf den aktivierten Legacy-Pull-Modus erhalten Sie bereits in der Befehlsausgabe bei der xref:install_package[Installation des Agenten].
+Im Monitoring sieht das dann etwa so aus:
+
+.Warnung im {CMK}-Monitoring, dass TLS noch nicht genutzt wird
+image::agent_linux_service_legacy_pull_mode.png[alt="Der WARN-Zustand des 'Check_MK' Services wegen fehlender Verschlüsselung."]
+
+Die {CMK}-Instanz erkennt an der Agentenausgabe, dass der Agent Controller vorhanden und damit die TLS-Verschlüsselung möglich ist -- aber noch nicht eingeschaltet ist.
+Der Service [.guihint]#Check_MK Agent# wechselt in den Zustand {WARN} und bleibt es solange, bis Sie die Registrierung durchgeführt haben.
+Nach der Registrierung wird nur noch im verschlüsselten Pull-Modus kommuniziert.
+Der Legacy-Pull-Modus wird abgeschaltet und bleibt es auch.
+Allerdings kann er im Bedarfsfall xref:deregister[per Befehl] wieder eingeschaltet werden.
+endif::[]
+
+Anders liegt der Fall, wenn der Agent Controller sich während der Installation nicht als Daemon bei `systemd` registrieren konnte.
+Ohne Agent Controller ist die Registrierung des Hosts nicht möglich und der einzige Kommunikationsweg verbleibt der *Legacy-Modus*.
+
+ifdef::saas[]
+[IMPORTANT]
+====
+Linux-Systeme, bei denen der Agent nur im Legacy-Modus genutzt werden kann, können _nicht_ ins Monitoring von {CE-saas} aufgenommen werden!
+====
+endif::[]
+
+Im nächsten Kapitel können Sie durch xref:test_environment[Test von Agent Controller und Systemumgebung] feststellen, ob Sie mit der Registrierung fortsetzen können.
+
+ifdef::onprem[]
+*Hinweis:* Im Regelsatz [.guihint]#{CMK} Agent installation auditing# finden Sie verschiedene Einstellungen, um den Zustand des Agenten zu prüfen und im Monitoring sichtbar zu machen.
+Unter anderem können Sie hier festlegen, welchen Zustand der Service [.guihint]#Check_MK Agent# bei einer noch nicht durchgeführten TLS-Konfiguration haben soll.
+endif::[]
+
+
+[#registration]
+== Registrierung
+
+ifdef::saas[]
+// ES: This admonition may need attention for KNW-2113
+[TIP]
+====
+Dieses Kapitel ist vor allem relevant, wenn Sie einen nicht für die Autoregistrierung vorkonfigurierten Vanilla-Agenten installiert haben oder vorhandene Hosts aus dem Monitoring einer On-Premises-Edition von {CMK} zu {CE-saas} migrieren wollen.
+Es kann auch hilfreich sein, wenn die Autoregistrierung – aus welchen Gründen auch immer – einmal fehlschlägt.
+====
+endif::[]
+
+
+[#overview]
+=== Übersicht und Voraussetzungen
+
+Unmittelbar nach der Installation des Agenten (auch als Update eines sehr alten Agenten, d.h. älter als Version {v21}) ist nur unverschlüsselte Kommunikation im Legacy-Pull-Modus möglich.
+Eine ausschließlich verschlüsselte Datenübertragung ist erst nach Aufbau eines Vertrauensverhältnisses aktiv.
+
+Eine Ausnahme hiervon sind die für die xref:hosts_autoregister#[Autoregistrierung] vorkonfigurierten und via Agentenbäckerei heruntergeladenen Pakete.
+Diese Pakete führen die Registrierung automatisch nach der Installation durch.
+
+In allen anderen Fällen führen Sie die manuelle Registrierung zeitnah nach der Installation des Agenten durch.
+Wie Sie dies bewerkstelligen, zeigt dieses Kapitel.
+
+Die Registrierung und damit die Herstellung des gegenseitigen Vertrauensverhältnisses erfolgt unter einem {CMK}-Benutzer mit Zugriff auf die xref:rest_api#[REST-API].
+Dafür bietet sich der xref:glossar#automation_user[Automationsbenutzer] `agent_registration` an, der nur die Berechtigung zur Registrierung von Agenten besitzt und bei jeder {CMK}-Installation automatisch angelegt wird.
+Das zugehörige Automationspasswort (_automation secret_) können Sie mit dem Symbol icon:icon_random[alt="Symbol für das Würfeln."] auswürfeln.
+Sie müssen den Benutzer speichern, bevor Sie das neue Passwort nutzen können.
+
+
+==== Voraussetzungen auf dem Host
+
+Die Registrierung mit dem Agent Controller setzt ein Linux-System voraus mit einem init-System `systemd` ab Version 219 und einer `x86_64`- oder `aarch64`-Rechnerarchitektur.
+Im Abschnitt xref:test_environment[Agent Controller und Systemumgebung testen] erfahren Sie, wie Sie diese Voraussetzungen überprüfen.
+
+
+ifdef::onprem[]
+==== Voraussetzungen auf dem {CMK}-Server
+
+Damit die Registrierung direkt auf dem ins Monitoring aufzunehmenden Host durchgeführt werden kann, muss dieser die REST-API des {CMK}-Servers (Port 443 oder 80) und den Agent Receiver (Port 8000 bei der ersten Instanz, 8001 bei der zweiten…) erreichen können.
+Lesen Sie den Abschnitt xref:networkrequirements[Netzwerkumgebung für die Registrierung], falls in Ihrer IT-Infrastruktur eine dieser Bedingungen nicht erfüllt werden kann.
+endif::[]
+
+
+ifdef::saas[]
+==== Voraussetzungen für Ihre Firewall
+
+Damit die Registrierung auf dem ins Monitoring aufzunehmenden Host durchgeführt werden kann, muss dieser die REST-API des {CMK}-Servers (Port 443) und den Agent Receiver (Port 8000) erreichen können.
+Lesen Sie den Abschnitt xref:networkrequirements[Netzwerkumgebung für die Registrierung] für Hintergründe und Details.
+endif::[]
+
+
+[#test_environment]
+=== Agent Controller und Systemumgebung testen
+
+Der Agent mit Agent Controller setzt eine Linux-Distribution mit `systemd` voraus, präziser `systemd` in einer Version 219 oder neuer.
+
+Die Chance ist groß, dass diese Voraussetzung auf Ihrem Host erfüllt ist, da seit 2015 die meisten Linux-Distributionen `systemd` als init-System übernommen und damit andere init-Systeme wie SysVinit ersetzt haben, z.B. SUSE Linux Enterprise Server ab Version 12, openSUSE ab Version 12.1, Red Hat Enterprise Linux ab Version 7, Fedora ab Version 15, Debian ab Version 8 und Ubuntu ab Version 15.04.
+Leider bringt der Vergleich der Versionsnummer alleine keine Gewissheit, da `systemd` auch auf einem aktuellen Linux-System fehlen kann, wenn dieses Jahre lang „nur“ aktualisiert wurde.
+
+Neben der Version von `systemd` sind einige weitere Voraussetzungen zu erfüllen, die in diesem Kapitel abgeprüft werden.
+
+// MFS: FIXME: Agenten mit preconfigured_connections.json sollten keine 6556 mehr aufmachen, testen und dann ggf. auch für onprem anpassen
+
+ifdef::onprem[]
+*Achtung:* Push-Modus und Autoregistrierung sind zwingend an den Agent Controller gebunden und daher nicht nutzbar im Legacy-Modus, auf den wir in diesem Kapitel mehrfach verweisen.
+endif::[]
+
+Prüfen Sie zunächst auf dem Host, auf dem der Agent installiert werden soll, ob und in welcher Version `systemd` läuft:  
+
+[{shell-raw}]
+----
+{c-root} systemctl --version
+systemd 245 (245.4-4ubuntu3.15)
+----
+
+Die obige Befehlsausgabe zeigt, dass `systemd` in der richtigen Version installiert ist.
+Falls `systemd` nicht, oder nur in einer zu alten Version läuft, kann der Agent Controller nicht verwendet werden.
+ifdef::onprem[]
+Schließen Sie die Einrichtung ab, wie im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] beschrieben.
+endif::[]
+ifdef::saas[]
+In diesem Fall erfüllt der Host nicht die Mindestanforderungen für das Monitoring mit {CE-saas} und Sie können sich den folgenden Test sparen.
+endif::[]
+
+Prüfen Sie nun, ob der Agent Controller gestartet werden kann:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl --version
+----
+
+Als Ausgabe sollte die Versionsnummer zu sehen sein, beispielsweise:
+
+[{shell}]
+----
+cmk-agent-ctl {current}
+----
+
+In seltenen Fällen erscheint die folgende Fehlermeldung:
+
+[{shell}]
+----
+bash: /usr/bin/cmk-agent-ctl: cannot execute binary file: Exec format error
+----
+
+Ursache hierfür ist, dass Ihr Linux eine andere Rechnerarchitektur als `x86_64` oder `aarch64` nutzt, zum Beispiel das ältere _32-Bit x86_.
+In diesem Fall kann der Agent Controller nicht verwendet werden.
+
+ifdef::onprem[]
+Schließen Sie die Einrichtung ab, wie im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] beschrieben.
+
+Im nächsten Schritt gilt es herauszufinden, welches Programm auf Port 6556 auf Anfragen wartet:
+
+[{shell-raw}]
+----
+{c-root} ss -tulpn | grep 6556
+tcp	LISTEN	0	1024	0.0.0.0:6556	0.0.0.0:*	users:(("cmk-agent-ctl",pid=1861810,fd=9))
+----
+
+Hier ist es `cmk-agent-ctl`.
+Die Voraussetzungen für verschlüsselte Kommunikation sind also erfüllt.
+Steht innerhalb der Klammer stattdessen `systemd`, `xinetd` oder `inetd`, sind die Voraussetzungen für die Verwendung des Agent Controllers nicht gegeben.
+Schließen Sie auch in diesem Fall die Einrichtung ab, wie im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] beschrieben.
+endif::[]
+
+ifdef::saas[]
+[TIP]
+====
+Für Systeme, bei denen der mitgelieferte Agent Controller nicht verwendet werden kann, kann {COM} keinen Support leisten.
+Monitoring mit {CE-saas} ist hier _out of the box_ nicht möglich.
+====
+endif::[]
+
+
+=== Host ins Setup aufnehmen
+
+Erstellen Sie zunächst den neuen Host über [.guihint]#Setup > Hosts > Add host#.
+Ein Host muss in der xref:glossar#configuration_environment[Konfigurationsumgebung] existieren, bevor er registriert werden kann.
+
+ifdef::onprem[]
+In {CE} finden Sie in den Eigenschaften des Hosts im Abschnitt zu den xref:hosts_setup.html#monitoring_agents[Monitoring-Agenten] die Option [.guihint]#{CMK} agent connection mode#.
+Hier können Sie alternativ zum Pull-Modus, der in allen Editionen verfügbar ist, für den {CMK}-Agenten den Push-Modus aktivieren.
+endif::[]
+
+
+[#register_host]
+=== Host beim Server registrieren
+
+Die Registrierung erfolgt mit dem Agent Controller `cmk-agent-ctl`, der für die Konfiguration der Verbindungen eine Befehlsschnittstelle bietet.
+Sie können sich mit `cmk-agent-ctl help` die Befehlshilfe anzeigen lassen, auch spezifisch für die verfügbaren Sub-Befehle, z.B. mit `cmk-agent-ctl help register`.
+
+Ob der Host dabei für den Pull-Modus oder den Push-Modus konfiguriert ist, macht für die Befehlsbeispiele keinen Unterschied.
+In welchem Modus der Agent Controller arbeiten soll, teilt ihm der Agent Receiver bei der Registrierung mit.
+
+Begeben Sie sich nun zum Host, der registriert werden soll.
+Hier ist mit `root`-Rechten eine Anfrage an die {CMK}-xref:glossar#site[Instanz] zu stellen:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl register \
+             --hostname mynewhost \
+             --server mycmkserver \
+             --site mysite \
+             --user agent_registration \
+             --password 'PTEGDYXBFXVGNDPRL'
+----
+
+Dabei ist der Host-Name hinter der Option `--hostname` exakt so anzugeben, wie zuvor beim Erstellen im Setup.
+Die Optionen `--server` und `--site` geben den Namen des {CMK}-Servers und der Instanz an.
+Der Server-Name darf auch die IP-Adresse sein, der Instanzname (hier `mysite`) entspricht demjenigen, den Sie im URL-Pfad der Weboberfläche sehen. 
+Komplettiert werden die Optionen durch Name und Passwort des Automationsbenutzers.
+Wenn Sie die Option `--password` auslassen, wird das Passwort interaktiv abgefragt.
+
+Waren die angegebenen Werte korrekt, werden Sie aufgefordert, die Identität der {CMK}-Instanz zu bestätigen, zu der Sie die Verbindung herstellen wollen.
+Das zu bestätigende Server-Zertifikat haben wir aus Gründen der Übersichtlichkeit stark verkürzt:
+
+[{shell}]
+----
+Attempting to register at mycmkserver:8000/mysite. Server certificate details:
+
+PEM-encoded certificate:
+---BEGIN CERTIFICATE---
+MIIC6zCCAdOgAwIBAgIUXbSE8FXQfmFqoRNhG9NpHhlRJ40wDQYJKoZIhvcNAQEL
+[...]
+nS+9hN5ILfRI+wkdrQLC0vkHVYY8hGIEq+xTpG/Pxw==
+---END CERTIFICATE---
+
+Issued by:
+	Site 'mysite' local CA
+Issued to:
+	localhost
+Validity:
+	From Thu, 10 Feb 2022 15:13:22 +0000
+	To   Tue, 13 Jun 3020 15:13:22 +0000
+
+Do you want to establish this connection? [Y/n]
+> #Y#
+----
+
+Bestätigen Sie mit `Y`, um den Vorgang abzuschließen.
+
+Falls keine Fehlermeldung angezeigt wird, ist die verschlüsselte Verbindung hergestellt.
+Über diese Verbindung werden alle Daten komprimiert übertragen.
+
+Wenn Sie die interaktive Zertifikatsprüfung – beispielsweise, um die Registrierung komplett automatisieren zu können – abschalten wollen, können Sie den zusätzlichen Parameter `--trust-cert` verwenden.
+Dem übermittelten Zertifikat wird dann automatisch vertraut.
+Beachten Sie in diesem Fall, dass Sie auf anderem Weg die Integrität des Zertifikats sicher stellen sollten.
+Dies kann (von Hand oder per Skript) durch Kontrolle der xref:files[Datei] `/var/lib/cmk-agent/registered_connections.json` erfolgen.
+
+[TIP]
+====
+Weitere Informationen zum Thema Zertifikate finden Sie im Artikel xref:certificates#[Zertifikate in {CMK} im Überblick.]
+
+Mit dem Befehl `cmk-agent-ctl` kann die Registrierung des Agent Controllers und des xref:glossar#agent_updater[Agent Updaters] _gleichzeitig_ erfolgen.
+Wie das funktioniert, erfahren Sie im Artikel zu den xref:agent_deployment#one_registration[automatischen Agenten-Updates].
+====
+
+
+[#autoregister]
+=== Host beim Server automatisch registrieren lassen
+
+ifdef::onprem[]
+{CE} bietet die Möglichkeit, Hosts automatisch bei der Registrierung anzulegen.
+Für die xref:hosts_autoregister#[Autoregistrierung] benötigen Sie zusätzlich zu einem Benutzer mit der Berechtigung Hosts zu registrieren, mindestens einen Ordner, der für die Aufnahme der automatisch zu erstellenden Hosts konfiguriert ist.
+endif::[]
+
+ifdef::saas[]
+Sie haben die Möglichkeit, zusätzlich zu den in der Agentenbäckerei verfügbaren Paketen, eigene Pakete für die xref:hosts_autoregister#[Autoregistrierung] zu erstellen.
+Neben einem Benutzer mit der Berechtigung, Hosts zu registrieren, benötigen Sie dazu mindestens einen Ordner, der für die Aufnahme der automatisch zu erstellenden Hosts konfiguriert ist.
+endif::[]
+
+Ist dies der Fall, können Sie die Registrierung inklusive automatischer Erstellung des Hosts auch per Befehl vornehmen.
+
+In der Regel werden Sie den Weg über die xref:hosts_autoregister#rule_autoregister_bakery[Einstellungen der Agentenbäckerei] gehen, 
+welche die Konfigurationsdatei `/var/lib/cmk-agent/pre_configured_connections.json` ins Agentenpaket integrieren und die Registrierung automatisch bei der Installation vornehmen.
+Der hier vorgestellte Befehl dient daher primär dem Test und der Fehlersuche, beispielsweise dem Ausprobieren eigener _Agenten-Labels_ mit der Option `--agent-labels <KEY=VALUE>`.
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl register-new \
+             --server mycmkserver \
+             --site mysite \
+             --agent-labels testhost:true \
+             --user agent_registration \
+             --password 'PTEGDYXBFXVGNDPRL'
+----
+
+Größter Unterschied hier ist der geänderte Sub-Befehl `register-new`, mit dem die Registrierung _und_ die Erstellung eines neuen Hosts in der {CMK}-Instanz angefragt wird.
+Als Name des Hosts wird der in der Umgebungsvariable `$HOSTNAME` hinterlegte verwendet.
+Die anschließende Bestätigung des Zertifikats entspricht der im letzten Abschnitt gezeigten.
+
+Ob der Host
+ifdef::onprem[]
+im Pull-Modus,
+endif::[]
+im Push-Modus oder überhaupt nicht angelegt wird, entscheiden Ihre Einstellungen des Regelsatzes [.guihint]#Agent registration#.
+Nach erfolgreicher Registrierung können mehrere Minuten vergehen, bis der Host im Monitoring auftaucht.
+
+
+=== Vertrauensverhältnis überprüfen
+
+Der Befehl `cmk-agent-ctl status` zeigt nun genau ein Vertrauensverhältnis zum {CMK}-Server:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl status
+Connection: 12.34.56.78:8000/mysite
+	UUID: d38e7e53-9f0b-4f11-bbcf-d19617971595
+	Local:
+		Connection type: pull-agent
+		Certificate issuer: Site 'mysite' local CA
+		Certificate validity: Mon, 21 Feb 2022 11:23:57 +0000 - Sat, 24 Jun 3020 11:23:57 +0000
+	Remote:
+		Connection type: pull-agent
+		Host name: mynewhost
+----
+
+Ist die Information in einem maschinenlesbaren Format erforderlich, hängen Sie den zusätzlichen Parameter `--json` an, um die Ausgabe als JSON-Objekt formatiert zu erhalten.
+
+*Hinweis:* Es kann stets nur ein Vertrauensverhältnis zwischen Host und Instanz geben.
+Wenn Sie beispielsweise den bereits registrierten Host `mynewhost` unter anderem Namen (`mynewhost2`), aber mit der gleichen IP-Adresse registrieren, dann ersetzt die neue Verbindung die bestehende.
+Die Verbindung von `mynewhost` zur Instanz wird gelöst und für den Host werden keine Agentendaten mehr für das Monitoring geliefert.
+
+
+[#proxyregister]
+=== Im Auftrag registrieren
+
+ifdef::saas[]
+// ES: This admonition may need attention for KNW-2113
+[TIP]
+====
+Dieser Abschnitt hat dank der Verfügbarkeit der Autoregistrierung für {CE-saas} wenig Relevanz.
+Falls Sie die _Registrierung im Auftrag_ beispielsweise zusammen mit Infrastruktur-Management-Werkzeugen bereits mit den On-Premises-Editionen von {CMK} verwenden, können Sie dies auch weiterhin mit {CE-saas} tun.
+====
+endif::[]
+
+Zur leichteren Registrierung mehrerer Hosts kann ein beliebiger Host, auf dem der Agent installiert ist, eine Registrierung im Auftrag anderer durchführen.
+Dabei wird eine JSON-Datei exportiert, die dann auf den Ziel-Host übertragen und dort importiert werden kann.
+Auch hier gilt wie zuvor: Der im Auftrag registrierte Host muss in der Instanz bereits eingerichtet sein.
+
+Zunächst wird auf einem beliebigen im Setup befindlichen Host die Registrierung stellvertretend durchgeführt.
+ifdef::onprem[]
+Hier bietet sich natürlich der {CMK}-Server an, der in der Regel als erster Host eingerichtet wird.
+endif::[]
+Wie beim Beispiel oben gilt, dass Sie das Passwort per Option übergeben können oder interaktiv danach gefragt werden, wenn Sie die Option `--password` weglassen.
+Die JSON-Ausgabe leiten wir im Beispiel in eine Datei um:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register \
+    --hostname mynewhost3 \
+    --server mycmkserver \
+    --site mysite \
+    --user agent_registration > /tmp/mynewhost3.json
+----
+
+Nun übertragen wir die Datei `/tmp/mynewhost3.json` auf den Host, für den wir die Registrierung durchgeführt haben, und importieren die Datei:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl import /tmp/mynewhost3.json
+----
+
+Der gesamte Vorgang ist auch in einer Pipeline möglich, in der Sie die Ausgabe von `cmk-agent-ctl proxy-register` an `ssh hostname cmk-agent-ctl import` übergeben:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register \
+             --hostname mynewhost3 \
+             --server mycmkserver \
+             --site mysite \
+             --user agent_registration \
+             --password 'PTEGDYXBFXVGNDPRL' | \
+             ssh root@mynewhost3 cmk-agent-ctl import
+----
+
+
+=== Host ins Monitoring aufnehmen
+
+ifdef::onprem[]
+Sobald die Registrierung fertiggestellt ist, führen Sie im Setup des {CMK}-Servers einen xref:wato_monitoringagents#diagnosticpage[Verbindungstest] und eine xref:wato_services#discovery[Service-Erkennung] durch.
+endif::[]
+ifdef::saas[]
+Sobald die Registrierung fertiggestellt ist, führen Sie im Setup des {CMK}-Servers eine xref:wato_services#discovery[Service-Erkennung] durch.
+endif::[]
+Anschließend nehmen Sie die gefundenen Services ins Monitoring auf, indem Sie als letzten Schritt xref:wato#activate_changes[die Änderungen aktivieren].
+
+ifdef::onprem[]
+Falls der Verbindungstest fehlschlägt, finden Sie im xref:test[folgenden Kapitel] Informationen zu Test und Fehlerdiagnose.
+endif::[]
+
+
+[#deregister]
+=== Host deregistrieren
+
+Die Registrierung eines Hosts können Sie auch wieder rückgängig machen.
+
+Auf einem Host, der mit dem {CMK}-Server verbunden ist, können Sie das Vertrauensverhältnis widerrufen.
+Dabei ist im folgenden Befehl der anzugebende Universally Unique Identifier (UUID) derjenige, der beim Befehl `cmk-agent-ctl status` ausgegeben wird:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl delete d38e7e53-9f0b-4f11-bbcf-d19617971595
+----
+
+// Auch SaaS-Nutzer können das tun, but why?
+ifdef::onprem[]
+Um alle Verbindungen des Hosts zu entfernen *und* zusätzlich den Legacy-Pull-Modus wiederherzustellen, geben Sie folgenden Befehl ein:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl delete-all --enable-insecure-connections
+----
+
+Anschließend verhält sich der Agent wie nach der erstmaligen Installation und vor der ersten Registrierung und sendet seine Daten unverschlüsselt.
+endif::[]
+
+Komplettiert wird die Deregistrierung auf dem {CMK}-Server:
+Im Setup wählen Sie auf der Seite [.guihint]#Properties of host# den Menüeintrag [.guihint]#Host > Remove TLS registration# aus und bestätigen die Nachfrage.
+
+ifdef::onprem[]
+Falls Sie die Befehlszeile bevorzugen:
+Auf dem {CMK}-Server existiert für jede Verbindung eines registrierten Hosts, der sich im Monitoring befindet, ein Softlink mit der UUID, welcher auf den Ordner mit der Agentenausgabe zeigt:
+
+[{shell-raw}]
+----
+{c-omd} cd ~/var/agent-receiver/received-outputs
+OMD[mysite]:~/var/agent-receiver/received-outputs$ ls -l d38e7e53-9f0b-4f11-bbcf-d19617971595
+lrwxrwxrwx 1 mysite mysite 67 Feb 23 07:18 d38e7e53-9f0b-4f11-bbcf-d19617971595 -> /omd/sites/mysite/tmp/check_mk/data_source_cache/push-agent/mynewhost
+----
+endif::[]
+
+
+ifdef::onprem[]
+[#changepush]
+=== Umstellung zwischen Push- und Pull-Modus
+
+In {CCE} können Sie Hosts vom Push- zum Pull-Modus und umgekehrt umstellen.
+Dies kann in Einzelfällen nötig sein, wenn Änderungen an der Netzwerktopologie anstehen oder ein Downgrade auf {CSE} durchgeführt werden soll, wo nur der Pull-Modus möglich sind.
+
+Stellen Sie zunächst im Setup, in den Eigenschaften des Hosts, den Zugriffsmodus mit der Option [.guihint]#{CMK} agent connection mode# um.
+Innerhalb der nächsten Minute werden alle Services den Status {UNKNOWN} annehmen, weil keine Monitoring-Daten eingehen.
+Führen Sie anschließend eine erneute Registrierung durch.
+Bei dieser erneuten Registrierung teilt der Agent Receiver des {CMK}-Servers dem Agent Controller mit, ob er Daten im Pull- oder im Push-Modus erwartet.
+Die anschließende Kontrolle mit `cmk-agent-ctl status` zeigt dann eine neue UUID und den Modus konsistent mit der Änderung im Setup an.
+endif::[]
+
+
+[#test]
+== Test und Fehlerdiagnose
+
+Ein modulares System kann an vielen Stellen nicht wie vorgesehen funktionieren.
+Da beim Agenten die beiden Komponenten Agent Controller (auf dem Host) und Agent Receiver (auf dem {CMK}-Server) verwendet werden, gibt es mehrere Stellen, an denen etwas schiefgehen kann.
+Bei der Fehlersuche ist daher eine strukturierte Vorgehensweise sinnvoll.
+Selbstverständlich können Sie die hier beschriebene schrittweise Analyse auch nutzen, die Datenerhebung und Kommunikation von {CMK} näher kennenzulernen. 
+
+ifdef::onprem[]
+Alle Möglichkeiten, die es vom {CMK}-Server aus gibt, sind im allgemeinen Artikel über die xref:wato_monitoringagents#diagnostics[Monitoring-Agenten] beschrieben.
+Aber natürlich gibt es noch weitere Diagnosemöglichkeiten, wenn man direkt auf dem überwachten Host angemeldet ist.
+endif::[]
+
+Wir arbeiten uns im Folgenden vom Agentenskript über den Agent Controller
+ifdef::onprem[]
+und den TCP-Port 6556
+endif::[]
+bis zur {CMK}-Instanz durch.
+ifdef::onprem[]
+Beim Agent Controller im Push-Modus überspringen Sie Tests auf Port 6556 – selbst wenn der Port 6556 vor der Registrierung geöffnet ist, wird er nach der Registrierung im Push-Modus geschlossen.
+endif::[]
+In den meisten Fällen können Sie nach Korrektur eines Fehlers die Service-Erkennung erneut starten und die Aufnahme ins Monitoring abschließen.
+
+[IMPORTANT]
+====
+Beim direkten Aufruf des Agentenskripts in einer Shell stehen möglicherweise andere link:https://wiki.debian.org/EnvironmentVariables[Umgebungsvariablen^] zur Verfügung als beim Aufruf durch den Agent Controller.
+Um die Ausgabe des Agentenskripts zu analysieren, sollten Sie daher nach Möglichkeit den xref:agent_ctl_dump[Agent Controller im Dump-Modus] verwenden.
+====
+
+
+[#script_output]
+=== Ausgabe des Agentenskripts
+
+Das Agentenskript ist ein einfaches Shellskript, welches Daten über Ihr System beschafft und als lose formatierten Text ausgibt.
+Sie können es direkt auf der Befehlszeile aufrufen.
+Da die Ausgabe etwas länger sein kann, ist der Pager `less` zum Scrollen der Ausgabe hier sehr praktisch.
+Sie können ihn mit der Taste kbd:[Q] verlassen:
+
+[{shell-raw}]
+----
+{c-root} check_mk_agent | less
+<<<check_mk>>>
+Version: {current}
+AgentOS: linux
+Hostname: mynewhost
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+AgentController: cmk-agent-ctl 0.1.0
+----
+
+So ermitteln Sie, ob das Agentenskript und Ihre Plugins und lokalen Checks richtig installiert sind.
+
+Sie müssen übrigens nicht unbedingt `root` sein, um den Agenten aufzurufen.
+Allerdings werden dann in der Ausgabe einige Informationen fehlen, zu deren Beschaffung `root`-Rechte erforderlich sind (z.B. Multipath-Informationen und die Ausgaben von `ethtool`).
+
+
+=== Agentenskript im Debug-Modus
+
+Damit eventuelle Fehlerausgaben von nicht funktionierenden Plugins oder Befehlen nicht die eigentlichen Daten „verunreinigen“, unterdrückt das Agentenskript generell den Standardfehlerkanal (STDERR).
+Sind Sie auf der Suche nach einem bestimmten Problem, können Sie diesen wieder aktivieren, indem Sie das Agentenskript in einem speziellen Debug-Modus aufrufen.
+
+Vorbereitend sollten Sie prüfen, ob das Agentenskript und der Agent Controller im xref:agent_ctl_dump[Dump-Modus] eine identische Ausgabe liefern und gegebenenfalls eine identische Umgebung (_environment_) sicherstellen.
+Dies kann durch Setzen von Variablen in einem Plugin/lokalen Check oder der Shell geschehen.
+Einen Dump der Umgebung können Sie erstellen, indem Sie die Zeile
+
+[{shell}]
+----
+env > /tmp/cmk_agent_environment.txt
+----
+
+zu einer Plugin-Datei hinzufügen und dann den Inhalt der Datei nach Ausführung durch den Agent Controller ansehen.
+
+Die Ausgabe der zusätzlichen Debug-Informationen erledigt dann die Option `-d`.
+Dabei werden auch sämtliche Shell-Befehle ausgegeben, die das Skript ausführt.
+Damit Sie hier mit `less` arbeiten können, müssen Sie Standardausgabe (STDOUT) und Fehlerkanal mit `2>&1` zusammenfassen:
+
+[{shell}]
+----
+{c-root} check_mk_agent -d 2>&1 | less
+----
+
+
+[#networkrequirements]
+=== Netzwerkumgebung für die Registrierung
+
+Schlägt die Registrierung eines Hosts im Monitoring fehl, ohne dass überhaupt das Zertifikat angezeigt wird, hilft Kenntnis der involvierten Netzwerkkommunikation bei der Identifizierung des Problems -- und natürlich bei der Behebung.
+
+Um herauszufinden, warum die Registrierung nicht erfolgreich war, führen Sie die Registrierung noch einmal mit der zusätzlichen Option `-vv` durch.
+Dadurch werden Ihnen nicht nur Fehler, sondern auch zusätzliche Informationen und Debug-Meldungen ausgegeben.
+Ist beispielsweise der {CMK}-Server vom Host aus nicht erreichbar, wird die Ausgabe etwa folgendermaßen aussehen:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl -vv register \
+            --hostname mynewhost \
+            --server mycmkserver \
+            --site mysite \
+            --user agent_registration
+INFO [cmk_agent_ctl] starting
+INFO [cmk_agent_ctl] Loaded config from '"/var/lib/cmk-agent/cmk-agent-ctl.toml"', connection registry from '"/var/lib/cmk-agent/registered_connections.json"'
+DEBUG [reqwest::connect] starting new connection: pass:[https://mycmkserver/]
+INFO [cmk_agent_ctl::site_spec] Failed to discover agent receiver port using https.
+DEBUG [cmk_agent_ctl::site_spec] https error: "Failed to discover agent receiver port from pass:[https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror] sending request for url (pass:[https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke])\nclient error (Connect)\ndns error\nfailed to lookup address information: Try again"
+DEBUG [reqwest::connect] starting new connection: pass:[http://mycmkserver/]
+INFO [cmk_agent_ctl::site_spec] Failed to discover agent receiver port using http.
+DEBUG [cmk_agent_ctl::site_spec] http error: "Failed to discover agent receiver port from pass:[http://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror] sending request for url (pass:[http://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke])\nclient error (Connect)\ndns error\nfailed to lookup address information: Try again"
+ERROR [cmk_agent_ctl] Failed to discover agent receiver port from Checkmk REST API, both with http and https. Run with verbose output to see errors.
+----
+
+Nach Absetzen des Befehls `cmk-agent-ctl register` fragt der Agent Controller zunächst über die REST-API den {CMK}-Server nach dem Port des Agent Receivers.
+In der oben gezeigten Ausgabe ist zu erkennen, dass die Verbindung über die REST-API fehlgeschlagen ist, und zwar sowohl über HTTPS als auch über HTTP.
+Logischerweise kann es an dieser Stelle mit der Registrierung nicht weitergehen.
+
+An diesem Punkt können Sie die Routing- oder Firewall-Einstellungen so verändern, dass der Zugriff vom Host auf den {CMK}-Server möglich ist.
+Wenn der zu registrierende Host einen HTTP-Proxy verwendet, weisen Sie `cmk-agent-ctl` mit der zusätzlichen Option `--detect-proxy` an, den systemweit konfigurierten Proxy zu nutzen.
+
+Ist der {CMK}-Server erreichbar und die Registrierung schlägt dennoch fehl, dann liegt das Problem an einer anderen Stelle.
+Möglicherweise ist die REST-API nicht erreichbar oder antwortet nicht mit dem richtigen Port für den Agent Receiver.
+
+ifdef::onprem[]
+Sie können auf dem {CMK}-Server als Instanzbenutzer prüfen, welchem Port der Agent Receiver zugeordnet ist:
+
+[{shell-raw}]
+----
+{c-omd} omd config show | grep AGENT_RECEIVER
+AGENT_RECEIVER: on
+AGENT_RECEIVER_PORT: 8000
+----
+endif::[]
+
+ifdef::saas[]
+In {CE} wird dem Agent Receiver normalerweise der Port 8000 zugewiesen.
+endif::[]
+Den korrekten Port können Sie bei der Registrierung zusammen mit dem {CMK}-Server explizit angeben (`--server mycmkserver:8000`), um sicherzustellen, dass der Agent Receiver erreicht wird.
+So wird die erste Anfrage via REST-API übersprungen, und die Kommunikation findet ohne Umwege direkt mit dem Agent Receiver statt.
+
+Möglicherweise erhalten Sie trotz korrekter Port-Angabe die Fehlermeldung `Connection refused`.
+In diesem Fall können Sie wiederum die Routing- oder Firewall-Einstellungen so anpassen, dass der zu registrierende Host den {CMK}-Server auf dem benötigten Port (hier `8000`) erreichen kann.
+
+ifdef::onprem[]
+Im Falle der Registrierung im Push-Modus gilt:
+endif::[]
+Hat die Registrierung funktioniert, wird auch der minütliche Transfer der Agentenausgabe erfolgreich sein.
+
+ifdef::onprem[]
+Sollten Sicherheitsrichtlinien in Ihrer Umgebung den Zugriff auf den Agent Receiver nicht zulassen, haben Sie die Möglichkeit, auf dem {CMK}-Server selbst die xref:proxyregister[Registrierung im Auftrag] vorzunehmen.
+endif::[]
+ifdef::saas[]
+Sollten Sicherheitsrichtlinien in Ihrer Umgebung den Zugriff auf den Agent Receiver nicht zulassen, ist {CE-saas} keine adäquate Lösung für das Monitoring dieses Hosts.
+endif::[]
+
+
+[#agent_ctl_dump]
+=== Agent Controller im Dump-Modus
+
+Der Agent Controller stellt einen eigenen Sub-Befehl `dump` bereit, das die vollständige Agentenausgabe anzeigt, wie sie im Monitoring ankommt:
+
+[{shell-raw}]
+----
+{c-root} cmk-agent-ctl dump | less
+<<<check_mk>>>
+Version: {current}
+AgentOS: linux
+Hostname: mynewhost
+----
+
+So können Sie überprüfen, ob die Daten vom Agentenskript beim Agent Controller angekommen sind.
+Diese Ausgabe beweist noch nicht, dass der Agent auch über das Netzwerk erreichbar ist.
+
+In einigen Fällen sieht die Ausgabe wie folgt aus:
+
+[{shell-raw}]
+----
+ERROR [cmk_agent_ctl] Error collecting monitoring data.
+
+Caused by:
+    Connection refused (os error 111)
+----
+
+Dies ist der Fall, wenn der Socket des Agenten nicht im Hintergrund läuft – beispielsweise unmittelbar nach einem Update.
+Starten Sie diesen Hintergrundprozess neu:
+
+[{shell-raw}]
+----
+{c-root} systemctl restart check-mk-agent.socket
+----
+
+ifdef::onprem[]
+Schlägt `cmk-agent-ctl dump` erneut fehl, prüfen Sie, ob und wenn, welches Programm an Port 6556 lauscht:
+
+[{shell-raw}]
+----
+{c-root} ss -tulpn | grep 6556
+tcp	LISTEN	0	1024	0.0.0.0:6556 0.0.0.0:*	users:(("cmk-agent-ctl",pid=1861810,fd=9))
+----
+
+Ist die Ausgabe leer oder innerhalb der Klammer steht ein anderer Befehl als `cmk-agent-ctl`, sind die Systemvoraussetzungen für die Nutzung des Agent Controllers nicht erfüllt.
+Schließen Sie in diesem Fall die Einrichtung ab, wie im Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] beschrieben.
+endif::[]
+
+
+ifdef::onprem[]
+=== Verbindungstest von außen
+
+Ist im Pull-Modus sichergestellt, dass lokal das Agentenskript und die mitinstallierten Plugins korrekt ausgeführt werden,
+können Sie als Nächstes per `netcat` (oder `nc`) prüfen, ob Port 6556 über die externe IP-Adresse des Hosts erreichbar ist:
+
+[{shell}]
+----
+{c-root} echo | nc 10.76.23.189 6556
+16
+----
+
+Die Ausgabe `16` zeigt an, dass die Verbindungsaufnahme erfolgreich war und nun der TLS-Handshake stattfinden kann.
+Da alles weitere hier TLS verschlüsselt stattfindet, ist keine detaillierte Prüfung möglich.
+
+Schlägt der Verbindungstest von außen fehl, liegt dies meist an der Firewall-Einstellung.
+Konfigurieren Sie `iptables` oder `nftables` in diesem Fall so, dass Zugriff auf TCP Port 6556 vom {CMK}-Server aus möglich ist.
+
+Falls die Kommunikation zwischen Agent und {CMK}-Server _noch_ unverschlüsselt ist (wie im Legacy-Pull-Modus) oder unverschlüsselt ist und auch bleibt (wie im xref:agent_linux_legacy#[Legacy-Modus]),
+erhalten Sie mit diesem Befehl statt der `16` die komplette unverschlüsselte Agentenausgabe.
+
+*Hinweis:* Weitere Diagnosemöglichkeiten zur Ausführung auf dem {CMK}-Server finden Sie im allgemeinen Artikel über die xref:wato_monitoringagents#diagnostics[Monitoring-Agenten].
+endif::[]
+
+
+[#debugpush]
+=== Fehlersuche beim Agenten im Push-Modus
+
+ifdef::onprem[]
+Im Ordner `~/var/agent-receiver/received-outputs/` Ihrer {CMK}-Instanz finden Sie für jeden registrierten Host einen Softlink, der als Name die UUID des Hosts verwendet.
+Bei Hosts im Push-Modus zeigt dieser Softlink auf den Ordner mit der Agentenausgabe, bei Hosts im Pull-Modus auf eine nicht vorhandene Datei mit dem Namen des Hosts, wie er im Monitoring verwendet wird.
+
+Anhand des Alters der zwischengespeicherten Agentenausgabe können Sie ermitteln, ob die regelmäßige Übertragung erfolgreich war oder beispielsweise durch sporadische Netzwerkprobleme vereitelt wird.
+
+Des Weiteren können Sie auf dem Host mit dem Befehl `systemctl status cmk-agent-ctl-daemon` den Status der letzten Übertragungen und Übertragungsversuche auslesen.
+Zeilen wie die folgende deuten auf Verbindungsprobleme hin:
+endif::[]
+
+ifdef::saas[]
+Auf dem Host können Sie mit dem Befehl `systemctl status cmk-agent-ctl-daemon` den Status der letzten Übertragungen und Übertragungsversuche auslesen.
+Zeilen wie die folgende deuten auf Verbindungsprobleme hin:
+endif::[]
+
+[{shell-raw}]
+----
+Dez 15 17:59:49 myhost23 cmk-agent-ctl[652648]: WARN [cmk_agent_ctl::modes::push] https://mycmkserver:8000/mysite: Error pushing agent output.
+----
+
+
+[#lostconnections]
+=== Verbindungen gehen verloren
+// MFS: Außer zum Testen hat man selten Hosts mit Push- und Pull-Konfiguration.
+// MFS: Was in der Betaphase der 2.2.0 relevant war, wird für SaaS wieder relevant.
+
+ifdef::saas[]
+// ES: This admonition may need attention for KNW-2113
+[TIP]
+====
+Das hier beschriebene Verhalten betrifft vor allem Benutzer, die Hosts ins Monitoring von {CE-saas} aufnehmen (zum Beispiel zu Evaluationszwecken), die sich bereits bei On-Premises-Editionen von {CMK} im Monitoring befinden.
+====
+endif::[]
+
+Wurde ein Host für die xref:hosts_autoregister#rule_autoregister_bakery[Autoregistrierung] mit dem Regelsatz [.guihint]#Agent controller auto-registration# konfiguriert und die Option [.guihint]#Keep existing connections# auf [.guihint]#no# gesetzt, werden bei jedem Neustart des Dienstes `cmk-agent-ctl-daemon` (beispielsweise beim Neustart eines Hosts) alle anderen Verbindungen entfernt -- außer der für die Autoregistrierung konfigurierten Verbindung.
+Dies betrifft beispielsweise Hosts, auf denen vor der Installation des gebackenen Agentenpakets Verbindungen zu mehreren Instanzen eingerichtet waren oder nach der Installation des Agentenpakets manuell Verbindungen hinzugefügt wurden.
+
+Sie können dieses Verhalten temporär ändern, indem Sie auf dem Host in der Datei `/var/lib/cmk-agent/pre_configured_connections.json` die Variable `keep_existing_connections` auf `true` setzen.
+Eine dauerhafte Änderung über ein Update der Agentenpakete hinweg erreichen Sie, indem Sie im oben genannten Regelsatz [.guihint]#Keep existing connections# auf [.guihint]#yes# setzen.
+
+
+[#howlong]
+=== Zeitdauer, bis Änderungen sichtbar werden
+
+Bei der Autoregistrierung eines Hosts vergehen typischerweise etwa zwei Minuten, bis der Host im Monitoring auftaucht.
+
+Wurde einem Host, der zuerst für den Push-Modus konfiguriert wurde, nachträglich eine Verbindung im Pull-Modus zu einer anderen Instanz hinzugefügt, vergehen bis zu fünf Minuten, bis Port 6556 geöffnet wird.
+Die sofortige Öffnung des Ports erreichen Sie durch den Neustart des Dienstes `cmk-agent-ctl-daemon`.
+
+
+[#security]
+== Absicherung
+
+=== Vorüberlegung
+
+Sicherheit ist ein wichtiges Kriterium für jegliche Software, hier darf Monitoring keine Ausnahme machen.
+Da der Monitoring-Agent auf jedem überwachten Server installiert wird, hätte hier ein Sicherheitsproblem besonders gravierende Auswirkungen.
+
+Deswegen wurde schon beim Design von {CMK} auf Sicherheit Wert gelegt und es gilt seit den ersten Tagen von {CMK} ein eherner Grundsatz:
+_Der Agent liest keine Daten vom Netzwerk. Punkt._ 
+Somit ist mit Sicherheit ausgeschlossen, dass ein Angreifer über den Überwachungsport 6556 irgendwelche Befehle oder Skriptbestandteile einschleusen kann.
+
+
+[#security_tls]
+=== Transport Layer Security (TLS)
+
+ifdef::onprem[]
+Für einen Angreifer kann jedoch bereits eine Prozessliste ein erster Ansatz sein, Rückschlüsse auf lohnenswerte Ziele zu ziehen.
+Daher ist die Transportverschlüsselung zwischen Agent und {CMK}-Server mit Transport Layer Security (TLS) obligatorisch.
+Hierbei „pingt“ der {CMK}-Server den überwachten Host an, der daraufhin die TLS-Verbindung zum {CMK}-Server aufbaut und darüber die Agentenausgabe überträgt.
+Da nur {CMK}-Server, zu denen ein Vertrauensverhältnis besteht, diese Datenübertragung initiieren können, besteht schon einmal kein Risiko, dass Daten in die falschen Hände gelangen.
+endif::[]
+
+Für die Absicherung der TLS-Verbindung verwendet {CMK} ein selbst signiertes Zertifikat, das kurz vor Ablauf seiner Gültigkeit automatisch ersetzt wird.
+Der Agent Controller kümmert sich um die rechtzeitige Erneuerung des Zertifikates vor seinem Ablauf.
+// Technisch tauscht der Agent Receiver sein Zertifikat aus, der Agent Controller fragt dann an, ob ein neues vorliegt.
+Nur längere Zeit inaktive Agenten, d.h., ohne laufenden Agent Controller, können ihre Registrierung bei Ablauf verlieren und müssen dann erneut registriert werden.
+Die Laufzeit des Zertifikats kann über die globale Einstellung [.guihint]#Agent Certificates > Lifetime of certificates# festgelegt werden.
+
+
+ifdef::onprem[]
+=== Zugriff über IP-Adressen beschränken
+
+Da nur autorisierte {CMK}-Server Daten abrufen können und nicht berechtigte Server nach einigen Bytes Handshake scheitern, ist die Gefahr einer _Denial of Service (DoS)_ Attacke sehr gering.
+Aus diesem Grund ist aktuell keine weitere Zugriffsbeschränkung vorgesehen.
+Selbstverständlich können Sie Port 6556 per `iptables` gegen unberechtigten Zugriff sperren.
+Eine möglicherweise vorhandene und per Agentenbäckerei auf Clients übertragene Regel zur Einschränkung des Zugriffs auf bestimmte IP-Adressen wird vom Agent Controller ignoriert.
+endif::[]
+
+
+ifdef::onprem[]
+=== Eingebaute Verschlüsselung abschalten
+
+Insbesondere bei einem Update des Agenten kann es sein, dass die xref:agent_linux_legacy#encryption[eingebaute (symmetrische) Verschlüsselung] aktiv ist, die vom Agentenskript selbst durchgeführt wird.
+Sind TLS-Verschlüsselung und eingebaute Verschlüsselung gleichzeitig aktiv, dann ist die Entropie der übertragenen Daten so hoch, dass die ab Version {v21} aktive Komprimierung keine Ersparnis der übertragenen Daten bringt – und die CPUs sowohl des Hosts als auch des {CMK}-Servers mit zusätzlichen Ver- und Entschlüsselungsschritten belasten.
+
+Aus diesem Grund sollten Sie die eingebaute Verschlüsselung zeitnah nach dem Wechsel auf TLS deaktivieren.
+
+Im ersten Schritt schalten Sie in der vorhandenen Regel unter [.guihint]#Setup > Agents > Access to agents > {CMK} agent > Symmetric encryption (Linux, Windows)# die Verschlüsselung ab.
+
+Im zweiten Schritt benennen Sie auf dem Host des Agenten die Konfigurationsdatei `/etc/check_mk/encryption.cfg` um.
+
+Im dritten und letzten Schritt legen Sie mit der Regel [.guihint]#Enforce agent data encryption# fest, dass der {CMK}-Server nur noch per TLS verschlüsselte Daten akzeptiert.
+Wählen Sie dazu in der Regel den Wert [.guihint]#Accept TLS encrypted connections only# aus.
+
+{cee-only}
+Das Abschalten der Verschlüsselung mit der Agentenbäckerei geht so:
+Mit dem ersten Schritt, dem Ändern der Regel [.guihint]#Symmetric encryption (Linux, Windows)#, sind Sie fast fertig.
+Sie brauchen nur noch neue Agenten zu paketieren und zu verteilen.
+Die Konfigurationsdatei `/etc/check_mk/encryption.cfg` wird automatisch für Sie geändert und mit in die Agentenpakete eingebaut.
+Übrig bleibt dann nur der dritte Schritt, d.h. die Änderung der Regel [.guihint]#Enforce agent data encryption#.
+
+Nach dem nächsten automatischen Agenten-Update ist die Verschlüsselung des Agentenskripts abgeschaltet, aber durch den Agent Controller die Verschlüsselung garantiert.
+Beachten Sie, dass nach dem automatischen Agenten-Update nur noch registrierte Hosts Monitoring-Daten liefern können.
+endif::[]
+
+
+[#disabled_sections]
+== Sektionen deaktivieren
+
+Die Ausgabe des {CMK}-Agenten ist in Sektionen unterteilt.
+Jede dieser Sektionen enthält zusammengehörige Informationen und ist meist einfach die Ausgabe eines Diagnosebefehls.
+Sektionen beginnen immer mit einem Sektions-Header.
+Dies ist eine Zeile, die in `<<<` und `>>>` eingeschlossen ist.
+
+Bis auf die {CMK} eigenen Sektionen, können Sie jede der über 30 Sektionen, die der Agent standardmäßig erzeugt, einzeln deaktivieren.
+Konkret bedeutet dies, dass die entsprechenden Befehle durch den Agenten überhaupt nicht ausgeführt werden und ggf. Rechenzeit eingespart werden kann.
+Andere Gründe für die Deaktivierung könnten sein, dass Sie sich für bestimmte Informationen einer gewissen Gruppe von Hosts schlicht nicht interessieren, oder dass ein bestimmter Host fehlerhafte Werte liefert und Sie den Abruf dieser Daten kurzzeitig aussetzen wollen.
+
+ifdef::onprem[]
+Als Nutzer einer der kommerziellen Editionen können Sie über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Disabled sections (Linux agent)# einfach eine Regel anlegen, welche dann von der xref:glossar#agent_bakery[Agentenbäckerei] berücksichtigt wird.
+endif::[]
+
+ifdef::saas[]
+Sie können über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Disabled sections (Linux agent)# einfach eine Regel anlegen, welche dann von der xref:glossar#agent_bakery[Agentenbäckerei] berücksichtigt wird.
+endif::[]
+
+.Hier können Sie Sektionen per Regel deaktivieren
+image::agent_linux_disabled_sections.png[alt="Liste der Agentenregeln für den Linux-Agenten."]
+
+In der Regel finden Sie für jede deaktivierbare Sektion eine eigene Checkbox.
+Für jede angewählte Checkbox finden Sie dann -- nachdem der neu gebackene Agent auf den ausgewählten Hosts installiert wurde -- in der Konfigurationsdatei der Agentenbäckerei `/etc/check_mk/exclude_sections.cfg` einen eigenen Eintrag.
+Würden Sie in der Regel beispielsweise die beiden Optionen `Running processes` und `Systemd services` auswählen, sähe die passende Konfigurationsdatei wie folgt aus:
+
+./etc/check_mk/exclude_sections.cfg
+[{file}]
+----
+MK_SKIP_PS=yes
+MK_SKIP_SYSTEMD=yes
+----
+
+ifdef::onprem[]
+Nutzer von {CRE} können die oben genannte Datei `/etc/check_mk/exclude_sections.cfg` manuell anlegen und dort die Sektionen eintragen, die deaktiviert werden sollen.
+Alle deaktivierbaren Sektionen sind in der Datei `~/share/check_mk/agents/cfg_examples/exclude_sections.cfg` aufgelistet.
+endif::[]
+
+
+[#plugins]
+== Agent um Plugins erweitern
+
+=== Was sind Agentenplugins?
+
+Das Agentenskript `/usr/bin/check_mk_agent` enthält eine ganze Reihe von Sektionen, welche Überwachungsdaten für diverse Check-Plugins liefern, die dann von der Service-Erkennung automatisch gefunden werden.
+Dazu gehören alle wichtigen Überwachungen des Betriebssystems.
+
+Darüber hinaus gibt es die Möglichkeit, den Agenten um _Agentenplugins_ zu erweitern.
+Das sind kleine Skripte oder Programme, die vom Agenten aufgerufen werden und diesen um weitere Sektionen mit zusätzlichen Monitoring-Daten erweitern.
+Das {CMK}-Projekt liefert eine ganze Reihe solcher Plugins mit aus, welche -- wenn sie korrekt installiert und konfiguriert sind -- in der Service-Erkennung automatisch neue Services liefern.
+
+Warum sind diese Plugins nicht einfach in den Agenten fest integriert?
+Für jedes der Plugins gibt es einen der folgenden Gründe:
+
+* Das Plugin ist in einer anderen Programmiersprache als Shell geschrieben und kann daher nicht inline realisiert werden (Beispiel: `mk_logwatch`).
+* Das Plugin benötigt sowieso eine Konfiguration, ohne die es nicht funktionieren würde (Beispiel: `mk_oracle`).
+* Das Plugin ist so speziell, dass es von den meisten Anwendern nicht benötigt wird (Beispiel: `plesk_domains`).
+
+
+[#manualplugins]
+=== Manuelle Installation
+
+Die mitgelieferten Plugins für Linux und Unix finden Sie auf der Download-Seite der Agenten im Setup-Menü (wie im Kapitel xref:download_gui[Installation] beschrieben) im Kasten [.guihint]#Plugins#:
+
+.Der Anfang der langen Liste verfügbarer Agentenplugins
+image::agent_linux_files_agent_plugins.png[alt="Download-Seite mit den Agentenplugins."]
+
+ifdef::onprem[]
+[TIP]
+====
+Die Plugins finden Sie auch auf dem {CMK}-Server unter `~/share/check_mk/agents/plugins`.
+====
+endif::[]
+
+Zu allen von uns mitgelieferten Agentenplugins existieren die passenden Check-Plugins, welche deren Daten auswerten und Services erzeugen können.
+Diese sind bereits mitinstalliert, so dass neu gefundene Services sofort erkannt und konfiguriert werden können.
+
+*Hinweis:* Bevor Sie ein Plugin auf dem Host installieren, werfen Sie einen Blick in die entsprechende Datei.
+Oft finden Sie dort wichtige Hinweise zur korrekten Verwendung des Plugins.
+
+Die eigentliche Installation ist dann einfach:
+Kopieren Sie die Datei nach `/usr/lib/check_mk_agent/plugins`.
+Achten Sie dabei darauf, dass diese ausführbar ist.
+Falls nicht, verwenden Sie ein `chmod 755`.
+Der Agent wird das Plugin sonst nicht ausführen.
+Insbesondere, wenn Sie die Dateien nicht per `scp` übertragen, sondern per HTTP von der Download-Seite holen, geht die Ausführungsberechtigung verloren.
+
+Sobald das Plugin ausführbar ist und im richtigen Verzeichnis liegt, wird es vom Agenten automatisch aufgerufen und es entsteht eine neue Sektion in der Agentenausgabe.
+Diese trägt üblicherweise den gleichen Namen wie das Plugin.
+Komplexe Plugins (z.B. `mk_oracle`) erzeugen sogar eine ganze Reihe an neuen Sektionen.
+
+
+[#pluginconfig]
+=== Konfiguration
+
+Manche Plugins brauchen eine Konfigurationsdatei in `/etc/check_mk/`, damit sie funktionieren können.
+Bei anderen ist eine Konfiguration optional und ermöglicht besondere Features oder Anpassungen.
+Wieder andere funktionieren einfach so.
+Sie haben verschiedene Quellen, um an Informationen zu kommen:
+
+* Die Dokumentation der zugehörigen Check-Plugins in Ihrer {CMK}-Instanz, welche Sie über [.guihint]#Setup > Services > Catalog of check plugins# erreichen.
+* Kommentare im Plugin selbst (oft sehr hilfreich!).
+* Einen passenden Artikel in diesem Handbuch (z.B. über das Überwachen von xref:monitoring_oracle#[Oracle])
+
+
+[#async_plugins]
+=== Asynchrone Ausführung
+
+Agentenplugins werden üblicherweise der Reihe nach ausgeführt.
+Alternativ können Sie die Plugins asynchron ausführen lassen.
+Das ist sehr nützlich, wenn die Plugins eine lange Laufzeit haben und die gewonnenen Statusdaten ohnehin nicht jede Minute neu erzeugt werden brauchen.
+
+Die asynchrone Ausführung wird nicht über eine Datei konfiguriert.
+Stattdessen erzeugen Sie unter `/usr/lib/check_mk_agent/plugins` ein Unterverzeichnis, dessen Name eine Zahl ist: eine Anzahl von Sekunden.
+Plugins in diesem Verzeichnis werden nicht nur asynchron ausgeführt, sondern gleichzeitig geben Sie mit der Sekundenzahl eine Mindestwartezeit vor, bevor das Plugin erneut ausgeführt werden soll.
+Wird der Agent vor Ablauf der Zeit erneut abgefragt, verwendet er zwischengespeicherte Daten von der letzten Ausführung des Plugins.
+Damit können Sie ein größeres Intervall für das Plugin konfigurieren, als die typische eine Minute.
+
+Folgendes Beispiel zeigt, wie das Plugin `my_foo_plugin` von synchroner Ausführung auf eine asynchrone Ausführung mit einem Intervall von 5 Minuten (oder 300 Sekunden) umgestellt wird:
+
+[{shell}]
+----
+{c-root} cd /usr/lib/check_mk_agent/plugins
+root@linux:/usr/lib/check_mk_agent/plugins# mkdir 300
+root@linux:/usr/lib/check_mk_agent/plugins# mv my_foo_plugin 300
+----
+
+*Hinweis:* Beachten Sie, dass einige Plugins bereits von sich aus eine asynchrone Ausführung umsetzen.
+Dazu gehört `mk_oracle`.
+Installieren Sie solche Plugins direkt nach `/usr/lib/check_mk_agent/plugins`.
+
+
+[#install_plugins_using_bakery]
+=== Installation über die Agentenbäckerei
+
+ifdef::onprem[]
+{cee-only}
+In den kommerziellen Editionen können Sie die mitgelieferten Plugins über die xref:glossar#agent_bakery[Agentenbäckerei] konfigurieren.
+endif::[]
+ifdef::saas[]
+Sie können die mitgelieferten Plugins über die xref:glossar#agent_bakery[Agentenbäckerei] konfigurieren.
+endif::[]
+Diese sorgt sowohl für die Installation des Plugins selbst als auch für die korrekte Erstellung der Konfigurationsdatei, falls eine notwendig sein sollte.
+
+Jedes Plugin wird über eine Agentenregel konfiguriert.
+Sie finden die passenden Regelsätze in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Agent Plugins#:
+
+.Liste mit Regeln für die Agentenplugins
+image::agent_linux_rules_agent_plugins.png[alt="Seite mit den Regeln zur Konfiguration der Agentenplugins."]
+
+
+=== Manuelle Ausführung
+
+Da Agentenplugins ausführbare Programme sind, können Sie diese zu Test-und Diagnosezwecken auch von Hand ausführen.
+Es gibt allerdings Plugins, welche bestimmte vom Agenten gesetzte Umgebungsvariablen brauchen, um z.B. ihre Konfigurationsdatei zu finden.
+Setzen Sie diese vor der Ausführung von Hand:
+
+[{shell-raw}]
+----
+{c-root} export MK_LIBDIR=/usr/lib/check_mk_agent
+{c-root} export MK_CONFDIR=/etc/check_mk
+{c-root} export MK_VARDIR=/var/lib/check_mk_agent
+{c-root} /usr/lib/check_mk_agent/plugins/mk_foobar
+<<<foobar>>>
+FOO BAR BLA BLUBB 17 47 11
+----
+
+Einige Plugins kennen auch spezielle Aufrufoptionen zum Debuggen.
+Werfen Sie einfach einen Blick in die Plugin-Datei.
+
+
+[#e2e_monitoring]
+== Einbinden von Legacy Nagios Check-Plugins
+
+[#mrpe]
+=== Plugins über MRPE ausführen
+
+Es gibt zwei gute Gründe, Nagios-Plugins auch unter {CMK} zu nutzen.
+Wenn Sie Ihr Monitoring von einer Nagios-basierten Lösung auf {CMK} migriert haben, können Sie ältere Check-Plugins, zu denen es noch kein {CMK}-Pendant gibt, zunächst weiternutzen.
+In vielen Fällen sind das selbst geschriebene Plugins in Perl oder Shell.
+
+Der zweite Grund für die Verwendung ist echtes End-to-End-Monitoring.
+Nehmen wir an, Sie haben Ihren {CMK}-Server, einen Webserver und einen Datenbankserver über ein großes Rechenzentrum verteilt.
+In so einem Fall sind die Antwortzeiten des Datenbankservers vom {CMK}-Server aus gemessen wenig aussagekräftig.
+Weit wichtiger ist es, diese Werte für die Verbindung zwischen Web- und Datenbankserver zu kennen.
+
+Der {CMK}-Agent bietet einen einfachen Mechanismus, diesen beiden Anforderungen gerecht zu werden:
+_MK's Remote Plugin Executor_ oder kurz _MRPE_.
+Der Name ist bewusst eine Analogie zum _NRPE_ von Nagios, der dort die gleiche Aufgabe übernimmt.
+
+Der MRPE ist im Agenten fest eingebaut und wird mit einer einfachen Textdatei konfiguriert, welche Sie als `/etc/check_mk/mrpe.cfg` selbst anlegen.
+Dort geben Sie pro Zeile einen Plugin-Aufruf an -- zusammen mit dem Namen, den {CMK} für den Service verwenden soll, den es dafür automatisch erzeugt.
+Hier ist ein Beispiel:
+
+./etc/check_mk/mrpe.cfg
+[{file}]
+----
+Foo_Application /usr/local/bin/check_foo -w 60 -c 80
+Bar_Extender /usr/local/bin/check_bar -s -X -w 4:5
+----
+
+*Hinweis:* Die Nagios-Plugins dürfen nicht im Verzeichnis `/usr/lib/check_mk_agent/plugins` abgelegt werden.
+Dieses Verzeichnis ist den xref:plugins[Agentenplugins] vorbehalten.
+Abgesehen von diesem Verzeichnis steht Ihnen die Wahl frei, solange der Agent die Plugins dort finden und ausführen kann.
+
+Wenn Sie jetzt den Agenten lokal laufen lassen, finden Sie pro Plugin eine neue Sektion mit dem Titel `+<<<mrpe>>>+`, welche Name, Exitcode und Ausgabe des Plugins enthält.
+Das können Sie mit folgendem praktischen `grep`-Befehl überprüfen:
+
+[{shell-raw}]
+----
+{c-root} check_mk_agent | grep -A1 '^...mrpe'
+<<<mrpe>>>
+(check_foo) Foo_Application 0 OK - Foo server up and running
+<<<mrpe>>>
+(check_bar) Bar_Extender 1 WARN - Bar extender overload 6.012|bar_load=6.012
+----
+
+Die `0` bzw. `1` in der Ausgabe stehen für die Exitcodes der Plugins und folgen dem klassischen Schema:
+`0` = {OK}, `1` = {WARN}, `2` = {CRIT} und `3` = {UNKNOWN}.
+
+Den Rest macht jetzt {CMK} automatisch.
+Sobald Sie die Service-Erkennung für den Host aufrufen, werden die beiden neuen Services als xref:wato_services#available[verfügbar] angezeigt.
+Das sieht dann so aus:
+
+.Für die beiden MRPE Plugins wird je ein Service erkannt
+image::agent_linux_mrpe_checks.png[alt="Liste der erkannten Services für die per MRPE eingerichteten Plugins."]
+
+Übrigens: Aufgrund der Syntax der Datei darf der Name keine Leerzeichen enthalten.
+Sie können aber mithilfe der gleichen Syntax wie in URLs ein Space durch `%20` ersetzen (ASCII-Code 32 für Space ist Hexadezimal 20):
+
+./etc/check_mk/mrpe.cfg
+[{file}]
+----
+Foo%20Application /usr/local/bin/check_foo -w 60 -c 80
+Bar%20Extender /usr/local/bin/check_bar -s -X -w 4:5
+----
+
+
+=== Asynchrone Ausführung
+
+Beachten Sie, dass alle Plugins, die Sie in `mrpe.cfg` aufführen, der Reihe nach synchron ausgeführt werden.
+Die Plugins sollten daher keine allzu große Ausführungszeit haben.
+Wenn ein Plugin hängt, verzögert sich die Ausführung aller weiteren.
+Das kann dazu führen, dass das komplette Abfragen des Agenten durch {CMK}-in einen Timeout läuft und der Host nicht mehr zuverlässig überwacht werden kann.
+
+Wenn Sie wirklich länger laufende Plugins benötigen, sollten Sie diese wie xref:async_plugins[bei regulären Agentenplugins] auf asynchrone Ausführung umstellen und das Problem damit vermeiden.
+Dabei legen Sie eine Zeit in Sekunden fest, die ein berechnetes Ergebnis Gültigkeit haben soll.
+Um eine Zeitüberschreitung von fünf Minuten zu konfigurieren, setzen Sie dazu in `mrpe.cfg` nach dem Service-Namen den Ausdruck `(interval=300)`:
+
+./etc/check_mk/mrpe.cfg
+[{file}]
+----
+Foo_Application (interval=300) /usr/local/bin/check_foo -w 60 -c 80
+Bar_Extender /usr/local/bin/check_bar -s -X -w 4:5
+----
+
+Das hat mehrere Auswirkungen:
+
+* Das Plugin wird in einem Hintergrundprozess ausgeführt und bremst nicht mehr die Ausführung des Agenten.
+* Weil der Agent die Ausführung nicht abwartet, wird das Ergebnis erst beim _nächsten_ Aufruf des Agenten geliefert.
+* Frühestens nach 300 Sekunden wird das Plugin neu ausgeführt.
+Bis dahin wird das alte Ergebnis wiederverwendet.
+
+Damit können Sie also Tests, die etwas mehr Rechenzeit benötigen, auch in größeren Intervallen ausführen, ohne dass Sie dazu am {CMK}-Server etwas konfigurieren müssen.
+
+
+=== MRPE mit der Agentenbäckerei
+
+ifdef::onprem[]
+{cee-only}
+Nutzer der kommerziellen Editionen können MRPE auch mit der xref:glossar#agent_bakery[Agentenbäckerei] konfigurieren.
+endif::[]
+ifdef::saas[]
+Sie können MRPE auch mit der xref:glossar#agent_bakery[Agentenbäckerei] konfigurieren.
+endif::[]
+Zuständig dafür ist der Regelsatz [.guihint]#Setup > Agents > Windows, Linux Solaris, AIX > Agent rules > Generic agent options > Execute MRPE checks#.
+Dort können Sie die gleichen Dinge wie oben beschrieben konfigurieren.
+Die Datei `mrpe.cfg` wird dann von der Bäckerei automatisch generiert.
+
+.MRPEs können Sie bequem per Regel konfigurieren
+image::agent_linux_mrpe_rule.png[alt="Regel zur MRPE-Konfiguration in der Agentenbäckerei."]
+
+ifdef::saas[]
+[TIP]
+====
+In {CE-saas} können aus Sicherheitsgründen bis auf weiteres keine beliebigen Dateien für die Verteilung im Agentenpaket hochgeladen werden.
+Installieren Sie die Plugins auf dem Host wie oben beschrieben manuell.
+====
+endif::[]
+
+
+ifdef::onprem[]
+==== Backen der Plugins
+
+Auch die Check-Plugins selbst können Sie mit dem Paket ausliefern lassen.
+Damit ist der Agent dann komplett und braucht keine manuelle Installation von weiteren Dateien.
+Das Ganze geht so:
+
+. Erzeugen Sie auf dem {CMK}-Server das Verzeichnis `~/local/share/check_mk/agents/custom`.
+. Erzeugen Sie dort ein Unterverzeichnis -- z.B. `my_mrpe_plugins`.
+. Erzeugen Sie wiederum darin das Unterverzeichnis `bin`.
+. Kopieren Sie Ihre Plugins in den `bin`-Ordner.
+. Legen Sie eine Regel in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Generic agent options > Deploy custom files with agent# an.
+. Wählen Sie `my_mrpe_plugins` aus, speichern Sie und klicken Sie [.guihint]#Bake#!
+
+Die Check-Plugins werden jetzt in das Standard-`bin`-Verzeichnis Ihres Agenten installiert.
+Per Default ist das `/usr/bin`.
+Bei der Konfiguration der MRPE-Checks verwenden Sie dann also `/usr/bin/check_foo` anstelle von `/usr/local/bin/check_foo`.
+endif::[]
+
+
+[#hw_monitoring]
+== Hardware überwachen
+
+Zu einer möglichst vollständigen Überwachung eines Linux-Servers gehört natürlich auch die Hardware.
+Die Überwachung geschieht teils direkt mit dem {CMK}-Agenten, teils auch über spezielle xref:plugins[Plugins].
+Außerdem gibt es noch Fälle, in denen man per SNMP oder sogar über ein separates Managementboard eine Überwachung umsetzen kann.
+
+
+=== Überwachung der SMART-Werte
+
+Moderne Festplatten verfügen fast immer über _S.M.A.R.T._ (Self-Monitoring, Analysis and Reporting Technology).
+Dieses System zeichnet kontinuierlich Daten zum Zustand der HDD oder SSD auf und {CMK} kann mit dem Plugin `smart` diese Werte abrufen und die wichtigsten davon auswerten.
+Damit das Plugin nach der Installation auch funktioniert, müssen folgende Voraussetzungen erfüllt sein:
+
+* Das Paket `smartmontools` muss installiert sein. Sie können es auf allen modernen Distributionen über den jeweiligen Paketmanager installieren.
+* Falls die Festplatten an einen RAID-Controller angeschlossen sind und dieser Zugriff auf die SMART-Werte erlaubt, muss das jeweilige Tool dazu installiert sein. Unterstützt werden `tw_cli` (3ware) und `megacli` (LSI).
+
+Sind diese Voraussetzungen erfüllt und ist das Plugin installiert, werden die Daten automatisch ausgelesen und der Ausgabe des Agenten angehängt.
+In {CMK} können Sie die xref:wato_services#available[neuen Services] dann auch direkt aktivieren:
+
+.Von der Service-Erkennung gefundene SMART-Services
+image::agent_linux_smart_stats.png[alt="Liste gefundener SMART-Services in der Service-Erkennung."]
+
+Sollte -- wie im Screenshot zu sehen -- gelegentlich `cmd_timeout` auftreten, stellen Sie das Plugin auf asynchrone Ausführung im Abstand einiger Minuten um.
+
+
+=== Überwachung mit Hilfe von IPMI
+
+IPMI (Intelligent Platform Management Interface) ist eine Schnittstelle zum Hardware-Management, welche auch die Überwachung der Hardware ermöglicht.
+{CMK} nutzt dafür `freeipmi`, um direkt und ohne Netzwerk auf die Hardware zuzugreifen.
+`freeipmi` wird aus den Paketquellen installiert und ist danach sofort einsatzbereit, so dass die Daten schon beim nächsten Aufruf von {CMK} übermittelt werden.
+
+Falls `freeipmi` nicht verfügbar ist, oder andere Gründe gegen eine Installation sprechen, kann auch `ipmitool` verwendet werden.
+`ipmitool` ist oft bereits auf dem System vorhanden und muss lediglich mit einem IPMI Gerätetreiber versorgt werden, wie ihn z.B. das Paket `openipmi` zur Verfügung stellt.
+Auch hier müssen Sie danach nichts weiter tun.
+Die Daten werden von {CMK} automatisch erfasst.
+
+Zur Fehlerdiagnose können Sie die Tools auch händisch in einer Shell des Hosts ausführen.
+Haben Sie das Paket `freeipmi` installiert, können Sie die Funktion hiermit kontrollieren:
+
+[{shell}]
+----
+{c-root} ipmi-sensors Temperature
+32 Temperature_Ambient 20.00_C_(1.00/42.00) [OK]
+96 Temperature_Systemboard 23.00_C_(1.00/65.00) [OK]
+160 Temperature_CPU_1 31.00_C_(1.00/90.00) [OK]
+224 Temperature_CPU_2 NA(1.00/78.00) [Unknown]
+288 Temperature_DIMM-1A 54.00_C_(NA/115.00) [OK]
+352 Temperature_DIMM-1B 56.00_C_(NA/115.00) [OK]
+416 Temperature_DIMM-2A NA(NA/115.00) [Unknown]
+480 Temperature_DIMM-2B NA(NA/115.00) [Unknown]
+----
+
+Wenn `ipmitool` installiert wurde, können Sie die Ausgabe der Daten mit folgendem Befehl prüfen:
+
+[{shell}]
+----
+{c-root} ipmitool sensor list
+UID_Light 0.000 unspecified ok na na 0.000 na na na
+Int._Health_LED 0.000 unspecified ok na na 0.000 na na na
+Ext._Health_LED 0.000 unspecified ok na na 0.000 na na na
+Power_Supply_1 0.000 unspecified nc na na 0.000 na na na
+Fan_Block_1 34.888 unspecified nc na na 75.264 na na na
+Fan_Block_2 29.792 unspecified nc na na 75.264 na na na
+Temp_1 39.000 degrees_C ok na na -64.000 na na na
+Temp_2 16.000 degrees_C ok na na -64.000 na na na
+Power_Meter 180.000 Watts cr na na 384.00
+----
+
+
+ifdef::onprem[]
+=== Herstellerspezifische Tools
+
+Viele große Server-Hersteller bieten auch eigene Tools an, um die Hardware-Informationen auszulesen und über SNMP bereitzustellen.
+Es gelten dabei die folgenden Voraussetzungen, um diese Daten abrufen und {CMK} bereitstellen zu können:
+
+* Auf dem Linux-Host ist ein SNMP-Server eingerichtet.
+* Das Tool des Herstellers ist installiert (z.B. Dells _OpenManage_ oder Supermicros _SuperDoctor_).
+* Der Host ist in {CMK} für die Überwachung per SNMP *zusätzlich* zum {CMK}-Agenten konfiguriert.
+Im Artikel zur xref:snmp#snmp_cmk_agent[Überwachung mit SNMP] erfahren Sie, wie das geht.
+
+Die dadurch unterstützten neuen Services für die Hardware-Überwachung werden dann automatisch erkannt.
+Es werden keine weiteren Plugins benötigt.
+endif::[]
+
+
+ifdef::onprem[]
+=== Zusätzliche Überwachung über das Management Board
+
+Man kann zu jedem Host ein Management Board konfigurieren und zusätzliche Daten per SNMP holen.
+Die dadurch erkannten Services werden dann ebenfalls dem Host zugeordnet.
+
+Die Einrichtung des Management Boards ist dabei sehr einfach.
+Geben Sie in den Eigenschaften des Hosts lediglich das Protokoll, die IP-Adresse und die Zugangsdaten für SNMP an und speichern Sie die neuen Einstellungen ab:
+
+.In den Eigenschaften des Hosts im Setup wird das Management Board für SNMP konfiguriert 
+image::agent_linux_snmp_management_board.png[alt="Die Konfiguration des Management Boards für SNMP in den Eigenschaften des Hosts."]
+
+In der Service-Erkennung werden die neu erkannten Services dann wie gewohnt aktiviert.
+endif::[]
+
+
+[#uninstall]
+== Deinstallation
+
+Wie die xref:install[Installation] erfolgt auch die Deinstallation des Agenten mit dem Paketmanager des Betriebssystems.
+Geben Sie hier den Namen des installierten Pakets an, nicht den Dateinamen der ursprünglichen RPM/DEB-Datei. 
+
+So finden Sie heraus, welches DEB-Paket installiert ist:
+
+[{shell}]
+----
+{c-root} dpkg -l | grep check-mk-agent
+ii  check-mk-agent          {current}-1          all          Checkmk Agent for Linux
+----
+
+Die Deinstallation des DEB-Pakets erfolgt dann mit `dpkg --purge`:
+
+[{shell}]
+----
+{c-root} dpkg --purge check-mk-agent
+(Reading database ... 739951 files and directories currently installed.)
+Removing check-mk-agent ({current}-1) ...
+Removing systemd units: check-mk-agent.socket, check-mk-agent-async.service, cmk-agent-ctl-daemon.service, check-mk-agent@.service
+Deactivating systemd unit 'check-mk-agent.socket'...
+Deactivating systemd unit 'check-mk-agent-async.service'...
+Deactivating systemd unit 'cmk-agent-ctl-daemon.service'...
+Reloading xinetd
+Purging configuration files for check-mk-agent ({current}-1) ...
+----
+
+So finden Sie heraus, welches RPM-Paket installiert ist:
+
+[{shell}]
+----
+{c-root} rpm -qa | grep check-mk
+----
+
+Die Deinstallation des RPM-Pakets erfolgt als `root` mit dem Befehl `rpm -e`.
+
+
+ifdef::onprem[]
+[#reenable_legacy_pull]
+=== Reaktivierung des Legacy-Pull-Modus
+
+Bei der Deinstallation des Agenten bleibt der vom Installationsskript angelegte Nutzer `cmk-agent` erhalten.
+Er dient dem Post-Install-Skript als Indikator dafür, dass der Agent bereits auf diesem System installiert war.
+Ist dies der Fall, wird bei einer späteren Neuinstallation kein Legacy-Pull-Modus aktiviert.
+Dies führt dazu, dass nach Ausführung von `cmk-agent-ctl delete-all` und späterer Neuinstallation des Agenten gar keine Verbindung auf Port 6556 möglich ist.
+
+Sollte es erwünscht sein, wieder den unverschlüsselten Legacy-Pull-Modus zu aktivieren, müssen Sie dies xref:deregister[per Befehlsparameter anweisen].
+endif::[]
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+=== Pfade auf dem überwachten Host
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`/usr/bin/` |Installationsverzeichnis für das Agentenskript `check_mk_agent` und des Agent Controllers `cmk-agent-ctl` auf dem Zielsystem.
+// Nur zur Info: in /usr/bin/ liegt auch der check_mk_caching_agent
+|`/usr/lib/check_mk_agent` |Basisverzeichnis für Erweiterungen des Agenten.
+|`/usr/lib/check_mk_agent/plugins` |Verzeichnis für Plugins, welche automatisch vom Agenten ausgeführt werden sollen und dessen Ausgabe um zusätzliche Überwachungsdaten erweitern. Plugins können in jeder verfügbaren Programmiersprache geschrieben werden.
+|`/usr/lib/check_mk_agent/local` |Verzeichnis für eigene xref:localchecks#[lokale Checks].
+|`/var/lib/check_mk_agent` |Basisverzeichnis für Daten des Agenten.
+|`/var/lib/check_mk_agent/cache` |Hier werden Cache-Daten einzelner Sektionen abgelegt und dem Agenten, solange die Cache-Daten gültig sind, bei jeder Ausführung wieder angehängt.
+|`/var/lib/check_mk_agent/job` |Verzeichnis für überwachte Jobs. Diese werden der Agentenausgabe bei jeder Ausführung angehängt.
+|`/var/lib/check_mk_agent/spool` |Enthält Daten, die z.B. von Log-Dateien erstellt werden und eine eigene Sektion beinhalten. Diese werden ebenfalls der Agentenausgabe angehängt. Mehr dazu erfahren Sie im Artikel xref:spool_directory#[Das Spool-Verzeichnis].
+|`/var/lib/cmk-agent/registered_connections.json` |Enthält eine Liste der mit dem Agent Controller registrierten Verbindungen.
+|`/var/lib/cmk-agent/pre_configured_connections.json` |Enthält eine vorkonfigurierte und per Agentenbäckerei in das Agentenpaket integrierte Verbindung zu einer Instanz für die xref:hosts_autoregister#[Autoregistrierung].
+|`/etc/check_mk` |Ablage von Konfigurationsdateien für den Agenten.
+|`/etc/check_mk/mrpe.cfg` |Konfigurationsdatei für xref:mrpe[MRPE] -- für die Ausführung von Legacy Nagios-kompatiblen Check-Plugins.
+ifdef::onprem[]
+|`/etc/check_mk/encryption.cfg` |Konfiguration für die xref:agent_linux_legacy#encryption[eingebaute Verschlüsselung] der Agentendaten.
+endif::[]
+|`/etc/check_mk/exclude_sections.cfg` |Konfigurationsdatei für die xref:disabled_sections[Deaktivierung bestimmter Sektionen] des Agenten.
+|===
+
+
+ifdef::onprem[]
+=== Pfade auf dem {CMK}-Server
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung
+|`~/local/share/check_mk/agents/custom` |Basisverzeichnis für eigene Dateien, die mit einem gebackenen Agenten ausgeliefert werden sollen.
+|`~/share/check_mk/agents/cfg_examples/exclude_sections.cfg` |Beispielhafte Konfigurationsdatei für das Deaktivieren von Sektionen.
+|`~/var/agent-receiver/received-outputs` |Enthält für jede Verbindung deren UUID als Softlink, der auf einen Ordner mit dem Namen des Hosts zeigt. Im Push-Modus enthält dieser Ordner die Agentenausgabe.
+|===
+endif::[]

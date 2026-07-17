@@ -1,0 +1,1074 @@
+// -*- coding: utf-8 -*-
+// IGNORE %
+// NONASCII ├ ─ └ │ …​ ° ä ö ü
+include::global_attr.adoc[]
+= {CMK} on the command line
+:title: {CMK} on the command line - Understanding and using commands
+:description: You can use the command line to access many functions of a {CMK} site. Read here how to use the command line.
+
+{related-start}
+link:wato.html[Configuring {CMK}]
+link:livestatus.html[Retrieving status data via Livestatus]
+{related-end}
+
+
+[#why]
+== Why command line?
+
+When a {CMK} system has been installed, it can be 100{nbsp}% configured and operated using the web interface.
+There are nonetheless situations in which it is useful to dive into the depths of the command line, for example:
+
+* when searching for the source of problems
+* when automating the administration of {CMK} with the xref:rest_api#[REST API]
+* when programming and testing your own extensions
+* to be able to understand how {CMK} functions internally
+* if you simply enjoy working with the command line!
+
+This article will present the most important commands, files and directories of {CMK}.
+
+
+[#site_user]
+== The site user
+
+[#login]
+=== Login as site user
+
+When administering {CMK}, with a few exceptions you need never work as the `root` user.
+In this article we will generally assume that you are logged in as a _site user_.
+That is done with, e.g.:
+
+[{shell}]
+----
+{c-root} su - mysite
+----
+
+It is also possible to make a direct SSH login to a site without a detour via `root`.
+Since the site user is a ‘completely normal’ Linux user, you must simply assign a password for this (which requires `root` permissions, once only, for the configuration):
+
+[{shell}]
+----
+{c-root} passwd mysite
+Enter new Unix password: *pass:[**********]*
+Retype new Unix password: *pass:[**********]*
+passwd: password updated successfully
+----
+
+Afterwards an SSH-login directly from another computer should be possible (Windows-users preferably use PuTTY for this).
+From Linux this login is simply performed with the `ssh` command:
+
+[{shell}]
+----
+user@otherhost:~$ ssh mysite@myserver123
+mysite@myserver123's password: *pass:[**********]*
+----
+
+At the first login a warning regarding an unknown host key will probably be received.
+When you are certain that in this brief moment no attacker has taken over your operating system's IP-address, you can simply verify it with `yes`.
+
+You can also work with the command line on the {CMK} appliance.
+How that is done is explained in its xref:appliance_usage#ssh[own article].
+
+
+[#profile]
+=== Profile and environment variables
+
+So that as few problems as possible arise, particularly as a result of individual distributions or differing operating system configurations,
+the {CMK} system ensures that the site user – and likewise all of the monitoring's processes – always have a clearly defined environment.
+Along with the home directory and the permissions, the *environment variables* play an important role.
+
+Among other things, when logging in as a site user the following variables will be set or modified.
+These variables are available for use in all processes running within the site.
+This also applies to scripts that are indirectly invoked by these processes (for example, a user's own xref:notifications#scripts[notification scripts]).
+
+[cols="20,~"]
+|===
+|`OMD_SITE` |The site's name (`mysite`).
+In custom scripts this variable should always be used rather than a hard coded site name (e.g. with `$OMD_SITE` in the shell).
+With this the script can also be used unchanged in other sites.
+
+|`OMD_ROOT` |The path for the site directory (`/omd/sites/mysite/`).
+
+|`PATH` |Directories in which executable programs will be searched for.
+For example, {CMK} keeps the site's `~/bin/` here.
+In the case of identical names, {CMK} programs have priority – this is important, e.g., for the `mail` command, a special version of which is provided with a {CMK} installation.
+
+|`LD_LIBRARY_PATH` |Directories in which additional binary libraries are searched for.
+Using this variable {CMK} ensures that libraries provided with {CMK} have priority over those installed in the normal operating system.
+
+|`PERL5LIB` |Search path for Perl modules.
+Here, too, module variants delivered by {CMK} have priority in case of doubt.
+
+|`LANG` |The language setting for command line commands.
+This setting is adopted from the Linux installation.
+This variable is automatically removed in the site's processes, and the setting reverts to the default English!
+This also affects other regional settings.
+Removing `LANG` is very important, since a number of standard Nagios plug-ins, for example, the German language setting, uses a comma for the decimal separator instead of a point.
+Your output can thus not be accurately processed.
+|===
+
+With the `env` command you can output all of the environment variables – adding `| sort` to this command arranges the list a bit more clearly:
+
+[{shell}]
+----
+{c-omd} env | sort
+HOME=/omd/sites/mysite
+LANG=de_DE.UTF-8
+LD_LIBRARY_PATH=/omd/sites/mysite/local/lib:/omd/sites/mysite/lib
+LOGNAME=mysite
+MAILRC=/omd/sites/mysite/etc/mail.rc
+MAIL=/var/mail/mysite
+MANPATH=/omd/sites/mysite/share/man:
+MODULEBUILDRC=/omd/sites/mysite/.modulebuildrc
+MP_STATE_DIRECTORY=/omd/sites/mysite/var/monitoring-plugins
+NAGIOS_PLUGIN_STATE_DIRECTORY=/omd/sites/mysite/var/monitoring-plugins
+OMD_ROOT=/omd/sites/mysite
+OMD_SITE=mysite
+PATH=/omd/sites/mysite/lib/rabbitmq/sbin:/omd/sites/mysite/lib/perl5/bin:/omd/sites/mysite/local/bin:/omd/sites/mysite/bin:/omd/sites/mysite/local/lib/perl5/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+PERL5LIB=/omd/sites/mysite/local/lib/perl5/lib/perl5:/omd/sites/mysite/lib/perl5/lib/perl5:
+PERL_MM_OPT=INSTALL_BASE=/omd/sites/mysite/local/lib/perl5/
+PWD=/omd/sites/mysite
+SHELL=/bin/bash
+SHLVL=1
+TERM=xterm
+USER=mysite
+_=/usr/bin/env
+----
+
+Under Linux the environment is an attribute of a _process_.
+Every process has its own variables, which it automatically passes on to sub-processes.
+These start initially with the same, inherited variables, but can also alter them.
+
+With the `env` command you can always only view the current shell's environment.
+If you suspect there is an error in a particular process's environment, with a small trick you can nonetheless output a listing of its environment.
+For this you only need the process-ID (PID).
+You can identify this with, e.g., `ps ax`, `pstree -p` or `top`.
+With this you can then access the process's `environ` file directly via the `/proc` file system.
+Here as an example is a suitable command for the PID `13222`:
+
+[{shell}]
+----
+{c-omd} tr \\0 \\n < /proc/13222/environ | sort
+----
+
+If you require custom variables for your own scripts or other software to be run in the site,
+store them in the `~/etc/environment` file which has been specially created for this purpose.
+All variables defined here will be available everywhere within the site:
+
+.~/etc/environment
+[{file}]
+----
+# Custom environment variables
+#
+# Here you can set environment variables. These will
+# be set in interactive mode when logging in as site
+# user and also when starting the OMD processes with
+# omd start.
+#
+# This file has shell syntax, but without 'export'.
+# Better use quotes if your values contain spaces.
+#
+# Example:
+#
+# FOO="bar"
+# FOO2="With some spaces"
+#
+MY_SUPER_VAR=blabla123
+MY_OTHER_VAR=10.88.112.17
+----
+
+
+[#shell]
+=== Customizing the shell
+
+If you wish to customize your shell (prompt or other things), you can perform this as usual in the `.bashrc` file.
+Environment variables nonetheless belong to `~/etc/environment`, so that they are certain to be available to all processes.
+
+There is also nothing to prevent you having your own `.vimrc` file if you like working with Vim.
+
+
+[#folder_structure]
+== The directory structure
+
+[#software_data]
+=== The separation of software and data
+
+The following graphic shows the most important directories in a {CMK} installation with a site named `mysite` and a `<version>` called for example `{current}.pro`:
+
+image::filesystem.png[alt="Illustration of the directory structure of a {CMK} site."]
+
+The basis for this structure is provided by the `/omd` directory.
+Without exception, all of the files for {CMK} are found here.
+`/omd` is in fact a symbolic link to `/opt/omd`, while the actual _physical_ data is located in `/opt`
+– but all data paths in {CMK} always use `/omd`.
+
+Important is the separation of data (highlighted yellow) and software (blue).
+The site's data is found in `/omd/sites/`, and the installed software in `/omd/versions/`.
+
+
+[#sitedir]
+=== Site directory
+
+Like every Linux user, the site user also has a home directory, which we refer to as the site directory.
+If your site is named `mysite` it will be found in `/omd/sites/mysite/`.
+As usual in Linux the shell abbreviates the its own home directory with a tilde (`~`) (or swung dash).
+Since immediately following a login you will actually be in this directory, the tilde appears automatically in the input prompt:
+
+[{shell}]
+----
+OMD[mysite]#:~$#
+----
+
+Subdirectories of the site directory are shown relative to the tilde:
+
+[{shell}]
+----
+{c-omd} cd var/log
+OMD[mysite]#:~/var/log$#
+----
+
+A number of subdirectories are located within the site directory, these can be listed with `ll` (alias for `ls -l`):
+
+[{shell}]
+----
+{c-omd} ll
+total 16
+lrwxrwxrwx  1 mysite mysite   11 Jan 24 11:56 bin -> version/bin/
+drwxr-xr-x 19 mysite mysite 4096 Jan 24 11:56 etc/
+lrwxrwxrwx  1 mysite mysite   15 Jan 24 11:56 include -> version/include/
+lrwxrwxrwx  1 mysite mysite   11 Jan 24 11:56 lib -> version/lib/
+drwxr-xr-x  5 mysite mysite 4096 Jan 24 11:56 local/
+lrwxrwxrwx  1 mysite mysite   13 Jan 24 11:56 share -> version/share/
+drwxr-xr-x  2 mysite mysite 4096 Jan 24 09:57 tmp/
+drwxr-xr-x 12 mysite mysite 4096 Jan 24 11:56 var/
+lrwxrwxrwx  1 mysite mysite   29 Jan 24 11:56 version -> ../../versions/{current}.pro/
+----
+
+As can be seen, the directories `bin`, `include`, `lib`, `share` and `version` are symbolic links.
+The rest are ‘normal’ directories.
+This mirrors the separation of software and and data as explained above.
+The software directory must be accessible as a subdirectory in the site,
+but it is physically located in `/omd/versions/`, and can also possibly be used by other sites.
+
+[cols="25,35,~",options="header"]
+|===
+| |Software |Data
+|Directories |`bin`, `include`, `lib`, `share` |`etc`, `local`, `tmp`, `var`
+|Owner |`root` |Site user (`mysite`)
+|Created by |{CMK} installation |Site creation, configuration, and monitoring
+|Physical location |`/omd/versions/{current}.pro/` |`/omd/sites/mysite/`
+|File type |Symbolic links |Normal directories
+|===
+
+
+[#software]
+=== Software
+
+The software directories, as usual under Linux, belong to `root` and thus may not be altered by a site user.
+The following subdirectories are present – those in the example are physically located within `/omd/versions/{current}.pro/`, and they are accessible via symbolic links from the site directory:
+
+[cols="20,~"]
+|===
+|`bin/` |Directory for executable programs.
+Here the `cmk` command is found, for example.
+
+|`lib/` |C-directories, plug-ins for Apache and Python – and in the `nagios/plugins/` subdirectory – standard monitoring plug-ins, which are mostly written in C or Perl.
+
+|`share/` |The main part of the installed software.
+Very many components are located in `share/check_mk` – among others, well over 2,000 check plug-ins.
+
+|`include/` |Contains include files for C-programs, which should be linked to libraries in `lib/`.
+This directory is not important and is only used if you wish to translate C-programs yourself.
+|===
+
+The `version` symbolic link is a ‘intermediate stop’ and serves as a relay point for the version used by the site.
+During a xref:update#[software update] this will be switched from the old to the new version.
+Nonetheless, do not attempt to perform an update manually by altering the link, since an update requires a number of other further steps – which will fail.
+
+
+[#data]
+=== Data
+
+The actual data for a site is found in the remaining subdirectories in the site directory.
+Without exception, these belong to the site user.
+The site directory itself is also included.
+{CMK} stores nothing apart from the directories listed there.
+You can create your own files and directories without problem here, in which tests, downloaded data, copies of log files, etc. can be kept as desired.
+
+The following directories have been predefined:
+
+[cols="20,~"]
+|===
+|`etc/` |Configuration files. +
+These are changed by actions in the xref:wato#[Setup] of {CMK}. +
+Note: The scripts in `etc/init.d` are actually also ‘configuration files’, since they are found in `etc/`.
+This is based on the same pattern as found in every Linux system under `/etc/init.d/`.
+We do advise against changing this script however, since this can lead to xref:update#conflicts[conflicts] during a software update.
+Changes to the scripts are not necessary.
+
+|`var/` |Runtime data. +
+All data generated by the monitoring will be stored here.
+Depending on the number of hosts and services, an immense volume of data can be accumulated
+– of which the largest part is the measured values recorded in the xref:graphing#rrds[RRDs].
+
+|`tmp/` |Volatile data. +
+{CMK} and other components store temporary data (which does not need to be retained) here.
+A `tmpfs` is therefore mounted here.
+This is a file system which manages data in RAM, thus generating zero Disk-IO.
+Restarting the computer results in the loss of all data in `tmp/`!
+However, stopping and starting the site does _not_ delete the data.
+Data such as sockets, pipes and PID-files can be found in `tmp/run` – these are necessary for communication and managing the server processes.
+Do *not* use `tmp/` for storing your own data,
+since this directory is mounted to the RAM where space is rather limited.
+Store your own data directly in the site directory, or in your own subdirectory within it.
+
+|`local/` |Own extensions. +
+A ‘shadow’ hierarchy of the software directories `bin/`, `lib/` and `share/` can be found in `local/`.
+These are intended for your own changes or extensions to the software.
+Also applicable here:
+Under no circumstances store test files, log files, security copies or anything else that does not belong there, in `local/`.
+{CMK} could attempt to execute these files as a part of the software.
+Likewise, in a xref:glossar#distributed_monitoring[distributed monitoring]the data will also be duplicated to all remote sites.
+|===
+
+
+[#local]
+=== Modifying and extending {CMK} – the local files
+
+[TIP]
+====
+Some statements made in this section regarding the priority of local (site-specific) files over files with the same name in the software directory are no longer correct.
+We will update the relevant areas soon.
+====
+
+As just shown in the above table, the `~/local/` directory with its numerous subdirectories is intended for your own extensions.
+In a new site, all of the directories in `~/local/` are initially empty.
+
+With the practical `tree` command you can quickly get an overview of the structure of `~/local/`.
+The `-L 3` option restricts the depth to 3:
+
+[{shell}]
+----
+{c-omd} tree -L 3 local
+local
+├── bin
+├── lib
+│   ├── apache
+│   ├── check_mk -> python3/cmk
+│   ├── nagios
+│   │   └── plugins
+│   ├── python
+│   └── python3
+│       ├── cmk
+│       └── cmk_addons
+└── share
+    ├── check_mk
+    │   ├── agents
+    │   ├── alert_handlers
+    │   ├── checkman
+    │   ├── checks
+    │   ├── inventory
+    │   ├── locale
+    │   ├── mibs
+    │   ├── notifications
+    │   ├── pnp-rraconf
+    │   ├── pnp-templates
+    │   ├── reporting
+    │   └── web
+    ├── diskspace
+    ├── doc
+    │   └── check_mk
+    ├── nagios
+    │   └── htdocs
+    ├── nagvis
+    │   └── htdocs
+    └── snmp
+        └── mibs
+----
+
+All of the directories in the _lowest_ level are actively integrated in the software.
+A file stored here will be treated in the same way as if it was in the directory with the same name within `/omd/versions/...`
+(or respectively, in the logical path from the site in `~/bin/`, `~/lib/` or `~/share/`).
+
+Example: In the site, executable programs will be searched for in `~/bin/` and in `~/local/bin/`.
+
+Here it applies that in the case of _identical names_ the file in `~/local/` always has priority.
+This enables modification of the software without the need to change installation files in  `/omd/versions/`.
+The procedure is simple:
+
+. Copy the desired file to the appropriate directory in `~/local/`.
+. Modify this file.
+. Restart the appropriate service so that the change can take effect.
+
+Regarding point 3 above, if it is not known exactly which service to which the change applies, simply restart the complete site with `omd restart`.
+
+
+[#logs]
+=== Log files
+
+In {CMK} – as already-described – the log files are stored in the xref:data[data directory] `var/`.
+The log files of the relevant components can be found there.
+The following output for one of the commercial editions is abbreviated:
+
+[{shell}]
+----
+{c-omd} ll -R var/log/
+var/log/:
+total 1268
+drwxr-x--- 2 mysite mysite   4096 May 19 15:20 agent-receiver/
+-rw------- 1 mysite mysite  13646 Aug 14 12:02 alerts.log
+drwxr-x--- 2 mysite mysite   4096 May 19 15:20 apache/
+drwx------ 2 mysite mysite   4096 May 19 15:20 automation-helper/
+-rw------- 1 mysite mysite 379995 Aug 14 14:35 cmc.log
+-rw------- 1 mysite mysite  57808 Aug 14 12:03 dcd.log
+-rw------- 1 mysite mysite      0 May 19 16:05 diskspace.log
+-rw------- 1 mysite mysite 529922 Aug 14 18:12 licensing.log
+-rw------- 1 mysite mysite   8395 Aug 14 12:02 liveproxyd.log
+-rw-rw---- 1 mysite mysite     62 Aug 14 18:13 liveproxyd.state
+drwxr-x--- 2 mysite mysite   4096 May 19 15:19 mkeventd/
+-rw------- 1 mysite mysite  37345 Aug 14 12:02 mkeventd.log
+-rw------- 1 mysite mysite  63829 Aug 14 14:35 mknotifyd.log
+-rw-rw---- 1 mysite mysite    564 Aug 14 18:13 mknotifyd.state
+-rw------- 1 mysite mysite  30060 Aug 14 14:35 notify.log
+-rw------- 1 mysite mysite  32202 Aug 14 12:02 redis-server.log
+-rw------- 1 mysite mysite      0 May 19 15:20 rrdcached.log
+-rw------- 1 mysite mysite  21132 Sep  4 18:43 security.log
+drwx------ 2 mysite mysite   4096 May 19 15:20 ui-job-scheduler/
+-rw------- 1 mysite mysite  25871 Sep  4 09:17 update.log
+-rw------- 1 mysite mysite   2486 Aug 14 12:12 web.log
+
+var/log/agent-receiver:
+total 264
+-rw-r--r-- 1 mysite mysite 233243 Jun 18 10:25 access.log
+-rw-r--r-- 1 mysite mysite      0 May 19 15:20 agent-receiver.log
+-rw-r--r-- 1 mysite mysite  27546 Aug 14 12:02 error.log
+----
+
+On the web interface you can easily configure the extent to which data should be written to the log files
+by searching in [.guihint]#Setup > General > Global settings# for all entries with `logging`:
+
+.The global settings for logging in a commercial edition
+image::cmk_commandline_global_settings_logging.png[alt="List of global settings for logging."]
+
+[IMPORTANT]
+====
+Log files can quickly become very large if a high log level has been set.
+It is generally advisable to use such settings for a temporary customization, as an aid in problem identification for example.
+====
+
+
+[#cmk]
+== The cmk command
+
+Along with the xref:omd_basics#[`omd` command], which serves for starting and stopping sites, for the basic configuration of components,
+and for starting a xref:update#[software update], `cmk` is the most important command.
+With this a configuration for a monitoring core can be created, xref:glossar#check[checks] executed manually, a xref:glossar#service_discovery[service discovery] performed, and much more.
+
+
+[#options]
+=== The command options
+
+The command `cmk` is actually an abbreviation for `check_mk`, introduced to make the command faster to type.
+The command includes a built-in, very detailed online help, that can be called up with `--help` option:
+
+[{shell}]
+----
+{c-omd} cmk -h
+WAYS TO CALL:
+ cmk  --automation [COMMAND...]          Internal helper to invoke Check_MK actions
+ cmk  --check [HOST [IPADDRESS]]         Check all services on the given HOST
+ cmk  --check-discovery HOSTNAME         Check for not yet monitored services
+...
+----
+
+As you can see in the command above, we have called help with the option `-h` instead of `--help`.
+Because what is true for the command itself is also true for its options:
+The less there is to type, the faster it goes.
+Not for all options, but for those that are often needed, there is therefore a short form in addition to the long form.
+Even though the long form is more intuitive, especially for beginners (`check_mk --list-hosts`) than the short form (`cmk -l`), we will use the short form in the User Guide.
+If in doubt, you can always consult the command help.
+A longer look in the command help is a good idea in any case, as we will not present all options in the User Guide.
+
+By entering an option, you start the command `cmk` in a certain mode.
+Here follows the overview of the options we will present in this chapter, but also in other parts of the manual:
+
+[cols="35,~",options=header]
+|===
+|Option |Function
+2+|*Monitoring core*
+|`cmk -R` |xref:commands_core[Restarting the core]
+|`cmk -O` |xref:commands_core[Loading a new configuration into the core]
+|`cmk -U` |xref:commands_core[Creating a new configuration for the core]
+|`cmk -N` |xref:commands_core[Output the Nagios configuration of the core]
+2+|*Checks*
+|`cmk myserver123` |xref:execute_checks[Executing checks] on host `myserver123`
+2+|*Services*
+|`cmk -I myserver123` |xref:wato_services#commandline[Executing a service discovery]
+|`cmk --check-discovery myserver123` |Runs the xref:wato_services#discovery_check[discovery check] on the host, which checks for new and disappeared services and for new host labels.
+When a change occurs, the host is 'marked' by creating a file with the host name in `~/var/check_mk/autodiscovery`
+-- but only if automatic service configuration update is enabled in {CMK} (in the [.guihint]#Periodic service discovery# rule set).
+2+|*Agents*
+|`cmk -d myserver123` |xref:dump_agent[Retrieving agent output]
+|`cmk -A myserver123` |xref:bake_agents[Baking agents]
+2+|*Diagnostics*
+|`cmk -l` |xref:list_hosts[Listing hosts]
+|`cmk --list-tag mytag` |xref:list_hosts[Listing hosts with host tag]
+|`cmk -D myserver123` |xref:dump_host[Displaying host configuration]
+
+2+|*Information*
+|`cmk -V` |Displays the {CMK} version installed in the site.
+|`cmk -L` |xref:info_plugins[Listing check plug-ins]
+|`cmk -m` |xref:info_plugins[Accessing the check plug-ins catalog]
+|`cmk -M df` |xref:info_plugins[Showing a check plug-in manual page] (here of plug-in `df`)
+2+|*Special topics*
+|`cmk --update-dns-cache` |Deletes the DNS cache and re-creates it.
+For details on the DNS cache, see the xref:hosts_setup#dns[article on hosts].
+By default, this command is executed in a {CMK} site once a day via cronjob.
+|`cmk --cleanup-piggyback` |Deletes all obsolete xref:piggyback#[piggyback data] in the `~/tmp/check_mk/piggyback/` directory.
+By default, this command is executed in a {CMK} site once a day via cronjob.
+|`cmk -P` |xref:mkps#commandline[Managing MKPs]
+|`cmk --snmpwalk myswitch` |xref:snmp#simulation[Pulling an SNMP walk] from host `myswitch`
+|`cmk --snmptranslate` |xref:devel_check_plugins_snmp#locating_oids[Translating an SNMP walk]
+|`cmk --create-diagnostics-dump` |xref:support_diagnostics#commandline[Creating support diagnostics dump]
+|===
+
+In some modes, further, specific options are available to you,
+e.g. you can limit the service discovery to certain checks, e.g. to the check `df` with the command `cmk -I --detect-plugins=df myserver123`.
+
+A number of options always work -- regardless of the mode with which the command is executed:
+
+[cols="35,~",options=header]
+|===
+|Option |Function
+|`cmk -v` |Prompts `cmk` to produce a detailed dump of its current activity ('verbose')
+|`cmk -vv` |The same as the above, with even more details: ‘very verbose’
+|`cmk --cache` |The information is read from cache files, even if they are out of date.
+The agent is only contacted if no cache file exists.
+The cached agent data of the host can be found in `~/tmp/check_mk/cache`.
+|`cmk --no-tcp` |Works like `--cache`, however it will interrupt with if a cache file is absent or not current. Thus in any situation you can suppress an access to the agent.
+|`cmk --no-cache` |The information is always fetched up to date, i.e. no cache files are used.
+|`cmk --usewalk` |For SNMP hosts: instead of accessing the SNMP agent this uses a stored SNMP walk, that has been previously pulled with `cmk --snmpwalk myserver123`.
+These walks are stored in `~/var/check_mk/snmpwalks`.
+|`cmk --debug` |If an error occurs, this option ensures that it will no longer be intercepted, rather the original Python exception will be displayed in full.
+This can be important information for the developer, by showing the exact program location in which the error is located.
+It will also be very helpful with locating errors in self-written check plug-ins.
+If when invoking `cmk` an error is encountered which should be reported to support or feedback, repeat the request with the added `--debug` option, and attach the Python trace to your email.
+|===
+
+In the following section we will show how the commands can be used.
+The example outputs are mostly shown in an abbreviated form.
+
+
+[#commands_core]
+=== Commands for the monitoring core
+
+The commercial editions utilizes the xref:cmc#[{CMK} Micro Core] (CMC) as its monitoring core, {CRE} uses Nagios. 
+An important task for the `cmk` is the generation of a configuration file that is readable for the core,
+and which contains all of the configured hosts, services, contacts, contact groups, time periods, etc.
+On the basis of this information the core knows which checks are to be executed and which objects it should provide to the GUI via xref:glossar#livestatus[Livestatus].
+
+For Nagios as well as for the CMC, it is fundamental that the number of hosts, services and other objects always remains static during the operation,
+and that this number can only be altered through the generation of a new configuration, followed by a reloading of the core.
+With Nagios, this requires a restart of the core.
+The CMC has a very efficient function for the reloading of its configuration during active processing.
+
+The following table highlights important differences between the configurations of both cores:
+
+[cols="20,45,~",options=header]
+|===
+| |Nagios |CMC
+|Configuration file |`~/etc/nagios/conf.d/check_mk_objects.cfg` |`~/var/check_mk/core/config`
+|File type |Text file with `define`-commands |Compressed and optimized binary file
+|Activation |Core restart |Core command for reloading the configuration
+|Command |`cmk -R` |`cmk -O`
+|===
+
+Regenerating the configuration is always necessary
+if the contents of the configuration files in `~/etc/check_mk/conf.d`, or automatically-detected services in `~/var/check_mk/autochecks` have been modified.
+The [.guihint]#Setup# keeps a record of such changes and highlights them in the GUI as to xref:glossar#activate_changes[activating changes].
+The following commands are available for activation via the command line:
+
+[cols="35,~",options=header]
+|===
+|Option |Function
+|`cmk -R` |Generates a new configuration for the core and restarts the core (analogous to `omd restart core`).
+This is the method provided for Nagios.
+|`cmk -O` |Generates the configuration for the core and loads this without a restart of the active processing (analogous to `omd reload core`).
+This is the recommended variant with the CMC.
+*Attention:* With Nagios as the core, this option also functions, but can lead to memory leaks and other instabilities.
+Apart from that, this option does in any case not perform a genuine reload, rather it internally stops and restarts the process, as it were.
+|`cmk -U` |Generates the configuration for the core _without_ activating it.
+|`cmk -N` |For diagnostic purposes, this outputs the configuration to be generated on the standard output, without altering the actual configuration file.
+Here you can enter a host name simply in order to view the host's configuration (e.g. `cmk -N myserver123`).
+|===
+
+
+[#execute_checks]
+=== Executing checks
+
+A second mode in {CMK} deals with the execution of a host's {CMK}-based checks.
+With this you can allow all automatically detected, and also manually configured services, to be immediately checked, without needing to bother yourself with the monitoring core or the GUI.
+
+To do this, enter `cmk --check` followed by the name of a host configured in the monitoring.
+Since the `--check` option is the default option of `cmk`, you can also omit it.
+In addition, you should always add the two options `-n` (do not send results to the core) and `-v` (output all results).
+More on this in the description of the options below.
+
+[{shell}]
+----
+{c-omd} cmk -nv myserver123
++ FETCHING DATA
+Get piggybacked data
+CPU load             [green]#15 min load: 1.53, 15 min load per core: 0.19 (8 cores)#
+CPU utilization      [green]#Total CPU: 10.02%#
+Check_MK Agent       [green]#Version: {current}, OS: linux, ...#
+Disk IO SUMMARY      [green]#Read: 412 kB/s, Write: 1.15 MB/s, Latency: 57 microseconds#
+Filesystem /         [green]#Used: 61.61% - 287 GiB of 466 GiB, trend per 1 day 0 hours: +671 MiB, trend per 1 day 0 hours: +0.14%, Time left until disk full: 272 days 23 hours#
+Interface 2          [green]#[tun0], (up), Speed: 10 GBit/s, In: 511 B/s (<0.01%), Out: 184 B/s (<0.01%)#
+Kernel Performance   [green]#Process Creations: 67.64/s, Context Switches: 8509.18/s, Major Page Faults: 2.18/s, Page Swap in: 0.00/s, Page Swap Out: 0.00/s#
+Memory               [green]#Total virtual memory: 37.07% - 6.08 GB of 16.41 GB#
+Mount options of /   [green]#Mount options exactly as expected#
+Number of threads    [yellow]#2684 (warn/crit at 2000/4000)(!), Usage: 2.13%#
+TCP Connections      [green]#Established: 36#
+Temperature Zone 0   [green]#Temperature: 25.0 °C#
+Uptime               [green]#Up since 2025-09-08 08:54:55, Uptime: 8 hours 8 minutes#
+[agent] Success, [piggyback] Success (but no data found for this host), execution time 2.1 sec | execution_time=2.070 user_time=0.160 system_time=0.000 ...
+----
+
+Further tips:
+
+* Do not use this command in monitored production hosts which use log file monitoring.
+Log messages are only sent once by agents, and it can happen that a manual `cmk -nv` ‘catches’ these and that they will then be lost from the monitoring.
+In such a situation use the `--no-tcp` option.
+
+* If Nagios is being used for the core and `-n` is omitted, the effect will be an immediate actualization of the check results in the core and in the GUI.
+
+* The command is useful when xref:devel_intro#[developing your own check plug-ins], because it enables a quicker test than by using the GUI.
+If the check fails and returns an {UNKNOWN}, the `--debug` option can help to find the problem location in the code.
+
+The following options influence the command:
+
+[cols="35,~",options=header]
+|===
+|Option |Function
+|`-v` |Check results output:
+Without this option you will only see the output from the service [.guihint]#Check_MK# itself, and not the results from the other services.
+|`-n` |Dry run: Results are *not* passed to the core, the performance counter is not updated.
+|`--detect-plugins=df,uptime` |Restricts the execution to the check plug-ins `df` and `uptime`.
+In the case of SNMP hosts, only the data required for these will be retrieved.
+This option is practical if you develop your own check plug-ins and only want to test these.
+|===
+
+
+[#dump_agent]
+=== Retrieving agent output
+
+The command `cmk -d` retrieves and displays the output from a host's {CMK} agent.
+With `cmk -d` agent data is retrieved in the same way as with the monitoring. It is neither validated nor processed.
+Thus the data showed exactly matches the data that is turned over to the Agent Controller (when TLS encryption is enabled) or to a tunneling program in case xref:datasource_programs#[data source programs] are configured.
+
+[{shell-raw}]
+----
+{c-omd} cmk -d myserver123
+<<<check_mk>>>
+Version: {current}
+AgentOS: linux
+Hostname: myserver123
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+LocalDirectory: /usr/lib/check_mk_agent/local
+OSType: linux
+OSName: Ubuntu
+OSVersion: 24.04
+OSPlatform: ubuntu
+...
+----
+
+You can even run `cmk -d` using the name or IP address of a host that is not configured in the monitoring.
+In this case legacy settings for the host will be assumed (TCP connection to port 6556, no Agent Controller, no encryption, no data source program).
+
+
+[#bake_agents]
+=== Baking agents
+
+In the commercial editions you can also bake the agents from the command line, as you would otherwise do via the xref:wato_monitoringagents#bakery[web interface].
+This gives you the option, for example, of updating the agents regularly, for example via a cronjob.
+
+To bake the agents, use the option `-A` followed by the name of a host (or several):
+
+[{shell}]
+----
+{c-omd} cmk -Av myserver123
+Baking packages for targets myserver123:
+...
+Baking...linux_deb:baking...linux_rpm:baking...solaris_pkg:baking...windows_msi:baking...linux_tgz:baking...solaris_tgz:baking...aix_tgz:baking
+...
+----
+
+The output shows that the agent packages available for the host `myserver123` have been successfully baked.
+If you do not specify a host, the packages will be baked for all hosts.
+
+The command only bakes when necessary.
+If the packages are still up to date, the output will look something like this:
+
+[{shell}]
+----
+{c-omd} cmk -Av myserver123
+Baking packages for targets myserver123:
+...
+myserver123..linux_deb: up to date (not baking)...linux_rpm: up to date (not baking)...solaris_pkg: up to date (not baking)...windows_msi: up to date (not baking)...linux_tgz: up to date (not baking)...solaris_tgz: up to date (not baking)...aix_tgz: up to date (not baking)...
+...
+----
+
+You can still force baking with the `-f` (_force_) option.
+
+
+[#list_hosts]
+=== Listing hosts
+
+The `cmk -l` command simply lists the names of all hosts configured in the [.guihint]#Setup#:
+
+[{shell}]
+----
+{c-omd} cmk -l
+myserver123
+myserver124
+myserver125
+----
+
+Because the data is provided ‘naked’ and ‘unprocessed’, it is easy to use in scripts
+– for example a loop across all host names can be constructed:
+
+[{shell}]
+----
+{c-omd} for host in $(cmk -l) ; do echo "Host: $host" ; done
+Host: myserver123
+Host: myserver124
+Host: myserver125
+----
+
+If, instead of `echo` you insert a command that performs something meaningful, this can be really useful.
+
+The `cmk --list-tag` invocation likewise outputs host names, but also offers the possibility of filtering by xref:glossar#host_tag[host tags].
+Simply enter a host tag and you will receive all hosts having this tag.
+The following example lists all hosts monitored by SNMP:
+
+[{shell}]
+----
+{c-omd} cmk --list-tag snmp
+myswitch01
+myswitch02
+myswitch03
+----
+
+Enter multiple tags and they will be linked with AND.
+The below command delivers all hosts that are monitored by both SNMP *and* {CMK} agent.
+As no hosts fulfill this condition, the output remains empty:
+
+[{shell}]
+----
+{c-omd} cmk --list-tag snmp checkmk-agent
+----
+
+
+[#dump_host]
+=== Displaying host configuration
+
+For one or more specified host, `cmk -D` displays the configured services, host tags, labels and other attributes.
+Because the list of services is so extensive it can look somewhat confusing on the terminal.
+Send the output through `less -S` to avoid a break:
+
+[{shell}]
+----
+{c-omd} cmk -D myserver123 | less -S
+myserver123
+Addresses:              192.168.178.34
+Tags:                   [address_family:ip-v4-only], [agent:cmk-agent], [criticality:prod], [ip-v4:ip-v4], [networking:lan], [piggyback:auto-piggyback], [site:mysite], [tcp:tcp]
+Labels:                 [cmk/check_mk_server:yes], [cmk/os_family:linux]
+Host groups:            mylinuxservers
+Contact groups:         all
+Agent mode:             Normal Checkmk agent, or special agent if configured
+Type of agent:
+  TCP: 192.168.178.34:6556
+  Process piggyback data from /omd/sites/mysite/tmp/check_mk/piggyback/mycmkserver
+Services:
+Type of agent:          TCP (port: 6556)
+Is aggregated:          no
+Services:
+  checktype        item              params
+  ---------------- ----------------- ------------
+  cpu_loads        None              (5.0, 10.0)
+  kernel_util      None              {}
+...
+----
+
+
+[#info_plugins]
+=== Information on the check plug-ins
+
+{CMK} provides a large number of ready to use check plug-ins as standard.
+In every version a few new ones are added, and version {current-major} already includes more than 2,000 plug-ins.
+Three `cmk` command options give you access to information about these plug-ins.
+
+`cmk -L` produces a table of all plug-ins with their name, type and a description.
+At the same time, any self-written plug-ins stored in `~/local/` will also be listed.
+
+The following are possible types:
+
+[cols="20,~"]
+|===
+|`agent` |Evaluates data from xref:glossar#agent_plugin[agent plug-ins] or xref:glossar#special_agent[special agents].
+The agent is (normally) retrieved via TCP Port 6556.
+|`snmp` |Serves the monitoring of devices via SNMP.
+|`active` |Calls an xref:glossar#active_check[active check].
+This includes Nagios-compatible third-party plug-ins for which {CMK} only adopts the configuration.
+|===
+
+The list can of course be filtered simply with `grep` if something specific is being searched for:
+
+[{shell}]
+----
+{c-omd} cmk -L | grep f5
+f5_bigip_apm                      snmp   F5 Big-IP: Number of Current SSL/VPN Connections
+f5_bigip_chassis_temp             snmp   F5 Big-IP: Chassis Temperature
+f5_bigip_cluster                  snmp   F5 Big-IP: Cluster State, Up to Firmware Version 10
+f5_bigip_cluster_status           snmp   F5 Big-IP: Active/Active or Passive/Active Cluster Status (< V11.2)
+f5_bigip_cluster_status_v11_2     snmp   F5 Big-IP: Active/Active or Passive/Active Cluster Status (> V11.2)
+f5_bigip_cluster_v11              snmp   F5 Big-IP: Cluster State for Firmware Version >= 11
+f5_bigip_conns                    snmp   F5 Big-IP: Number of Current Connections
+f5_bigip_cpu_temp                 snmp   F5 Big-IP: CPU Temperature
+f5_bigip_fans                     snmp   F5 Big-IP: System Fans
+f5_bigip_interfaces               snmp   F5 Big-IP: Special Network Interfaces
+f5_bigip_mem                      snmp   F5 Big-IP: Usage of Memory
+f5_bigip_pool                     snmp   F5 Big-IP: Load Balancing Pools
+f5_bigip_psu                      snmp   F5 Big-IP: Power Supplies
+f5_bigip_snat                     snmp   F5 Big-IP: Source NAT
+f5_bigip_vcmpfailover             snmp   F5 Big-IP: Active/Active or Passive/Active vCMP Guest Failover Status
+f5_bigip_vcmpguests               snmp   F5 Big-IP: Show Failover States of all vCMP Guests Running on a vCMP Host
+f5_bigip_vserver                  snmp   F5 Big-IP: Virtual Servers
+----
+
+If you want more information on a certain plug-in, documentation as manual page can be called up with `cmk -M`:
+
+[{shell}]
+----
+{c-omd} cmk -M f5_bigip_pool
+----
+
+This produces the following output:
+
+image::check_manpage_example.png[alt="Example of a check plug-in manual page."]
+
+Using `cmk -m` with no further options will access a complete catalog of all check plug-ins manual pages.
+
+[{shell}]
+----
+{c-omd} cmk -m
+----
+
+You can navigate interactively in this catalog:
+
+image::cmk_commandline_manpage_catalog_level1.png[alt="Main menu for selecting a manual page.",width=65%]
+
+image::cmk_commandline_manpage_catalog_level2.png[alt="Submenu for selecting a manual page.",width=65%]
+
+
+[#config]
+== Configuration files
+
+Knowing the location and structure of configuration files can often help with resolving problems and identifying errors,  
+for example, in extensions downloaded from the link:https://exchange.checkmk.com/[{CMK} Exchange^] or xref:devel_intro#[self-programmed].
+
+The comparison between [.guihint]#Setup# and configuration files in this chapter is not intended to encourage the modification of  configuration files using scripts. If it is necessary to automate configuration changes, this can be done safely and without side effects using the xref:rest_api#[REST API].
+
+[IMPORTANT]
+====
+Do not make any changes to configuration files unless you have been explicitly instructed to do so by a {CMK} support representative, because... There be dragons!
+====
+
+
+[#config_doc]
+=== Where is the documentation?    
+
+Not here.
+Configuration files are defined by the components that write and read them. 
+Ultimately, only by looking at the source code and associated tests can the structure of the configuration stored in the file system be revealed.
+
+Also note that configuration file formats may change between patch versions.
+In this case, migration routines ensure the conversion of changed data formats.
+
+Furthermore, the units used may differ between the display in the [.guihint]#Setup# and the storage in the configuration file.
+This applies, for example, to the display of time ranges or temperatures.
+
+The following example shows a complete set of parameters for the check plug-in that monitors file systems in {CMK} (here in an older version). Due to the large number of parameters, the screenshot has been split into two parts and set in a small font:
+
+[{image-border}] 
+image::cmk_commandline_parameters_for_df_check.png[alt=“Complete parameter set of the check plug-in for monitoring file systems.”]  
+
+The corresponding section in the actual configuration file looks like this (formatted a little more neatly):
+
+[{file}]
+----
+{ 'inodes_levels'      : (10.0, 5.0),
+  'levels'             : (80.0, 90.0),
+  'levels_low'         : (50.0, 60.0),
+  'magic'              : 0.8,
+  'magic_normsize'     : 20,
+  'show_inodes'        : 'onlow',
+  'show_levels'        : 'onmagic',
+  'show_reserved'      : True,
+  'subtract_reserved'  : False,
+  'trend_mb'           : (100, 200),
+  'trend_perc'         : (5.0, 10.0),
+  'trend_perfdata'     : True,
+  'trend_range'        : 24,
+  'trend_showtimeleft' : True,
+  'trend_timeleft'     : (12, 6)},
+----
+
+As can be seen, there are more than 10 different parameters here, each of which follows its own logic.
+Some are configured using floating point numbers (`0.8`), others using integers (`24`), some using keywords (`'onlow'`), others using Boolean values (`True`), and finally some using tuples such as (`(5.0, 10.0)`).
+
+This example shows just one of over 2,000 plug-ins.  In addition, {CMK} recognizes other configurations as check parameters: Just think of time ranges, Event Console rules, user profiles, and much more.
+
+[TIP]
+====
+When it comes to the names of file directories, files, or even file contents, you will often find the abbreviation `wato`.
+[.notranslate]#WATO# is the abbreviation for Web Administration Tool -- the {CMK} configuration tool up to and including version {v16}.
+Starting with version {v20}, the functions of [.notranslate]#WATO# have been taken over by the [.guihint]#Setup# menu, or [.guihint]#Setup# for short.
+Although [.notranslate]#WATO# has been completely replaced by [.guihint]#Setup# in the web interface, it lives on in the names of files and directories.
+====
+
+
+[#config_file]
+=== Which configuration file is currently being used?
+
+There is a handy command for finding out which file [.guihint]#Setup# has just changed: `find`.
+Called with the following parameters, you will find all files (`-type f`) in `~/etc/` that have been changed within the last minute (`-mmin -1`):
+
+[{shell}]
+----
+{c-omd} find ~/etc/ -mmin -1 -type f
+/omd/sites/mysite/etc/check_mk/conf.d/wato/rules.mk
+----
+
+The basis of the configuration is always the `~/etc/check_mk/` directory.
+This is divided into various domains, most of which relate to a specific functionality.
+Each domain has a directory ending in `.d`, from which all files ending in `.mk` are automatically read in alphanumeric order.
+
+
+[#setup_config_files]
+=== Setup and configuration files
+
+Within the `.d/` configuration directories, there is always a subdirectory called `wato`, e.g., `~/etc/check_mk/conf.d/wato/`.  
+The [.guihint]#Setup# usually only reads and writes to this directory.  
+However, the service responsible for the configuration directory also reads the other files in its 'own' `.d` directory. 
+
+If files are located outside the `wato/` directory, they were either created manually _at some point in the past_ with the aim of making changes that are effective but not visible in the [.guihint]#Setup#, or they were created by other components in {CMK}.
+
+
+[#locked]
+==== Locked files and folders
+
+Various automation mechanisms that work within {CMK} or access {CMK} from outside (e.g., via xref:rest_api#[REST API]) can make configuration changes.
+In some cases, it is desirable that hosts and folders created in this way are visible and verifiable in the [.guihint]#Setup#, but it is not desirable that changes are made by 'human' users.
+In such cases, hosts or folders can be locked.
+
+You can recognize a `hosts.mk` file of a locked host by the line with the `lock` attribute:
+
+.hosts.mk
+[{file},highlight=4]
+----
+# Created by WATO
+# encoding: utf-8
+
+_lock = True
+----
+
+When opening such a folder in the [.guihint]#Setup#, the following message will be displayed above the hosts list:
+
+image::cmk_commandline_locked_host_attributes.png[alt=“Message indicating that editing hosts function in the folder is locked.”]
+
+All actions that would require a change to the `hosts.mk` file are then locked in the GUI.
+Incidentally, this does _not_ affect xref:glossar#service_discovery[service discovery].
+The configured services of a host are stored under `~/var/check_mk/autochecks/`.
+
+Folder properties can also be locked.
+This is done by an entry in the folder's `.wato` file. In the file's dictionary, the `lock` key then has the value `True`:
+
+..wato
+[{file},highlight=4-5]
+----
+{'title': 'My folder',
+ 'attributes': {},
+ 'num_hosts': 1,
+ 'lock': True,
+ 'lock_subfolders': False,
+ '__id': '7f2a8906d3c3448fac8a379e2d1cec0e'}
+----
+
+If the value of the `lock_subfolders` key is set to `True`, the creation and deletion of subfolders is prevented.
+
+
+[#file_syntax]
+=== File content and syntax
+
+Configuration files can be text files that can be viewed in any editor, or binary files that require special tools.
+Text files follow the Python syntax, but there are differences in how they are handled by {CMK}:
+
+* Files that contain variable assignments (`=`) are _executed_ like a script, e.g., `hosts.mk`.
+* Files that only contain simple values or Python dictionaries are _read_ as variables, e.g., `.wato`.
+
+UTF-8 is always used for the character encoding.
+If you need to make modifications for any reason, make sure that the modified file can still be parsed by Python.
+
+Binary files have the extension `.pb`, which stands for link:https://protobuf.dev/[Protocol Buffers^] and is sometimes also called _Protobuf_.
+This format, developed by Google for serializing configuration and messages, can be written and read with low overhead.
+However, special tools are required to view it.
+The {CMK} package includes `protoc`, which performs many simple tasks.
+For example, the following provides a ‘raw‘ insight into the last status of a stopped xref:cmc#[CMC]:
+
+[{shell}]
+----
+{c-omd} cat ~/var/check_mk/core/state.pb | protoc --decode_raw | less
+----
+
+For a more detailed analysis of Protobuf files, you can use link:https://github.com/protocolbuffers/protoscope[protoscope^].
+
+
+[#check_config_files] 
+=== Verifying configuration files
+
+If you suspect that configuration files may be corrupted (e.g., due to a defective data carrier), you can have them checked.
+{CMK} provides the `cmk-validate-config` program for this purpose, which, unlike `cmk-update-config`, which is called during a software update, does not make any changes such as migrating data formats.
+`cmk-validate-config` checks both syntax (parentheses, correct assignments, etc.) and partially semantics (data types used and the presence of certain keys). If the program encounters syntax errors, the first damaged file will be displayed:
+
+[{shell}]
+----
+{c-omd} cmk-validate-config
+Cannot read in configuration file etc/check_mk/conf.d/wato/rules.mk: invalid syntax (rules.mk, line 42)
+----
+
+If the checked files are OK, a list of all examined files will be displayed:
+
+[{shell}]
+----
+{c-omd} cmk-validate-config
+The following mk files have passed the validation:
+  etc/check_mk/multisite.d/wato/roles.mk...................... [green]#Passed#
+  etc/check_mk/conf.d/wato/groups.mk.......................... [green]#Passed#
+  etc/check_mk/multisite.d/wato/groups.mk..................... [green]#Passed#
+  etc/check_mk/conf.d/wato/passwords.mk....................... [green]#Passed#
+  etc/check_mk/conf.d/wato/notifications.mk................... [green]#Passed#
+  etc/check_mk/multisite.d/wato/tags.mk....................... [green]#Passed#
+  etc/check_mk/multisite.d/sites.mk........................... [green]#Passed#
+  etc/check_mk/multisite.d/broker_connections.mk.............. [green]#Passed#
+  etc/check_mk/multisite.d/wato/user_connections.mk........... [green]#Passed#
+  etc/check_mk/multisite.d/wato/users.mk...................... [green]#Passed#
+  etc/check_mk/conf.d/wato/contacts.mk........................ [green]#Passed#
+  etc/check_mk/multisite.d/wato/configuration_bundles.mk...... [green]#Passed#
+  etc/check_mk/conf.d/wato/timeperiods.mk..................... [green]#Passed#
+  etc/check_mk/conf.d/wato/rules.mk........................... [green]#Passed#
+  etc/check_mk/conf.d/wato/opentelemetrytest/rules.mk......... [green]#Passed#
+----

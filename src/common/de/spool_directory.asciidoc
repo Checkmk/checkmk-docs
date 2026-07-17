@@ -1,0 +1,240 @@
+// -*- coding: utf-8 -*-
+// IGNORE inhalt
+// NONASCII
+include::global_attr.adoc[]
+= Das Spool-Verzeichnis
+:title: Das Spool-Verzeichnis - Dateiinhalte der Agentenausgabe hinzufügen
+:description: Programme auf überwachten Hosts können Informationen im Spool-Verzeichnis ablegen. Lesen Sie hier, wie Sie diese für die {CMK}-Agentenausgabe nutzen.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:agent_linux#[Linux überwachen]
+xref:agent_windows#[Windows überwachen]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Die Überwachung regelmäßig oder bei Bedarf abgearbeiteter Aufgaben, sowie dauerhaft laufender Prozesse kann beispielsweise durch die Analyse von Log- oder Statusdateien erfolgen.
+Dies ist jedoch häufig mit Aufwand verbunden:
+Oft ist es erforderlich, große Datenmengen zu lesen, um wenig Information herauszuziehen.
+
+Um diesen Aufwand zu reduzieren, bietet {CMK} die Möglichkeit, dass ein Programm Ausgaben direkt im {CMK}-Agentenformat in eine Datei schreibt.
+Im sogenannten Spool-Verzeichnis (_spool directory_) abgelegt, sammelt der Agent diese Dateien und integriert ihren Inhalt in die Agentenausgabe.
+Der Weg über das Spool-Verzeichnis bietet sich beispielsweise an bei
+
+- der regelmäßigen Analyse von Log-Dateien,
+// TK: Dafür gibt es ja mk_logwatch (auch wenn es noch nicht beschrieben ist). Eine Abgrenzung/Einordnung Spool-Verzeichnis vs. mk_logwatch wäre hier hilfreich
+- der Überwachung automatischer Backups,
+- der Erstellung und Prüfung von Nutzungsstatistiken aus einer Datenbank,
+// - Checks, deren Laufzeit extrem variiert,
+- der Kontrolle von Cronjobs (wenn das xref:monitoring_jobs#[`mk-job`-Plugin] nicht genügt),
+- der xref:devel_intro#[Entwicklung eigener Checks] zum Test von Beispielausgaben.
+
+In {CMK} wird das Spool-Verzeichnis von den Agenten der folgenden Betriebssysteme unterstützt: Windows, Linux, AIX, FreeBSD, OpenWrt und Solaris.
+
+Damit Sie dieses Feature reibungslos nutzen können, sind einige Dinge zu beachten.
+
+
+[#paths]
+== Verzeichnispfade
+
+Der Standardpfad des Spool-Verzeichnisses ist unter Linux und anderen Unix-Systemen `/var/lib/check_mk_agent/spool/` und unter Windows `C:\ProgramData\checkmk\agent\spool\`.
+Für Linux und Unix können Sie den Pfad des übergeordneten Verzeichnisses mit der Regel [.guihint]#Agent rules > Installation paths for agent files (Linux, UNIX)# und der dort vorhandenen Option [.guihint]#Base directory for variable data (caches, state files)# anpassen.
+
+Wenn Sie auf einem Host im Monitoring arbeiten, können Sie das dort konfigurierte Spool-Verzeichnis aus der Agentenausgabe herausfiltern:
+
+[{shell}]
+----
+{c-user} check_mk_agent | grep SpoolDirectory
+SpoolDirectory: /var/lib/check_mk_agent/spool
+----
+
+{CMK} nutzt ein einziges Spool-Verzeichnis, welches in den Standardeinstellungen `root` gehört.
+Mehrere Verzeichnisse mit unterschiedlichen Eigentümern sind nicht vorgesehen.
+Selbstverständlich können Sie aber im Spool-Verzeichnis (zunächst leere) Dateien anlegen und einen anderen Benutzer zum Eigentümer machen, der den Inhalt seiner Datei dann überschreiben kann.
+
+[IMPORTANT]
+====
+Beachten Sie, dass seitens des Agenten keinerlei inhaltliche Prüfung von Spool-Dateien vorgesehen ist!
+Manipulierte Spool-Dateien können reguläre Agentensektionen überschreiben und so einen problemlosen Betrieb vorgaukeln.
+Und auch ohne bösen Willen ist eine gewisse Gefahr vorhanden, dass eine Spool-Datei eine kaputte Agentenausgabe enthält und diese dazu führt, dass nachfolgende Teile der Agentenausgabe komplett ignoriert werden.
+====
+
+
+[#contents]
+== Dateinamen und -inhalt
+
+Spool-Dateien können beliebige Textausgaben in den von {CMK} verarbeiteten Formaten beinhalten.
+Sie werden in der im Spool-Verzeichnis vorhandenen Reihenfolge aneinander gehängt.
+Die verwendete Dateiendung ist dabei egal.
+
+Wenn Sie ein numerisches Schema zur Sortierung verwenden wollen, stellen Sie dem Dateinamen einen Unterstrich (`_`) voran, da mit Zahlen beginnende Dateinamen einer xref:agecheck[Altersprüfung] dienen.
+Dateien, die mit einem Punkt beginnen, werden ignoriert.
+
+Um Durcheinander bei den aneinander gehängten Dateiinhalten zu vermeiden, sollte jede Spool-Datei
+// MFS: Sollte, oder besser muss?
+
+- mit einem Sektions-Header beginnen, d.h. einer Zeile, die in `<<<` und `>>>` eingeschlossen ist -- auch wenn in der Datei nur das Format xref:glossar#local_check[lokaler Checks] verwendet wird,
+- mit einem Zeilenumbruch beendet werden.
+
+Ein lokaler Check, der sofort einen Service bereitstellt, kann demnach so aussehen:
+
+./var/lib/check_mk_agent/spool/spooldummy.txt
+[{file}]
+----
+<<<local>>>
+0 "Spool Test Dummy" - This static service is always OK
+----
+
+Analog können Sie Ausgaben ablegen, die auf {CMK}-Seite ein xref:glossar.html#check_plugin[Check-Plugin] erfordern:
+
+./var/lib/check_mk_agent/spool/poolplugin.txt
+[{file}]
+----
+<<<waterlevels>>>
+rainbarrel 376
+pond 15212
+pool 123732
+----
+
+[#piggyback]
+=== Terminierung von Piggyback-Sektionen
+
+Wenn Sie in einer Datei xref:glossar#piggyback[Piggyback]-Sektionen verwenden, schließen Sie diese Datei mit der Zeile `<<<<>>>>` ab.
+Nur so ist sichergestellt, dass bei einer möglichen Änderung der Auslesereihenfolge die der Piggyback-Ausgabe folgenden Ausgaben wieder dem Host selbst zugeordnet werden.
+
+
+[#agecheck]
+== Altersprüfung vorgefundener Dateien
+
+Wenn ein Programm korrekt in seine Ausgabedatei schreiben kann, ist alles prima -- egal, ob es erfolgreich durchgelaufen ist oder nicht.
+Doch was, wenn ein Programm vor dem Schreiben auf Festplatte abbricht oder ein Fehler am Dateisystem verhindert, dass neue Dateien geschrieben werden?
+
+Für diesen Fall haben Sie die Möglichkeit, dem Dateinamen eine Ganzzahl vorne anzustellen, beispielsweise `600MyCronjob`.
+Die Zahl wird in diesem Fall als Maximalalter der Datei in Sekunden interpretiert.
+Ist die Datei älter, wird sie vom Agenten ignoriert und der zugehörige Service in {CMK} wechselt wegen der fehlenden Ausgabe in den Zustand {UNKNOWN}.
+Im Falle einer Datei `3900_hourly_cleaner.txt` ist die Zahl demnach passend gewählt für einen stündlich laufenden Cronjob, bei dem eine Ausführungszeit von unter fünf Minuten erwartet wird.
+
+
+[#example]
+== Ein Praxisbeispiel
+
+Nehmen wir an, Sie betreiben einen Dienst, an dem sich Benutzer an- und abmelden.
+In den Log-Dateien des Dienstes finden Sie Zeilen der folgenden drei Arten vor:
+
+./var/log/dummyapp.log
+[{file}]
+----
+21/Oct/2022:12:42:09 User harrihirsch logged in from 12.34.56.78
+21/Oct/2022:12:42:23 User zoezhang logged out after 10 min idle
+21/Oct/2022:13:00:00 Current user count: 739
+----
+
+Die Zeile mit `Current user count` schreibt der Prozess dabei nicht nach jedem Login/Logout, sondern in festen Zeitabständen.
+Ist die Zahl der Zeilen in der Log-Datei klein genug, um sie schnell einzulesen, können Sie einen xref:localchecks#[lokalen Check] programmieren.
+Dieser liest jedes Mal die ganze Log-Datei Zeile für Zeile und setzt immer beim Vorkommen der Zeile `Current user count` die Benutzerzahl auf den angezeigten Wert.
+Bei Vorkommen der Zeilen `logged in` und `logged out` erhöht oder verringert er die Benutzerzahl.
+Am Ende gibt Ihr Check eine Zeile ähnlich der folgenden aus:
+
+[{shell}]
+----
+1 "Frobolator User Count" count=1023 Watch out! Limit nearly used up.
+----
+
+Mit steigender Beliebtheit Ihres Dienstes läuft der lokale Check immer länger, so dass irgendwann diese Lösung und selbst die Ausführung als xref:agent_linux#async_plugins[asynchrones Agentenplugin] nicht mehr praktikabel sind.
+Hier kann die richtige Nutzung des Spool-Verzeichnisses die Effizienz der Check-Ausführung drastisch erhöhen.
+In den nächsten Absätzen zeigen wir Ihnen, wie Sie das Programm, welches bisher Ihren lokalen Check bereitstellt, so abändern, dass es das Spool-Verzeichnis effektiv nutzt.
+
+Zunächst soll es sich nicht selbst beenden, wenn es am Ende der Datei angekommen ist, sondern eine Spool-Datei schreiben, die den aktuell ermittelten Zustand des Dienstes bei vollständiger Auswertung der Log-Datei enthält:
+
+./var/lib/check_mk_agent/spool/1800_frobolator.txt
+[{file}]
+----
+<<<local>>>
+2 "Frobolator User Count" count=1200 Maximum number of users reached!
+----
+
+Lassen Sie Ihr Programm dann eine gewisse Zeitspanne warten -- ob wenige Sekunden oder mehrere Minuten, sollten Sie von der Frequenz neu hinzukommender Log-Einträge abhängig machen.
+Es soll dann nur die neu hinzugekommenen Zeilen auswerten, und den Zustand neu berechnen.
+Liegen geänderte Zahlen vor, schreibt es die Spool-Datei neu.
+
+Dieses Vorgehen programmieren Sie als Endlosschleife.
+Um abzufangen, dass dieses Programm auch abstürzen kann, sollten Sie die Spool-Datei entsprechend benennen, beispielsweise `1800_frobolator.txt` -- wenn 30 Minuten ohne Aktualisierung der Spool-Datei auf Probleme des Dienstes oder des auswertenden Programms hindeuten.
+
+Anstatt über das Plugin-Verzeichnis des Agenten starten Sie das Programm jetzt als _Daemon_ (oder _Hintergrundprogramm_) mit den Mitteln Ihres Betriebssystems.
+Achten Sie hierbei auf automatischen Neustart, wenn das Programm abstürzt oder terminiert wird.
+Viele Server-Applikationen bieten zudem die Möglichkeit, statt oder zusätzlich zum Schreiben normaler Log-Dateien, einem anderen Programm Log-Ausgaben per Pipe zu übergeben.
+Diesen Mechanismus für ein Auswertungsskript zu nutzen, das Spool-Dateien schreibt, bietet sich ebenfalls an.
+
+
+[#pitfalls]
+== Zu beachtende Feinheiten
+
+Das Lesen von Dateien hält andere Fallstricke bereit als das regelmäßige Starten von Prozessen durch den Agenten.
+Beachten Sie die folgenden Punkte für einen reibungslosen Betrieb.
+
+
+[#charset]
+=== Zeichensatz
+
+{CMK} erwartet die Agentenausgabe ausschließlich link:https://de.wikipedia.org/wiki/UTF-8[UTF-8^] kodiert (ohne link:https://de.wikipedia.org/wiki/Byte_Order_Mark#In_UTF-8[Byte Order Mark / BOM^]) mit einem einfachen Newline (`0x0A` oder `\n`) als Zeilenumbruch.
+Abweichungen können schlimmstenfalls dazu führen, dass die Agentenausgabe ab dem ersten Zeichen einer falsch formatierten Spool-Datei nicht mehr gelesen werden kann.
+Konkret bedeutet dies:
+
+* Sorgen Sie insbesondere auf _älteren_ Windows- und Linux-Systemen dafür, dass Spool-Dateien _nicht_ in der Kodierung link:https://de.wikipedia.org/wiki/Windows-1250[Windows 1250 bis 1258^] oder link:https://de.wikipedia.org/wiki/ISO_8859[ISO 8859^] geschrieben werden.
+Sollte es dennoch nötig sein, stellen Sie sicher, dass nur die Schnittmenge zu UTF-8 – de facto link:https://de.wikipedia.org/wiki/American_Standard_Code_for_Information_Interchange[7-Bit-ASCII^] – verwendet wird.
+
+* Sorgen Sie insbesondere auf _neueren_ Windows-Systemen dafür, dass Spool-Dateien _nicht_ in der dort als Standard genutzten Kodierung link:https://de.wikipedia.org/wiki/UTF-16[UTF-16^] geschrieben werden.
+
+* Verzichten Sie auf das link:https://de.wikipedia.org/wiki/Byte_Order_Mark[BOM^].
+Insbesondere Skriptsprachen unter Windows schreiben häufig diese Zeichensequenz, welche die verwendete Kodierung anzeigt, automatisch in Ausgabedateien.
+In der Agentenausgabe verhindert sie, dass `<<<` am Anfang einer Zeile stehen.
+
+* Verwenden Sie den Unix-Zeilenumbruch Newline (`0x0A` oder `\n`).
+Auch hier nutzt Windows häufig die Zeichenfolge `CRLF` (`0x0D 0x0A` oder `\r\n`).
+
+Sollte eine Spool-Datei unerwünschtes Verhalten verursachen, untersuchen Sie deren erste Zeilen mit einem link:https://de.wikipedia.org/wiki/Hex-Editor[Hex-Editor^]:
+
+* `0xFF 0xFE` zeigt eine UTF-16 kodierte Datei an:
+Ändern Sie in diesem Fall Ihre Skripte auf Ausgabe in UTF-8.
+
+* `0xEF 0xBB 0xBF` zeigt UTF-8 mit BOM an.
+Hier genügt es in der Regel, die Datei künftig ohne BOM zu schreiben.
+
+
+[#softlinks]
+=== Softlinks und benannte Pipes
+
+// MFS: Named Pipes, denen man nur sehr langsam Daten liefert, sind ein zuverlässiger Weg, den Agenten zu DoSen.
+// MFS: Named Pipes, die man richtig füttert, ein richtig smarter Weg, Daten nach Checkmk zu bringen.
+Im Prinzip können Dateien im Spool-Verzeichnis auch Softlinks oder benannte Pipes (_named pipes_) sein.
+Zu beachten ist, dass hier die Altersprüfung über Dateinamen nicht funktioniert, weil das Alter des Softlinks oder der benannten Pipe selbst ausgewertet wird und nicht das Alter der geschriebenen Daten.
+Bei benannten Pipes müssen Sie zudem sicherstellen, dass der in die Pipe schreibende Prozess immer Daten nachliefert.
+Werden keine Daten geliefert, wartet der {CMK}-Agent ewig und wird schließlich mit Timeout abgebrochen.
+
+Falls Sie nicht unprivilegierten Benutzern die Möglichkeit geben müssen, in Spool-Dateien zu schreiben, legen Sie leere Dateien für diese Benutzer an, deren Eigentümerschaft Sie entsprechend setzen.
+Diese Benutzer können dann von sich aus einen Softlink setzen oder direkt in die Spool-Datei schreiben.
+
+
+[#locking]
+=== Sperren und Puffern
+
+Beim Schreiben längerer Programme, die mehrere Statuszeilen in eine Spool-Datei schreiben, ist die Versuchung groß, die Ausgabedatei beim Start des Programms schreibend zu öffnen.
+Die Datei bleibt in diesem Fall aber komplett leer, bis der Schreibpuffer das erste Mal geleert und ins Ziel geschrieben wird, und sie wird unvollständig sein, bis das schreibende Programm die Datei geschlossen hat.
+Ähnlich sieht es aus, wenn eine Datei für die Dauer eines längeren Schreibvorgangs exklusiv gesperrt ist.
+
+Aus diesem Grund sollten Sie entweder die Ausgabedatei erst schreibend öffnen, wenn der gesamte zu schreibende Inhalt vorliegt, oder in eine temporäre Datei schreiben, die Sie dann ins Spool-Verzeichnis kopieren -- respektive den Inhalt einer temporären Datei mit `cat` in eine vorhandene im Spool-Verzeichnis übertragen.
+
+
+[#losingcontrol]
+=== Den Überblick behalten
+
+Ein weiteres Problem kann auftreten, wenn verschiedene Programme versuchen, in gleichnamige Dateien zu schreiben.
+Bei vielen Spool-Dateien kann leicht der Überblick verloren gehen, welches Programm eigentlich in welche Spool-Datei schreibt.
+Insbesondere, wenn eine falsch formatierte Spool-Datei zur Folge hat, dass ein Teil der Agentenausgabe unbrauchbar wird, ist dies sehr ärgerlich und kann eine Zeit raubende Suche verursachen.
+
+Sie können hier Ordnung schaffen, indem Sie zu jeder Spool-Datei eine gleichnamige Datei mit vorangestelltem Punkt anlegen, die Informationen zum Job und gegebenenfalls einem Ansprechpartner enthält.
+Der Inhalt dieser versteckten Datei wird nicht mit übertragen.
+

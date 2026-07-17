@@ -1,0 +1,601 @@
+// -*- coding: utf-8 -*-
+// IGNORE mk_inventory cfg check_mk
+// NONASCII
+include::global_attr.adoc[]
+= Die HW-/SW-Inventur
+:title: Die HW-/SW-Inventur
+:description: Die HW-/SW-Inventur von {CMK} ermittelt Informationen über Hardware und Software auf überwachten Hosts. Lesen Sie hier, wie Sie die Inventur durchführen.
+
+{related-start}
+xref:agent_linux#[Linux überwachen]
+xref:agent_windows#[Windows überwachen]
+ifdef::onprem[]
+xref:devel_inventory_plugins#[HW/SW-Inventur-Plugins entwickeln]
+endif::[]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Neben dem klassischen Monitoring -- also dem Überwachen von Status-, Log- und Messdaten -- bringt {CMK} noch eine ganz andere Funktion quasi kostenlos mit:
+die _Hardware-/Software-Inventur_ (oder kurz _HW-/SW-Inventur_).
+Diese kann auf Ihren Hosts z.B. folgende Informationen automatisch ermitteln:
+
+* Welche Software-Pakete sind in welchen Versionen auf einem Server installiert?
+* Welchen Ausbau an RAM-Bausteinen hat ein Server?
+* Welche BIOS-Version ist auf dem Mainboard installiert?
+* Welche Seriennummern haben die verbauten Festplatten?
+* Welche Ports auf einem Switch sind länger nicht genutzt worden (also wahrscheinlich frei)?
+* ... und vieles mehr
+
+Die so ermittelten Daten werden pro Host in einem strukturierten Baum und in verschiedenen anderen xref:views#[Ansichten] dargestellt und sind auch über eine API verfügbar.
+Hier ein Beispiel mit Daten zum Prozessor:
+
+.CPU-Daten im Inventurpfad `hardware.cpu`
+image::inventory_example_main.png[alt="Aufgeklapptes Inventar mit CPU-Daten."]
+
+Mit der HW-/SW-Inventur können Sie zum Beispiel:
+
+* Daten über installierte Software für ein Lizenz-Management-System bereitstellen,
+* Typenbezeichnungen für Ersatzteilbestellungen (RAM, Festplatten, Lüfter) ermitteln,
+* generelle Daten über Hardware- und Software-Ausstattung für den regelmäßigen Import in CMDBs liefern,
+* Änderungen an Hardware oder Software zurückverfolgen, z.B. um festzustellen, wann ein bestimmtes BIOS-Update durchgeführt wurde,
+* informiert werden, wenn sich etwas an der Hardware oder Software geändert hat,
+* gezielt Server finden, die ein bestimmtes Service Pack noch nicht installiert haben.
+
+Der wichtigste Vorteil gegenüber vergleichbaren anderen Systemen liegt auf der Hand: 
+Sie können dafür einfach die vorhandene Infrastruktur von {CMK} verwenden und sparen sich das Einrichten und Administrieren einer weiteren Software-Umgebung.
+Sie verteilen lediglich ein einziges zusätzliches Agentenplugin.
+Bei SNMP-Geräten ist nicht einmal das notwendig, da der Inventurscanner auch SNMP unterstützt und sich die Daten einfach auf diesem Weg holt.
+
+Außerdem braucht sich {CMK} hinter anderen Inventurscannern nicht zu verstecken.
+Wie auch bei unseren Check-Plugins arbeiten wir ständig an einer Erweiterung der gescannten Daten.
+Jede {CMK}-Version bringt neue Plugins für den Inventurscanner mit, und die eingesammelten Informationen werden immer detaillierter und umfangreicher.
+
+ifdef::onprem[]
+Wenn die verfügbaren Plugins Ihnen nicht ausreichen, können Sie mithilfe der dafür vorgesehenen Programmierschnittstelle eigene Inventur-Plugins entwickeln.
+Informationen dazu finden Sie in einem xref:devel_inventory_plugins#[eigenen Artikel].
+endif::[]
+
+
+[#config]
+== Einrichtung
+
+Das Einrichten der HW-/SW-Inventur geht in zwei Schritten.
+Voraussetzung ist, dass auf den Hosts bereits der {CMK}-Agent installiert ist (falls diese nicht per SNMP überwacht werden):
+
+. Die Inventur für die gewünschten Hosts einschalten.
+. Das Inventory-Agentenplugin auf diesen Hosts verteilen.
+
+
+[#activate]
+=== Die Inventur für die gewünschten Hosts einschalten
+
+[#create_rule]
+==== Regel erstellen
+
+Wie immer, wenn Sie etwas für bestimmte Hosts konfigurieren wollen, geht das auch hier mithilfe einer xref:glossar#rule[Regel.]
+Den Regelsatz finden Sie unter [.guihint]#Setup > Hosts > HW/SW Inventory rules > Do HW/SW Inventory# oder noch einfacher mit der Suche nach `inventory`.
+Verwechseln Sie diesen nicht mit dem Regelsatz [.guihint]#HW/SW Inventory (Linux, Windows, Solaris, AIX)#.
+Dieser wird für das xref:inventory_plugin[Agentenplugin] verwendet, wie Sie später sehen werden. 
+
+Im Regelsatz [.guihint]#Do HW/SW Inventory# sind bereits einige Regeln standardmäßig aktiv, die sich auf Host-xref:glossar#label[Labels] beziehen. 
+Wenn die von Ihnen gewünschten Hosts ein solches Label haben, ist der Service für die HW-/SW-Inventur bereits eingerichtet.
+Wenn nicht, müssen Sie eine neue Regel erstellen. 
+
+Legen Sie also hier mit icon:icon_new[] [.guihint]#Add rule# eine neue Regel für die Hosts an, für die Sie die Inventur aktivieren möchten.
+Dort finden Sie etliche Einstellungen:
+
+.Standardmäßig sind alle Optionen deaktiviert und werden auch nicht benötigt
+image::inventory_do_inventory_default.png[alt="Dialog für Inventuroptionen."]
+
+Fürs Erste übernehmen Sie die Voreinstellungen.
+Die anderen Möglichkeiten erklären wir im Verlauf dieses Artikels.
+
+Die Regel, die Sie gerade angelegt haben, erzeugt bei der nächsten xref:glossar#activate_changes[Aktivierung der Änderungen] einen xref:glossar#active_check[aktiven Check] pro Host, der alle Inventurdaten zu diesem einsammelt, darunter Daten von einem normalen {CMK}-Agenten, aber auch solche, die über SNMP-Abfragen hereinkommen.
+Den neuen Service [.guihint]#Check_MK HW/SW Inventory# finden Sie in der Serviceliste bei den Hosts, und er sieht etwa so aus:
+
+.Ohne Agentenplugin werden nur einige Standardeinträge gemeldet
+image::inventory_list_first_item.png[alt="Statusanzeige eines frischen Inventur-Services."]
+
+Lassen Sie sich nicht verunsichern, weil der Check nur wenige Einträge gefunden hat.
+Das liegt daran, dass Sie das Plugin noch nicht verteilt haben.
+
+
+[#set_interval]
+==== Intervall festlegen
+
+Inventurdaten ändern sich nur selten.
+Und das Erkennen einer Änderung ist in der Regel auch nicht zeitkritisch.
+Deswegen ist es sehr sinnvoll, das Intervall, in dem der Inventurcheck ausgeführt wird, anzupassen und nicht einfach den Standard (1 Minute) zu verwenden -- vor allem, weil das Verarbeiten der Inventurdaten in dem aktiven Check deutlich mehr Rechenzeit benötigt als für einen normalen
+Service.
+
+{CMK}-Instanzen haben dazu _automatisch_ eine Regel im Regelsatz [.guihint]#Setup > Service monitoring rules > Service Checks > Normal check interval for service checks#, die für alle Services mit dem Namen [.guihint]#Check_MK HW/SW Inventory# das Intervall auf einen Tag festlegt:
+
+.Eine tägliche Inventur genügt in der Praxis, für Testzwecke bieten sich kürzere Zeiträume an
+image::inventory_interval.png[alt="Die Regel zum Festlegen des Intervalls."]
+
+Falls Ihnen einmal am Tag zu selten ist, können Sie diese Regel natürlich auch anpassen -- z.B. auf Prüfintervalle von vier oder acht Stunden.
+Und natürlich besteht immer die Möglichkeit, dass Sie das mithilfe mehrerer Regeln für unterschiedliche Hosts anders einstellen.
+
+
+[#inventory_plugin]
+=== Das Inventory-Agentenplugin auf diesen Hosts verteilen
+Der wichtigste Schritt ist das Installieren des Agentenplugins für die Inventur auf den entsprechenden Hosts.
+ifdef::onprem[]
+Das können Sie entweder manuell oder mit der xref:wato_monitoringagents#bakery[Agentenbäckerei] (nur kommerzielle Editionen) machen.
+endif::[]
+ifdef::saas[]
+Das können Sie entweder manuell oder mit der xref:wato_monitoringagents#bakery[Agentenbäckerei] machen.
+endif::[]
+
+
+[#manual_installation]
+==== Installation von Hand
+
+Für eine manuelle Installation benötigen Sie zunächst das Plugin.
+ifdef::onprem[]
+Das finden Sie in den kommerziellen Editionen unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Related# und in {RE} unter [.guihint]#Setup > Agents#.
+In allen Editionen finden Sie dort Menüeinträge für die unterschiedlichen Betriebssysteme.
+endif::[]
+ifdef::saas[]
+Das finden Sie unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Related#.
+Sie finden dort Menüeinträge für die unterschiedlichen Betriebssysteme.
+endif::[]
+
+Verwenden Sie je nach Betriebssystem folgendes Plugin im Kasten [.guihint]#Plug-ins#:
+
+[cols="25,~",options="header"]
+|===
+|Betriebssystem |Plugin 
+|Windows |`mk_inventory.ps1`
+|Linux |`mk_inventory.linux`
+|AIX |`mk_inventory.aix`
+|Solaris |`mk_inventory.solaris`
+|===
+
+Sie finden diese Dateien auch auf der Befehlszeile in der {CMK}-Instanz im Unterverzeichnis
+`~/share/check_mk/agents/plugins` (Linux/Unix) bzw. `~/share/check_mk/agents/windows/plugins` (Windows).
+
+Kopieren Sie das Plugin auf die Ziel-Hosts in das korrekte Verzeichnis für Plugins.
+Beim Windows-Agenten ist das `C:\ProgramData\checkmk\agent\plugins`.
+Einzelheiten finden Sie im xref:agent_windows#plugins[Artikel zum Windows-Agenten.]
+Bei Linux und Unix lautet das Verzeichnis `/usr/lib/check_mk_agent/plugins`.
+Achten Sie darauf, dass die Datei ausführbar ist (`chmod +x`).
+Einzelheiten erfahren Sie im xref:agent_linux#plugins[Artikel zum Linux-Agenten.]
+
+Wichtig ist nun Folgendes:
+Der Agent wird ja von {CMK} in der Regel einmal pro Minute abgerufen.
+Das Inventory-Agentenplugin benötigt aber mehr Rechenzeit als normale Plugins, weil es z.B. in vielen Verzeichnissen nach installierter Software suchen muss.
+Es erzeugt darüber hinaus deutlich größere Datenmengen.
+Deswegen ist es so entwickelt, dass es nur alle vier Stunden (14400 Sekunden) neue Daten erzeugt und ausliefert.
+
+Falls Sie also für Ihren Inventurcheck aus irgendeinem Grund ein _kürzeres_ Intervall als vier Stunden eingestellt haben, werden Sie trotzdem nur alle vier Stunden wirklich neue Daten bekommen.
+Falls Sie wirklich häufiger Daten ermitteln möchten, müssen Sie das voreingestellte Berechnungsintervall anpassen.
+
+Bei Windows ersetzen Sie die Zahl direkt in der Plugin-Datei.
+Suchen Sie nach `14400` und ersetzen Sie diese durch eine andere Anzahl von Sekunden.
+Die Stelle in der Datei sieht so aus (Ausschnitt):
+
+[.copybutton]
+.mk_inventory.ps1
+[{psscript}]
+----
+# These three lines are default in case not set in the agent bakery
+$script:delay = 14400
+$script:exePaths = @()
+$script:regPaths = @("Software\Microsoft\Windows\CurrentVersion\Uninstall",
+    "Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+----
+
+Bei Linux und Unix geht das etwas anders.
+Dort legen Sie zu diesem Zweck eine Konfigurationsdatei `/etc/check_mk/mk_inventory.cfg` an mit folgender Zeile (hier im Beispiel mit 7200 Sekunden):
+
+[.copybutton]
+./etc/check_mk/mk_inventory.cfg
+[{file}]
+----
+INVENTORY_INTERVAL=7200
+----
+
+Noch ein Hinweis:
+Das Inventory-Agentenplugin kümmert sich _selbst_ darum, dass es nur alle vier Stunden ausgeführt wird.
+Verwenden Sie daher *nicht* den Mechanismus vom Agenten für eine asynchrone Ausführung von Plugins mit größeren Intervallen.
+Installieren Sie das Plugin auf die normale Art zur direkten Ausführung.
+
+
+[#agent_bakery]
+==== Konfiguration über die Agentenbäckerei
+
+ifdef::onprem[]
+{cee-only}
+Falls Sie in den kommerziellen Editionen für die Konfiguration Ihrer Agenten die xref:wato_monitoringagents#bakery[Agentenbäckerei] verwenden, ist die Sache natürlich viel komfortabler.
+endif::[]
+ifdef::saas[]
+Falls Sie für die Konfiguration Ihrer Agenten die xref:wato_monitoringagents#bakery[Agentenbäckerei] verwenden, ist die Sache natürlich viel komfortabler.
+endif::[]
+Hier gibt es unabhängig vom Betriebssystem nur einen einzigen Regelsatz mit dem Namen [.guihint]#HW/SW Inventory (Linux, Windows, Solaris, AIX)#.
+Dieser steuert die Verteilung des nötigen Plugins sowie dessen Konfiguration.
+Sie finden ihn unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agents > Agent rules#:
+
+.Portable Programme können Sie direkt über Verzeichnisse mit einbeziehen
+image::inventory_agent_rule.png[alt="Formular mit Optionen für das Inventory-Agentenplugin."]
+
+Hier können Sie neben dem Intervall auch noch für Windows Pfade angeben, in denen nach ausführbaren `.EXE`-Dateien gesucht werden soll, wenn
+es darum geht, die auf dem System installierte Software zu finden.
+Auch die Pfade in der Windows-Registry, die als Indikator für installierte Software berücksichtigt werden sollen, können Sie hier konfigurieren.
+
+
+[#testing]
+=== Test
+
+Wenn Sie das Plugin korrekt verteilt haben, dann finden Sie bei der nächsten Ausführung des Inventurchecks eines Hosts deutlich mehr Datensätze.
+Das sieht dann z.B. so aus:
+
+.So wenige Einträge werden Sie nur auf frisch aufgesetzten Systemen vorfinden
+image::inventory_list_entries.png[alt="Statusanzeige eines Inventur-Services mit laufendem Agentenplugin."]
+
+
+[#operating]
+== Mit den Inventurdaten arbeiten
+
+Inventurdaten gibt es natürlich insbesondere für jeden einzelnen Host, teils als Baum-, teils als Tabellendarstellung.
+Wie genau diese funktionieren und wie Sie darauf zugreifen können, sehen Sie unten.
+Es gibt aber freilich auch Ansichten, insbesondere Suchen, die Ihre gesamte Host-Landschaft betreffen.
+Diese erreichen Sie über den Eintrag [.guihint]#HW/SW Inventory# im [.guihint]#Monitor#-Menü:
+
+.Alle globalen Ansichten der Inventurdaten
+image::inventory_monitor_menu.png[alt="Alle HW-/SW-Inventur-Einträge im Monitor-Menü.",width=87%]
+
+
+[#treeview]
+=== Darstellung als Baum
+
+Im Monitoring werden die Inventurdaten der Hosts einmal in einem Baum pro Host und noch einmal in Tabellen dargestellt.
+Den Baum erreichen Sie beispielsweise in einer Host-Ansicht über den Menüeintrag [.guihint]#Host > HW/SW Inventory > Inventory of host#.
+
+Alternativ können Sie in Ansichten, die Hosts auflisten, das icon:icon_menu[] Menü eines Hosts aufrufen und darüber wiederum das icon:icon_inventory[] Inventar:
+
+.Zugriff auf das Inventar aus einer Liste mit Hosts
+image::inventory_host_contextmenu.png[alt="Kontextmenü zum Anzeigen des Inventars eines Hosts."]
+
+In beiden Fällen landen Sie bei der Baumdarstellung der Inventurdaten des Hosts.
+Ausgehend von den drei Basiskategorien [.guihint]#Hardware# icon:icon_hardware[], [.guihint]#Networking# icon:icon_networking[] und [.guihint]#Software# icon:icon_software[] können Sie Unteräste auf- und zuklappen:
+
+[#internal_paths]
+.Ein sehr kleiner Teil des Inventurbaums 
+image::inventory_example_main.png[alt="Aufgeklapptes Inventar mit CPU-Informationen."]
+
+Hinter den einzelnen Einträgen sehen Sie oben im Bild in Klammern die internen _Inventurpfade_, die Sie sich über [.guihint]#Display > Modify display options# und die Option [.guihint]#Show internal tree paths# einblenden lassen können:
+
+image::inventory_show_internal_paths.png[alt="Option zum Anzeigen der Inventurpfade."]
+
+Im Inventar sehen Sie dann die internen Bezeichnungen.
+So heißt der interne Pfad für den Bereich `Processor` beispielsweise `hardware.cpu`.
+Die Bezeichnungen für CPU-Modell und -Architektur, `model` und `arch`, finden Sie darunter in den CPU-Daten.
+
+Sie können diese internen Bezeichnungen nutzen, um nur einzelne Pfade für xref:wato_user#visibility[Kontaktgruppen freizuschalten.]
+Benutzer einer Kontaktgruppe, denen nur die oben gezeigten Einträge `hardware.cpu`, model und arch zugewiesen sind, sehen dann nur noch ein abgespecktes Inventar:
+
+image::inventory_restricted_internal_path.png[alt="Inventar mit ausgewählten Datensätzen."]
+
+
+[#table]
+=== Darstellung als Tabelle
+
+Viele der Inventurdaten sind Einzelwerte unter ganz konkreten Pfaden im Baum, z.B. der Eintrag [.guihint]#Hardware > System > Manufacturer > Apple Inc.#.
+Es gibt aber auch Stellen im Baum mit Tabellen gleichartiger Objekte.
+Eine sehr wichtige ist z.B. die Tabelle [.guihint]#Software  > Packages#:
+
+.Die Paketliste ist sehr ausführlich und hier im Bild stark beschnitten
+image::inventory_packages.png[alt="Software-Pakete im Inventurbaum."]
+
+Das Besondere an diesem Teil der Inventurdaten:
+Sie können die Pakete über [.guihint]#Host > HW/SW Inventory > Software packages# in einer separaten Ansicht aufrufen.
+Dort finden Sie dann icon:icon_filter[] Filter speziell für die Suche in Paketen (im Bild stark gekürzt):
+
+.Der Filter für den Host-Namen ist bereits ausgefüllt
+image::inventory_packages_search.png[alt="Filterliste für Software-Pakete."]
+
+Sie können auch in Software-Paketen auf mehreren Hosts suchen.
+Die entsprechende Ansicht finden Sie im xref:user_interface#monitor_menu[Monitor-Menü] unter [.guihint]#Monitor > HW/SW Inventory > Search software packages#.
+Im [.guihint]#Monitor#-Menü sind auch alle weiteren Tabellenansichten für die Inventur aufgeführt, darunter weitere Suchen, etwa für bestimmte Oracle-Daten.
+
+Beachten Sie, dass in der Voreinstellung viele allgemeine Filter zu den Hosts nicht in diesen Ansichten verfügbar sind.
+Sie können die Voreinstellungen aber bearbeiten und weitere Filter hinzufügen.
+
+Weitere Dinge, die Sie mit diesen Ansichten machen können:
+
+* In xref:reporting#[Berichte] einbinden 
+* Als PDF- oder CSV-Datei exportieren 
+* In xref:dashboards#[Dashboards] integrieren
+
+Übrigens können Sie auch solche Inventurdaten in Ansichten aufnehmen, die _nicht_ tabellarisch sind.
+Dazu gibt es für jeden bekannten Pfad im Inventurbaum einen Spaltentyp, den Sie in Ansichten von Hosts hinzufügen können.
+Ein Beispiel dafür ist die vordefinierte Beispielansicht [.guihint]#CPU inventory of all hosts#.
+Das ist eine Tabelle der Hosts, die jeweils zusätzliche Daten aus der Inventur anzeigt.
+Hier ist beispielhaft eine der Spaltendefinitionen, die eine Spalte mit der Anzahl der physikalischen CPUs des Hosts hinzufügt:
+
+.Inventurdaten stehen allen Ansichten zur Verfügung
+image::inventory_cpus.png[alt="Dialog für die Aufnahme von Spalten mit Inventurdaten in Ansichten."]
+
+
+[#history]
+== Historischer Verlauf der Inventurdaten
+
+Sobald Sie die HW-/SW-Inventur für einen Host eingerichtet haben, wird {CMK} jede Änderung in den Inventurdaten erfassen und die Historie aufzeichnen.
+Sie finden diese in Ansichten mit Inventurdaten über [.guihint]#Host > HW/SW Inventory > Inventory history of host#.
+
+Hier ist ein Ausschnitt aus der Historie mit einer Reihe von IP-Daten, die sich seit dem letzten Durchlauf geändert haben:
+
+.Änderungen im Inventar werden in der Historie sofort sichtbar
+image::inventory_history.png[alt="Historie von Einträgen im Inventar."]
+
+Wenn Sie möchten, können Sie sich informieren lassen, wann immer eine Änderung in der Software oder Hardware auftritt.
+Das geschieht über den Status des Services [.guihint]#Check_MK HW/SW Inventory#.
+Dazu bearbeiten Sie die Regel, die Sie ganz am Anfang dieses Artikels angelegt haben (im Regelsatz [.guihint]#Do HW/SW Inventory)#.
+Dort finden Sie im Wert der Regel etliche Einstellungen, welche die Historie betreffen.
+Folgendes Beispiel setzt den Service auf {WARN}, wenn sich Änderungen in Software oder Hardware ergeben:
+
+.Ein gutes Mittel, um auf Schatten-IT auf Arbeitsplatzrechnern aufmerksam zu werden
+image::inventory_do_inventory_warn.png[alt="Dialog zum Zustandswechsel des Inventurchecks."]
+
+Sobald der Inventurcheck das nächste Mal Änderungen feststellt, wird er auf {WARN} gehen.
+Das sieht dann z.B. so aus:
+
+.Warnungen in der Service-Liste eines einzelnen Hosts
+image::inventory_list_warn.png[alt="Inventurcheck mit Warnung wegen erkannter Änderungen."]
+
+Bei der nächsten Ausführung des Checks geht dieser wieder automatisch auf {OK}, wenn sich nichts geändert hat.
+Das heißt, dass Sie den Check von Hand ausführen können, um den Service wieder auf {OK} zu setzen, wenn Sie nicht bis zum nächsten regelmäßigen Lauf warten möchten.
+
+
+[#statusdata]
+== Statusdaten
+
+Der Baum der Inventurdaten kann automatisch um aktuelle, passende Statusdaten ergänzt werden.
+Das ist in einigen Fällen sehr nützlich.
+Ein Beispiel dafür sind _Oracle Tablespaces._
+In den eigentlichen Inventurdaten sind lediglich relativ statische Dinge wie die SID, der Name und der Typ enthalten.
+Aktuelle Statusdaten können dies um Angaben zur aktuellen Größe, zu freiem Platz usw. ergänzen.
+
+Wenn Sie Statusdaten in Ihrem Baum sehen möchten (und da spricht eigentlich nichts dagegen), müssen Sie lediglich die entsprechende Option aktivieren in der Regel, die Sie xref:activate[am Anfang] unter [.guihint]#Do HW/SW Inventory# angelegt haben:
+
+.Statusdaten erweitern das Monitoring teils erheblich
+image::inventory_do_inventory_status.png[alt="Dialog zum Aktivieren der Statusdaten."]
+
+Änderungen in Statusdaten finden übrigens _keinen_ Niederschlag in der xref:history[Historie!]
+Dies würde quasi zu ständigen Änderungen führen und die Funktion nutzlos machen.
+Statusdaten werden auch nicht in Dateien abgelegt, sondern wie die Resultate von Checks direkt im Hauptspeicher vom Monitoring-Kern gehalten.
+
+
+ifdef::onprem[]
+[#external]
+== Externer Zugriff auf die Daten
+
+=== Zugriff via eigener Web-API
+
+Sie können die HW-/SW-Inventurdaten eines Hosts über eine Inventur-eigene Web-API exportieren.
+
+*Hinweis:* Die hier erwähnte, Inventur-eigene Web-API ist *nicht* die Web-API, die in der Version {v22} aus {CMK} entfernt wurde.
+
+Die URL dazu lautet
+
+`\http://myserver/mysite/check_mk/host_inv_api.py?host=myhost`
+
+Das Ausgabeformat in diesem Fall ist Python-Quellcode.
+Wenn Sie JSON bevorzugen, dann hängen Sie einfach ein `&output_format=json` an die URL an:
+
+`\http://myserver/mysite/check_mk/host_inv_api.py?host=myhost&output_format=json`
+
+Das Ergebnis sieht in gekürzter Form etwa so aus:
+
+.myhost.json
+[{json}]
+----
+{
+    "result": {
+        "myhost": {
+            "Attributes": {},
+            "Nodes": {
+                "hardware": {
+                    "Attributes": {},
+                    "Nodes": {
+                        "memory": {
+                            "Attributes": {
+                                "Pairs": {
+                                    "total_ram_usable": 67139399680,
+                                    "total_swap": 4294963200,
+                                    "total_vmalloc": 35184372087808
+                                }
+                            },
+                            "Nodes": {},
+                            "Table": {}
+                        }
+                    },
+                    "Table": {}
+                }
+            }
+        }
+    },
+    // ... etc. ...
+    "result_code": 0
+}
+----
+
+Analog können Sie die Ausgabe auch in XML anfordern:
+
+`\http://myserver/mysite/check_mk/host_inv_api.py?host=myhost&output_format=xml`
+
+Geben Sie die jeweilige URL in die Adressleiste Ihres Browsers ein, sehen Sie sofort ein Ergebnis, weil Sie bereits bei {CMK} angemeldet sind.
+Die HW-/SW-Inventurdaten finden Sie in der Ausgabedatei im Abschnitt nach dem Schlüssel _result_.
+Von einem Skript aus authentifizieren Sie sich am besten als xref:glossar#automation_user[Automationsbenutzer.]
+
+Im Fehlerfall, z.B. wenn der angegebene Host nicht gefunden wurde, wird der `result_code` auf 1 gesetzt und eine entsprechende Fehlermeldung ausgegeben:
+
+`{"result": "Found no inventory data for this host.", "result_code": 1}`
+//SP: Ergebnis der Raw Edition. Bei der Enterprise Edition bekomme ich stattdessen leere Angaben mit einem Fehlercode 0. 
+
+
+==== Mehrere Hosts abfragen
+
+Sie können auch die HW-/SW-Inventurdaten mehrerer Hosts in einer Ausgabe abfragen.
+Erweitern Sie dafür die Abfrage auf alle gewünschten Hosts:
+
+`\http://myserver/mysite/check_mk/host_inv_api.py?request={"hosts":pass:[[]"myhost","myhost2"pass:[]]}&output_format=json`
+
+Das Ergebnis dieser Abfrage sieht dann fast genauso aus wie die obige Ausgabe.
+Auf der obersten Ebene werden jedoch die Namen der Hosts als Schlüssel verwendet.
+Die Angaben zu den Hosts folgen dann darunter in den Verzeichnisbäumen:
+
+.multiplehosts.json
+[{json},highlight=3;36]
+----
+{
+    "result": {
+        "myhost": {
+            "Attributes": {},
+            "Nodes": {
+                "hardware": {
+                    "Attributes": {},
+                    "Nodes": {
+                        "memory": {
+                            "Attributes": {
+                                "Pairs": {
+                                    "total_ram_usable": 16495783936,
+                                    "total_swap": 1027600384,
+                                    "total_vmalloc": 35184372087808
+                                },
+                                "Nodes": {},
+                                "Table": {}
+                            },
+                            "Table": {}
+                        }
+                    }
+                },
+                "networking": {
+                    "Attributes": {
+                        "Pairs": {
+                            "available_ethernet_ports": 1,
+                            "hostname": "MyServer",
+                            "total_ethernet_ports": 3,
+                            "total_interfaces": 4
+                        }
+                    }
+                }
+                // ... etc. ...
+            }
+        },
+        "myhost2": {
+            "Attributes": {},
+            "Nodes": {},
+            "Table": {}
+        }
+    },
+    "result_code": 0
+}
+----
+
+Werden zu einem Host keine Inventurdaten gefunden, dann hat der Host einen leeren Inventureintrag anstelle der Fehlermeldung.
+
+
+==== Abfrage auf spezifische Daten einschränken
+
+Nun wollen Sie aber vielleicht nicht alle Inventurdaten abfragen, sondern suchen nur gezielt nach einzelnen Informationen.
+Dann geben Sie sogenannte xref:internal_paths[Inventurpfade] an, um die gewünschten Angaben zu definieren.
+Sie bekommen dann nur von denjenigen Hosts Informationen angezeigt, die diese Pfade / Informationen haben.
+
+Um zum Beispiel für den Host `myhost` nur die Angaben zu Gesamtspeicher und Auslagerungsspeicher zu sehen, verwenden Sie diese URL:
+
+`\http://myserver/mysite/check_mk/host_inv_api.py?host=myhost&request={"paths":pass:[[]".hardware.memory.total_ram_usable",".hardware.memory.total_swap"pass:[]]}&output_format=json`
+
+Sie bekommen die gewünschten Angaben zurück:
+
+.selectdata.json
+[{json}]
+----
+{
+    "result": {
+        "Attributes": {},
+        "Nodes": {
+            "hardware": {
+                "Attributes": {},
+                "Nodes": {
+                    "memory": {
+                        "Attributes": {
+                            "Pairs": {
+                                "total_ram_usable": 16495783936,
+                                "total_swap": 1027600384
+                            },
+                            "Nodes": {},
+                            "Table": {}
+                        }
+                    }
+                },
+                "Table": {}
+            }
+        },
+        "Table": {}
+    },
+    "result_code": 0
+}
+----
+
+
+=== Zugriff via Datei
+
+Alternativ können Sie auch einfach die Dateien auslesen, die {CMK} selbst erzeugt.
+Diese liegen im Python-Format im Verzeichnis `~/var/check_mk/inventory/` vor.
+Für jeden Host gibt es dort eine Datei in unkomprimierter (z.B. `myhost`) und eine in komprimierter Variante (z.B. `myhost.gz`).
+endif::[]
+
+
+ifdef::onprem[]
+[#distributed]
+== Inventur im verteilten Monitoring
+
+{cee-only}
+In den kommerziellen Editionen funktioniert die HW-/SW-Inventur auch im xref:glossar#distributed_monitoring[verteilten Monitoring.]
+Hier werden die Inventurdaten zunächst durch die lokalen Instanzen ermittelt und dort unterhalb von `~/var/check_mk/inventory/` abgelegt. 
+
+Der xref:distributed_monitoring#livestatusproxy[Livestatus-Proxy-Daemon] überträgt turnusmäßig alle aktualisierten Inventurdaten von der Remote-Instanz in die Zentralinstanz und legt sie dort ebenfalls unter `~/var/check_mk/inventory/` ab.
+Das ist wichtig, da diese Daten zu umfangreich sind, um sie bei einer Abfrage in diesem Augenblick live abzuholen.
+
+Sobald über die Zentralinstanz Abfragen zu Inventurdaten kommen, werden diese Dateien gelesen und dann noch mit aktuellen Statusdaten zusammengeführt, welche per xref:livestatus#[Livestatus] von den Remote-Instanzen geholt werden.
+
+Kurz zusammengefasst: Sie müssen sich um nichts kümmern.
+
+{cre-only}
+In {RE} gibt es keinen Livestatus-Proxy.
+Daher ist auch die HW-/SW-Inventur in der GUI der Zentralinstanz unvollständig und zeigt nur die Statusdaten.
+Sie können sich behelfen und die Dateien im Verzeichnis `~/var/check_mk/inventory/` regelmäßig mit einem Skript o.Ä. an die Zentralinstanz übertragen.
+Dabei genügt es, die Dateien _ohne_ die Endung `.gz` zu kopieren.
+Für eine effiziente Übertragung eignet sich z.B. `rsync`.
+endif::[]
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+ifdef::onprem[]
+=== Verzeichnisse auf dem {CMK}-Server
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung 
+|`~/share/check_mk/agents/plugins/` |Ablageort für Agentenplugins für Linux und Unix
+|`~/share/check_mk/agents/windows/plugins/` |Ablageort für Agentenplugins für Windows
+|`~/var/check_mk/inventory/` |Inventurdaten der einzelnen Hosts als Python-Dateien (komprimiert und unkomprimiert)
+|===
+endif::[]
+
+=== Verzeichnisse auf den überwachten Hosts
+
+[cols="45,~",options="header"]
+|===
+|Pfad |Bedeutung 
+|`C:\ProgramData\checkmk\agent\plugins\` |Ablageort für das Inventory-Agentenplugin beim Windows-Agenten
+|`/usr/lib/check_mk_agent/plugins/` |Ablageort für das Inventory-Agentenplugin beim Linux-/Unix-Agenten
+|`/etc/check_mk/mk_inventory.cfg` |Konfiguration für das Inventory-Agentenplugin beim Linux-/Unix-Agenten
+|===

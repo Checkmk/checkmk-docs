@@ -1,0 +1,165 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Single sign-on with Kerberos
+:title: Single sign-on with Kerberos
+:description: While single sign-on (SSO) is not officially supported for {CMK}, it is still possible. Read here how to integrate SSO with Kerberos into {CMK}.    
+
+{related-start}
+xref:ldap#[User management with LDAP/Active Directory]
+xref:wato_user#[Users, roles and permissions]
+xref:omd_https#[Securing the web interface with HTTPS]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+A single sign-on to the GUI of {CMK} with Kerberos is not officially supported by {CMK}, but you can easily set it up yourself.
+These instructions will show you how to do this.
+
+The following prerequisites must be satisfied before the configuration in {CMK} can be retroactively altered to SSO (Single Sign-On) with Kerberos:
+
+* The Apache-Version is 2.4 or newer.
+* On the {CMK} server the module `libapache-mod-auth-kerb` is installed (or `mod_auth_kerb` under Red Hat Enterprise Linux and CentOS or `apache2-mod_auth_kerb` under SUSE).
+* The Kerberos client is installed and configured on the {CMK} server.
+* A Keytab -- e.g. as `/etc/krb5.keytab` -- has been installed and may be read by the site user.
+* The {CMK} server has been set up as the _Service Principal_.
+* The client's browser has been configured for access using Kerberos.
+
+_Optional:_
+
+If you want users *without SSO* to still be able to log in via the regular login page, xref:cookie[cookie authentication] must be enabled.
+
+
+[#configuration]
+== Kerberos integration
+
+To switch {CMK} to authentication via Kerberos, delete the `~/etc/apache/conf.d/auth.conf` file and rewrite it.
+The entries at the beginning of the following file contents are only examples.
+Therefore, modify all lines that begin with the `Define` expression to suit your environment:
+
+.~/etc/apache/conf.d/auth.conf
+[source,apache,subs="attributes+"]
+----
+Define SITE My{CMK}Site
+Define REALM MyRealm.org
+Define SERVICENAME myservice.mydomain.tld
+Define KEYTAB /omd/sites/${SITE}/etc/apache/cmk_http.keytab
+
+<IfModule !mod_auth_kerb.c>
+  LoadModule auth_kerb_module /usr/lib/apache2/modules/mod_auth_kerb.so
+</IfModule>
+
+<Location /${SITE}>
+  <If "! %{HTTP_COOKIE} =~ /^(.*;)?auth_${SITE}/ && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/webapi.py' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+    ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+    ! %{REQUEST_URI} = '/${SITE}/check_mk/ajax_graph_images.py' && \
+    ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+    ! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+  Order allow,deny
+  Allow from all
+  Require valid-user
+
+  AuthType Kerberos
+  AuthName "{CMK} Kerberos Login"
+
+  KrbMethodNegotiate on
+  KrbMethodK5Passwd off
+  KrbLocalUserMapping on
+
+
+  # Environment specific: Path to the Keytab, Realm and ServicePrincipal
+  KrbAuthRealm ${REALM}
+  KrbServiceName HTTP/${SERVICENAME}@${REALM}
+  Krb5Keytab ${KEYTAB}
+
+  # When Kerberos auth fails, show the login page to the user
+  ErrorDocument 401 '<html> \
+      <head> \
+        <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+      </head> \
+      <body> \
+        Kerberos authentication failed, redirecting to login page. \
+        <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+      </body> \
+    </html>'
+  </If>
+</Location>
+
+# These files are accessible unauthenticated (login page and needed ressources)
+<LocationMatch /${SITE}/(omd/|check_mk/(images/.*\.png|login\.py|.*\.(css|js)))>
+  Order allow,deny
+  Allow from all
+  Satisfy any
+</LocationMatch>
+----
+
+Once the sample configuration shown has been executed, only authentications via Kerberos will be permitted.
+You must now decide whether you want to continue to support `basic auth` with or without cookies -- for users without SSO, or as a fallback.
+What you will need to configure for this is explained in the following two chapters.
+
+
+[#basic_auth]
+== Allow basic authentication
+
+If you want to continue to allow authentication via `basic auth` in addition to SSO via Kerberos, you need to edit one line in the above configuration.
+
+To do this, change the value in the following line to `on`:
+
+.~/etc/apache/conf.d/auth.conf
+[{apache}]
+----
+  KrbMethodK5Passwd on
+----
+
+
+[#cookie]
+== Verify cookie authentication
+
+To make authentication more convenient, {CMK} also supports logging in via a cookie.
+In a new and unmodified {CMK} site this is currently the default.
+
+Last but not least, you should check if this authentication option is still enabled and whether it should stay that way.
+
+You can check the current state of your site with the following command:
+
+[{shell}]
+----
+{c-omd} omd config show MULTISITE_COOKIE_AUTH
+----
+
+If you receive an `on` value here and want to keep cookie authentication enabled -- for example as a fallback -- nothing more needs to be done at this point.
+
+If, on the other hand, you want to disable `MULTISITE_COOKIE_AUTH`, this can be performed with the following command:
+
+[{shell}]
+----
+{c-omd} omd config set MULTISITE_COOKIE_AUTH off
+----
+
+Then delete the `cookie_auth.conf` file from the site's Apache directory:
+
+[{shell}]
+----
+{c-omd} rm ~/etc/apache/conf.d/cookie_auth.conf
+----
+
+
+[#diagnostics]
+== Diagnostics
+
+You can check with the following commands, if your Kerberos setup is working:
+
+[{shell}]
+----
+{c-root} kinit -p username
+{c-root} klist
+----

@@ -1,0 +1,436 @@
+// -*- coding: utf-8 -*-
+// IGNORE 10+ 7+
+// NONASCII ├─ └─ │ ● ○
+include::global_attr.adoc[]
+= The {CMK} Relay
+:title: The {CMK} Relay
+:description: Where a firewall blocks special agent or SNMP communication, the {CMK} Relay can be used to monitor affected hosts.
+:experimental:
+
+{related-start}
+xref:snmp#[Monitoring via SNMP]
+xref:special_agents#[Special agents]
+ifdef::onprem[]
+xref:distributed_monitoring#[Distributed monitoring]
+endif::[]
+xref:ports#[Ports]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+ifdef::onprem[]
+{cce-only}
+endif::[]
+There are cases where a {CMK} site cannot reach the host, for example when firewall configuration blocks incoming traffic from a network.
+With
+ifdef::onprem[]
+{UE}, 
+endif::[]
+ifdef::saas[]
+{CE}, 
+endif::[]
+the {CMK} Relay can be deployed to collect monitoring data and send it to the monitoring site.
+
+include::include_technical_preview.asciidoc[]
+
+
+[#relaydiffs]
+=== Differences from distributed monitoring
+
+There are notable differences compared to xref:glossar#distributed_monitoring[distributed monitoring]:
+
+* _The communication direction_: The Relay always xref:ports#relay[sends data] to the monitoring site.
+* _The place of data processing_: The Relay neither processes, nor stores data, it just collects monitoring data and passes it on.
+
+ifdef::onprem[]
+Using the Relay in _combination_ with distributed monitoring is currently limited to the central site.
+This also means that there is typically no practical use for it in environments using {ME} as intended. 
+endif::[]
+
+
+[#scope]
+=== Scope of functionality
+
+The current state of the Relay encompasses functionality as follows:
+
+* A growing selection of xref:glossar#special_agent[special agents]
+* Monitoring via xref:glossar#snmp[SNMP]
+
+Work on extending functionality towards running active checks is currently under way.
+The prioritizing of special agent additions is dependent on user benefit and the effort needed.
+A list of the special agents that are included in the Relay is available at link:https://github.com/Checkmk/checkmk/blob/{current-major}/relay_supported_plugins.bzl[GitHub^].
+ifdef::onprem[]
+Special agents deployed via xref:glossar#mkp[MKP] to the {CMK} site are _not_ synced to the Relay.
+endif::[]
+
+
+[#setup]
+== Setup
+
+
+[#prerequisites]
+=== Technical requirements
+
+
+[#ossupport]
+==== Supported operating systems
+The {CMK} Relay is provided as a link:https://hub.docker.com/r/checkmk/check-mk-relay[container^] for the _x86-64_ platform.
+The following operating systems are currently supported:
+
+* Ubuntu Linux 24.04
+* Red Hat Enterprise Linux 8.10+, 9.7+, and 10
+* Windows Server 2022 and 2025
+
+On Windows, the {CMK} Relay runs on the _Windows Subsystem for Linux_ version 2 (WSL2).
+To prepare the necessary environment for this, an Ubuntu distribution is set up in WSL during the xref:setup[installation] process.
+
+
+==== Podman and connection to Docker Hub
+
+For the installation we provide a script that requires the link:https://podman.io/[Podman^] package provided by your distribution to be installed.
+The required container image is downloaded directly from Docker Hub during installation and with every update.
+Make sure your target system can connect to Docker Hub.
+
+The xref:setup[installation] wizard on Linux systems includes a step for explicitly installing Podman.
+When installing on Windows, the MSI installer we provide also handles the installation of Podman within the WSL environment.
+
+We chose Podman because its tight integration with Systemd facilitates automatic updates of the Relay container.
+Deploying on container runtimes other than Podman, running on distributions other than those listed, updating via methods other than direct access to `hub.docker.com`, using Podman packages other than those provided by the distribution, or using multiple Relays on a single Linux host may work for experienced users--however, {CMK} does not provide support for such environments.
+
+You can run the installation script on distributions other than those listed above.
+If compatible versions of Podman and Systemd are found, the script will prompt you to either abort or proceed with an unsupported installation.
+
+
+[#hwrequirements]
+==== Hardware requirements
+
+In the standard configuration (13 fetchers), you should expect RAM requirements of about one gigabyte and CPU core utilization of less than 20{nbsp}% on current hardware.
+With these resources, we were able to monitor more than 50 SNMP devices without any problems.
+If the number of devices to be monitored is significantly higher, the number of fetchers may need to be increased.
+As the number of devices increases, resource requirements scale almost linearly with the number of devices being monitored.
+
+For each Relay registered on a site, the number of fetchers can be customized via [.guihint]#Setup > Hosts > Relays# by clicking the edit icon (icon:icon_edit[alt="Edit icon"]).
+
+
+[#setup_relay]
+=== Configuring and installing a Relay
+
+To set up a Relay, navigate to [.guihint]#Setup > Hosts > Relays#.
+There, click [.guihint]#Add Relay configuration# to launch the setup wizard for configuring a new Relay.
+First, choose between [.guihint]#Linux# and [.guihint]#Windows# to get the appropriate instructions for your target system.
+
+.In the first step, the download link for the installation script is provided
+image::relay_wizard.png[alt="In the Quick Setup for a new Relay, this step displays the curl command to download the installation script."]
+
+Follow the wizard's instructions.
+
+[.tabs]
+====
+[#wizard_linux]#Linux#::
++
+--
+In the wizard for Linux systems, installing Podman is a separate step that you perform individually on the target system.
+
+Afterward, you can run the provided installation script as described in the wizard.
+When you run the script, the container with the Relay is downloaded and set up, the update service is installed, and the Relay is connected to the {CMK} site--all in a single action.
+
+On Linux, no separate log file is created for the installation.
+If needed, you can redirect the output of the installation script to a file.
+--
+[#wizard_windows]#Windows#::
++
+--
+In the Windows wizard, you first prepare the WSL environment on the target system.
+This step may take a few minutes.
+
+You can then download and run the provided MSI installer as described in the wizard.
+When the script runs, Podman is installed first, followed by the download and setup of the container containing the Relay, the installation of the update service, and the connection of the Relay to the {CMK} site--all in a single operation.
+
+If necessary, you can check the installation script's log file to verify that the installation proceeded as expected.
+On Windows, you can find this log file in the `C:\ProgramData\checkmk\relay\logs` folder.
+--
+====
+
+[TIP]
+====
+To register the Relay with your {CMK} site, the wizard will prompt you to complete the installation using a _one-time token_.
+This token is valid for one hour after it is generated.
+ifdef::onprem[]
+If one hour is not sufficient, you can also complete the registration using the username and password of a user who has sufficient permissions to register the Relay.
+endif::[]
+ifdef::saas[]
+If one hour is not sufficient, you can also complete the registration using the username and password of an automation user who has sufficient permissions to register the Relay.
+endif::[]
+====
+
+In the {CMK} site to which you just added the Relay, you must now xref:glossar#activate_changes[activate pending changes] to complete its registration.
+
+
+[#reinstall]
+==== Notes on reinstallation
+If you install and register the Relay multiple times on the same system, your {CMK} site will treat each installation as a new Relay.
+Hosts that were already being monitored by the previous Relay must then be explicitly assigned to the newly registered Relay--even if the Relay is running on the same machine as before.
+
+
+[#updates]
+=== Updates
+
+A {CMK} Relay deployed using the provided installation script automatically keeps itself up to date.
+As soon as it detects that the version of the associated {CMK} site has changed, it downloads the appropriate container image from Docker Hub and restarts without requiring manual intervention.
+Depending on your network speed, this process can take up to 10 minutes.
+
+If you encounter issues with incomplete updates, please refer to our xref:update_manager[troubleshooting guidelines].
+
+
+[#monitoring_relay]
+=== Monitoring the Relay
+
+If you want to monitor the container in which you are running the Relay, you can add it to your monitoring using the xref:monitoring_podman#[`mk_podman` agent plug-in].
+
+
+[#monitoring]
+== Monitoring with the Relay
+
+Once you have set up the Relay, you can now start using it to monitor hosts via a special agent or SNMP.
+When adding a host, enable [.guihint]#Monitored on Relay# in the [.guihint]#Basic settings# section and select the Relay that can contact the host you are currently adding.
+Note that hosts assigned to a Relay cannot be monitored with the {CMK} agent.
+
+The Relay will not begin monitoring the assigned hosts until special agents or SNMP connections have been configured for those hosts.
+
+Each Relay periodically contacts its assigned {CMK} site for configuration updates.
+After receiving an updated configuration, it immediately executes the special agents and other checks.
+A xref:glossar#service_discovery[service discovery] for special agents should be completed quickly, but it may take longer with slow SNMP devices.
+In general, the delay caused by the Relay is marginal and, in most cases, is in the range of a few seconds.
+
+
+[#troubleshooting]
+== Troubleshooting
+
+Reminder: This component of {CMK} is a work in progress!
+Although it is already quite stable, you may encounter the occasional bug.
+
+If you encounter technical issues, it may be helpful to examine the behavior and status of the Relay and the container in which it is running.
+On Windows, start by switching to the WSL environment:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch> wsl.exe -d Ubuntu-Checkmk-Relay
+----
+
+On Linux systems the above WSL switch is not necessary.
+
+All commands shown below can be executed directly on Linux systems, and on Windows systems after switching to the WSL environment.
+
+
+[#relay_status]
+=== Checking the Relay's operating status
+
+You can use `systemctl` at any time to check whether the Relay is active and view details about its operating status:
+
+[{shell}]
+----
+{c-user} systemctl status checkmk_relay
+● checkmk_relay.service - Checkmk Relay Container
+     Loaded: loaded (/etc/containers/systemd/checkmk_relay.container; generated)
+     Active: [.green]#active (running)# since Thu 2026-03-19 07:44:27 UTC; 2h 41min ago
+   Main PID: 2063 (conmon)
+      Tasks: 21 (limit: 4646)
+     Memory: 669.5M (peak: 686.2M)
+        CPU: 1min 38.577s
+     CGroup: /system.slice/checkmk_relay.service
+             ├─libpod-payload-cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439
+             │ ├─2067 python3 /opt/check-mk-relay/bin/cmk-relay daemon
+             │ ├─2113 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2114 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2115 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2116 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2117 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2118 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2119 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2120 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2121 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2122 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2123 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2124 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2125 python3 /opt/check-mk-relay/bin/fetcher
+             │ ├─2126 python3 -m cmk.fetcher_helper.fetch_ad_hoc
+             │ ├─2127 python3 -m cmk.fetcher_helper.fetch_ad_hoc
+             │ ├─2128 python3 -m cmk.fetcher_helper.fetch_ad_hoc
+             │ └─2129 python3 -m cmk.fetcher_helper.fetch_ad_hoc
+             └─runtime
+               └─2063 /usr/bin/conmon --api-version 1 -c cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439 -u cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439 -r /usr/bin/crun -b /var/lib/containers/storage/overlay-containers/cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439/userdata -p /run/containers/storage/overlay-containers/cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439/userdata/pidfile -n checkmk_relay-container --exit-dir /run/libpod/exits --full-attach -l journald --log-level warning --syslog --runtime-arg --log-format=json --runtime-arg --log --runtime-arg=/run/containers/storage/overlay-containers/cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439/userdata/oci-log --conmon-pidfile /run/containers/storage/overlay-containers/cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439/userdata/conmon.pid --exit-command /usr/bin/podman --exit-command-arg --root --exit-command-arg /var/lib/containers/storage --exit-command-arg --runroot --exit-command-arg /run/containers/storage --exit-command-arg --log-level --exit-command-arg warning --exit-command-arg --cgroup-manager --exit-command-arg systemd --exit-command-arg --tmpdir --exit-command-arg /run/libpod --exit-command-arg --network-config-dir --exit-command-arg "" --exit-command-arg --network-backend --exit-command-arg netavark --exit-command-arg --volumepath --exit-command-arg /var/lib/containers/storage/volumes --exit-command-arg --db-backend --exit-command-arg sqlite --exit-command-arg --transient-store=false --exit-command-arg --runtime --exit-command-arg crun --exit-command-arg --events-backend --exit-command-arg journald --exit-command-arg container --exit-command-arg cleanup --exit-command-arg --rm --exit-command-arg cd8f4482262c4812546c5cf25796548037a1cb0cacca4a23e239a6a6d1a5d439
+{c-user} sudo podman container list
+CONTAINER ID  IMAGE                                 COMMAND               CREATED         STATUS         PORTS  NAMES
+6c5bf8861dc5  localhost/checkmk_relay:checkmk_sync  sh -c cmk-relay d...  49 minutes ago  Up 49 minutes         checkmk_relay-container
+----
+
+
+[#version]
+=== Verifying the version of the Relay
+
+The version of the Relay container image must exactly match the version of the {CMK} site to which it is assigned.
+You can verify the Relay version using the `podman images` command.
+Run this command as root or with `sudo` prefixed to ensure that the output includes all relevant images:
+
+[{shell}]
+----
+{c-root} podman images
+REPOSITORY                        TAG           IMAGE ID      CREATED       SIZE
+docker.io/checkmk/check-mk-relay  {current-major}b1       423f9b67558b  5 months ago  428 MB
+localhost/checkmk_relay           checkmk_sync  72c27637aa5a  5 months ago  428 MB
+docker.io/checkmk/check-mk-relay  {current-major}b2       72c27637aa5a  5 months ago  428 MB
+----
+
+
+[#restart]
+=== Restarting the container
+
+As mentioned earlier, Podman is tightly integrated with Systemd.
+Therefore, restarting containers is simply a matter of restarting Systemd units.
+
+[{shell}]
+----
+{c-root} systemctl restart checkmk_relay
+{c-root} systemctl status checkmk_relay
+----
+
+
+[#update_manager]
+=== Status of the update service
+
+When deploying using the included installation script, the {CMK} Relay sets up a service that automatically updates the container image to the same version as the associated site and then restarts the container.
+
+To check the status of the update service for the {CMK} Relay, run the following command:
+
+[{shell}]
+----
+{c-user} systemctl status checkmk_relay-update-manager
+○ checkmk_relay-update-manager.service - Checkmk Relay Update Manager
+     Loaded: loaded (/etc/systemd/system/checkmk_relay-update-manager.service; static)
+     Active: inactive (dead)
+TriggeredBy: ● checkmk_relay-update-manager.path
+----
+
+The service has been loaded here, but no update has been performed yet.
+Since the update itself is only triggered when a file appears, the service displays the (misleading) status `inactive (dead)`.
+
+If you notice that the Relay is in an error state because an update could not be performed, you can resolve this issue manually.
+First, reset the error status of the update service:
+
+[{shell}]
+----
+{c-root} systemctl reset-failed checkmk_relay-update-manager.service checkmk_relay-update-manager.path
+----
+
+After that, you can restart the update service:
+
+[{shell}]
+----
+{c-root} systemctl restart checkmk_relay-update-manager.path
+----
+
+Finally, check to make sure the status of the update service is okay after the restart.
+
+[{shell}]
+----
+{c-user} systemctl status checkmk_relay-update-manager.path checkmk_relay-update-manager.service --no-pager
+----
+
+If you manually restart the service and check its status immediately afterward, you may see output similar to the following:
+
+[{shell}]
+----
+{c-user} systemctl status checkmk_relay-update-manager
+● checkmk_relay-update-manager.service - Checkmk Relay Update Manager
+     Loaded: loaded (/home/ubuntu/.config/systemd/user/checkmk_relay-update-manager.service; enabled; preset: enabled)
+     Active: [.green]#activating (start)# since Tue 2026-01-20 17:47:38 CET; 46s ago
+TriggeredBy: ● checkmk_relay-update-manager.path
+   Main PID: 47108 (checkmk_relay-u)
+      Tasks: 12 (limit: 9484)
+     Memory: 772.8M (peak: 780.0M)
+        CPU: 15.249s
+     CGroup: /user.slice/user-1000.slice/user@1000.service/app.slice/checkmk_relay-update-manager.service
+             ├─47108 /bin/bash /home/ubuntu/.local/bin/checkmk_relay-update-manager.sh
+             └─47110 podman pull docker.io/checkmk/check-mk-relay:{current-major}p3
+----
+
+
+Here, the running `podman pull` process shows that an update is currently in progress and that the latest container is being downloaded.
+
+
+[#follow_logs]
+=== Checking log files
+
+
+If something is not working properly or your support contact at {com} asks you for log entries, check the container logs.
+Use `journalctl` with the `-f` option (like _follow_) to display ten log lines and immediately output any new lines as they arrive:
+
+[{shell}]
+----
+{c-user} journalctl -u checkmk_relay.service -f
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,944 - cmk.relay.processors.configuration - INFO - Extracting config update [context: {"type":"'ConfigUpdateTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'","serial":"56"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,946 - cmk.relay.processors.configuration - INFO - Config update extracted [context: {"type":"'ConfigUpdateTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'","serial":"56"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,947 - cmk.relay.processors.configuration - INFO - Updated 'latest' symlink to point to serial '56' [context: {"type":"'ConfigUpdateTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'","serial":"56"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,947 - cmk.relay.processors.configuration - INFO - Successfully unpacked configuration [context: {"type":"'ConfigUpdateTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'","serial":"56"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,948 - cmk.relay.processors.fetcherpool - INFO - Scaling fetcher pool adhoc to size: 4 [context: {"type":"'ApplyConfigTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,948 - cmk.relay.processors.fetcherpool - INFO - Scaling fetcher pool relay to size: 13 [context: {"type":"'ApplyConfigTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,948 - cmk.relay - INFO - Log level set: INFO [context: {"type":"'ApplyConfigTask'","id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'"}]
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,949 - cmk.relay.processors.site_client - INFO - Using serial '56'
+Mar 14 11:01:30 relay checkmk_relay-container[2783]: 2026-03-14 11:01:30,949 - cmk.relay.processors.site_client - INFO - Submitting Result [context: {"id":"'ab63eee2-71ef-40db-92ae-d47606cf7917'"}]
+----
+
+
+[#tabula_rasa]
+== Removing the Relay
+
+If the Relay is no longer required, you can uninstall it.
+
+[.tabs]
+====
+[#uninstall_linux]#Linux#::
++
+--
+To uninstall, run the installation script with the `--uninstall` option, which will remove the Relay without further prompting.
+
+[{shell}]
+----
+{c-root} bash install_relay.sh --uninstall
+=== Checkmk Relay Installer ===
+[2026-03-14 11:52:55] [INFO] Checking prerequisites for uninstall...
+[2026-03-14 11:52:55] [INFO] Uninstalling Checkmk Relay...
+[2026-03-14 11:52:55] [INFO] Stopping services...
+[2026-03-14 11:53:06] [INFO] Disabling services...
+[2026-03-14 11:53:07] [INFO] Removing installed files...
+[2026-03-14 11:53:07] [INFO] Removing data directories...
+[2026-03-14 11:53:07] [INFO] Reloading Systemd daemon...
+[2026-03-14 11:53:07] [INFO] Removing Podman volumes...
+relay
+[2026-03-14 11:53:07] [INFO] Relay uninstalled.
+
+--------------------------------------------------------
+The Checkmk Relay has been removed.
+--------------------------------------------------------
+----
+--
+[#uninstall_windows]#Windows#::
++
+--
+
+In Windows, you can uninstall the Relay via [.guihint]#Settings > Apps > Installed Apps#.
+Select the {CMK} Relay from the list of installed programs and click [.guihint]#Uninstall#.
+
+As long as the downloaded MSI installer is present on the system, you can use it to perform the uninstallation via PowerShell instead.
+This step does not take place within the WSL environment, but directly in Windows.
+
+[{powershell}]
+----
+PS C:\Users\hhirsch> msiexec /x checkmk-relay.msi /passive
+----
+
+--
+====
+
+Don't forget to delete the associated Relay in your {CMK} site after you have removed the Relay.
+

@@ -1,0 +1,689 @@
+
+// -*- coding: utf-8 -*-
+// IGNORE UserPrincipalName |
+// NONASCII
+include::global_attr.adoc[]
+= Authentication with SAML
+:title: Authentication with SAML
+:description: The process of logging in to a {CMK} site can be realized via a single sign-on (SSO) solution. Read here how to set up authentication with SAML.
+
+{related-start}
+xref:ldap#[User management with LDAP/Active Directory]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+In this article you will learn how to set up a login via _Secure Assertion Markup Language_ (SAML) in {CMK}.
+
+SAML is a standardized method for informing external applications and services that a user is actually who they claim to be.
+SAML makes single sign-on (SSO) possible because it can be used to authenticate a user once and then communicate that authentication to multiple applications.
+With the help of the connection and communication between the so-called 'Service Provider' (SP) and the so-called 'Identity Provider' (IdP), it is thus possible for employees to access various web applications with just a single login.
+In the SAML architecture, the Service Provider makes the application available and the Identity Provider manages the digital identities of the users.
+
+
+SAML is supported in the commercial editions of {CMK} and can be set up directly in the {CMK} web interface.
+{CMK} takes the role of the Service Provider.
+For example, as described in the xref:saml_cee[setup chapter], Entra ID is an example of an Identity Provider.
+
+[TIP]
+====
+Microsoft Entra ID (short: Entra ID) is the new name for Azure Active Directory (Azure AD) since 2023.
+However, the screenshots and contents of configuration files contained in this article still use the old name Azure AD.
+====
+
+{cre-only}
+Up to {CMK} version {v22}, as an alternative, SAML was also supported by the Apache `mod_auth_mellon` module, which was supplied as part of the {CMK} software.
+From version {v23}, `mod_auth_mellon` is no longer included in the {CMK} software.
+If you want to use SAML as a {CRE} user, you must therefore install `mod_auth_mellon` yourself.
+The configuration based on this is described in xref:saml_re[chapter on {RE}].
+However, it is *no longer* supported by us.
+
+[TIP]
+====
+The whole topic of transport encryption (TLS/SSL) is only included in the examples in a simple, demonstration implementation.
+In production environments link:https://checkmk.com/blog/how-become-your-own-certificate-authority[with your own Certificate Authority (CA)^] and proper certificate handling, there will be some differences which will depend on your own infrastructure.
+====
+
+
+[#use_saml]
+== Using SAML in {CMK}
+
+Once you have gone through all of the points of the setup process, the SAML login can be used by the user in {CMK}.
+The button text can be customized, as xref:configure_saml[described below].
+
+image::saml_login.png[alt="{CMK} login with SAML button.", width=55%]
+
+Any user authorized by SAML will be automatically created in {CMK} the first time they log in there -- provided that there is not already a user with the same ID.
+If a user with the same ID already exists, the current user creation will be rejected.
+
+The user data will be synchronized every time the user logs in to {CMK}.
+
+Several prerequisites must be met for SAML to function:
+
+* The xref:omd_https#[web interface must be secured with HTTPS]. For security reasons HTTP addresses are not accepted.
+
+* {CMK}'s SAML endpoints for ID/metadata and responses (Assertion Consumer Service) must have been registered with the IdP. Below we will show how this can be done.
+
+* Messages directed by the IdP to {CMK} -- responses to authentication requests (only mandatory for the assertion) and attribute statements -- must be signed with one of the xref:supported_algorithms[supported algorithms].
+
+
+[#supported_algorithms]
+=== Supported algorithms
+
+{CMK} accepts the following algorithms for communication with the IdP:
+
+* RSA-SHA256
+* RSA-SHA384
+* RSA-SHA512
+* ECDSA-SHA256
+* ECDSA-SHA384
+* ECDSA-SHA512
+
+{CMK} itself uses RSA-SHA256 for signing its requests.
+
+If the IdP does not use any of the above algorithms for its response, the response will be rejected by {CMK}.
+
+
+[#saml_cee]
+== Setting up SAML
+
+To be able to use SAML in the commercial editions, the IdP must first be set up.
+In our example this is Entra ID (called Azure Active Directory until 2023).
+Once this has been done, the SP, i.e. {CMK}, is then supplied with the required information.
+
+
+[#access_azure]
+=== Logging in to Entra ID
+
+==== Registering the {CMK} SAML service in Entra ID
+
+Next, register the {CMK} SAML service with Entra ID.
+To do this, call [.guihint]#Enterprise applications > Create your own application#.
+
+image::saml_azure_own_application.png[alt="Creating your own application in Entra ID."]
+
+Assign an arbitrary, preferably meaningful name, e.g. `checkmk-saml`.
+We recommend not naming the application simply `checkmk` to avoid confusion with the {CMK} agent.
+
+Select the [.guihint]#Integrate any other application you don't find in the gallery (Non-gallery)# option and then click the [.guihint]#Create# button.
+
+On the Entra ID overview page you will have created the following function: [.guihint]#Single sign-on > SAML > Basic SAML Configuration#:
+
+image::saml_azure_sign_on.png[alt="Overview of application data in Entra ID."]
+
+At this point, Entra ID will require two more pieces of information:
+
+* the [.guihint]#Identifier (Entity ID)# in the `\https://myserver.com/mysite/check_mk/saml_metadata.py` format, and
+
+* the [.guihint]#Reply URL (Assertion Consumer Service URL)# in the `\https://myserver.com/mysite/check_mk/saml_acs.py?acs` format.
+
+Leave all other options unchanged at their default value or empty.
+In particular, the [.guihint]#Relay State# in the [.guihint]#Basic SAML Configuration# must remain unchanged, otherwise SAML will not work.
+
+Now call [.guihint]#Edit > Signing Option > Sign SAML assertion# to configure an Entra ID for responses and verifications:
+
+image::saml_signing_certificate.png[alt="SAML access data in Entra ID."]
+
+
+[#url_from_azure]
+==== Retrieving SAML information from Entra ID
+
+Next, go to Entra ID to find the SAML information you need for {CMK}.
+
+This is available in the [.guihint]#Enterprise applications | All applications > Browse Microsoft Entra Gallery > checkmk-saml | SAML-based Sign-On# view (see above):
+
+* In the [.guihint]#SAML Certificates# box, find the [.guihint]#App Federation Metadata URL#.
+You will need this in the next section for setting up SAML in {CMK} [.guihint]#(Identity provider metadata)#.
+
+* The [.guihint]#Attributes & Claims# box takes you to a view of the user attributes for {CMK}, e.g. email address, first and last name:
+
+image::saml_attributes_claims.png[alt="View of user attributes in Entra ID."]
+
+
+[#configure_saml]
+=== Activating SAML in the {CMK} web interface
+
+With the information obtained earlier, set up the SAML connection on the {CMK} side. 
+
+If necessary, add the TLS certificate issued by your IdP to the trusted certificates in {CMK} by entering it in [.guihint]#Setup > Global settings > Trusted certificate authorities for SSL#.
+
+Now open [.guihint]#Setup > Users > SAML authentication#.
+Use [.guihint]#Add connection# there to start configuring a new connection:
+
+image::saml_saml_authentication.png[alt="The SAML connection in {CMK}."]
+
+Assign a [.guihint]#Connection ID# and a [.guihint]#Name# for the new connection.
+The [.guihint]#Name# will be used afterwards for xref:use_saml[naming the {CMK} login button].
+
+Next, in the [.guihint]#Security# box, you specify whether you want to secure the access connections with {CMK} or with your own certificates:
+
+image::saml_security.png[alt="Selecting the certificate for SAML."]
+
+If you use your own certificates, you must specify the [.guihint]#Private key# and the [.guihint]#Certificate#.
+Custom certificates are stored in the site directory under `~/etc/ssl/saml2/custom/`.
+
+Next, in the [.guihint]#Connection# box, as the [.guihint]#Identity provider metadata# enter the URL (e.g. App Federation Metadata URL) you selected as described in the xref:url_from_azure[previous section]:
+
+image::saml_connection.png[alt="Entering connection data."]
+
+Alternatively, you can download the metadata XML file directly from Entra ID and upload it in the dialog above with the [.guihint]#Upload XML file# in the [.guihint]#Identity provider metadata# option.
+This is convenient, for example, if your {CMK} server has no access to the internet.
+For the mandatory [.guihint]#{CMK} server URL#, enter the address you -- not Entra ID -- normally use to access {CMK}, e.g. `\https://myserver.com`.
+
+You will now need to enter the user details into the [.guihint]#Users# box:
+
+image::saml_users.png[alt="Entering user information."]
+
+You also need to obtain this information as described in the xref:url_from_azure[previous section].
+It is important to note that the [.guihint]#User ID attribute# must be unique, for instance the user ID.
+{CMK} here requires the complete [.guihint]#claim name# from Entra ID, i.e. the URL address starting with `http`, for each entry,
+for instance, in the above example, the user ID is `\http://schemas.xmlsoap.org/ws/2005/05/identity/claims/userID`.
+
+In order to define the responsibilities for all users who authenticate themselves with SAML in {CMK}, each user can be xref:wato_user#contact_groups[assigned to one or more contact groups].
+You have various options for defining the mapping in the [.guihint]#Contact groups#.
+
+You can use the [.guihint]#Roles# to assign users to different roles in order to define normal users, administrators, etc.
+
+
+[#saml_re]
+== SAML in {RE}
+
+[IMPORTANT]
+====
+The configuration described in this chapter is only of interest to {RE} users who cannot use the xref:saml_cee[SAML connection] built into the commercial editions of {CMK}.
+The prerequisite is that you have installed the Apache module `mod_auth_mellon`, which is not supplied with the {CMK} software, system-wide according to the link:https://github.com/latchset/mod_auth_mellon[instructions on the project page^].
+The configuration based on this is described in this chapter.
+However, we no longer support the SAML connection via `mod_auth_mellon`.
+====
+
+The following sections only describe the configuration of `mod_auth_mellon` for any IdPs that may already be running, using Active Directory Federation Services (ADFS) as an example.
+The connection in {CMK} itself is limited to the last step from the ADFS instructions.
+On the {CMK} server, `mod_auth_mellon` acts as the service provider for authentications.
+
+
+=== Logging in with Active Directory Federation Services
+
+==== Prerequisites
+
+Logging on to {CMK} using Active Directory is basically relatively simple:
+Active Directory Federation Services (ADFS) serves as Identity Provider (IdP), {CMK} provides the SAML authentication.
+
+Prerequisites for this tutorial are accordingly:
+
+* Functioning LDAP-AD integration
+* Working ADFS as IdP
+* {CMK} server with SSL
+* A supported operating system.
+
+The setup is accomplished in three steps:
+
+. Configuration of Apache (one result: XML file with metadata).
+. Configuration of ADFS: setting up a relying party trust with Mellon metadata.
+. Enabling of the login in {CMK} itself.
+
+
+==== Configuring Apache
+
+This is, of course, about configuring the site's own Apache server, so log in there first:
+
+[{shell}]
+----
+{c-root} omd su mysite
+----
+
+Now create a directory for `mod_auth_mellon` and switch to it:
+
+[{shell}]
+----
+{c-omd} mkdir etc/apache/mellon
+{c-omd} cd etc/apache/mellon
+----
+
+Now run `mellon_create_metadata` specifying your server as well as your site with the `mellon` suffix:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ mellon_create_metadata https://myserver "https://myserver/mysite/mellon"
+----
+
+This module generates three files: Certificate (`.cert`), key (`.key`) and static metadata (`.xml`).
+The `.xml` file is not required and can be deleted:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ rm *.xml
+----
+
+Rename the key and certificate files for simplicity:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ mv *.key mellon.key
+OMD[mysite]:~/etc/apache/mellon$ mv *.cert mellon.cert
+----
+
+Now get the required metadata directly from your ADFS server (here `myadfs`) and save it as `idp-metadata.xml`:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ wget --no-check-certificate -O ./idp-metadata.xml https://myadfs/FederationMetadata/2007-06/FederationMetadata.xml 
+----
+
+Now you need the public certificate for the ADFS server, which is stored in the `idp-public-key.pem` file:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ echo -n | openssl s_client -connect myadfs:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | openssl x509 -pubkey -noout > idp-public-key.pem
+----
+
+Just in case you are wondering about the `echo -n`:
+This is used to terminate the following SSL session.
+
+[TIP]
+====
+The certificate should, or even _must_ be uploaded to the trust store if, for example, the IdP service checks the certificate chain.
+For more information on this topic, see the xref:omd_https#[HTTPS article].
+====
+
+As a final step, replace the authentication configuration file `~/etc/apache/conf.d/auth.conf` with the following variant -- of course specifying your {CMK} server (here `myserver`) and your site (here `mysite`).
+Note in the following example configuration that the path of the installation directory in the line beginning with `LoadModule` may vary depending on the distribution used:
+
+.~/etc/apache/conf.d/auth.conf
+[{apache}]
+----
+# Set this to the Name of your {CMK} site, e.g.
+#Define SITE
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server. auth_mellon uses this
+# to generate the needed URLs in the metadata
+ServerName https://myserver
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /usr/lib/apache2/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+#MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.txt
+#MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no {CMK} authentication
+	# cookie provided by the user and whitelist also some other required URLs
+	<If "! %{HTTP_COOKIE} =~ /^(.*;)?auth_${SITE}/ && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+		! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+		! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+		! %{REQUEST_URI} = '/${SITE}check_mk/ajax_graph_images.py' && \
+		! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+		
+		MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+		MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+		MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+		MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+		MellonEndpointPath "/${SITE}/mellon"
+		MellonDefaultLoginPath "/${SITE}/check_mk/"
+		
+		Order allow,deny
+		Allow from all
+
+		MellonSecureCookie On
+		MellonCookieSameSite None
+
+		AuthType Mellon
+		AuthName "{CMK} SAML Login"
+		MellonEnable auth
+		Require valid-user
+		
+		# Get Username
+		# ADFS sends username as DOMAIN\username pair.
+		# {CMK} just wants the username.
+		RewriteEngine on
+		RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+		RequestHeader edit X-Remote-User "^.*\\\(.*)$" "$1"
+		
+		# When SAML auth fails, show the login page to the user. This should only happen,
+		# if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+		# A failed login at the IDP will not return you here at all.
+		
+    ErrorDocument 401 '<html> \
+      <head> \
+        <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+      </head> \
+      <body> \
+        SAML authentication failed, redirecting to login page. \
+        <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+      </body> \
+    </html>'
+	
+	</If>
+	
+	# This header is also needed after authentication (outside of the If clause)
+	RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+	RequestHeader edit X-Remote-User "^.*\\\(.*)$" "$1"
+	
+</Location>
+----
+
+Then restart Apache:
+
+[{shell}]
+----
+OMD[mysite]:~/etc/apache/mellon$ omd restart apache
+----
+
+Last but not least, you now download the dynamically created Mellon metadata as an XML file so that you can import it into AD Management right away:
+
+[{shell-raw}]
+----
+OMD[mysite]:~/etc/apache/mellon$ wget https://myserver/mysite/mellon/metadata -o metadata.xml
+----
+
+
+==== Configuring Active Directory
+
+To create a relying party trust in ADFS, do the following:
+
+Start the ADFS interface:
+
+[.border]
+image::saml_adfs_01.png[]
+
+Click [.guihint]#Add Relying Party Trust#:
+
+[.border]
+image::saml_adfs_02.png[]
+
+Leave the option set to [.guihint]#Claims aware# and continue with the Start button:
+
+[.border]
+image::saml_adfs_03.png[]
+
+Now select [.guihint]#Import data on the relying party from a file# and specify the XML file you just downloaded:
+
+[.border]
+image::saml_adfs_04.png[]
+
+You can safely ignore the [.guihint]#AD FS Management# warning:
+
+[.border]
+image::saml_adfs_05.png[]
+
+Under [.guihint]#Specify Display Name# now enter `{CMK}` as the name:
+
+[.border]
+image::saml_adfs_06.png[]
+
+When assigning permissions, *for testing purposes*, for the [.guihint]#Choose Access Control Policy# you can first select the value [.guihint]#Permit everyone#; you should later change this to [.guihint]#Permit specific group#.
+
+[.border]
+image::saml_adfs_07.png[]
+
+Confirm the summary under [.guihint]#Ready to Add Trust#:
+
+[.border]
+image::saml_adfs_08.png[]
+
+Finally, confirm the [.guihint]#Finish# dialog and keep the check mark at [.guihint]#Configure claims issuance policy for this application#:
+
+[.border]
+image::saml_adfs_09.png[]
+
+Select the relying party trust you just created and then start the editor with [.guihint]#Edit Claim Issuance Policy...#:
+
+[.border]
+image::saml_adfs_10.png[]
+
+Add a new rule in the following dialog via [.guihint]#Add Rule...#:
+
+[.border]
+image::saml_adfs_11.png[]
+
+In the first step [.guihint]#Select Rule Template# select [.guihint]#Transform to Incoming Claim# and confirm:
+
+[.border]
+image::saml_adfs_12.png[]
+
+In the second step [.guihint]#Configure Rule# set the following values:
+
+* [.guihint]#Incoming claim type#: `Windows account name`
+* [.guihint]#Outgoing claim type#: `Name ID`
+* [.guihint]#Outgoing name ID format#: `Transient Identifier`
+
+[.border]
+image::saml_adfs_13.png[]
+
+That step also completes the ADFS configuration.
+FS can now derive authentication for {CMK} from Windows authentication, which you instruct to authenticate users via HTTP requests in the next step.
+
+
+==== Configuring {CMK}
+
+In {CMK}, under [.guihint]#Setup > General > Global Settings > User Interface > Authenticate users by incoming HTTP requests#, at the [.guihint]#Current settings# you now only need to activate the [.guihint]#Activate HTTP header authentication# option.
+
+image::saml_adfs_cmk.png[]
+
+
+=== Additional information for other systems
+
+==== Entra ID with mod_auth_mellon
+
+When Entra ID (called Azure Active Directory until 2023) acts as the IdP, there are some differences in the configuration procedure, for example, the username can be specified directly without needing to be rewritten.
+
+Prerequisites for the following sample configuration:
+
+* Set UserPrincipalName in LDAP connection as the identifier (more information in the link:https://learn.microsoft.com/en-us/windows/win32/adschema/a-userprincipalname[Microsoft documentation^]).
+
+* Custom Enterprise App in Entra ID with UserPrincipalName as the 'name' attribute (for more information see the link:https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/add-application-portal[Microsoft documentation^]).
+
+Note in the following example configuration that the path of the installation directory in the line beginning with `LoadModule` may vary depending on the distribution used:
+
+.~/etc/apache/conf.d/auth.conf
+[{apache}]
+----
+#Set this to the Name of your {CMK} site, e.g.
+# Define SITE mysite
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server.
+# auth_mellon uses this to generate the needed URLs in the metadata.
+ServerName https://myserver
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /usr/lib/apache2/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+# MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.log
+# MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no {CMK} authentication
+	# cookie provided by the user and whitelist also some other required URLs.
+   <If "! %{HTTP_COOKIE} =~ /^auth_${SITE}/ && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+	! %{REQUEST_URI} = '/${SITE}/check_mk/automation.py' && \
+        ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+		! %{REQUEST_URI} = '/${SITE}check_mk/ajax_graph_images.py' && \
+        ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+
+        RequestHeader unset X-Remote-User
+        MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+        # Azure-AD-specific: Not needed because in metadata:
+        #MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+        MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+        MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+        MellonEndpointPath "/${SITE}/mellon"
+        MellonDefaultLoginPath "/${SITE}/check_mk/"
+
+		Order allow,deny
+		Allow from all
+				       
+		MellonSecureCookie On
+		MellonCookieSameSite None
+        
+		AuthType Mellon
+		MellonEnable auth
+		require valid-user
+
+        # Azure-AD-specific:
+        # Get Username
+        # If your assertion offers the username for {CMK} in an attribute you can set it directly as the remote user (REMOTE_USER):
+        MellonUser "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name"
+        RequestHeader set X-Remote-User "%{MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name}e" env=MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name
+		
+        # When SAML auth fails, show the login page to the user. This should only happen, if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+        # A failed login at the IDP will not return you here at all.
+        ErrorDocument 401 '<html> \
+          <head> \
+            <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+          </head> \
+          <body> \
+            SAML authentication failed, redirecting to login page. \
+            <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+          </body> \
+        </html>'
+		
+	</If>
+	
+	# Azure-AD-specific:
+	# This header is also needed after authentication (outside of the If clause)
+	RequestHeader set X-Remote-User "%{MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name}e" env=MELLON_http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name
+	
+</Location>
+----
+
+
+==== NetIQ Access Manager
+
+When NetIQ Access Manager acts as the IdP, there are some differences in the configuration procedure, for example, the username can be specified directly without needing to be rewritten.
+
+Note in the following example configuration that the path of the installation directory in the line beginning with `LoadModule` may vary depending on the distribution used:
+
+.~/etc/apache/conf.d/auth.conf
+[{apache}]
+----
+
+# Set this to the Name of your {CMK} site, e.g.# Define SITE mysite
+# Define SITE mysite
+Define SITE mysite
+
+# ServerName from listen-ports.conf needs to be overwritten here
+# and being set to the URL of the real server. auth_mellon uses this to generate the needed URLs in the metadata.
+
+ServerName https://myserver.mydomain.tld
+
+# Load the module.
+<IfModule !mod_auth_mellon.c>
+
+	LoadModule auth_mellon_module /usr/lib/apache2/modules/mod_auth_mellon.so
+
+</IfModule>
+
+# Only enable this for debugging purposes
+#MellonDiagnosticsFile /opt/omd/sites/${SITE}/tmp/mellon_diagnostics.log
+#MellonDiagnosticsEnable On
+
+<Location /${SITE}>
+
+	# Use SAML auth only in case there is no {CMK} authentication
+	# Cookie provided by the user and whitelist also some other required URLs.
+
+    <If "! %{HTTP_COOKIE} =~ /^auth_${SITE}/ && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/register_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/run_cron.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/deploy_agent.py' && \
+        ! %{REQUEST_URI} = '/${SITE}/check_mk/restapi.py' && \
+        ! %{REQUEST_URI} -strmatch '/${SITE}/check_mk/api/*' && \
+		! %{REQUEST_URI} = '/${SITE}check_mk/ajax_graph_images.py' && \
+        ! %{QUERY_STRING} =~ /(_secret=|auth_|register_agent)/ && \
+		! %{REQUEST_URI} =~ m#^/${SITE}/(omd/|check_mk/((images|themes)/.*\.(png|svg)|login\.py|.*\.(css|js)))# ">
+
+        MellonIdPMetadataFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-metadata.xml
+        # NetIQ-specific: Not needed because in metadata:
+        #MellonIdPPublicKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/idp-public-key.pem
+        MellonSPCertFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.cert
+        MellonSPPrivateKeyFile /opt/omd/sites/${SITE}/etc/apache/mellon/mellon.key
+        MellonEndpointPath "/${SITE}/mellon"
+        MellonDefaultLoginPath "/${SITE}/check_mk/"
+
+		Order allow,deny
+		Allow from all
+		
+		MellonSecureCookie On
+		MellonCookieSameSite None
+
+		AuthType Mellon
+		MellonEnable auth
+		require valid-user
+
+
+        # NetIQ-specific:
+        # Even though it is set as 'optional' in https://docs.oasis-open.org/security/saml/v2.0/saml-metadata-2.0-os.pdf
+        # a NetIQ Access Manager requires it to be set.
+        # Specified in oasis link above - line 396
+        MellonOrganizationName "<countrycode>" "<your organisation name>"
+        # Specified in oasis link above - line 443 / 452
+        MellonOrganizationURL  "<countrycode>" "<your organisation url>"
+        # Specified in oasis link above - line 454
+        MellonOrganizationDisplayName "<countrycode>" "<your organisation display name>"
+
+        # NetIQ-specific:
+        # If your assertion offers the username for {CMK} in an attribute you can set it directly as the remote user (REMOTE_USER)
+        MellonUser "myusername"
+
+        # NetIQ-specific:
+        # If the assertion does contain the username (and was set to MellonUser) then you can set the header directly.
+        RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+
+    # When SAML auth fails, show the login page to the user. This should only happen,
+    # if e.g. the mellon cookie is lost/rejected or if the IDP is misconfigured.
+    # A failed login at the IDP will not return you here at all.
+        ErrorDocument 401 '<html> \
+          <head> \
+            <meta http-equiv="refresh" content="1; URL=/${SITE}/check_mk/login.py"> \
+          </head> \
+          <body> \
+            SAML authentication failed, redirecting to login page. \
+            <a href="/${SITE}/check_mk/login.py">Click here</a>. \
+          </body> \
+        </html>'
+
+# This header is also needed after authentication (outside of the If clause)
+RequestHeader set X-Remote-User "expr=%{REMOTE_USER}"
+
+</Location>
+----
+
+[#migration]
+== Migrate existing users
+
+Once you have enabled SAML, you can migrate existing users from a password-based connection to the SAML connection.
+To do this, check the desired accounts in the user management under [.guihint]#Setup > Users > Users#.
+Then start the migration via [.guihint]#Migrate selected users#.
+
+image::saml_migration_list.png[alt="List of users marked for migration." ]
+
+In an intermediate step, you can have any attributes deleted.
+
+image::users_migration.png[alt="Dialog with user attributes that can be deleted."]

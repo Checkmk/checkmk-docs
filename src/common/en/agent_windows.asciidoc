@@ -1,0 +1,1554 @@
+// -*- coding: utf-8 -*-
+// IGNORE 30+ pre
+// NONASCII
+include::global_attr.adoc[]
+= Monitoring Windows
+:title: Monitoring Windows - The new agent for Windows in detail
+:description: The Agent Controller sends the monitoring data collected by the Windows agent to {CMK}. Here you can read how to set up the monitoring for Windows hosts.
+:experimental:
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_deployment#[Automatic agent updates]
+{related-end}
+
+
+[#intro]
+== The Windows agent
+
+From its very beginning, monitoring Windows servers has been one of the most important tasks performed by {CMK}.
+As for all other server operating systems, {CMK} therefore also provides its own agent for Windows, an agent program that is both minimalistic and secure.
+
+ifdef::onprem[]
+The *agent program* is accompanied by the *Agent Controller*, a component that communicates securely with the *Agent Receiver*, a process running on the {CMK} server.
+To do this, the Agent Controller registers itself with the *Agent Receiver*.
+The Windows agent can perform functions with the Agent Controller such as TLS encryption of communication or data compression, and is designed to accommodate future enhancements.
+
+The registered, encrypted and compressed xref:glossar#pull_mode[pull mode] with the Agent Controller is available for all {CMK} editions
+-- provided both {CMK} server and agent have at least version {v21}.
+The xref:glossar#push_mode[push mode] is available in {CCE}.
+Reversing the communication direction makes it easier to monitor hosts that are located behind firewalls.
+Push mode is usually combined with xref:hosts_autoregister#[automatic registration] of the {CMK} agent, which is also available in {CE}.
+
+[TIP]
+====
+Agent packages that use the default configuration open port 6556 immediately following installation.
+They will output unencrypted agent data via this port to anyone requesting it.
+For hosts that are accessible from the internet, you should therefore ensure _prior to_ installation via firewall settings that only selected hosts are allowed to access this port.
+Carry out the registration and the associated activation of TLS encryption promptly after installation.
+====
+endif::[]
+
+ifdef::saas[]
+The *agent program*, which collects the data relevant for monitoring, is supported by the *Agent Controller*, a component that communicates in encrypted form with the *Agent Receiver*, a process that runs on the {CMK} server.
+In addition to the initial authentication and registration, the Agent Controller's task is to call the agent script once a minute and transfer the agent data to the Checkmk-xref:glossar#site[site].
+
+[TIP]
+====
+This article focuses on the {CE-saas} agent.
+For performance and security reasons, {CE-saas} only expects the encrypted xref:glossar#push_mode[push mode] for communication between agent and site.
+This differs from the _on-premises_ editions of {CMK}.
+In {RE} and {SE}, only the xref:glossar#pull_mode[pull mode] is available (encrypted and--where required for compatibility reasons--unencrypted).
+{UE} is the most flexible and supports both modes.
+====
+endif::[]
+
+For compatibility reasons, the agent supports only the current versions of the link:https://en.wikipedia.org/wiki/Windows_NT[Microsoft Windows NT^] product line (edition).
+ifdef::onprem[]
+You can find out exactly what these are in the xref:release_notes.html#windows[System requirements] article.
+endif::[]
+ifdef::saas[]
+You can find out exactly what these are in the xref:release_notes.html#windows[System requirements for {CE}] article.
+endif::[]
+
+[#legacyagent]
+*Important*: Other Windows editions are not officially supported.
+This also includes _Windows Embedded_, for example.
+ifdef::onprem[]
+However, for monitoring older Windows versions such as, for example, Windows Server 2008, you can use a *legacy agent* at your own risk.
+Legacy agents are agents in older {CMK} versions without the Agent Controller.
+Of course this means extended functionalities with the Agent Controller, such as TLS encryption or compression will not be available.
+Legacy agents are available for download link:https://download.checkmk.com/legacy-agents/[here^].
+For the legacy agents some special requirements will need to be considered, and these are summarized in the xref:post_install[installation chapter].
+endif::[]
+
+The installation, registration, and setup of the agent can be accomplished in just a few steps, because the agent does not need any additional libraries for its functionality, for example.
+In addition, the agent is shipped with a basic configuration that is sufficient for most applications.
+
+
+[#agent_architecture]
+== Architecture of the agent
+
+The {CMK} agent consists of the agent program and the Agent Controller, which communicates with the Agent Receiver on the {CMK} server.
+See the general article on xref:wato_monitoringagents#agents[monitoring agents] for details on the common architectures of the xref:agent_linux#[Linux agent] and the Windows agent.
+This chapter specifically covers the Windows implementation.
+
+The *agent program* `check_mk_agent.exe` is responsible for the collection of the monitoring data.
+The program is started as a Windows service under the LocalSystem account.
+It collects data about the local system when called and makes it available to the Agent Controller.
+
+The agent program is minimalistic, secure, easily extendable and comprehensive, and provides access to important data
+ifdef::onprem[]
+that is not accessible via WMI or SNMP.
+In some cases, however, monitoring via SNMP *in addition* to the {CMK} agent can be useful.
+See the article on xref:snmp#snmp_cmk_agent[monitoring with SNMP] for more on this topic.
+endif::[]
+ifdef::saas[]
+that cannot be reached by other means.
+endif::[]
+In addition, the agent program is as transparent as a file delivered as executable can be,
+because you have access to the source code at any time and thus insight into its functionality, and can in principle also compile the agent yourself.
+
+The *Agent Controller* `cmk-agent-ctl.exe` is the component within the agent that is responsible for transporting the data collected by the agent program.
+It runs as a background process under the Windows LocalSystem account.
+In pull mode, it listens on TCP port 6556 for incoming connections from the {CMK} xref:glossar#site[site] and queries the agent program via a Windows-specific mechanism for process communication called link:https://learn.microsoft.com/en-us/windows/win32/ipc/about-mailslots[Mailslot^].
+
+
+[#slideout]
+== Quick installation
+
+ifdef::onprem[]
+{CMK} guides you through the user interface to download, install, and register the {CMK} agent on a host, thereby adding it to the xref:glossar#configuration_environment[configuration environment].
+An assistant guides you through the necessary steps in a _slideout_.
+In the slideout, you can select Windows, Linux, Solaris, or AIX as the operating system for the host.
+The xref:intro_setup_monitor#linux[Beginner's Guide] describes the process in detail for a Linux host in pull mode.
+The process is identical for a Windows host--only the commands are different.
+
+The main advantage of the slideout is that it displays directly in the GUI the appropriate commands for downloading, installing, and registering a Windows host.
+You can copy any command to the clipboard and then run it on the host.
+For a Windows host, the agent package is downloaded using curl via the REST API, installed with the `msiexec` command, and finally, the host is registered with `cmk-agent-ctl`.
+endif::[]
+
+ifdef::saas[]
+{CMK} guides you through the user interface to download, install, and register the {CMK} agent on a host--and even add it to monitoring.
+To do this, {CE} provides two assistants that guide you through the necessary steps in a _slideout_.
+
+* One slideout helps you to automatically add a host to the xref:glossar#configuration_environment[configuration environment] and the xref:glossar#monitoring_environment[monitoring environment]. +
+This uses the agent packages prepared for auto-registration for Linux and Windows.
+
+* The other slideout guides you through the manual process of adding a host to the configuration environment.
+Here, the standard packages available for Windows and Linux are used. 
+
+Both slideouts--one for xref:intro_setup_monitor#first_auto[automatic creation] and one for xref:intro_setup_monitor#first[manual creation]--are described in the Beginner's Guide.
+
+The main advantage of the slideouts is that they display directly in the GUI the appropriate commands for downloading, installing, and registering a Windows host.
+You can copy any command to the clipboard and then run it on the host.
+endif::[]
+
+To make the process as simple as possible, authentication in the commands required for download and registration is performed using a _one-time token_.
+This token is valid for successful execution within a limited time period.
+The token is first generated before being used in the aforementioned commands.
+
+Quick download, installation, and registration via slideout are particularly well-suited for quickly creating the first hosts in {CMK}.
+Detailed information on all possible methods for installing a standard agent (for example, without a one-time token, using xref:glossar#agent_plugin[agent plug-ins], and with troubleshooting) is provided in the following chapters.
+
+
+[#install]
+== Installation
+
+ifdef::onprem[]
+{CMK} provides several ways to install the Windows agent--from a manual installation of the software package to the fully automated deployment including its update function.
+Some of these installation methods are only available in the commercial editions:
+
+[cols="30,50,~,~",options="header"]
+|===
+|Method |Description |{RE} |Commercial editions
+|Supplied MSI package |Simple installation of a standard agent with manual configuration via configuration files. |X |X
+|MSI package from the xref:glossar#agent_bakery[Agent Bakery] |Configuration via GUI, an individual configuration per host is possible. | |X
+|xref:agent_deployment#[Automatic updates] |The package from the Agent Bakery is installed for the first time by hand or by script and will from then on be automatically updated. | |X
+|===
+
+As an alternative, you can also distribute the MSI package via other paths, such as the Microsoft Active Directory.
+The installation can be completely automated here using the MSI format.
+endif::[]
+
+ifdef::saas[]
+In {CE-saas}, it is particularly easy to install and use the preconfigured agent packages for auto-registration.
+In addition to these, so-called 'Vanilla agents' are available without preconfiguration, though they require more effort to set up.
+
+The use of the Vanilla agents can be useful for debugging or if you want to create operating system images that can be used independently of a {CMK} edition or site.
+More on this later.
+endif::[]
+
+
+[#download]
+=== Downloading an MSI package
+
+You install the Windows agent by installing the MSI package.
+
+Before installation, you need to get the package and bring it to the host on which the agent will run (for example with `scp` or WinSCP).
+
+
+[#download_gui]
+==== Getting a package via the {CMK} GUI
+
+ifdef::onprem[]
+In {CRE} you can find the agent's Windows package via [.guihint]#Setup > Agents > Windows#.
+In the commercial editions, you first get to the xref:wato_monitoringagents#bakery[Agent Bakery] in the [.guihint]#Setup# menu via [.guihint]#Agents > Windows, Linux, Solaris, AIX#, where you find the baked packages.
+From there, the [.guihint]#Related > Windows files# menu item will take you to the list of agent files:
+
+.You can find the MSI package on the download page
+image::agent_windows_agent_files.png[alt="Download page with the MSI package."]
+
+Everything you need can be found right in the first box named [.guihint]#Packaged Agents#:
+the ready-made MSI package file `check_mk_agent.msi` for installing the Windows agent with its default settings.
+endif::[]
+
+ifdef::saas[]
+{CE} has the xref:glossar#agent_bakery[Agent Bakery], a software module for automatically packaging customized agents.
+You can access the Agent Bakery in the [.guihint]#Setup# menu via [.guihint]#Agents > Windows, Linux, Solaris, AIX#.
+
+In the Agent Bakery you will find prepared packages for each folder that has been configured for auto-registration.
+By default, this is the `preconfigured_agent` folder.
+Registration of the agent takes place automatically following the installation of the agent package.
+Manual registration, as described in the following xref:registration[chapter], is _not_ required.
+
+The Vanilla agents without preconfiguration can be found in the first row [.guihint]#Default configuration# of the table.
+
+.In the Agent Bakery you can download preconfigured and Vanilla agent packages
+image::agent_linux_bakery_saas.png[alt="Agent packages in the Agent Bakery."]
+
+A detailed description of the configuration of individual agent packages with the Agent Bakery can be found in the general article on xref:wato_monitoringagents#[monitoring agents].
+endif::[]
+
+
+==== Getting a package via the REST API
+
+{CMK}'s xref:rest_api#[REST API] provides the following methods for downloading agent packages from the {CMK} server:
+
+* Downloading the provided agent.
+* Downloading an individually prepared agent by host name and operating system.
+* Downloading an individually prepared agent by hash of the agent and operating system.
+
+Via the REST API you have the option to fetch the package from the {CMK} server directly to the target machine.
+
+For example, the included MSI package with the Windows agent can be downloaded using the following `curl` command, which authenticates using an xref:glossar#automation_user[automation user].
+In newer Windows versions `curl` is already included, in older versions you will first have to install the `curl` command environment separately via link:https://curl.se/windows/[curl for Windows^].
+
+ifdef::onprem[]
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> curl.exe -OJG "\http://mycmkserver/mysite/check_mk/api/v1/domain-types/agent/actions/download/invoke" `
+    --header "Accept: application/octet-stream" `
+    --header "Authorization: Bearer automation myautomationsecret" `
+    --data-urlencode "os_type=windows_msi"
+----
+endif::[]
+
+ifdef::saas[]
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> curl.exe -OJG "\http://mycmkserver/mysite/check_mk/api/v1/domain-types/agent/actions/download/invoke" `
+    --header "Accept: application/octet-stream" `
+    --header "Authorization: Bearer api_user myautomationsecret" `
+    --data-urlencode "os_type=windows_msi"
+----
+endif::[]
+
+*Note:* The above command has been split into four lines for readability.
+
+This is just a simple example to demonstrate how this particular REST API endpoint works to download the agent.
+For details on this and other REST API endpoints, see the API documentation available in {CMK} via [.guihint]#Help > Developer resources > REST API > Version 1 > Documentation#.
+
+ifdef::onprem[]
+The easiest way to download the default agent is a direct file download:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> Invoke-WebRequest `
+    -Uri "\http://mycmkserver/mysite/check_mk/agents/windows/check_mk_agent.msi" `
+    -OutFile "check_mk_agent.msi"
+----
+
+endif::[]
+
+
+[#install_package]
+=== Package installation
+
+[#install_manual]
+==== Manual installation
+
+After fetching the MSI package and--if necessary--copying it to the host to be monitored using `scp`, WinSCP or other means, start the installation either by double-clicking the MSI file or from the command line as follows:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> check_mk_agent.msi
+----
+
+You will see the start page for the Setup wizard:
+
+.The installation starts with a welcome
+image::agent_windows_setup_wizard_1.png[alt="Start page of the Setup wizard."]
+
+Use the [.guihint]#Next# buttons to scroll through the pages of the wizard.
+Accept the license terms of the [.guihint]#GNU GENERAL PUBLIC LICENSE# to continue.
+The Setup wizard will then present you with the following page:
+
+[#agent_windows_setup_wizard_3b]
+.Choices when installing the agent
+image::agent_windows_setup_wizard_3b.png[alt="Setup Wizard page on how to proceed when updating an old agent."]
+
+ifdef::onprem[]
+The choices on this page are relevant to you only if a Windows agent is already installed on the host and it is *older* than version {v16}.
+In version {v16} the architecture of the Windows agent had changed fundamentally.
+If you are updating (or _migrating_) to the current agent from a Windows agent *older* than version {v16}, first read the link:https://docs.checkmk.com/2.0.0/en/agent_windows.html#legacy[chapter on the old agent] in the {CMK} User Guide for version {v20}.
+There you will learn which of the provided options you should select in this particular update case.
+
+In all other cases, we recommend selecting the [.guihint]#Clean installation.# option.
+endif::[]
+
+ifdef::saas[]
+Select [.guihint]#Clean installation.# here.
+The other options displayed relate to the rarely encountered case that you want to include a Windows system in the monitoring on which an agent of an on-premises edition of {CMK} was installed a long, long time ago.
+endif::[]
+
+Confirm the start of the installation and then allow the installation program to make changes (in the [.guihint]#User Account Control# dialog).
+When finished, you can exit the Setup wizard.
+
+ifdef::onprem[]
+After the installation, the agent will immediately start as a Windows service and be ready to monitor the system.
+endif::[]
+ifdef::saas[]
+After the installation, the agent will immediately start as a Windows service
+With the agent package preconfigured for auto-registration, the {CMK} site will next be contacted, and after a few minutes the host will be ready with the first monitoring data.
+endif::[]
+
+
+[#install_unattended]
+==== Unattended installation
+
+Via the command line, Windows provides administrators with `msiexec` the possibility of installing MSI packages automatically without requiring user interaction.
+An automated installation can then look like this, for example:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn
+----
+
+In this case, the agent is installed (`/i`) without user interaction or the user interface (`/qn`) and is also started immediately as a Windows service.
+So this method is great for automatically distributing the agent to many hosts.
+
+You can also use this method to select the three options that were offered to you during the manual installation xref:agent_windows_setup_wizard_3b[in the Setup wizard].
+For each option, there is an identifier that you can use for the installation command:
+
+[cols="65,~",options="header"]
+|===
+|Option in the Setup wizard | Identifier
+|[.guihint]#Clean installation.# |`WIXUI_CLEANINSTALL`
+|[.guihint]#Remove Legacy Windows Agent (pre 1.6) if present.# |`WIXUI_REMOVELEGACY`
+|[.guihint]#Migrate from Legacy Windows Agent (pre 1.6) configuration if present.# |`WIXUI_MIGRATELEGACY`
+|===
+
+To _enable_ an option, append its identifier followed by an 'equals' sign:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn WIXUI_CLEANINSTALL=
+----
+
+To explicitly _disable_ an option, you must add two more quotation marks following the equals sign:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> msiexec /i check_mk_agent.msi /qn WIXUI_MIGRATELEGACY=""
+----
+
+
+ifdef::onprem[]
+[#install_bakery]
+=== Installation using the Agent Bakery
+
+{cee-only}
+The commercial editions have a software module, the xref:glossar#agent_bakery[Agent Bakery], for automatically packaging customized agents.
+A detailed description of this can be found in the general article on the xref:wato_monitoringagents#[agents].
+Installation of the baked MSI package is done in the same way as described xref:install_package[above] for the included package.
+
+In {CE} you can additionally use the Agent Bakery to provide agent packages with a configuration for auto-registration,
+which facilitates the xref:hosts_autoregister#[automatic creation of hosts].
+In this case, the agent registration is done automatically once the agent package has been installed,
+and manual registration, as described in the following xref:registration[chapter], will _no longer_ be necessary.
+endif::[]
+
+
+[#automatic_updates]
+=== Automatic updates
+
+ifdef::onprem[]
+{cee-only}
+endif::[]
+If you use the Agent Bakery, you can also set up automatic updates of the agent.
+These updates are described in their xref:agent_deployment#[own article].
+
+
+ifdef::onprem[]
+[#config_files]
+=== Agent configuration files
+
+During an installation the MSI package stores the program-specific files in `C:\Program Files (x86)\checkmk\service\` and the host-specific files in `C:\ProgramData\checkmk\agent\`.
+You do not need to customize the program-specific files.
+The host-specific files are used to store plug-ins, log and configuration files and to configure the behavior of the agent.
+
+*Note*: By default, the entire `C:\ProgramData` directory is _hidden_ in Windows.
+
+The agent reads three configuration files in succession:
+
+. `C:\Program Files (x86)\checkmk\service\check_mk.yml` +
+is the default configuration file, which you should not change.
+. `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` +
+is created by the Agent Bakery and should not be changed manually.
+. `C:\ProgramData\checkmk\agent\check_mk.user.yml` +
+is your configuration file where you can manually make custom adjustments to test a setting or extension on a host.
+
+If an option has been set in multiple files, then the last file read in determines the content of this option.
+For manual work with the agent, therefore, only the last configuration file `check_mk.user.yaml` is relevant, because it is read in last and thus _has the last word_.
+If the Agent Bakery is not used, this is in fact the only file in which customizations to the agent's configuration may be made.
+
+As you may have already recognized from the file extension of the configuration files, link:https://en.wikipedia.org/wiki/YAML[YAML^] is used as the file format.
+endif::[]
+
+
+ifdef::saas[]
+=== Agent configuration files
+
+An overview of the agent's configuration files can be found at the xref:config_files[end of this article].
+endif::[]
+
+
+[#post_install]
+=== What follows the installation?
+
+ifdef::saas[]
+[TIP]
+====
+This section is only relevant for you if you have installed a Vanilla Agent that has not been preconfigured for auto-registration. 
+====
+endif::[]
+
+After installing the agent including the Agent Controller, the next step is the xref:registration[registration], which sets up TLS encryption so that the encrypted agent output can be decrypted by the {CMK} server and displayed in monitoring.
+
+There is a special feature when the agent has been installed with the Agent Controller for the first time.
+In such a case the agent will switch to the unencrypted *legacy pull mode*,
+ifdef::onprem[]
+so that the {CMK} server is not cut off from the monitoring data and can continue to display it.
+endif::[]
+ifdef::saas[]
+so that a {CMK} server of an on-premises edition is not cut off from the monitoring data and can continue to display it.
+endif::[]
+This applies to both a new installation and an update of a very old agent (older than version {v21}).
+
+ifdef::onprem[]
+It will look like this in the monitoring:
+
+.Warning in {CMK} monitoring that TLS is not yet in use
+image::agent_windows_service_legacy_pull_mode.png[alt="The WARN state of the 'Check_MK' service due to missing encryption."]
+
+The {CMK} site recognizes from the agent output that the Agent Controller is present and thus that TLS encryption is possible--but not yet enabled.
+The [.guihint]#Check_MK Agent# service changes to the {WARN} state and remains so until you register it.
+After registration, only the encrypted pull mode will be used for communication.
+The legacy pull mode is switched off and will remain so.
+However, it can be switched on again xref:deregister[by command] if necessary.
+
+The situation will be different when using a *legacy agent* on a very old xref:legacyagent[Windows system].
+Without the Agent Controller a registration is not possible.
+Thus, for legacy agents the only relevant sections in the xref:registration[Registration] chapter are adding the host to the Setup and then to the monitoring.
+In the chapter xref:test[Testing and troubleshooting] you must omit the test for calling the Agent Controller, because this is not available for a legacy agent.
+Since there is also no TLS encryption without the Agent Controller, you will need to use other methods of encryption if required.
+In this case we recommend using the built-in (symmetric) encryption using the [.guihint]#Symmetric encryption (Linux, Windows)# rule.
+
+*Note:* In the [.guihint]#{CMK} Agent installation auditing# rule set you will find various settings to check the state of the agent and make it visible in monitoring.
+Among other things, here you can specify which state the [.guihint]#Check_MK Agent# service should have if TLS configuration has not yet been performed.
+endif::[]
+
+
+[#registration]
+== Registration
+
+ifdef::saas[]
+[TIP]
+====
+This chapter is particularly relevant if you have installed a Vanilla agent that is not preconfigured for auto-registration, or if you want to migrate existing hosts from the monitoring of an on-premises edition of {CMK} to {CE-saas}.
+It can also be helpful if the auto-registration fails for whatever reason.
+====
+endif::[]
+
+
+[#overview]
+=== Overview and prerequisites
+
+Immediately after installing the agent (including when updating a very old agent, i.e., one older than version {v21}), only unencrypted communication is possible in the legacy pull mode.
+An exclusively encrypted data transmission can only be activated once a trust relationship has been established.
+
+An exception to this are the packages preconfigured for the xref:hosts_autoregister#[auto-registration] and downloaded via the Agent Bakery.
+These packages perform the registration automatically after installation.
+
+In all other cases, you perform the manual registration promptly after installing the agent.
+This chapter shows how to perform the registration.
+
+The registration and thus the establishment of the mutual trust relationship is done under a {CMK} user with access to the xref:rest_api#[REST-API].
+For this, a good choice is the xref:glossar#automation_user[automation user] `agent_registration` which only has the permission to register agents and is automatically created with every {CMK} installation.
+You can randomize the corresponding automation password (_automation secret_) with the icon:icon_random[alt="Icon for rolling the dice."] icon.
+You must save the user before you can use the new password.
+
+ifdef::onprem[]
+*Note:* Since there is no Agent Controller, and thus no registry and TLS encryption, on very old xref:legacyagent[Windows systems] you will need to use alternative encryption methods if required.
+In this case we recommend using the built-in (symmetric) encryption using the [.guihint]#Symmetric encryption (Linux, Windows)# rule.
+endif::[]
+
+
+ifdef::saas[]
+==== Requirements for a firewall
+
+In order for the registration to be carried out on the host to be included in the monitoring, it must be able to reach the REST API on the {CMK} server (port 443) as well as the Agent Receiver (port 8000).
+Read the xref:networkrequirements[Network environment for registration] section for background information and details.
+endif::[]
+
+
+=== Adding a host to the Setup
+
+First create the new host via [.guihint]#Setup > Hosts > Add host#.
+A host must exist in the xref:glossar#configuration_environment[configuration environment] before it can be registered.
+
+ifdef::onprem[]
+In {CE} you will find the [.guihint]#{CMK} agent connection mode# option in the properties of the host in the section on xref:hosts_setup.html#monitoring_agents[monitoring agents].
+Here you can activate the push mode for the {CMK} agent as an alternative to the pull mode, which is available in all editions.
+endif::[]
+
+
+=== Registering a host with the server
+
+The registration is done using the Agent Controller `cmk-agent-ctl`, which provides a command interface for configuring the connections.
+You can display command help with `cmk-agent-ctl help`, also for specific available subcommands, for example with `cmk-agent-ctl help register`.
+
+Whether the host is configured for the pull mode or the push mode makes no difference for the command examples.
+The Agent Receiver tells the Agent Controller in which mode it should operate during registration.
+
+Now go to the host that is to be registered.
+Here you have to make a request to the {CMK} xref:glossar#site[site] with administrator rights:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" register `
+    --hostname mynewhost `
+    --server cmkserver `
+    --site mysite `
+    --user agent_registration `
+    --password "PTEGDYXBFXVGNDPRL"`
+----
+
+The host name following the `--hostname` option must be exactly the same as it was when it was created in the Setup.
+The `--server` and `--site` options specify the name of the {CMK} server and the site.
+The server name may also be the IP address, the site name (here `mysite`) corresponds to the one you see in the URL path for the web interface. 
+The options are completed by the name and password used by the automation user.
+If you omit the `--password` option, the password will be requested interactively.
+
+*Caution, trap for the unwary:* If you primarily administer Unix machines, you are used to enclosing paths or parameters with spaces or special characters in single quotes (_apostrophes_, `0x27`).
+Windows interprets this character as part of the call--in this case the password--and the registration will fail.
+Use double quotes (_quotation marks_, `0x22`) instead.
+
+If the specified values were correct, you will be asked to confirm the identity of the {CMK} site to which you want to connect.
+For clarity here, we have abbreviated the server certificate to be confirmed:
+
+[{file},subs="+quotes"]
+----
+Attempting to register at cmkserver:8000/mysite. Server certificate details:
+
+PEM-encoded certificate:
+---BEGIN CERTIFICATE---
+MIIC6zCCAdOgAwIBAgIUXbSE8FXQfmFqoRNhG9NpHhlRJ40wDQYJKoZIhvcNAQEL
+[...]
+nS+9hN5ILfRI+wkdrQLC0vkHVYY8hGIEq+xTpG/Pxw==
+---END CERTIFICATE---
+
+Issued by:
+	Site 'mysite' local CA
+Issued to:
+	localhost
+Validity:
+	From Thu, 10 Feb 2022 15:13:22 +0000
+	To   Tue, 13 Jun 3020 15:13:22 +0000
+
+Do you want to establish this connection? [Y/n]
+> #Y#
+----
+
+Confirm with `Y` to complete the process.
+
+If no error message is displayed, the encrypted connection will have been established.
+All data will now be transmitted in compressed form via this connection.
+
+If you want to disable the interactive check of the certificate--for example to fully automate the registration--you might use the additional parameter `--trust-cert`.
+The transferred certificate will be automatically trusted in this case.
+Keep in mind that you should take other measures to verify the integrity of the certificate.
+This can be performed (manually or scripted) by inspecting the xref:files[file] `C:\ProgramData\checkmk\agent\registered_connections.json`.
+
+[TIP]
+====
+Using the `cmk-agent-ctl` command, you can register the Agent Controller and the xref:glossar#agent_updater[Agent Updater] _at the same time_.
+You can learn how this works in the article on xref:agent_deployment#one_registration[automatic agent updates].
+====
+
+
+[#autoregister]
+=== Registering a host automatically with the server
+
+ifdef::onprem[]
+{CE} offers the facility to create hosts automatically at registration.
+For such xref:hosts_autoregister#[auto-registration], in addition to a user with permission to register hosts, you need at least one folder configured to hold the hosts that are to be created automatically.
+endif::[]
+
+ifdef::saas[]
+In addition to the packages available in the Agent Bakery, you have the option to create your own packages for xref:hosts_autoregister#[auto-registration].
+As well as a user with the permission to register hosts, you will need at least one folder that has been configured to contain the hosts to be created automatically.
+endif::[]
+
+If these conditions have been met, you can also carry out the registration, including automatic host creation, via the command line.
+
+Usually you will use the xref:hosts_autoregister#rule_autoregister_bakery[Agent Bakery settings] procedure, 
+which includes the `C:\ProgramData\checkmk\agent\pre_configured_connections.json` configuration file in the agent package and which performs the registration automatically during installation.
+The command line call presented here is therefore primarily used for testing and debugging, for example trying out your own _agent labels_ with the `--agent-labels <KEY=VALUE>` option.
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" register-new `
+    --server cmkserver `
+    --site mysite `
+    --agent-labels testhost:true `
+    --user agent_registration `
+    --password "PTEGDYXBFXVGNDPRL"
+----
+
+The biggest difference here is the modified `register-new` subcommand, which is used to request the registration _and_ creation of a new host in the {CMK} site.
+The name of the host is the one stored in the `%COMPUTERNAME%` environment variable.
+The subsequent confirmation of the certificate is the same as shown in the last section.
+
+Whether the host is created
+ifdef::onprem[]
+in pull mode,
+endif::[]
+in push mode or not at all is defined by your settings in the [.guihint]#Agent registration# rule set.
+Following a successful registration, it may take several minutes before the host appears in the monitoring.
+
+
+=== Verifying the trust relationship
+
+The `cmk-agent-ctl status` command now shows exactly one trust relationship with the {CMK} server:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" status
+Connection: 12.34.56.78:8000/mysite
+	UUID: d38e7e53-9f0b-4f11-bbcf-d196deadbeef
+	Local:
+		Connection type: pull-agent
+		Certificate issuer: Site 'mysite' local CA
+		Certificate validity: Mon, 21 Feb 2022 11:23:57 +0000 - Sat, 24 Jun 3020 11:23:57 +0000
+	Remote:
+		Connection type: pull-agent
+		Host name: mynewhost
+----
+
+If the information is needed in a machine-readable format, append the additional parameter `--json` to retrieve the output formatted as a JSON object.
+
+*Note:* There can only ever be one trust relationship between host and site.
+For example, if you register an already registered host `mynewhost` under a different name (`mynewhost2`) but with the same IP address, then the new connection will replace the existing one.
+The connection from `mynewhost` to the site will be disconnected and no more agent data will be supplied to the host for monitoring.
+
+
+[#proxyregister]
+=== Registration by proxy
+
+ifdef::saas[]
+[TIP]
+====
+This section has little relevance thanks to the availability of auto-registration for {CE-saas}.
+If you already use _registration by proxy_ together with infrastructure management tools, for example, with the on-premises editions of {CMK}, you can continue to do so with {CE-saas}.
+====
+endif::[]
+
+For easier registration of multiple hosts, any host on which the agent is installed can perform a registration on behalf of other hosts.
+The registration process exports a JSON file, which can then be transferred to the target host and imported there.
+Again, as before, the host registered in the job must already be set up on the site.
+
+First, on any host in the Setup, the registration is performed by proxy.
+ifdef::onprem[]
+Here, of course, the {CMK} server comes in handy, as it is usually the first host to be set up.
+endif::[]
+As with the example above, you can pass the password by option or be asked for it interactively if you omit the `--password` option.
+We redirect the JSON output to a file in the example:
+
+[{shell}]
+----
+{c-root} cmk-agent-ctl proxy-register \
+    --hostname mynewhost3 \
+    --server cmkserver --site mysite \
+    --user agent_registration > /tmp/mynewhost3.json
+----
+
+Next we transfer the `/tmp/mynewhost3.json` file to the host we registered and import that file:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" `
+    import %TEMP%\mynewhost3.json
+----
+
+
+=== Adding the host to the monitoring
+
+ifdef::onprem[]
+Once the registration is complete, perform a xref:wato_monitoringagents#diagnosticpage[connection test] and a xref:wato_services#discovery[service discovery] in the {CMK} server Setup. 
+endif::[]
+ifdef::saas[]
+Once the registration is complete, perform a xref:wato_services#discovery[service discovery] in the {CMK} server Setup. 
+endif::[]
+Then, as the last step include the discovered services in the monitoring by xref:wato#activate_changes[activating the changes].
+
+ifdef::onprem[]
+If the connection test fails, refer to the xref:test[following chapter] for testing and troubleshooting information.
+endif::[]
+
+
+[#deregister]
+=== Deregistering a host
+
+You can also deregister a host.
+
+On a host connected to the {CMK} server, you can revoke the trust.
+Here, in the following command, the Universally Unique Identifier (UUID) to specify is the one output by the `cmk-agent-ctl status` command:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" `
+    delete d38e7e53-9f0b-4f11-bbcf-d196deadbeef
+----
+
+ifdef::onprem[]
+To delete all connections from the host *and* additionally restore the legacy pull mode, enter the following command:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" `
+    delete-all --enable-insecure-connections
+----
+
+After that, the agent will behave as it did following the initial installation and before the first registration, and sends its data unencrypted.
+endif::[]
+
+Complete the deregistration on the {CMK} server:
+In the Setup, on the [.guihint]#Properties of host# page, select the [.guihint]#Host > Remove TLS registration# menu item and confirm the prompt.
+
+ifdef::onprem[]
+If you prefer using the command line:
+On the {CMK} server, for each connection of a host that is in monitoring, there is a soft link with the UUID that points to the folder with the agent output:
+
+[{shell-raw}]
+----
+{c-omd} cd ~/var/agent-receiver/received-outputs
+OMD[mysite]:~/var/agent-receiver/received-outputs$ ls -l d38e7e53-9f0b-4f11-bbcf-d19617971595
+lrwxrwxrwx 1 mysite mysite 67 Feb 23 07:18 d38e7e53-9f0b-4f11-bbcf-d19617971595 -> /omd/sites/mysite/tmp/check_mk/data_source_cache/push-agent/mynewhost
+----
+endif::[]
+
+
+ifdef::onprem[]
+[#changepush]
+=== Switching between the push and pull modes
+
+In {CCE} you can switch hosts from push to pull mode and vice versa.
+This may be necessary in individual cases if changes to the network topology are pending, or a downgrade to {CSE}--in which only the pull mode is possible--is to be carried out.
+
+First specify the access mode in the Setup, in the properties of the host, with the [.guihint]#{CMK} agent connection mode# option.
+Within the next minute, all services will assume the {UNKNOWN} status since no monitoring data is being received.
+Then perform a new registration.
+During this re-registration, the {CMK} server's Agent Receiver tells the Agent Controller whether it expects data in pull or push mode.
+A subsequent check using `cmk-agent-ctl status` will then show a new UUID and a mode consistent with the change made in the Setup.
+endif::[]
+
+
+[#test]
+== Testing and troubleshooting
+
+A modular system may not work as intended in many situations.
+Since the agent uses the two components Agent Controller (on the host) and Agent Receiver (on the {CMK} server), there are several places where something can go wrong.
+When troubleshooting, a structured approach is thus recommended.
+You can of course also use the step-by-step analysis described here to get to know the data collection and communication provided by {CMK} in more detail. 
+
+ifdef::onprem[]
+All of the diagnostic options that are available from the {CMK} server side are described in the general article on xref:wato_monitoringagents#diagnostics[monitoring agents].
+But, of course, there are other diagnostics available when logged in directly to the monitored host itself.
+endif::[]
+
+We will work our way from the agent program, through the Agent Controller
+ifdef::onprem[]
+and TCP port 6556, 
+endif::[]
+to the {CMK} site in the following sections.
+ifdef::onprem[]
+With the Agent Controller in push mode, bypass any tests on port 6556--even if port 6556 is open before the registration, it will be closed following a registration in the push mode.
+endif::[]
+In most cases, after correcting an error, you can restart the service discovery and complete the inclusion in monitoring.
+
+
+=== Checking the configuration
+
+To check that the configuration has been read in as expected, call the agent program with the `showconfig` option.
+With this option you will not only get the configuration as it is currently used by the agent, but additionally, the environment variables as well as the configuration files in use will always be displayed.
+
+If only a certain part of the configuration is of interest, you can limit the output to that specific part.
+Here, for example, it is checked whether the options in the `ps` section have been set correctly:
+
+[{powershell}]
+----
+PS C:\Windows\System32> & "C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" showconfig ps
+# Environment Variables:
+# MK_LOCALDIR="C:\ProgramData\checkmk\agent\local"
+# MK_STATEDIR="C:\ProgramData\checkmk\agent\state"
+# MK_LIBDIR="C:\ProgramData\checkmk\agent"
+# MK_PLUGINSDIR="C:\ProgramData\checkmk\agent\plugins"
+# MK_TEMPDIR="C:\ProgramData\checkmk\agent\tmp"
+# MK_LOGDIR="C:\ProgramData\checkmk\agent\log"
+# MK_CONFDIR="C:\ProgramData\checkmk\agent\config"
+# MK_SPOOLDIR="C:\ProgramData\checkmk\agent\spool"
+# MK_INSTALLDIR="C:\ProgramData\checkmk\agent\install"
+# MK_MSI_PATH="C:\ProgramData\checkmk\agent\update"
+# MK_MODULESDIR="C:\ProgramData\checkmk\agent\modules"
+# Loaded Config Files:
+# system: 'C:\Program Files (x86)\checkmk\service\check_mk.yml'
+# bakery: 'C:\ProgramData\checkmk\agent\bakery'
+# user  : 'C:\ProgramData\checkmk\agent\check_mk.user.yml'
+
+# ps
+enabled: yes
+use_wmi: yes
+full_path: no
+----
+
+In this way you get a quick overview of how the three different xref:config_files[configuration files] have been merged and used by the agent program. 
+Errors will be immediately visible.
+
+
+[#networkrequirements]
+=== Network environment for registration
+
+If registering a host fails even before a certificate is presented, knowledge about the connections used for communication can help in identifying the problem--and of course in solving it.
+
+To find out why the registration failed, run the registration again with the additional option `-vv`.
+This will display not only errors but also additional information and debugging messages.
+For example, if the {CMK} server is not accessible from the host, the output will look something like this:
+
+[{powershell}]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" -vv register `
+    --hostname mynewhost `
+    --server cmkserver `
+    --site mysite `
+    --user agent_registration
+[2026-05-18 23:13:32.722947 -07:00] INFO [cmk_agent_ctl] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\main.rs:16: starting
+[2026-05-18 23:13:32.734893 -07:00] INFO [cmk_agent_ctl] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\lib.rs:51: Loaded config from '"C:\\ProgramData\\checkmk\\agent\\cmk-agent-ctl.toml"', connection registry from '"C:\\ProgramData\\checkmk\\agent\\registered_connections.json"'
+[2026-05-18 23:13:32.736471 -07:00] DEBUG [reqwest::connect] C:\Users\jenkins\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\reqwest-0.12.23\src\connect.rs:882: starting new connection: \https://mycmkserver/
+[2026-05-18 23:13:53.755340 -07:00] INFO [cmk_agent_ctl::site_spec] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\site_spec.rs:254: Failed to discover agent receiver port using https.
+[2026-05-18 23:13:53.767766 -07:00] DEBUG [cmk_agent_ctl::site_spec] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\site_spec.rs:255: https error: "Failed to discover agent receiver port from \https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror sending request for url (\https://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke)\nclient error (Connect)\ntcp connect error\nA connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)"
+[2026-05-18 23:13:53.768905 -07:00] DEBUG [reqwest::connect] C:\Users\jenkins\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\reqwest-0.12.23\src\connect.rs:882: starting new connection: \http://mycmkserver/
+[2026-05-18 23:14:14.815083 -07:00] INFO [cmk_agent_ctl::site_spec] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\site_spec.rs:254: Failed to discover agent receiver port using http.
+[2026-05-18 23:14:14.815471 -07:00] DEBUG [cmk_agent_ctl::site_spec] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\site_spec.rs:255: http error: "Failed to discover agent receiver port from \http://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke\nerror sending request for url (\http://mycmkserver/mysite/check_mk/api/1.0/domain-types/internal/actions/discover-receiver/invoke)\nclient error (Connect)\ntcp connect error\nA connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)"
+[2026-05-18 23:14:14.815937 -07:00] ERROR [cmk_agent_ctl] D:\y5\winagt-build\checkout\packages\cmk-agent-ctl\src\main.rs:35: Failed to discover agent receiver port from Checkmk REST API, both with http and https. Run with verbose output to see errors.
+----
+
+After executing the `cmk-agent-ctl.exe register` command, the Agent Controller first queries the {CMK} server via the REST API to determine the port used by the Agent Receiver.
+The output shown above indicates that the connection via the REST API failed, both over HTTPS and HTTP.
+Consequently, the registration process cannot proceed at this point.
+
+In such a situation you can modify the routing or firewall settings to allow access from the host to the {CMK} server.
+If the host to be registered uses an HTTP proxy, instruct `cmk-agent-ctl` to use the system-wide configured proxy with the additional option `--detect-proxy`.
+
+If the {CMK} server is reachable and registration still fails, the problem lies elsewhere.
+The REST API may be unreachable or may not be responding on the correct port for the Agent Receiver.
+
+ifdef::onprem[]
+As a site user you can check which port the Agent Receiver is assigned to on the {CMK} server:
+
+[{shell-raw}]
+----
+{c-omd} omd config show | grep AGENT_RECEIVER
+AGENT_RECEIVER: on
+AGENT_RECEIVER_PORT: 8000
+----
+endif::[]
+
+ifdef::saas[]
+In {CE}, port 8000 is normally assigned to the Agent Receiver.
+endif::[]
+You can explicitly specify the correct port during registration, along with the {CMK} server (`--server mycmkserver:8000`) to ensure that the Agent Receiver can be reached.
+This skips the first request via the REST API, and communication takes place directly with the Agent Receiver without any detours.
+
+You may receive the error message `Connection refused` even though the port was specified correctly.
+In this case, you can configure the routing or firewall settings so that the host to be registered can reach the {CMK} server on the required port (here `8000`).
+
+ifdef::onprem[]
+In the case of a registration in push mode the following applies:
+endif::[]
+If the registration has worked, the minute-by-minute transfer of the agent output will also be successful.
+
+ifdef::onprem[]
+If security policies in your environment do not allow access to the Agent Receiver, there is still the possibility to use xref:proxyregister[registration by proxy] on the {CMK} server.
+endif::[]
+ifdef::saas[]
+If security policies in your environment do not allow access to the Agent Receiver, {CE-saas} is not an adequate solution for monitoring this host.
+endif::[]
+
+
+[#agent_ctl_dump]
+=== The Agent Controller in dump mode
+
+As the agent program must be called under the LocalSystem account in order to deliver exactly the data that arrives in the monitoring, you should never start it in a shell.
+If you want to examine the agent output locally, use the Agent Controller in _dump mode_ (subcommand `dump`).
+This starts the agent program with the correct environment and under the correct user ID and then outputs the result.
+
+Since the output can be a bit longer, the `more` pager is very handy here.
+You can exit it with the kbd:[Q] key:
+
+[{powershell},subs="+quotes"]
+----
+PS C:\Windows\System32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" dump | more
+<<<check_mk>>>
+Version: 2.5.0p4
+BuildDate: May 27 2026
+AgentOS: windows
+Hostname: WIN-0HLK813TS1I
+Architecture: 64bit
+OSName: Microsoft Windows Server 2025 Standard
+OSVersion: 10.0.26100
+OSType: windows
+Time: 2026-06-02T05:30:33-0700
+WorkingDirectory: C:\WINDOWS\system32
+ConfigFile: C:\Program Files (x86)\checkmk\service\check_mk.yml
+LocalConfigFile: C:\ProgramData\checkmk\agent\check_mk.user.yml
+AgentDirectory: C:\Program Files (x86)\checkmk\service
+PluginsDirectory: C:\ProgramData\checkmk\agent\plugins
+StateDirectory: C:\ProgramData\checkmk\agent\state
+ConfigDirectory: C:\ProgramData\checkmk\agent\config
+TempDirectory: C:\ProgramData\checkmk\agent\tmp
+LogDirectory: C:\ProgramData\checkmk\agent\log
+SpoolDirectory: C:\ProgramData\checkmk\agent\spool
+LocalDirectory: C:\ProgramData\checkmk\agent\local
+OnlyFrom:
+<<<cmk_agent_ctl_status:sep(0)>>>
+-- More  --
+----
+
+This allows you to verify that the data from the agent program has arrived at the Agent Controller.
+This output does not yet prove that the agent is also accessible over the network.
+
+
+ifdef::onprem[]
+=== Remote connection test
+
+If in pull mode it has been verified that the agent program and its installed plug-ins are executing correctly,
+you can next check via `netcat` (or `nc`) whether port 6556 is reachable via the external IP address of the host:
+
+[{shell}]
+----
+{c-omd} echo | nc 10.76.23.189 6556
+16
+----
+
+The output `16` indicates whether the connection was successfully established and that the TLS handshake can now take place.
+Since everything else here is TLS encrypted, no more detailed check is possible.
+
+If the communication between agent and {CMK} server is _still_ unencrypted (as in legacy pull mode) or is and remains unencrypted (as in legacy agent),
+you will get the complete unencrypted agent output with this command instead of the `16`.
+
+For more diagnostics to run on the {CMK} server, see the general article on the xref:wato_monitoringagents#diagnostics[monitoring agents].
+In particular, you can also perform a xref:wato_monitoringagents#diagnosticpage[connection test] using the {CMK} interface.
+You will get the result in the [.guihint]#Agent:# box.
+
+.Error during a connection test to the agent
+image::agent_windows_communication_failed.png[alt="Error message of an unreachable agent during connection test.",width=64%]
+
+If you get no information or only a timeout error message during the connection test, as in the example above, you should check the [.guihint]#Inbound Rules# of the Windows firewall on the host.
+endif::[]
+
+
+[#windows_firewall]
+=== Windows Firewall
+
+The agent already creates a rule in the Windows Firewall during its installation, so that the Agent Controller can be reached 
+ifdef::saas[]
+in pull mode
+endif::[]
+from the outside via port 6556.
+When using the push mode, it is usually not necessary to change its settings.
+If you use a very strict firewall configuration, the _Outbound Rules_ for connections to the monitoring server must be configured so that at least xref:ports#cmk_incoming_host_outgoing[port 8000] (for easier registration, additionally
+ifdef::onprem[]
+80 or
+endif::[]
+443) is reachable.
+
+In current versions of Windows you can find the [.guihint]#Windows Defender Firewall with Advanced Security# via Windows Settings ([.guihint]#Settings > Windows Security#) or start it by calling `wf.msc` from the command line:
+
+.Windows Firewall with the incoming rule for the {CMK} agent
+image::agent_windows_windows_firewall.png[alt="Entry of the {CMK} agent for Windows Firewall."]
+
+If you do not find such an entry in the Windows Firewall settings, you can add it at this exact location.
+To do this, click on [.guihint]#New Rule# in the [.guihint]#Action# menu.
+
+This opens a wizard for creating a new firewall rule.
+Set the five choices as follows:
+
+[cols="15,~"]
+|====
+|[.guihint]#Rule Type# |Leave the selection here at [.guihint]#Program#.
+|[.guihint]#Program# |Enter [.guihint]#This program path# `%ALLUSERSPROFILE%\checkmk\agent\bin\cmk-agent-ctl.exe` or use the [.guihint]#Browse# button to select `cmk-agent-ctl.exe`.
+|[.guihint]#Action# |[.guihint]#Allow the connection#.
+|[.guihint]#Profile# |This point strongly depends on the configuration of your network. However, in most cases it is recommended to enable only [.guihint]#Domain# and [.guihint]#Private# here.
+|[.guihint]#Name# |Give the rule a concise and short name.
+|====
+
+ifdef::onprem[]
+Alternatively, you can automate this step and set the rule directly on the command line.
+Modify the following command to your customized installation path if necessary:
+
+[{powershell}]
+----
+PS C:\Windows\System32> netsh advfirewall firewall add rule `
+    name="Checkmk Agent" `
+    description="Allow inbound network traffic to the Checkmk Agent" `
+    dir=in `
+    localport=6556 `
+    protocol=tcp `
+    action=allow `
+    program="%ALLUSERSPROFILE%\checkmk\agent\bin\cmk-agent-ctl.exe" `
+    profile=private,domain `
+    enable=yes
+Ok.
+
+----
+
+*Note:* The command has been split into multiple lines for readability.
+endif::[]
+
+
+[#debugpush]
+=== Troubleshooting the agent in push mode
+
+ifdef::onprem[]
+In your {CMK} site's `~/var/agent-receiver/received-outputs/` folder, for each registered host you will find a soft link that uses the host's UUID as its name.
+For hosts in push mode this soft link points to the folder with the agent output, for pull hosts it points to a non-existent file with the name of the host as used in the monitoring.
+
+Based on the age of the cached agent output, you can determine whether the regular transmission was successful or is being interrupted by sporadic network problems, for example.
+
+Furthermore, you can take a look at the log file `C:\ProgramData\checkmk\agent\log\check_mk` on the host (paths may be configured differently). 
+Lines such as the following indicate connection problems:
+endif::[]
+
+ifdef::saas[]
+On the host, you can take a look at the log file `C:\ProgramData\checkmk\agent\log\check_mk.log` (file paths may be configured differently). 
+Lines such as the following indicate connection problems:
+endif::[]
+
+[{file}]
+----
+Dez 15 17:59:49 myhost23 cmk-agent-ctl[652648]: WARN [cmk_agent_ctl::modes::push] https://mycmkserver:8000/mysite: Error pushing agent output.
+----
+
+
+[#lostconnections]
+=== Connections are being lost
+
+ifdef::saas[]
+[TIP]
+====
+The behavior described here mainly affects users who add hosts into a {CE-saas} monitoring (for example for evaluation purposes) that are already in a monitoring by on-premises editions of {CMK}.
+====
+endif::[]
+
+If a host has been configured for xref:hosts_autoregister#rule_autoregister_bakery[auto-registration] with the [.guihint]#Agent controller auto-registration# rule set and the [.guihint]#Keep existing connections# option is set to [. guihint]#no#, whenever the `cmk-agent-ctl-daemon` service is restarted (for example, when a host is restarted), all other connections will be removed--except the connection configured for auto-registration.
+This affects, for example, hosts where connections to multiple sites were set up before the baked agent package was installed, or connections were manually added after the agent package was installed.
+
+You can temporarily override this behavior by setting the `keep_existing_connections` variable to `true` in the `C:\ProgramData\checkmk\agent\pre_configured_connections.json` file on the host.
+You can achieve a permanent change across an agent package update by setting [.guihint]#Keep existing connections# to [.guihint]#yes# in the above rule set.
+
+
+[#howlong]
+=== Waiting time until changes become visible
+
+When auto-registering a host, typically about two minutes pass before the host appears in the monitoring.
+
+
+[#security]
+== Security
+
+=== Preliminary considerations
+
+Security is an important criterion for any software, and monitoring is no exception.
+Since the monitoring agent is installed on every monitored server, a security problem here would have particularly serious consequences.
+
+This is why security was emphasized in the design of {CMK} and has been an absolute principle since the earliest days of {CMK}:
+_The agent does not read data from the network. Period._ 
+This means that it is impossible for an attacker to inject any commands or script components via the monitoring port 6556.
+
+
+=== Transport Layer Security (TLS)
+
+ifdef::onprem[]
+For an attacker, however, even a process list can be a first approach for drawing conclusions about worthwhile targets.
+Therefore, transport encryption between agent and {CMK} server with Transport Layer Security (TLS) is mandatory.
+Here, the {CMK} server 'pings' the monitored host, which then establishes the TLS connection to the {CMK} server and transmits the agent output over it. 
+Since only {CMK} servers with which a trust relationship exists can initiate this data transfer, there is no risk of data falling into the wrong hands.
+endif::[]
+
+To secure the TLS connection, {CMK} uses a self-signed certificate that is automatically replaced shortly before its validity expires.
+The Agent Controller takes care of renewing the certificate in time before it expires.
+Only agents that have been inactive for a longer period of time, i.e., without a running Agent Controller, can lose their registration upon expiration and must then be registered again.
+The lifetime of the certificate can be specified via the [.guihint]#Agent Certificates > Lifetime of certificates# global setting.
+
+ifdef::onprem[]
+*Note:* Since there is no Agent Controller, and thus no registry and TLS encryption,
+on very old xref:legacyagent[Windows systems], you will have to choose other ways of encryption if needed.
+In this case we recommend using the built-in (symmetric) encryption using the [.guihint]#Symmetric encryption (Linux, Windows)# rule.
+endif::[]
+
+
+ifdef::onprem[]
+=== Restricting access via IP addresses
+
+Restricting access to specific IP addresses can also be configured via the xref:windows_firewall[firewall].
+However, the agent itself also offers the possibility to simply ignore requests from foreign IP addresses.
+Just add the following restriction to the configuration file in the global options.
+Note that there may be other parameters set in the configuration file before or after this and this is just a snippet:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+global:
+  only_from: 127.0.0.1/32 192.168.42.0/24
+----
+
+As you can see in the example, you can allow any number of subnets.
+For example, with `/32` you specify a subnet of size 1, so that only this one address is allowed, while with `192.168.42.0/24` you allow all addresses between `192.168.42.0` and `192.168.42.255`.
+
+{cee-only}
+In Agent Bakery, you can configure the allowed IP addresses using the following rule set:
+[.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Allowed agent access via IP address (Linux, Windows)#.
+endif::[]
+
+
+ifdef::onprem[]
+=== Disabling built-in encryption
+
+Especially when updating the agent, it may be that the built-in (symmetric) encryption is active, which is performed by the agent program itself.
+If TLS encryption and built-in encryption are active at the same time, then the entropy of the transmitted data is so high that compression, which is active from version {v21} onwards, will not save any transmitted data--and will burden the CPUs of both the host and the {CMK} server with additional encryption and decryption processes.
+
+For this reason, you should deactivate the built-in encryption promptly after switching to TLS.
+
+In the first step, deactivate the encryption in the existing rule under [.guihint]#Setup > Agents > Access to agents > {CMK} agent > Symmetric encryption (Linux, Windows)#.
+
+In the second step, on the agent's host, in the `C:\ProgramData\checkmk\agent\check_mk.user.yml` configuration file, change the value of the `encrypted` parameter to `no`:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+global:
+  encrypted: no
+  passphrase: D0e5NotMat7erAnym0r3
+----
+
+In the third and last step, use the [.guihint]#Enforce agent data encryption# rule to specify that the {CMK} server only accepts data encrypted via TLS.
+To do this, select the [.guihint]#Accept TLS encrypted connections only# value in the rule.
+
+{cee-only}
+Turning off encryption with the Agent Bakery proceeds like this:
+With the first step, changing the [.guihint]#Symmetric encryption (Linux, Windows)# rule, you are almost done.
+You only need to bake and distribute new agents.
+The configuration file `C:\ProgramData\checkmk\agent\check_mk.user.yml` will be automatically changed for you and included in the agent packages.
+All that remains is the third step, i.e. modifying the [.guihint]#Enforce agent data encryption# rule.
+
+Following the next automatic agent update, the encryption of the agent program is disabled, but encryption is guaranteed by the Agent Controller.
+Note that after the automatic agent update, only registered hosts will be able to provide monitoring data.
+endif::[]
+
+
+[#disable_sections]
+== Disabling sections
+
+The output from the {CMK} agent is divided into sections.
+Each of these sections contains related information.
+Sections always start with a section header.
+This is a line enclosed in `<<<` and `>>>`.
+
+Except for {CMK}'s own sections, you can individually disable any of the 30+ sections that the agent generates by default.
+Specifically, this means that the corresponding commands will not be executed by the agent at all, possibly saving computation time.
+Other reasons for disabling could be that you are simply not interested in certain information from a certain group of hosts, or that a particular host is providing erroneous values and you want to suspend retrieval of that data for a short time.
+
+ifdef::onprem[]
+As a user of one of the commercial editions, you can simply create a rule via [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Windows agent options > Disabled sections (Windows agent)# which will then be taken into account by the xref:glossar#agent_bakery[Agent Bakery].
+endif::[]
+
+ifdef::saas[]
+You can simply create a rule via [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Windows agent options > Disabled sections (Windows agent)# which will then be taken into account by the xref:glossar#agent_bakery[Agent Bakery].
+endif::[]
+
+.Here you can disable sections by rule
+image::agent_windows_disabled_sections.png[alt="List of agent rules for the windows agent."]
+
+*Note:* The above image shows that there is also an opposite rule [.guihint]#Enabled sections (Windows agent)# to [.guihint]#Disabled sections (Windows agent)#, which means that you can work with the 'positive' list as an alternative to the 'negative' one.
+However, to keep a clear overview, we recommend using only _one_ of the two rules.
+
+In the rule [.guihint]#Disabled sections (Windows agent)# you will find a separate checkbox for each section that can be disabled.
+For the selected checkboxes you will then find--after the newly baked agent has been installed on the selected hosts--in the Agent Bakery configuration file `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` below `global:` a line `disabled_sections:` listing the selected sections.
+
+For example, if you were to select both `System uptime` and `Web Services`, the appropriate configuration file would look like the following:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+global:
+    disabled_sections: [uptime, wmi_webservices]
+----
+
+ifdef::onprem[]
+Users of {CRE} can manually create an entry in the `C:\ProgramData\checkmk\agent\check_mk.user.yml` configuration file and enter there the sections which should be disabled.
+All sections that can be disabled are listed in this file below `global:` in the `_sections:` section.
+endif::[]
+
+
+[#plugins]
+== Extending the agent by plug-ins
+
+=== What are agent plug-ins?
+
+The agent program `check_mk_agent.exe` contains a whole set of sections which provide monitoring data for various check plug-ins which are then automatically found by the service discovery.
+This includes all important monitoring of the operating system.
+
+In addition, there is the possibility to extend the agent with _agent plug-ins_.
+These are small scripts or programs that are called by the agent and extend it with additional sections with additional monitoring data.
+The {CMK} project provides a number of such plug-ins, which--if installed and configured correctly--automatically provide new services in the service discovery.
+
+Why are these plug-ins not simply hard-coded into the agent?
+For each of the plug-ins there is one of the following reasons:
+
+* The plug-in can only fetch its data through internal interfaces that the agent does not provide (example: PowerShell).
+* The plug-in needs a configuration anyway, without which it would not work (example: `mk_oracle.ps1`).
+* The plug-in is so special that it is not needed by most users (example: `citrix_licenses.ps1`).
+
+
+[#manual_installation_of_plugins]
+=== Manual installation
+
+The included plug-ins for Windows can all be found on the monitored host in the agent installation directory under `C:\Program Files (x86)\checkmk\service\plugins`.
+They are stored there so that they are directly available.
+ifdef::onprem[]
+Alternatively, the plug-ins for Windows are also located on the {CMK} server under `~/share/check_mk/agents/windows/plugins`.
+endif::[]
+
+They are also available from the agent download page in the Setup menu (as described in the xref:download_gui[Installation] chapter) in the [.guihint]#Plugins# box:
+
+.The beginning of the long list of available agent plug-ins
+image::agent_windows_files_plugins.png[alt="Download page with agent plug-ins."]
+
+For all agent plug-ins we provide, there are matching check plug-ins that can evaluate their data and generate services.
+These are already installed, so that newly found services are immediately recognized and can be configured.
+
+*Note:* Before you install a plug-in on the host, take a look at the corresponding file.
+Often you will find important information there about the correct use of the plug-in.
+
+The actual installation is then simple:
+Copy the file to `C:\ProgramData\checkmk\agent\plugins`.
+
+Once the plug-in is in the correct directory, it will be called automatically by the agent and a new section will be created in the agent output.
+This usually has the same name as the plug-in.
+Complex plug-ins (e.g. `mk_oracle.ps1`) even create a whole set of new sections.
+
+
+[#pluginconfig]
+=== Configuration
+
+Some plug-ins need a configuration file in `C:\ProgramData\checkmk\agent\config` to work.
+For others, a configuration is optional (e.g. `mssql.vbs`) and allows special features or customizations.
+Still others just work that way.
+You have several sources to get information:
+
+* The documentation of the associated check plug-ins in your {CMK} site, which you can access via [.guihint]#Setup > Services > Catalog of check plugins#.
+* Comments in the plug-in file (often very helpful!)
+* A suitable article in this User Guide (e.g. about monitoring xref:monitoring_oracle#[Oracle])
+
+For special (scripting) languages, it may be necessary to _enable_ them first in the agent configuration.
+For example, Python scripts will not be executed unless they are explicitly enabled.
+You can do this by extending the file extensions in the `check_mk.user.yml` configuration file in the `global` section, as shown in the following excerpt:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+global:
+    execute: [exe, bat, vbs, cmd, ps1, py]
+----
+
+*Important*: The use of such plug-ins requires that the files can also be called in a regular command line without special paths.
+In the case of Python, it must be installed correctly and the path to the interpreter must be present in the environment variables.
+Instructions on how to set up Python correctly can be found directly on the pages of the link:https://www.python.org/doc/[Python Software Foundation^].
+
+
+[#customizeexecution]
+=== Customizing execution of a specific plug-in
+
+Each plug-in can be executed in different modes.
+The following options are available for entry in the configuration file.
+
+[cols="12,15,~",options="header"]
+|===
+|Option |Value |Description 
+|`pattern` |`'@user\*.ps1'` |Sets the range of the following options. Wildcards can also be used here. Then the following options refer to all plug-ins to which the expression applies. Leading determines whether the plug-in should be executed directly from the installation directory under `C:\Program Files (x86)\` or from the data directory under `C:\ProgramData`. 
+|`run` |`*yes*/no` |Determines whether the execution of a plug-in should be suppressed.
+|`async` |`*yes*/no` |Executes a plug-in asynchronously and stores the data in a file. If executed synchronously, the output is passed directly to the agent.
+|`timeout` |`*60*` |Sets the maximum execution time. After that the plug-in will be terminated even if no output has come. The default value is based on the default for the query interval of the agent.
+|`cache_age` |`*60*` |Sets in seconds how long an output is valid. 
+|`retry_count` |`*1*` |The number of times a plug-in may fail before discarding output from the cache.
+|`description` |`'Text'` |Here you can enter a free text to be appended to the logs.
+|===
+
+A configuration for the Veeam plug-in looks then for example like this (the excerpt is shortened and contains only the relevant part for the example):
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+plugins:
+    enabled: yes
+    execution:
+        - pattern: $CUSTOM_PLUGINS_PATH$\veeam_backup_status.ps1
+          async: yes
+          timeout: 120
+          cache_age: 300
+          retry_count: 2
+----
+
+According to the above exemplary configuration the plug-in in the data directory `C:\ProgramData\checkmk\agent\plugins` is executed asynchronously every five minutes (300 seconds) and may run for a maximum of two minutes (120 seconds).
+If the plug-in runs into this timeout, it will try a second time to get a result.
+
+
+=== Installation via the Agent Bakery
+
+ifdef::onprem[]
+{cee-only}
+In the commercial editions, the included plug-ins can be configured via the xref:glossar#agent_bakery[Agent Bakery].
+endif::[]
+ifdef::saas[]
+The included plug-ins can be configured via the xref:glossar#agent_bakery[Agent Bakery].
+endif::[]
+This takes care of both the installation of the plug-in itself and the correct creation of the configuration file, should one be needed.
+
+Each plug-in is configured via an agent rule.
+You can find the appropriate rule sets in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent rules > Agent Plugins#:
+
+.List of rules for the agent plug-ins
+image::agent_linux_rules_agent_plugins.png[alt="Page with rules for configuring agent plug-ins."]
+
+
+=== Manual execution
+
+Since agent plug-ins are executable programs, you can run them manually for testing and diagnostic purposes.
+However, there are plug-ins that need certain environment variables set by the agent to find their configuration file, for example.
+If necessary, set them manually if they are needed in the script or program.
+
+
+[#e2e_monitoring]
+== Integrating Legacy Nagios check plug-ins
+
+[#mrpe]
+=== Running plug-ins via MRPE
+
+There are two good reasons to continue using Nagios plug-ins under {CMK}.
+If you have migrated your monitoring from a Nagios based solution to {CMK}, you can continue to use older check plug-ins for which there is no {CMK} equivalent yet.
+In many cases these are self-written plug-ins in Perl or shell. 
+
+The second reason is true end-to-end monitoring.
+Let's assume you have your {CMK} server, a web server and a database server distributed over a large data center.
+In such a case, the database server response times measured from the {CMK} server are not very meaningful.
+It is far more important to know these values for the connection between the web server and the database server.
+
+The {CMK} agent provides a simple mechanism to meet these two requirements:
+_MK's Remote Plugin Executor_ or _MRPE_ for short.
+The name is deliberately an analogy to the _NRPE_ of Nagios, which performs the same task there.
+
+The MRPE is built into the agent and is controlled by various configuration files.
+
+
+==== Enabling and disabling MRPE
+
+By default the consideration of MRPE plug-ins is enabled.
+If you do not want to use this feature, you can disable it in the configuration file by adding the following definition:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+mrpe:
+  enabled: no
+----
+
+
+==== Limiting the execution time
+
+Sometimes the runtime of a script or Nagios plug-in is unpredictable and in the worst case a plug-in never finishes.
+To keep control here, you can limit the maximum runtime of the MRPE plug-ins.
+The value shown here is also the default value in seconds.
+So adjustments are only necessary if you want to set a shorter or longer interval:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+mrpe:
+  # enabled: yes
+  timeout: 60
+----
+
+
+==== Adding MRPE plug-ins
+
+To tell the agent where the file to run is located and how to call it, add an entry in the MRPE configuration:
+
+.C:\ProgramData\checkmk\agent\check_mk.user.yml
+[{yaml}]
+----
+mrpe:
+  config:
+  - check = MyServiceName 'C:\ProgramData\checkmk\agent\mrpe\my_check_plugin.bat' -w 10 -c 20 MyParameter
+----
+
+It is not necessary to put the file in the agent's directory as well, although it is convenient to collect them all in a common place.
+In this example configuration, you can now see the following elements of the relevant line:
+
+[cols="50,~"]
+|===
+|Element |Description 
+
+|`MyServiceName` |The service name as it should be displayed in {CMK}.
+|`'C:\ProgramData\checkmk\agent\mrpe\my_check_plugin.bat'` |Program to run; quotes for any spaces.
+|`-w 10 -c 20` |Passed options: A threshold of 10 for {WARN} and 20 for {CRIT}.
+|`MyParameter` |Example passing of other parameters.
+|===
+
+After you set up the MRPE plug-in, it will be active directly without restarting the agent and will be added to the output.
+In the service discovery you will now find your new service automatically:
+
+.The service discovery finds the new service
+image::agent_windows_service_discovery.png[alt="Service discovery page showing the new service."]
+
+
+=== MRPE with the Agent Bakery
+
+ifdef::onprem[]
+{cee-only}
+endif::[]
+As an alternative to configuring directly on a host in the user-specific configuration file, you can also define your MRPE plug-ins directly in the [.guihint]#Setup# menu.
+To do this, use the [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agent > Agent rules > Execute MRPE checks# rule set.
+The necessary entry is then automatically created in the xref:config_files[Agent Bakery configuration file].
+
+
+ifdef::onprem[]
+[#hw_monitoring]
+== Monitoring hardware
+
+Hardware monitoring of Windows hosts is well covered by the {CMK} agent, provided plug-ins and extensions available in the link:https://exchange.checkmk.com/[{CMK} Exchange^] well covered.
+However, there are situations where neither ready-made plug-ins nor programming interfaces for creating your own plug-ins are available, but either application software or a hardware monitoring tool from a hardware manufacturer can provide monitoring data via SNMP.
+
+In such a case, set [.guihint]#SNMP# to the appropriate connection type ([.guihint]#SNMPv2 or v3# or [.guihint]#SNMPv1#) in the [.guihint]#Monitoring agents# box in the host's properties in Setup.
+Services that are available via both SNMP and {CMK} agent (e.g. CPU usage, file systems, network cards) are then automatically fetched by the {CMK} agent and not via SNMP.
+This automatically avoids duplicate transmissions.
+
+For more information, see the xref:snmp#snmp_cmk_agent[Monitoring with SNMP] article.
+endif::[]
+
+
+[#uninstall]
+== Uninstallation
+
+You have several options for uninstalling the agent in Windows.
+In all versions of Windows you will find an entry in the Control Panel under [.guihint]#Control Panel > Programs and Features > Uninstall a program#.
+In newer versions you can also find the entry for the {CMK} agent in the settings under [.guihint]#Settings > Apps > Apps & features#.
+
+From the command line for administrators, you have several options to remove the agent.
+If you still have the last installed MSI package, you can use it for uninstallation as follows:
+
+[{powershell}]
+----
+PS C:\Users\hhirsch\Downloads\> msiexec /x check_mk_agent.msi /qn
+----
+
+Alternatively, you can use CIM Cmdlets to uninstall:
+
+[{powershell}]
+----
+PS C:\> Get-CimInstance -ClassName Win32_Product -Filter "Name LIKE '%Checkmk%'" | Invoke-CimMethod -MethodName Uninstall
+----
+
+If the uninstallation was successful, you will receive a `ReturnValue` of `0` as confirmation.
+Otherwise, you will receive an MSI error code that hints at why the uninstallation failed.
+
+Since the various routines of Windows only remove files that also got there through the installation process, it is perfectly normal that files remain in the xref:files[directories of the agent].
+These can be deleted manually.
+
+
+[#files]
+== Files and directories
+
+ifdef::saas[]
+[#config_files]
+=== Agent configuration files
+
+During an installation the MSI package stores the program-specific files in `C:\Program Files (x86)\checkmk\service\` and the host-specific files in `C:\ProgramData\checkmk\agent\`.
+You do not need to customize the program-specific files.
+The host-specific files are used to store plug-ins, log and configuration files and to configure the behavior of the agent.
+
+*Note*: By default, the entire `C:\ProgramData` directory is _hidden_ in Windows.
+
+The agent reads three configuration files in succession:
+
+. `C:\Program Files (x86)\checkmk\service\check_mk.yml` +
+is the default configuration file, which you should not change.
+. `C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` +
+is created by the Agent Bakery and should not be changed manually.
+. `C:\ProgramData\checkmk\agent\check_mk.user.yml` +
+is your configuration file where you can manually make custom adjustments to test a setting or extension on a host.
+
+If an option has been set in multiple files, then the last file read in determines the content of this option.
+For manual work with the agent, therefore, only the last configuration file `check_mk.user.yaml` is relevant, because it is read in last and thus _has the last word_.
+If the Agent Bakery is not used, this is in fact the only file in which customizations to the agent's configuration may be made.
+
+As you may have already recognized from the file extension of the configuration files, link:https://en.wikipedia.org/wiki/YAML[YAML^] is used as the file format.
+endif::[]
+
+
+=== Paths on the monitored host
+
+[cols="45,~",options="header"]
+|===
+|Path |Meaning
+|`C:\Program Files (x86)\checkmk\service` |Installation directory for the program specific files including the agent program `check_mk_agent.exe` and the Agent Controller `cmk-agent-ctl.exe`. Adjustments are not necessary here. +
+The agent is shipped as a 32-bit and 64-bit program. The installation routine automatically selects the correct program for a 32-bit or 64-bit operating system. In the directory `Program Files (x86)` the agent is installed for compatibility reasons.
+|`C:\Program Files (x86)\checkmk\service\check_mk.yml` |The default configuration file of the agent. Do not modify this file.
+|`C:\ProgramData\checkmk\agent\` |Installation directory for the host-specific files. This is where extensions, log, and configuration files specific to this host are located.
+|`C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` |This configuration file is created by the Agent Bakery and overwrites values from the default configuration file if necessary.
+|`C:\ProgramData\checkmk\agent\check_mk.user.yml` |Configuration file for your individual customizations. This file is read in last and overwrites values from the other configuration files if necessary.
+|`C:\ProgramData\checkmk\agent\plugins` |Directory for plug-ins which should be executed automatically by the agent and extend its output with additional monitoring data.
+|`C:\ProgramData\checkmk\agent\spool` |Contains data created e.g. by log files which have their own section. These are also appended to the agent output. You can read more about this in the article xref:spool_directory#[The spool directory].
+|`C:\ProgramData\checkmk\agent\registered_connections.json` |Contains a list of connections registered with the Agent Controller.
+|`C:\ProgramData\checkmk\agent\pre_configured_connections.json` |Contains a preconfigured connection to a site for the xref:hosts_autoregister#[auto-registration], integrated into the agent package via Agent Bakery.
+|`C:\ProgramData\checkmk\agent\config` |Storage of configuration files for the agent.
+|`C:\ProgramData\checkmk\agent\local` |Directory for custom xref:localchecks#[local checks].
+|`C:\ProgramData\checkmk\agent\mrpe` |MRPE extensions can be stored here.
+|`C:\ProgramData\checkmk\agent\backup` |After each change of the {CMK} agent service a backup is created from the user configuration here.
+|`C:\ProgramData\checkmk\agent\log` |Here you can find log files. Besides the `check_mk.log` (in all editions), which is constantly updated during operation, further logs from automatic installation or updates may be present here.
+|===
+
+
+ifdef::onprem[]
+=== Paths on the {CMK} server
+
+[cols="45,~",options="header"]
+|===
+|Path |Meaning
+|`~/local/share/check_mk/agents/custom` |Base directory for custom files to be delivered with a baked agent.
+|`~/share/check_mk/agents/windows/` |Directory containing the agent's MSI package. This directory also contains configuration examples and all agent plug-ins.
+|`~/var/agent-receiver/received-outputs` |Contains for each connection its UUID as a soft link pointing to the folder with the name of the host. In push mode, this folder contains the agent output.
+|===
+endif::[]

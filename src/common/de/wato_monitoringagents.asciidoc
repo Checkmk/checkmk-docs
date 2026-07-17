@@ -1,0 +1,699 @@
+// -*- coding: utf-8 -*-
+// IGNORE Programmier
+// NONASCII 
+include::global_attr.adoc[]
+= Monitoring-Agenten
+:title: Monitoring-Agenten - Mit {CMK} Geräte im Netzwerk überwachen
+:description: {CMK} nutzt Agenten für die aktive Überwachung von Hosts. Lesen Sie hier, wie Sie den {CMK}-Agenten konfigurieren, an die Hosts verteilen und nutzen.
+
+{related-start}
+xref:agent_linux#[Linux überwachen]
+xref:agent_windows#[Windows überwachen]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Damit ein Monitoring-System von einem überwachten Zielsystem mehr Informationen bekommt als nur, ob dieses erreichbar ist, benötigt es dessen Mithilfe. 
+Denn wie soll {CMK} z.B. wissen, wie voll ein Dateisystem auf einem Server ist, ohne dass dieser das irgendwie mitteilt? 
+Die Komponente, die diese Auskunft gibt, ist immer ein aktives Stück Software -- also ein _Monitoring-Agent_ oder auch kürzer ein _Agent._
+Ein Agent sammelt die für das Monitoring relevanten Daten in festgelegten Zeitabständen von einem Host ein und übermittelt die Daten an den Monitoring-Server.
+
+Für Server und Workstations bietet {CMK} eigene, die sogenannten _{CMK}-Agenten_ an.
+ifdef::onprem[]
+{CMK}-Agenten gibt es für verschiedenste Betriebssysteme -- von gängigen wie Windows und Linux, bis zu Exoten wie OpenVMS.
+Die Agenten verhalten sich im xref:glossar#pull_mode[Pull-Modus] passiv und horchen auf TCP-Port 6556.
+Erst bei einer Abfrage durch den {CMK}-Server werden sie aktiv und antworten mit den benötigten Daten. 
+Im xref:glossar#push_mode[Push-Modus] dagegen sendet der {CMK}-Agent von sich aus regelmäßig die Monitoring-Daten an den {CMK}-Server.
+endif::[]
+ifdef::saas[]
+Agenten, die Daten zu {CE-saas} senden können, gibt es für Windows und Linux.
+Im xref:glossar#push_mode[Push-Modus] senden diese {CMK}-Agenten von sich aus regelmäßig die Monitoring-Daten an den {CMK}-Server.
+endif::[]
+
+Alle {CMK}-Agenten finden Sie über die Weboberfläche im [.guihint]#Setup#-Menü.
+Von dort können Sie die Agenten herunterladen und auf dem Zielsystem installieren.
+Wie Sie {CMK}-Agenten installieren, konfigurieren und erweitern können, erfahren Sie in diesem Artikel.
+
+Allerdings gibt es Situationen, in denen man für das Monitoring nicht extra einen Agenten _installieren_ muss -- weil nämlich schon einer vorhanden ist, der genutzt werden kann. 
+Bestes Beispiel ist hier SNMP:
+Alle verwaltbaren Netzwerkgeräte und Appliances haben einen xref:snmp#[SNMP-Agenten] eingebaut.
+{CMK} greift auf diesen SNMP-Agenten zu und holt sich mit aktiven Anfragen (GET) Details über den Systemzustand ab.
+
+Einige Systeme erlauben aber weder die Installation eines Agenten noch unterstützen sie SNMP auf brauchbare Weise.
+Stattdessen bieten sie Anwendungsprogrammierschnittstellen für das Management, sogenannte _APIs_, die auf Telnet, SSH oder HTTP/XML basieren.
+Über die sogenannten xref:glossar#special_agent[Spezialagenten], die auf dem {CMK}-Server laufen, fragt {CMK} diese Schnittstellen ab.
+
+Ein Fall für sich ist schließlich die Überwachung von Netzwerkdiensten wie HTTP, SMTP oder IMAP.
+Bei einem Netzwerkdienst liegt es nahe, den Dienst über das link:https://checkmk.com/de/guides/network-monitoring-protocol[Netzwerk^] abzufragen und über diesen Weg auch zu überwachen.
+Dazu verwendet {CMK} teils eigene, teils bereits existierende Plugins.
+Diese werden auch als xref:active_checks#[aktive Checks] bezeichnet.
+Sehr beliebt ist z.B. `check_http` für das Abfragen von Webseiten.
+Aber selbst in diesem Fall kommt meist zusätzlich ein Agent zum Einsatz, mit dem man auch die übrigen Daten des Servers in das Monitoring bekommt.
+
+ifdef::onprem[]
+Folgende Grafik zeigt Ihnen die verschiedenen Wege, wie {CMK} auf zu überwachende Systeme zugreift:
+
+[{image-border}]
+image::monitoringagents_agent_access.png[alt="Illustration der Wege, auf denen {CMK} auf die überwachten Systeme zugreift."]
+endif::[]
+
+ifdef::onprem[]
+Bisher haben wir nur von _aktiver_ Überwachung gesprochen -- der Paradedisziplin von {CMK}. 
+Es gibt auch den umkehrten Weg, nämlich dass die Zielsysteme von sich aus Nachrichten an das Monitoring senden, z.B. per Syslog oder SNMP-Traps. 
+Für dieses ganze Thema bietet {CMK} die _Event Console_, die in einem xref:ec#[eigenen Artikel] beschrieben ist.
+endif::[]
+
+ifdef::saas[]
+// ES: This admonition needs attention for KNW-2113
+[TIP]
+====
+Wenn Sie mit den On-Premises-Editionen von {CMK} bereits Erfahrung gesammelt haben, vermissen Sie in dieser Einleitung möglicherweise die Erwähnung von Legacy-Agenten im Pull-Modus und SNMP-Traps in der Event Console.
+Diese Features sind im Bereich des Cloud-Monitoring wenig relevant und daher nicht Teil von {CE-saas}.
+====
+endif::[]
+
+
+[#agents]
+== Der {CMK}-Agent
+
+Sie benötigen für die Überwachung eines Servers oder einer Workstation ein kleines Programm, das auf dem Host installiert werden muss: den {CMK}-Agenten.
+
+Der Agent ist ein simples Shellskript, das minimalistisch, sicher und leicht erweiterbar ist.
+Dem *Agentenskript* vorgeschaltet ist der *Agent Controller*, welcher Transportverschlüsselung, Authentifizierung und Komprimierung handhabt.
+Um ein gegenseitiges Vertrauensverhältnis zu etablieren, registriert er sich am *Agent Receiver*, der auf dem {CMK}-Server läuft.
+Der Agent Receiver ist – wie der Name schon nahelegt – auch die Komponente auf dem {CMK}-Server, welche die Agentenausgabe entgegen nimmt.
+
+.Zusammenspiel der Software-Komponenten
+[{image-border}]
+image::monitoringagents_communication_flow.png[alt="Illustration der Kommunikation zwischen Agent und Instanz."]
+
+Diese Architektur ist beim xref:agent_linux#agent_architecture[Linux-Agenten] und beim xref:agent_windows#agent_architecture[Windows-Agenten] identisch.
+Nur die technische Realisierung ist spezifisch für die Betriebssysteme.
+
+Das *Agentenskript* ist zuständig für die Sammlung der Monitoring-Daten und stellt diese dem Agent Controller zur Verfügung.
+Es ist:
+
+* minimalistisch, denn es begnügt sich mit minimalen Ressourcen an RAM, CPU, Plattenplatz und Netzwerk.
+* sicher, denn es erlaubt keinerlei Zugriffe aus dem Netzwerk.
+* leicht erweiterbar, denn Sie können Plugins in einer beliebigen Programmier- oder Skriptsprache schreiben und vom Agentenskript ausführen lassen.
+
+Der *Agent Controller* ist die Komponente des Agenten, die für den Transport der vom Agentenskript gesammelten Daten zuständig ist.
+Im Pull-Modus lauscht er am TCP-Port 6556 auf eingehende Verbindungen der {CMK}-Instanz und fragt das Agentenskript ab.
+
+ifdef::saas[]
+// ES: This admonition may need attention for KNW-2113
+[TIP]
+====
+In diesem Kapitel haben wir Informationen zum Pull-Modus belassen, auch wenn in {CE-saas} nur der Push-Modus verfügbar ist.
+Sowohl bei Fehlkonfigurationen als auch beim Wechsel zwischen On-Premises-Editionen von {CMK} und {CE-saas} hilft die Kenntnis beider Kommunikationswege bei der Fehlersuche.
+====
+endif::[]
+
+Die Software-Architektur des Agenten mit dem Agent Controller ist die Voraussetzung dafür, neue Funktionen anzubieten, 
+die mit dem minimalistischen Design des Agentenskripts nicht umsetzbar waren, 
+wie beispielsweise die Verschlüsselung der Kommunikation per Transport Layer Security (TLS), Datenkomprimierung 
+und die Umkehrung der Kommunikationsrichtung vom xref:glossar#pull_mode[Pull-Modus] zum xref:glossar#push_mode[Push-Modus.]
+
+Im Pull-Modus initiiert der {CMK}-Server die Kommunikation und fragt die Daten vom Agenten ab.
+Im Push-Modus geht die Initiative vom Agenten aus.
+Der Push-Modus ist für eine Cloud-basierte Konfiguration und in einigen abgeschotteten Netzwerken erforderlich.
+In beiden Fällen kann der {CMK}-Server nicht auf das Netzwerk zugreifen, in dem sich die zu überwachenden Hosts befinden.
+Daher sendet der Agent von sich aus regelmäßig die Daten an den {CMK}-Server.
+
+Der *Agent Receiver* ist die Komponente des {CMK}-Servers, die als genereller Endpunkt für die Kommunikation des Agent Controllers dient,
+z.B. für die Registrierung der Verbindung und für den Empfang der im Push-Modus vom Agent Controller gesendeten Daten.
+Im Push-Modus werden die empfangenen Daten vom Agent Receiver im Dateisystem abgelegt und so den Fetchern der Instanz zur Verfügung gestellt.
+ifdef::onprem[]
+In den kommerziellen Editionen sind das die xref:cmc_differences.html#fetcher_checker[{CMK}-Fetcher.]
+endif::[]
+Dagegen erfolgt im Pull-Modus der Datenaustausch ohne Agent Receiver direkt zwischen den Fetchern der Instanz und dem Agent Controller.
+
+TLS-Verschlüsselung und Datenkomprimierung werden über den Agent Controller und den Agent Receiver realisiert.
+Dabei ist nach der Installation der erste Schritt die Registrierung des Agent Controller beim Agent Receiver der {CMK}-Instanz, mit der ein Vertrauensverhältnis hergestellt wird.
+Bei der Registrierung wird bereits die TLS-Verschlüsselung der Kommunikation eingerichtet.
+
+ifdef::onprem[]
+Die folgende Tabelle stellt die verschiedenen Funktionen des {CMK}-Agenten zusammen und zeigt, in welchen {CMK}-Editionen diese Funktionen verfügbar sind:
+
+[cols="25,50,25",options="header"]
+|===
+|Funktion |Beschreibung |Verfügbarkeit
+|Registrierung |Das Vertrauensverhältnis zwischen dem Agent Controller des Hosts und dem Agent Receiver der {CMK}-Instanz wird hergestellt. |Alle Editionen 
+|TLS-Verschlüsselung |Nach erfolgreicher Registrierung werden die Daten mit TLS verschlüsselt ausgetauscht. .3+|Alle Editionen 
+|Komprimierung |Die Daten werden komprimiert ausgetauscht.
+|Pull-Modus |Der Agent versendet die Daten auf Anforderung der {CMK}-Instanz.
+|Push-Modus |Der Agent versendet die Daten von sich aus an die {CMK}-Instanz. |{CE}
+|Individuelle Agentenkonfiguration |Per xref:glossar#agent_bakery[Agentenbäckerei] können Agenten für einzelne oder Gruppen von Hosts individuell konfiguriert und die Agentenpakete für die Installation erstellt werden. .2+|Kommerzielle Editionen
+|xref:agent_deployment#[Automatische Agenten-Updates] |Das Paket aus der Agentenbäckerei wird zuerst manuell oder per Skript installiert und wird von da an automatisch aktualisiert.
+|xref:hosts_autoregister#[Automatische Erstellung von Hosts] |Die Registrierung des Agenten bei der {CMK}-Instanz und die Erstellung des Hosts erfolgt automatisch. |{CE}
+|===
+endif::[]
+
+
+ifdef::onprem[]
+[#download_page]
+== Agent von der Download-Seite herunterladen
+
+Im {CMK}-Projekt werden aktuell Agenten für elf verschiedene Betriebssystemfamilien gepflegt.  
+Alle diese Agenten sind Bestandteil von {CMK} und stehen über die Weboberfläche des {CMK}-Servers zum Download bereit. 
+Die Agenten erreichen Sie über [.guihint]#Setup > Agents#.
+
+In {CRE} führen Sie die Menüeinträge [.guihint]#Linux#, [.guihint]#Windows# und [.guihint]#Other operating systems# direkt zu den Download-Seiten, auf denen Sie die vorkonfigurierten Agenten und Agentenplugins finden, im folgenden Beispiel zur Download-Seite für [.guihint]#Linux, Solaris, AIX#:
+
+image::monitoringagents_download_linux_cre.png[alt="Liste der Linux-Agenten zum Download in {RE}."]
+
+In den kommerziellen Editionen gelangen Sie mit dem Menüeintrag [.guihint]#Windows, Linux, Solaris, AIX# zu einer Seite, die Ihnen Zugang zur xref:bakery[Agentenbäckerei] bietet.
+Von dieser Seite aus kommen Sie mit dem Menüeintrag [.guihint]#Related# zu den Seiten mit den Agentendateien wie in {RE}.
+
+Die paketierten Agenten für Linux (im RPM- und DEB-Dateiformat) und für Windows (im MSI-Dateiformat) finden Sie gleich im ersten Kasten der entsprechenden Download-Seite.
+In diesen Softwarepaketen finden Sie den Agenten mit Agent Controller.
+Die Installation und Konfiguration ist ausführlich in den Artikeln zum xref:agent_linux#install[Linux-Agenten] und xref:agent_windows#install[Windows-Agenten] beschrieben.
+
+Im Kasten [.guihint]#Agents# finden Sie die Agentenskripte für die verschiedenen Betriebssysteme.
+Für Betriebssysteme, auf denen der Agent im Legacy-Modus (d.h. ohne Agent Controller) eingerichtet werden muss, gibt es die Artikel xref:agent_linux_legacy#[Linux überwachen im Legacy-Modus] und xref:agent_freebsd#[FreeBSD überwachen].
+endif::[]
+
+
+[#bakery]
+== Die Agentenbäckerei
+
+=== Einleitung
+
+ifdef::onprem[]
+{cee-only}
+Wenn Sie eine der kommerziellen Editionen verwenden, dann können Sie mit der Agentenbäckerei (_Agent Bakery_) Agenten individuell paketieren.
+endif::[]
+ifdef::saas[]
+In {CE} können Sie mit der Agentenbäckerei (_Agent Bakery_) Agenten individuell paketieren.
+endif::[]
+So können Sie Agentenpakete erzeugen (oder eben „backen“), die neben dem eigentlichen Agenten auch eine individuelle Konfiguration und zusätzliche Plugins enthalten. 
+Diese Pakete können Sie mit einem einzigen Befehl installieren. 
+Sie eignen sich daher ideal für eine automatische Verteilung und Installation. 
+Und Sie können sogar für Ordner oder bestimmte Gruppen von Hosts individuelle Agenten erzeugen. 
+Das schafft vor allem in Verbindung mit dem xref:agent_deployment#[automatischen Agenten-Update] große Flexibilität.
+
+Zwar funktioniert der {CMK}-Agent auch erst mal „nackt“, also ohne Konfiguration und Plugins, aber in einigen Fällen muss der Agent eben doch angepasst werden.
+Beispiele:
+
+ifdef::onprem[]
+* Beschränkung des Zugriffs auf bestimmte IP-Adressen
+endif::[]
+* Überwachung von Oracle-Datenbanken (Plugin und Konfiguration nötig)
+* Überwachung von Text-Logdateien (Plugin, Dateinamen und Textmuster nötig)
+* Verwendung der xref:inventory#[HW-/SW-Inventur] (Plugin nötig)
+ifdef::saas[]
+* Autoregistrierung in einem bestimmten Ordner (Konfiguration nötig)
+endif::[]
+
+ifdef::onprem[]
+[TIP]
+====
+Bei jedem Backvorgang kann eine fortlaufende Bake Revision -- für die Unterscheidbarkeit verschiedener Backvorgänge -- erzeugt werden.
+Diese ist nur in den Metadaten des gebackenen Pakets sichtbar.
+Die Funktion ist ab {CMK} {v23} standardmäßig deaktiviert, um zu verhindern, dass gebackene Agenten möglicherweise ihre gültige Signatur verlieren.
+Wenn Sie die Bake Revision dennoch aktivieren möchten, zum Beispiel für die eindeutige Verarbeitung in einem Paketmanager, schalten Sie die Option [.guihint]#Setup > Global settings > Setup > Apply bake revision# ein.
+Und sofern eingeschaltet: Bei später über die Regel [.guihint]#Automatically create monitoring agents# automatisch gebackenen Agenten bleibt die vorige Revision in jedem Fall bestehen und wird nicht weiter erhöht -- abermals, um die Signatur nicht zu verlieren.
+Wenn Sie automatisch gebackene Agenten _mit_ fortlaufenden Revisionen benötigen, sollten Sie zum Beispiel die xref:rest_api_bakery[REST-API] statt der Regel einsetzen.
+====
+endif::[]
+
+
+[#bakery_download]
+=== Agent herunterladen
+
+Sie erreichen die Agentenbäckerei über [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX#:
+
+ifdef::onprem[]
+.In der Agentenbäckerei können Sie die Agentenpakete herunterladen
+image::monitoringagents_agent_bakery_main.png[alt="Einstiegsseite zur Agentenbäckerei."]
+endif::[]
+ifdef::saas[]
+.In der Agentenbäckerei können Sie vorkonfigurierte und Vanilla-Agentenpakete herunterladen
+image::agent_linux_bakery_saas.png[alt="Agentenpakete in der Agentenbäckerei.",fullscreen=1]
+endif::[]
+
+{CMK} unterstützt mit der Agentenbäckerei die Betriebssysteme Windows, Linux, Solaris und AIX. 
+Bei Linux haben Sie dabei die Wahl zwischen den Paketformaten RPM (für Red Hat Enterprise Linux (RHEL) basierte Systeme, SLES) und DEB (für Debian, Ubuntu)
+sowie einem sogenannten „Tarball“ im TGZ-Dateiformat, der einfach als `root` unter `/` ausgepackt wird.
+ifdef::onprem[]
+Für AIX steht ebenfalls ein Tarball bereit.
+Dieser enthält allerdings keine automatische Integration in den `inetd`. 
+Dies muss einmalig von Hand gemacht werden. 
+Für Solaris gibt es wiederum den Tarball sowie ein PKG-Paket.
+endif::[]
+
+ifdef::saas[]
+// ES: This admonition may need attention for KNW-2113
+[TIP]
+====
+Auch wenn die Agentenbäckerei von {CE-saas} bereits scheinbar funktionsfähige Pakete für AIX und Solaris erzeugt:
+Diesen fehlt noch der Agent Controller, damit sind sie nur mit den On-Premises-Editionen von {CMK} nutzbar.
+Selbstverständlich können Sie den Agent Controller selbst kompilieren und damit auch seltener in Cloud-Umgebungen genutzte Betriebssysteme ins Monitoring aufnehmen.
+Beachten Sie aber, dass wir für selbst kompilierte Komponenten keinen Support bieten können.
+====
+endif::[]
+
+ifdef::onprem[]
+Wenn Sie noch keine Einstellungen für bestimmte Hosts vorgenommen haben, gibt es nur eine einzige Standardagentenkonfiguration.
+Was es mit den unterschiedlichen Agentenkonfigurationen auf sich hat, erfahren Sie in den nächsten beiden Abschnitten.
+endif::[]
+ifdef::saas[]
+Bei einer frischen Instanz finden Sie in der Agentenbäckerei Agentenpakete in zwei Konfigurationen:
+Den Vanilla-Agenten und einen für die Autoregistrierung vorkonfigurierten.
+endif::[]
+
+Jede Agentenkonfiguration hat eine eindeutige ID: den [.guihint]#Hash#.
+Die ersten 8 Zeichen des Hashs werden in der GUI angezeigt. 
+Dieser Hash wird Teil der Paketversion und auch in den Namen der Paketdatei eingebaut. 
+Wann immer Sie etwas an der Konfiguration eines Paketes ändern oder {CMK} aktualisieren, ändert sich auch der Hash des Pakets. 
+Dadurch erkennt der Paketmanager des Betriebssystems, dass es sich um ein anderes Paket handelt und führt ein Update durch. 
+Die Versionsnummer von {CMK} wäre hier zur Unterscheidung nicht ausreichend.
+
+ifdef::onprem[]
+Gebackene Pakete für Linux und Windows werden auf die gleiche Art installiert wie die Pakete, die Sie von der xref:download_page[Download-Seite herunterladen] können.
+endif::[]
+
+
+=== Konfiguration über Regeln
+
+Die Konfiguration des Agenten ändern Sie, wie so oft in {CMK}, über xref:glossar#rule[Regeln.] 
+Diese bieten Ihnen die Möglichkeit, verschiedene Hosts mit unterschiedlichen Einstellungen oder Plugins auszustatten.
+Über den Knopf [.guihint]#Agent rules# gelangen Sie zu einer Seite, die Ihnen alle Regelsätze zeigt, die die Agenten beeinflussen:
+
+image::monitoringagents_agent_rules.png[alt="Liste der Regeln für die Agenten."]
+
+Nehmen wir folgendes Beispiel:
+Sie möchten die Liste der IP-Adressen beschränken, welche auf den Agenten zugreifen dürfen. 
+Dazu wählen Sie den Regelsatz [.guihint]#Generic agent options > Allowed agent access via IP address (Linux, Windows)#.
+Tragen Sie als Wert der Regel eine oder mehrere IP-Adressen ein:
+
+image::monitoringagents_agent_rule_ipaccess.png[alt="Regel zur Einschränkung der IP-Adressen zum Zugriff auf den Agenten."]
+
+Lassen Sie die Standardwerte im Kasten [.guihint]#Conditions# unverändert, damit diese Regel für alle Hosts gilt.
+Speichern Sie die neue Regel.
+
+
+[#agent_configurations]
+=== Die Agentenkonfigurationen 
+
+Gehen Sie nach dem Speichern zurück zur Seite [.guihint]#Windows, Linux, Solaris, AIX#.
+Der Knopf icon:button_bake_agents[alt="Symbol zum Backen der Agenten."] sorgt für ein neues Backen der Agenten.
+Das Ergebnis: Sie haben nun zwei Konfigurationen:
+
+image::monitoringagents_agent_bakery_agentlist.png[alt="Liste mit zwei Konfigurationen der Agenten zum Download."]
+
+In der Spalte [.guihint]#Agent type# können Sie ablesen, welchen Hosts die jeweilige Konfiguration zugeordnet ist.
+
+[cols="20,~"]
+|===
+|[.guihint]#Vanilla (factory settings)# |Die Agentenpakete enthalten nur die Standardkonfiguration und damit *keine* einzige Agentenregel.
+|[.guihint]#Folders# |Die Agentenpakete enthalten *alle* Agentenregeln, in denen keine Bedingungen für Hosts definiert sind, und die für die genannten Ordner greifen. +
+Agentenpakete werden spezifisch für einen Ordner erstellt, wenn in den Eigenschaften dieses Ordners ([.guihint]#Folder properties#) das Attribut [.guihint]#Bake agent packages# auf [.guihint]#Bake a generic agent package for this folder# gesetzt ist.
+// Attribut ist per Default gesetzt für den Ordner root. Es ändert sich aber auch nix am Verhalten, wenn das Attribut auf "Do not bake a generic agent package for this folder" gesetzt wird.
+Dieses Attribut gilt nur für den Ordner und wird nicht vererbt. +
+Dieser Eintrag ist nützlich, um Agenten für Hosts zu erstellen, die noch nicht in {CMK} existieren.
+Der Ordner kann sogar leer sein, um dort später xref:hosts_autoregister#[Hosts automatisch erstellen zu lassen.]
+Standardmäßig werden Agentenpakete nur für den Ordner [.guihint]#Main# (oder [.guihint]#root folder#) erstellt.
+|[.guihint]#Hosts# |Die Agentenpakete enthalten *alle* Agentenregeln, die für die genannten Hosts greifen.
+|===
+
+Für das oben gezeigte Beispiel wurde die Regel [.guihint]#Allowed agent access via IP address (Linux, Windows)# ohne Bedingungen für Hosts erstellt.
+Die neue Agentenkonfiguration gilt daher für den Ordner [.guihint]#Main# und für den einzigen in der Instanz existierenden Host `localhost`.
+
+Je mehr Host-spezifische Regeln Sie aufstellen, desto mehr unterschiedliche Varianten von Agenten werden gebaut. 
+Die Agentenbäckerei achtet dabei darauf, dass nur solche Konfigurationen gebaut werden, die auch von mindestens einem der vorhandenen Ordner oder Hosts verwendet werden.
+
+Sie erreichen die Agentenpakete für einen Host übrigens auch bequem über die Eigenschaften des Hosts,
+indem Sie in [.guihint]#Setup > Hosts > Hosts# den Host anklicken und im Menü [.guihint]#Hosts# den Eintrag [.guihint]#Monitoring agent# auswählen:
+
+image::monitoringagents_download_host_agent.png[alt="Liste der Agenten für einen Host zum Download."]
+
+Warum werden für jeden Host die Pakete für alle Betriebssysteme angeboten? 
+Die Antwort ist sehr einfach: 
+Solange kein Agent auf einem System installiert ist, kann {CMK} das Betriebssystem natürlich nicht erkennen.
+Sobald die xref:agent_deployment#[automatischen Agenten-Updates] aktiviert sind, brauchen Sie sich darum ohnehin nicht mehr zu kümmern.
+
+
+=== Erweiterung über Plugins
+
+Sehr viele Agentenregeln befassen sich mit der Installation verschiedener _Plugins._ 
+Diese erweitern den Agenten um die Überwachung von ganz bestimmten Komponenten. 
+Meist sind dies spezielle Anwendungen wie z.B. Datenbanken. 
+Bei der Regel, die das Plugin aktiviert, finden Sie auch gleich die Einstellungen für die Konfiguration des Plugins.
+Hier als Beispiel die Regel [.guihint]#MySQL databases# für die Überwachung von MySQL:
+
+image::monitoringagents_agent_rule_mysql.png[alt="Regel für das MySQL Plugin des Agenten."]
+ 
+
+=== Konfigurationsdateien
+
+Achten Sie darauf, dass Sie Konfigurationsdateien, die die Agentenbäckerei erzeugt, auf dem Zielsystem *nicht von Hand anpassen.* 
+Zwar wird die manuelle Änderung erst mal funktionieren, aber beim nächsten Update des Agenten sind die Änderungen wieder verloren.
+Das Installieren von zusätzlichen Plugins und Konfigurationsdateien ist dagegen problemlos möglich.
+
+
+ifdef::onprem[]
+=== Logging aktivieren
+
+In den globalen Einstellungen können Sie unter [.guihint]#Agent Bakery logging# das Logging für die Bakery-Prozesse aktivieren.
+Die Resultate finden Sie in der Datei `~/var/log/agent_bakery.log`.
+
+image::wato_monitoringagents_bakery_logging.png[alt="Option zum Aktivieren des Bakery-Loggings."]
+
+Ohne aktiviertes Logging sehen Sie diese Informationen nur, wenn Sie Agenten mit `cmk --bake-agents -v` xref:cmk_commandline#bake_agents[auf der Befehlszeile backen].
+endif::[]
+
+
+[#rest_api_bakery]
+=== Agenten über die REST-API verwalten
+
+Alle Funktionen der Agentenbäckerei stehen auch über die xref:rest_api#[REST-API] zur Verfügung.
+Das ermöglicht die Einbindung in automatisierte Deployment-Pipelines und CI/CD-Systeme sowie den skriptgesteuerten Download von Agentenpaketen.
+Dieser Abschnitt zeigt einige Beispiel-Anfragen mit Bash und Curl.
+
+Bei allen API-Anfragen müssen Sie Informationen zu Ihrer {CMK}-Instanz und geeignete xref:rest_api#auth[Zugangsdaten] angeben.
+Legen Sie daher zunächst die folgenden Variablen fest:
+
+[{bash}]
+----
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+----
+
+Diesen Block mit den von Ihnen gesetzten Werten können Sie in allen Beispielen in den folgenden Abschnitten einfügen, um die vorgegebenen Werte aus dem Beispiel-Code zu ersetzen.
+
+==== Agentenpakete auflisten
+
+Der REST-API-Endpunkt [.guihint]#Show all agents# gibt eine Liste aller vorhandenen Agentenpaketen mit ihren Hashes zurück.
+// ES-blocked by KNW-1719: Direkten Link an diesen Abschnitt der API-Doku einfügen
+Kopieren Sie den Beispiel-Code aus der Dokumentation der REST-API und ersetzen Sie den Block mit den Variablen durch den oben vorbereiteten Block:
+
+.show_all_agents.sh
+[{bash},highlight=7-14]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/json" \
+  "$API_URL/domain-types/agent/collections/all"
+----
+
+Als Rückgabe erhalten Sie ein JSON-Objekt mit allen verfügbaren Agentenpaketen.
+Jeder Agent ist an mehreren Stellen mit seinem Hash gekennzeichnet, den Sie auch in der xref:bakery_download[Weboberfläche der Agentenbäckerei] finden.
+Anhand der Hash-Werte können Sie zuordnen, welche Konfiguration jedem Agentenpaket zugrunde liegt.
+
+
+==== Agentenpakete herunterladen
+
+Sie können ein Agentenpaket entweder direkt über seinen Hash oder über einen Hostnamen herunterladen.
+
+Für den Download anhand des Hash-Wertes verwenden Sie den REST-API-Endpunkt [.guihint]#Download an agent by agent hash and operating system#.
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der API-Doku einfügen
+Kopieren Sie den Beispiel-Code aus der REST-API-Dokumentation und ersetzen Sie sowohl den Block mit den Variablen als auch den Hash durch Ihre Werte:
+
+.download_agent_by_hash.sh
+[{bash},highlight=7-14;22]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --get \
+  -JO \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/octet-stream" \
+  --data-urlencode 'agent_hash=40dbb28a816134d4' \
+  --data-urlencode 'os_type=linux_tgz' \
+  "$API_URL/domain-types/agent/actions/download_by_hash/invoke"
+----
+
+Alternativ können Sie mit dem REST-API-Endpunkt [.guihint]#Download an agent by host or folder name and operating system# ein Agentenpaket über den Hostnamen herunterladen, ohne den Hash zu kennen.
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der API-Doku einfügen
+Passen Sie den kopierten Code aus der REST-API-Dokumentation so an, dass genau die benötigten Felder für den gewünschten Agenten angegeben werden.
+
+Im Beispiel wird der Agent für den Linux-Host `myhost` heruntergeladen:
+
+.download_agent_by_host.sh
+[{bash},highlight=7-14;22-24]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --get \
+  -JO \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/octet-stream" \
+  --data-urlencode 'agent_type=host_name' \
+  --data-urlencode 'host_name=myhost' \
+  --data-urlencode 'os_type=linux_tgz' \
+  "$API_URL/domain-types/agent/actions/download_by_host/invoke"
+----
+
+
+==== Agenten backen
+
+Um einen Backvorgang auszulösen, nutzen Sie den Endpunkt [.guihint]#Bake all agents#:
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der REST-API-Doku einfügen
+
+.bake_all_agents.sh
+[{bash},highlight=7-14]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --request POST \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/json" \
+  "$API_URL/domain-types/agent/actions/bake/invoke"
+----
+
+Da der Backvorgang asynchron abläuft, können Sie über den Endpunkt [.guihint]#Show the baking status# den aktuellen Status abrufen.
+Gehen Sie vor wie bei den zuvor kopierten Code-Beispielen.
+Die Ausgabe sieht etwa so aus:
+
+[{json}]
+----
+{
+  "links": [
+    {
+      "domainType": "link",
+      "rel": "self",
+      "href": "http://myserver/mysite/check_mk/api/1.0/domain-types/agent/actions/baking_status/invoke",
+      "method": "GET",
+      "type": "application/json"
+    }
+  ],
+  "resultType": "object",
+  "result": {
+    "links": [],
+    "value": {
+      "state": "finished",
+      "started": 1777361208.7000515,
+      "pid": 483352,
+      "loginfo": {
+        "JobProgressUpdate": [],
+        "JobResult": [
+          "Baking successful"
+        ],
+        "JobException": []
+      },
+      "is_active": false,
+      "duration": 0.12719297409057617,
+      "title": "Baking agents...",
+      "stoppable": false,
+      "deletable": true,
+      "user": "automation",
+      "estimated_duration": 0.3183622360229492,
+      "ppid": 269419,
+      "logfile_path": "~/var/log/web.log",
+      "acknowledged_by": null,
+      "lock_wato": false,
+      "host_name": ""
+    }
+  }
+}
+----
+
+Sobald Sie in diesem Ergebnis den Status `finished` entdecken, können Sie die fertig gebackenen Agentenpakete herunterladen.
+
+
+[#agent_update]
+== Wann soll man den Agenten updaten?
+
+Egal, ob Sie nur eine Handvoll oder gleich tausende Hosts überwachen: 
+Eine Aktualisierung des {CMK}-Agenten auf allen Hosts ist immer ein größerer Eingriff. 
+Das xref:agent_deployment#[automatische Agenten-Update]
+ifdef::onprem[]
+der kommerziellen Editionen
+endif::[]
+ist zwar eine Erleichterung, doch trotzdem sollten Sie den Agenten immer nur dann aktualisieren, wenn das Update:
+
+* einen Fehler behebt, von dem Sie betroffen sind, oder
+* neue, benötigte Funktionen enthält.
+
+Damit dies auch so möglich ist, gilt in {CMK} die generelle Regel:
+Neuere {CMK}-Versionen können mit der Ausgabe von älteren Agenten grundsätzlich umgehen.
+
+*Wichtig:* Umgekehrt gilt das nicht unbedingt. 
+Wenn die {CMK}-Version eines Agenten neuer ist, als die des Monitoring-Servers, kann es sein, dass die dort vorhandenen Check-Plugins Ausgaben des Agenten nicht korrekt interpretieren können. 
+In so einem Fall gehen die betroffenen Services auf {UNKNOWN}:
+
+image::monitoringagents_crashed_check.png[alt="Liste von Services im Status UNKNOWN wegen eines fehlgeschlagenen Checks."]
+
+Auch wenn die Ausgabe im obigen Bild etwas anderes nahelegt, senden Sie bitte in so einem Fall _keinen_ Crash-Report.
+
+
+[#diagnostics]
+== Fehlerdiagnose
+
+ifdef::saas[]
+Hinweise zur Fehlerdiagnose und Analyse von Verbindungsproblemen finden Sie in den Artikeln zum xref:agent_linux#test[Linux-Agenten] und xref:agent_windows#test[Windows-Agenten.]
+endif::[]
+
+
+ifdef::onprem[]
+=== Agent über die Befehlszeile testen
+
+Sie können einen korrekt installierten Agenten sehr einfach von der Befehlszeile aus abfragen. 
+Am besten machen Sie das direkt von der {CMK}-Instanz aus, welche den Agenten auch produktiv überwachen soll. 
+So können Sie sicherstellen, dass die IP-Adresse des Servers vom Agenten akzeptiert wird.
+Als Befehle eignen sich z.B. `telnet` und `netcat` (oder `nc`).
+
+[{shell}]
+----
+{c-omd} echo | nc 10.1.1.2 6556
+16
+----
+
+Die Ausgabe `16` zeigt an, dass die Verbindungsaufnahme über den TCP-Port 6556 erfolgreich war und nun der TLS-Handshake stattfinden kann.
+Der Agent wurde per Agent Controller bei der {CMK}-Instanz registriert, so dass die Kommunikation TLS verschlüsselt stattfindet und keine Agentenausgabe angezeigt wird.
+Einzelheiten zur Registrierung finden Sie im Artikel zum xref:agent_linux#registration[Linux-Agenten] und xref:agent_windows#registration[Windows-Agenten].
+
+Falls die Kommunikation zwischen Agent und {CMK}-Server _noch_ unverschlüsselt ist (wie im Legacy-Pull-Modus) oder unverschlüsselt ist und auch bleibt (wie im Legacy-Modus), erhalten Sie mit diesem Befehl statt der `16` die komplette unverschlüsselte Agentenausgabe (von der im Folgenden nur die ersten Zeilen gezeigt werden):
+
+[{shell-raw}]
+----
+{c-omd} echo | nc 10.1.1.2 6556
+<<<check_mk>>>
+Version: {current}
+AgentOS: linux
+Hostname: mycmkserver
+AgentDirectory: /etc/check_mk
+DataDirectory: /var/lib/check_mk_agent
+SpoolDirectory: /var/lib/check_mk_agent/spool
+PluginsDirectory: /usr/lib/check_mk_agent/plugins
+----
+
+Die Ausgabe beginnt immer mit der Zeile `+<<<check_mk>>>+`.
+Zeilen, die in `+<<<+` und `+>>>+` eingeschlossen sind, werden als _Sektions-Header_ bezeichnet. 
+Sie teilen die Agentenausgaben in Sektionen.
+Jede Sektion enthält zusammengehörige Informationen und ist meist einfach die Ausgabe eines Diagnosebefehls. 
+Die Sektion `check_mk` spielt eine Sonderrolle. 
+Sie enthält allgemeine Informationen über den Agenten selbst, wie z.B. dessen Versionsnummer.
+
+Wenn der Host bereits in das Monitoring aufgenommen ist, können Sie die Daten auch mit dem xref:cmk_commandline#dump_agent[Befehl] `cmk -d` abrufen. 
+Dieser verwendet dann die im [.guihint]#Setup# konfigurierte IP-Adresse, berücksichtigt eine eventuell umkonfigurierte Port-Nummer und auch den Fall eines Spezialagenten.
+Mit den Optionen `--debug -v` können Sie sich zusätzlich noch einige Debugging-Informationen ausgeben lassen.
+
+[{shell-raw}]
+----
+{c-omd} cmk -d mycmkserver
+<<<check_mk>>>
+Version: {current}
+----
+
+Wenn das Monitoring für den besagten Host bereits regelmäßig läuft, finden Sie immer eine aktuelle Kopie der Ausgabe im Instanzverzeichnis `~/tmp/check_mk/cache`:
+
+[{shell-raw}]
+----
+{c-omd} cat tmp/check_mk/cache/mycmkserver
+<<<check_mk>>>
+Version: {current}
+----
+
+[TIP]
+====
+Weitere Diagnosebefehle zur Ausführung auf dem Host des Agenten finden Sie im Artikel zum xref:agent_linux#test[Linux-Agenten] und xref:agent_windows#test[Windows-Agenten.]
+====
+endif::[]
+
+
+ifdef::onprem[]
+[#diagnosticpage]
+=== Agent über die Weboberfläche testen
+
+Auch über die Weboberfläche können Sie eine Diagnose des Agenten durchführen. 
+Diese berücksichtigt sämtliche Einstellungen, unterstützt auch SNMP-basierte Geräte und solche, die über einen Spezialagenten abgefragt werden. 
+Das Praktische: {CMK} probiert hier einfach immer gleichzeitig die Abfrage über TCP-Port 6556 *und* SNMP.
+
+Sie erreichen den Verbindungstest über die Eigenschaften des Hosts:
+Wählen Sie auf der Seite [.guihint]#Properties of host# im Menü [.guihint]#Host > Test connection# und starten Sie den Test durch Klick auf [.guihint]#Run tests#:
+
+image::monitoringagents_host_diag.png[alt="Ergebnis des Verbindungstests zu einem Host.",fullscreen=1]
+
+Etliche der Einstellungen (z.B. die SNMP-Community) können Sie hier sofort ausprobieren und bei Erfolg speichern.
+endif::[]

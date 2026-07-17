@@ -1,0 +1,702 @@
+﻿// -*- coding: utf-8 -*-
+// IGNORE 2c muc preconfigured_agent
+// NONASCII
+include::global_attr.adoc[]
+= Setting up monitoring
+:title: Setting up monitoring
+:description: After setting up {CMK}, you will add hosts to be monitored. Read here how to configure services of hosts and how to activate changes.
+
+{related-start}
+xref:hosts_setup#[Host administration]
+xref:agent_linux#[Monitoring Linux]
+xref:intro_gui#[The {CMK} user interface]
+{related-end}
+
+
+[#hosts_services_agents]
+== Hosts, services and agents 
+
+Before you begin with the actual monitoring, we will briefly explain some important terms.
+First of all, there is the *host*.
+A host in {CMK} is any stand alone, physical or virtual system monitored by {CMK}.
+Usually these are things with their own IP address (servers, switches, SNMP devices, virtual machines), but also, for example, Docker containers or other logical objects which do not have such an IP address.
+Each host always has one of the states {UP}, {DOWN}, {UNREACH} or {PEND}.
+
+On each host a number of *services* are monitored.
+A service can be anything -- for example, a file system, a process, a hardware sensor -- but it can also simply be a certain metric such as CPU utilization or RAM usage.
+Each service can have one of the states {OK}, {WARN}, {CRIT}, {UNKNOWN} or {PEND}.
+
+In order for {CMK} to be able to request data from a host, an *agent* is necessary.
+This is a small program that is installed on the host and which provides data on the state (or 'health') of the host.
+Servers running Windows, Linux, or Unix can only be effectively monitored by {CMK} if you install a {CMK} agent there -- an agent provided by us.
+In the case of network devices and many appliances, the manufacturer will usually have built-in an agent that {CMK} can easily query using the standardized SNMP protocol.
+Cloud services such as Amazon Web Services (AWS) or Azure alternatively provide an interface ('API') that can be queried by {CMK} via HTTP.
+
+
+ifdef::onprem[]
+[#dns]
+== Preliminary considerations for DNS
+
+Even though {CMK} does not require name resolution of hosts, a well-maintained Domain Name System (DNS) makes configuration much easier and avoids errors, since {CMK} will then be able to resolve the host names on its own without you needing to enter IP addresses in {CMK}.
+
+So setting up a monitoring system is a good opportunity to check whether your DNS is up to date and, if necessary, to add any missing entries.
+endif::[]
+
+
+[#folders]
+== Folder structure for hosts
+
+{CMK} manages your hosts in a hierarchical tree of folders -- quite analogous to what you know from files in your operating system.
+If you only monitor a handful of hosts, this may seem not so important to you.
+But remember -- {CMK} is designed to monitor thousands and tens of thousands of hosts -- so good order can be half the battle won.
+
+Before you include the first hosts into {CMK}, it is therefore advantageous to think about the structure of these folders.
+On the one hand, the folder structure is useful for your own overview.
+More importantly, however, it can be used for the configuration of {CMK}.
+All configuration attributes of hosts can be defined in a folder, which are then automatically *inherited* by its subfolders and hosts contained there.
+Therefore, it is elementary, not only but especially for the configuration of large environments, to set up a well-considered folder structure from the beginning.
+
+Once you have created a folder structure, you can change it -- but you must do so very carefully.
+Moving a host to another folder can have the effect of changing its attributes without you being aware of it.
+
+The real consideration when building a folder structure that will be most useful to you is the criteria by which you want to organize the folders.
+The criteria can be different at each level of the tree.
+For example, you can distinguish by location in the first level and by technology in the second level.
+
+The following classification criteria have proven themselves in practice:
+
+ifdef::onprem[]
+* Location/Geography
+endif::[]
+* Organization
+* Technology
+
+ifdef::onprem[]
+Sorting by location is particularly obvious in larger companies, especially if you distribute the monitoring over several {CMK} servers.
+Each server then monitors a region or a state/country, for example.
+If your folders map this distribution, then you can define, for example, in the folder 'Munich' that all hosts in this folder are to be monitored from the {CMK} site 'muc'.
+
+Alternatively, 'organization' (i.e. the answer to the question 'Who is responsible for a host?') may be a more meaningful criterion, since location and responsibility may not always be the same.
+For example, it may be that one group of your colleagues is responsible for the administration of Oracle, regardless of the actual physical location of the corresponding hosts.
+If, for example, the folder 'Oracle' is intended for the hosts of the Oracle colleagues, it is easy to configure in {CMK} that all hosts below this folder are only visible to these colleagues and that they can even maintain their hosts there themselves.
+endif::[]
+
+ifdef::saas[]
+Sorting by organization  (i.e. the answer to the question 'Who is responsible for a host?') can be a meaningful criterion.
+For example, it may be that one group of your colleagues is responsible for the administration of Oracle.
+If, for example, the folder 'Oracle' is intended for the hosts of the Oracle colleagues, it is easy to configure in {CMK} that all hosts below this folder are only visible to these colleagues and that they can even maintain their hosts there themselves.
+endif::[]
+
+Structuring by technology could, for example, provide a folder for Windows servers and one for Linux servers.
+This would simplify the implementation of the scheme 'The `sshd` process must run on all Linux servers'.
+Another example is the monitoring of devices such as switches or routers via SNMP.
+Here, no {CMK} agent is used, but the devices are queried via the SNMP protocol.
+If these hosts are grouped in separate folders, you can make the settings necessary for SNMP, such as the 'Community', directly at the folder.
+
+Since a folder structure can only rarely reflect the complexity of reality, {CMK} provides another supplementary possibility for structuring using the host tags
+-- but more on this in a separate chapter on xref:intro_finetune#host_tags[fine-tuning the monitoring].
+For more information on the folder structure, see the articles about xref:hosts_setup#folder[administration] and xref:hosts_structure#folder[structuring] of hosts.
+
+
+[#create_folders]
+== Creating folders
+
+You can access the administration of folders and hosts via the navigation bar, the [.guihint]#Setup# menu, the [.guihint]#Hosts# topic and the [.guihint]#Hosts# entry -- or more briefly via [.guihint]#Setup > Hosts > Hosts#.
+The [.guihint]#Main# page is then displayed:
+
+ifdef::onprem[]
+.The [.guihint]#Main# folder is still empty, but offers various actions for creation
+image::intro_default_main.png[alt="View of 'Main' without folders and hosts."]
+endif::[]
+
+ifdef::saas[]
+.The [.guihint]#Main# folder offers various actions for creation
+image::intro_default_main_saas.png[alt="View of 'Main' with one folder and without hosts."]
+endif::[]
+
+ifdef::onprem[]
+Before you create your first folder, we will briefly discuss the structure of this page, as you will find the various elements on most {CMK} pages in one form or another.
+endif::[]
+ifdef::saas[]
+Before we look at the contents of the folder shown, we will briefly discuss the structure of this page, as you will find the various elements on most {CMK} pages in one form or another.
+endif::[]
+
+Above the page title [.guihint]#Main# you will find the breadcrumb path, which shows you where you are currently located within the {CMK} interface.
+Below this, the menu bar is displayed, which summarizes the possible actions on this page in menus and menu items.
+The menus in {CMK} are always context-specific, i.e. you will only find menu entries for actions that make sense on the current page.
+
+Below the menu bar you will find the action bar, in which the most important actions in the menus are offered as buttons for direct clicking.
+You can hide the action bar with the icon:button_hide_toolbar[alt="Icon for hiding the action bar."] button to the right of the [.guihint]#Help# menu and show it again with icon:button_show_toolbar[alt="Icon for showing the action bar."].
+When the action bar is hidden, the icons for the actions are displayed in the menu bar to the right of icon:button_show_toolbar[alt="Icon for showing the action bar."].
+
+ifdef::onprem[]
+Since you are currently on an empty page (without folders and without hosts), the important actions for creating the first object are additionally offered via even larger buttons -- so that the options offered by the page cannot be overlooked.
+These buttons will disappear after the first object has been created.
+endif::[]
+
+Now let's get back to the topic that brought you to this page: the folders and how to create and edit them.
+_One_ folder -- the main folder -- exists in every freshly set up {CMK} system.
+It is called the [.guihint]#Main#, as you can see in the title of the page.
+
+ifdef::onprem[]
+Below the main folder, you will now create the three folders `Windows`, `Linux`, and `Network` as a simple exercise.
+Create the first of the three folders by selecting one of the actions offered to create a folder, e.g. the icon:icon_newfolder[alt="Icon for creating a folder."] [.guihint]#Add folder# button.
+On the new page [.guihint]#Add folder# enter the folder name in the first box [.guihint]#Basic settings#:
+
+.The first folder should be named `Windows`
+image::intro_folder_basic_settings.png[alt="Dialog with properties when creating a folder: 'Basic settings' with title."]
+
+In the above image, the xref:intro_gui#show_less_more[Show-less mode] is active and only the entry that is absolutely necessary for creating a folder is displayed.
+Confirm the entry with [.guihint]#Save#.
+
+Analogous to the `Windows` folder, create the other two folders `Linux` and `Network`.
+After that, the situation will look like this:
+
+.One of the three new folders is open and displays the icons for folder actions
+image::intro_empty_folders.png[alt="View of 'Main' with three folders, one of them expanded with icons for folder actions."]
+endif::[]
+
+ifdef::saas[]
+In {CE} there is a further folder, the `preconfigured_agent` folder within the [.guihint]#Main# folder.
+This subfolder is used to store the hosts that are automatically created with the preconfigured agent packages.
+More on this in the following xref:first[section].
+
+To create an additional folder in [.guihint]#Main#, select one of the functions provided for creating a folder, e.g. the icon:icon_newfolder[alt="Icon for creating a folder."] [.guihint]#Add folder# button.
+On the next [.guihint]#Add folder# page, enter the folder name in the first box [.guihint]#Basic settings#, and then confirm the entry with [.guihint]#Save#.
+The result will then look something like this:
+
+.The new folder, opened with icons for folder actions
+image::intro_empty_folders_saas.png[alt="View 'Main' with two folders, one of them expanded with icons for folder actions."]
+endif::[]
+
+[TIP]
+====
+When you point the mouse at the tab or the top of a folder icon, the folder unfolds to reveal the icons you need to perform important actions with the folder (change the properties, move the folder or delete it).
+====
+
+
+ifdef::onprem[]
+[#linux]
+== Adding the first host
+
+Now everything is ready to add the first host to monitoring
+— and what could be more obvious than monitoring the {CMK} server itself?
+Of course, it will not be able to report its own total failure, but it is still useful because you not only get an overview of CPU and RAM usage, but also a number of
+metrics and checks that relate to the {CMK} system itself.
+
+The procedure for adding a Linux host (as well as a Windows host, for that matter) is basically as follows:.
+
+. Creating a host
+. Downloading and installing the agent
+. Registering the host
+
+Once the host has been created in the xref:glossar#configuration_environment[configuration environment], the services are configured and the changes for the xref:glossar#monitoring_environment[monitoring environment] are activated.
+
+
+[#create_host]
+=== Creating a host
+
+In the {CMK} interface, open the same [.guihint]#Main# page where you already created the three folders: [.guihint]#Setup > Hosts > Hosts#.
+Switch to the [.guihint]#Linux# folder by clicking on it.
+
+Click [.guihint]#Add host# and the [.guihint]#Add host# page will open:
+
+.The most important properties of a host
+image::intro_host_allsettings_less.png[alt="Dialog with properties when creating a host."]
+
+As with the creation of the three folders above, the xref:intro_gui#show_less_more[Show less mode] is still active.
+For this reason, {CMK} only displays in the form the most important host attributes required for creating a host.
+If you are interested, you can view the rest by clicking on the three ellipsis points icon:button_showmore[alt="Icon for switching to Show more mode."] in each of the open boxes and opening the two closed boxes at the bottom of the page.
+{CMK} is a complex system that has an answer to every question.
+That's why you can configure a lot of things for a host (but not only there).
+
+In this form, you only need to fill in one field, namely [.guihint]#Host name# under [.guihint]#Basic settings#.
+
+You can assign this host name quite freely and it can be up to 240 characters long.
+It can consist of letters, numbers, dots, hyphens, and underscores.
+However, you should be aware that the host name is of central importance, as it serves as an internal ID (or key) for the unique identification of the host in the monitoring.
+Since it is so important in {CMK} and is used frequently, you should carefully consider the naming of your hosts.
+A host name can be changed later, but since this is a complex process, you should avoid doing so.
+
+It is best if the host can be found under its name in the DNS.
+The good news:
+{CMK} checks for you whether this is the case.
+As soon as you type the host name into the input field, {CMK} checks the resolvability of the name in the background and then tests whether the host can be reached:
+
+.The host name `localhost` does not cause any problems
+image::intro_hostname_dns_resolvable.png[alt="Result of the check when entering the host name."]
+
+If the host name cannot be resolved, the success message shown above will be replaced by a corresponding error message.
+
+If you use host names that cannot be resolved via DNS, you can also enter the IP address manually in the [.guihint]#IPv4 address# field.
+However, if you enter an IP address, {CMK} skips the host name resolution check and tests the reachability of this IP address directly.
+You will then receive feedback on the result next to the field with the IP address.
+The details on host names, IP addresses, and DNS can be found in the article on xref:hosts_setup#dns[host administration].
+
+*Tip:* On many pages -- including this one -- you can display additional help texts for the attributes.
+To do this, select [.guihint]#Show inline help# from the [.guihint]#Help# menu.
+The selected setting remains active on other pages until you turn off the help again.
+The following image shows the inline help for the [.guihint]#IPv4 address# parameter:
+
+.Helpful information about IP addresses
+image::intro_ipv4_inlinehelp.png[alt="The properties of a host with inline help for the IPv4 address."]
+
+Incidentally, {CMK} stops checking the host name or IP address in the background if you select the [.guihint]#No IP# value in the [.guihint]#IP address family# field.
+'No IP' is relevant for hosts that are queried via a xref:glossar#special_agent[special agent].
+Special agents are however not relevant in this example, in which the host is to be monitored with a {CMK} agent.
+
+
+[#download_agent]
+=== Downloading and installing the agent
+
+On the [.guihint]#Add host# page — which you hopefully still have open from the previous section — you will find the [.guihint]#Monitoring agents# section, which includes the [.guihint]#{CMK} agent / API integrations# option.
+Here you specify which data is used for the host and which is discarded.
+For each value with {CMK} agents, the page offers the [.guihint]#Test agent connection# button, including for the default value [.guihint]#API integrations if configured, else {CMK} agent#:
+
+.The previously-disabled button becomes active after entering the host name
+image::intro_host_test_agent_connection.png[alt="Button to test the agent connection."]
+
+The default setting is appropriate, since although there is no API integration, a {CMK} agent is supposed to provide the data.
+Testing the agent connection will likely fail, since there is currently no agent on the {CMK} server — that is, the host to be monitored — at least none that we are aware of.
+Click [.guihint]#Test agent connection# anyway, because after the test fails, you will then have the option to obtain the agent:
+
+.The unsurprising message that communication with the {CMK} agent is not possible 
+image::intro_host_test_agent_connection_failed.png[alt="Error message for a host without a {CMK} agent installed."]
+
+Communication with the {CMK} agent may not be possible for a number of reasons.
+One of these is that the communication partner is not present, meaning the {CMK} agent has not yet been installed.
+You will now fix this.
+After clicking [.guihint]#Download {CMK} agent#, the [.guihint]#Install Checkmk agent# slideout opens, which will guide you through the three steps to get the {CMK} agent up and running:
+
+.The first step in the slideout for creating an on-premises host
+image::intro_host_install_agent_slideout_1.png[alt="The slideout for installing the {CMK} agent."]
+
+First, select the appropriate operating system on which the agent is to be installed.
+Since the {CMK} server is a Linux machine, you need the {CMK} agent for Linux.
+For Linux, you must also select the appropriate package file: [.guihint]#RPM# for Red Hat Enterprise Linux (RHEL), its binary-compatible distributions, and SUSE Linux Enterprise Server (SLES), or [.guihint]#DEB# for Debian and Ubuntu.
+
+The first step is simple — and just the right thing to warm up with.
+Save the host with [.guihint]#Save host & next step#.
+This is necessary because the final registration requires an existing host in {CMK}, as stated in the text of the slideout.
+
+Next, select the second step, which begins with a prompt to generate a _token_.
+You must authenticate yourself for both the download and the registration described in the xref:register[next section], typically using your username and password.
+The slideout offers a shortcut and increased security here, performing authentication for these actions using a _one-time token (OTT)_, which is valid for a successful execution within a limited period of time.
+
+Before the token can be used, it must be generated.
+So first click on [.guihint]#Generate one-time token#.
+The slideout will then look something like this:
+
+.In the second step, the command for downloading and installing the {CMK} agent is displayed
+image::intro_host_install_agent_slideout_2.png[alt="The second step in the slideout for installing the {CMK} agent."]
+
+The command shown combines two separate commands and links them with `&&`.
+This first downloads the {CMK} agent to the host and the second installs it.
+To the right of the command, you will find the icon:icon_copy_string[alt="Icon for copying to the clipboard."] icon to copy the command to the clipboard.
+
+Open a terminal on the target host, paste the copied command, and execute it.
+You only need to make a single entry.
+After downloading and before executing the `dpkg` installation command, `sudo` will prompt you to enter your password.
+
+[TIP]
+====
+In our example, the agent is installed on the {CMK} server, which means you do not need to run the command on another computer.
+However, in the slideout, you can also select a different operating system, such as Windows, and use the corresponding command to download and install the {CMK} agent on a Windows host.
+====
+
+The Agent Controller is installed along with the agent; among other things, the controller establishes a TLS-encrypted connection to the {CMK} server during registration.
+This is described in the xref:register[next section].
+For the Agent Controller to install successfully, a Linux distribution with the `systemd` init system is required; this has been the standard in most Linux distributions since 2015.
+For the rare cases in which the Agent Controller cannot be used, you can find information in the article xref:agent_linux_legacy#[Monitoring Linux in legacy mode].
+
+This completes the installation of the agent.
+You can leave the slideout and the command line open.
+Both will be needed again when registering the host.
+
+
+[#register]
+=== Registering the host
+
+After successfully installing the {CMK} agent, you can check off the second step in the slideout with [.guihint]#Next step: Register agent#.
+Now only the third and final step remains.
+Registering the host with the {CMK} server establishes the trust relationship between the two.
+More precisely, the trust relationship is established between the host's _Agent Controller_ and the Checkmk site's _Agent Receiver_.
+Following registration, communication between the host and the server will then be encrypted using Transport Layer Security (TLS).
+
+Registration is performed by calling the Agent Controller `cmk-agent-ctl` on the command line.
+By default, the command requires the name and password of a {CMK} user with registration permissions.
+Instead, as was the case earlier when downloading the agent package, authentication via one-time token is used for this action as well.
+After you click [.guihint]#Generate one-time token#, the slideout looks something like this:
+
+.In the third and final step, the command for registration is displayed
+image::intro_host_install_agent_slideout_3.png[alt="The third step in the slideout for installing the {CMK} agent."]
+
+In the command shown, the one-time token is used with the `-ott` option.
+The registration process now proceeds in the same way as the download and installation described in the previous section.
+Copy the command and run it in a terminal.
+
+As with the installation command, `sudo` requires you to enter your password.
+You will then be prompted to confirm the identity of the {CMK} site you wish to connect to.
+To do this, the server certificate to be confirmed is displayed.
+Confirm with `Y` to complete the process.
+If no error message appears, the encrypted connection has been established.
+All data is transmitted in compressed form over this connection.
+
+After this (for now, final) trip to the command line, we return to the {CMK} interface.
+Complete the last step with [.guihint]#Close & test connection#.
+The slideout closes and takes you back to the page with the host properties.
+The agent connection test is restarted, and the result should now look something like this:
+
+.The success message indicates that communication with the {CMK} agent is now possible 
+image::intro_host_test_agent_connection_success.png[alt="Success message for a host with an installed and registered {CMK} agent."]
+
+
+[#diagnosis]
+=== Diagnostics
+
+Murphy's law ("Anything that can go wrong, will go wrong.") unfortunately cannot be overridden by {CMK}.
+Things can go wrong, especially when you are trying them for the first time.
+This is why it is important to have good troubleshooting options.
+
+In the previous section, you learned how to test communication between the {CMK} server and the {CMK} agent on the host.
+For more troubleshooting options, see the article on xref:wato_monitoringagents#diagnosticpage[monitoring agents].
+That article also describes testing via the web interface, which you can start on the [.guihint]#Properties of host# page using the [.guihint]#Save & run connection tests# button.
+You can find additional testing and diagnostic options in the article on the xref:agent_linux#test[Linux agent].
+
+
+[#services]
+=== Configuring services
+
+Once the host itself has been included, the really interesting part begins -- the configuration of its services.
+On the [.guihint]#Properties of host# page, click [.guihint]#Save & run service discovery# and the [.guihint]#Services of host# page will appear.
+
+.The shortened list of services found
+image::intro_services_of_host.png[alt="List of services found on the host for adding to monitoring.",fullscreen=1]
+
+On this page, you specify which services on the host you want to monitor.
+In addition, the top box shows you whether problems have been detected with the host's data sources.
+If the agent on the host is accessible and running correctly, {CMK} will automatically find a number of services and suggest these for monitoring.
+
+[TIP]
+====
+It may take up to one minute for a newly configured agent to provide information about the services it has detected.
+If there are problems with the service discovery, and when even a repeated [.guihint]#Rescan# fails, {CMK} will check whether the agent is installed and registered at all.
+If this is not the case, {CMK} will display a message on this page offering to complete the installation and/or registration.
+This performs the same agent connection test described in the section xref:download_agent[Downloading and installing the agent].
+====
+
+For each of these services, there are the following options:
+
+* [.guihint]#Undecided# : You have not yet decided whether to monitor this service.
+* [.guihint]#Monitored# : The service is currently being monitored.
+* [.guihint]#Disabled# : You have chosen not to monitor the service.
+* [.guihint]#Vanished# : The service was being monitored, but it now no longer exists.
+
+This page shows all services ordered by the above categories into tables.
+As you have not yet configured a service, you will see only the [.guihint]#Undecided# table.
+
+If you click [.guihint]#Monitor undecided services#, all of the services will be directly added to the monitoring and all of the [.guihint]#Undecided# services will become [.guihint]#Monitored# services.
+
+Conversely, services can also disappear, for example, when a file system has been removed.
+These services will then appear in the monitoring as {UNKNOWN} and on this page as [.guihint]#Vanished# and can be removed from the monitoring with [.guihint]#Remove vanished services#.
+
+For now, it is easiest to click the [.guihint]#Accept all# button, which does everything at once
+-- adding missing services, removing vanished ones -- and additionally apply any changes found to host and service xref:glossar#label[labels].
+
+You can always visit this page later to customize the configuration of the services.
+Sometimes new services are created by changes to a host, for example, when you include a Logical Unit Number (LUN) as a file system or configure a new Oracle database instance.
+These services then appear as [.guihint]#Undecided#, at which point you can include them in the monitoring individually or all at once.
+
+Further information on the services that a {CMK} server provides as standard can be found in the xref:self_monitoring#[Monitoring your own system] article.
+
+
+[#activate_changes]
+=== Activating changes
+
+{CMK} initially saves all changes you make only in a temporary 'configuration environment' that does not yet influence the currently-operating monitoring.
+Only by 'activating of pending changes' will they be transferred to the 'monitoring environment'.
+
+It often makes sense to activate multiple actions together in the configuration environment.
+A good example of this is the actions you have performed so far in this chapter.
+Only when the newly-created host has been activated along with the services found and adopted during service discovery will the host and services be visible together in monitoring all at once.
+
+You can see how many changes have accumulated so far that have not yet been activated in the navigation bar, in the [.guihint]#Changes# icon, and there by the number in the yellow circle.
+When you click this icon, you will see the details of these pending changes:
+
+.All changes in detail, which can be activated with the click of a button
+image::intro_menu_changes.png[alt="The 'Changes' menu displays the list of pending changes.",width=86%]
+
+This slideout displays the most important information.
+You can view the full overview by clicking the [.guihint]#Open full view# button, which opens the [.guihint]#Activate pending changes# page.
+This is necessary, for example, if the slideout shows issues with activation or with sites that might prevent activation.
+
+Now click the [.guihint]#Activate pending changes# button to apply the changes.
+After a short wait, you will receive confirmation that the changes have been successfully activated and everything is up to date.
+The number in the [.guihint]#Changes# symbol has disappeared and will remain so until the next change is pending.
+
+In the article on xref:wato#activate_changes[configuring {CMK}], you can learn more about the differences between the configuration and monitoring environments.
+It also explains how to revert pending changes instead of activating them.
+
+To verify that everything has been successful, switch to the monitoring environment, for example by selecting [.guihint]#Monitor > Overview > Main dashboard# in the navigation bar.
+
+.The [.guihint]#Main dashboard# of {RE} displays the first host in monitoring
+image::intro_dashboard.png[alt="The 'Main dashboard' of {RE}.",fullscreen=1]
+
+You have now successfully added the first host and its services to monitoring: Congratulations!
+endif::[]
+
+
+ifdef::saas[]
+[#first_auto]
+== Adding the first host automatically
+
+Everything is now set up to add the first host to the monitoring.
+One option is to monitor the host from which you access the {CE} web interface.
+
+You can easily do this using the xref:intro_welcome#[welcome page].
+In the first topic [.guihint]#Add your first host#, you will find a button to create an _On-Premises_ host.
+After clicking on [.guihint]#Server (Linux, Windows, Solaris, ...)#, the [.guihint]#Add your first host# slideout opens, which will guide you through the three steps to add your _on-premises_ host (Linux or Windows) to the monitoring:
+
+.The first step in the slideout for creating an on-premises host
+image::intro_host_install_agent_slideout_1_saas.png[alt="The slideout for creating an on-premises host."]
+
+There are several {CMK} agent packages to choose from:
+
+* A `deb` package for Debian and Ubuntu
+* An `rpm` package for Red Hat Enterprise Linux (RHEL), its binary-compatible distributions, and SUSE Linux Enterprise Server (SLES)
+* A package for Windows
+
+To download the package, you must authenticate yourself, typically using a username and password.
+The slideout offers a shortcut and enhanced security by performing authentication for this action using a _one-time token (OTT)_, which is valid for a successful execution within a limited period of time.
+
+Before the token can be used, it must be generated.
+So first click on [.guihint]#Generate one-time token#.
+The slideout will then look something like this:
+
+.After the token has been generated, the command to download the {CMK} agent is displayed
+image::intro_host_install_agent_slideout_2_saas.png[alt="The first step in the slideout for installing the {CMK} agent."]
+
+The command shown downloads the {CMK} agent package to the host.
+To the right of the command, you will find the icon:icon_copy_string[alt="Icon for copying to the clipboard."] icon to copy this command to the clipboard.
+Open a terminal on the target host, paste the copied command, and execute it.
+
+After executing the command, return to the slideout and click [.guihint]#Next step#.
+The second step then displays the command to install the downloaded agent package.
+Execute this command in the terminal as well.
+After installation, it will only take a few minutes for the host to appear in {CMK}.
+
+In the slideout, you can select the third and final step using [.guihint]#Next step#, close the slideout using [.guihint]#View hosts#, and open the [.guihint]#Main > preconfigured_agent# page in the xref:glossar#configuration_environment[configuration environment]:
+
+.The automatically-created host has been placed in the prepared `preconfigured_agent` folder
+image::intro_setup_first_host_saas.png[alt="The 'preconfigured_agent' folder containing the automatically-created host."]
+
+To verify that everything is working properly, switch to the xref:glossar#monitoring_environment[monitoring environment], for example by selecting [.guihint]#Monitor > Overview > Main dashboard# from the navigation bar.
+In the article on xref:wato#activate_changes[configuring {CMK}], you can learn more about the difference between the configuration and monitoring environments.
+
+.The [.guihint]#Main dashboard# displays the first host in the monitoring
+image::intro_dashboard_saas.png[alt="The 'Main dashboard'.",fullscreen=1]
+
+You have now successfully added the first host and its services to the monitoring -- Congratulations!
+
+The reason why it all works so easily is that the packages with the {CMK} agent are preconfigured in {CE} for all supported operating systems
+-- for the xref:hosts_autoregister#[auto-registration of a host], i.e., for agent registration, host creation, service discovery, and the activation of the resulting changes.
+You can find these packages in the {CMK} interface in [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX# in the line [.guihint]#Agent controller auto-registration#.
+
+The packages are configured so that the host is always placed in the `preconfigured_agent` folder of your {CE} site.
+If you would prefer to store your hosts in your own folder structure instead, you have several options.
+The simplest is to perform each of the individual steps manually, including those that were handled automatically by auto-registration.
+But do not worry -- {CMK} also supports you with the manual method described in the next section.
+
+If something went wrong when adding the first host, it is time to troubleshoot.
+It is best to start troubleshooting in the reverse order of execution.
+So if the most recent auto-registration failed, you will find initial troubleshooting tips in the article on xref:hosts_autoregister#test[auto-registration]. 
+
+
+[#first]
+== Manually adding the first host
+
+In addition to the assistant for automatically adding the first host, which was introduced in the previous section, {CMK} provides another wizard that guides you through the individual steps for creating a host in the configuration environment.
+This is convenient because this assistant displays the necessary commands and enables authentication via a one-time token.
+Although you must perform each step individually, this assistant offers you greater flexibility.
+
+Select [.guihint]#Setup > Hosts > Hosts# to open the [.guihint]#Main# folder.
+Navigate to a previously xref:create_folders[created folder] and click [.guihint]#Add host#.
+On the [.guihint]#Add host# page, enter the host name.
+In the [.guihint]#Monitoring agents# section, you will then find the active [.guihint]#Install & register agent# button next to the [.guihint]#Checkmk agent connection mode# option:
+
+.In the host properties you will find the button to open the assistant
+image::intro_add_host_saas.png[alt="The host properties with the ‘Install & register agent’ button."]
+
+Click this button to open the [.guihint]#Install Checkmk agent (Push Mode)# slideout:
+
+.The first step in the slideout for installing and registering the {CMK} agent
+image::intro_host_install_push_agent_slideout_saas.png[alt="The slideout for installing and registering the {CMK} agent."]
+
+The basic procedure is identical for Linux and Windows hosts and only a simple outline is shown below:
+
+. Create (and save) host +
+Registration (in step 3) requires an existing host in {CMK}.
+
+. Download and install the agent +
+Here, select the host’s operating system and, for Linux, the distribution as well.
+After the one-time token is generated, the commands for download and installation will be displayed; you can copy them to the clipboard to execute them on the host.
+If the downloaded file containing the installation package is not located on the target host where the agent is to be installed, you must first copy the file to the target host, for example using the command-line tool `scp`.
+You can find all installation details in the articles on xref:agent_linux#install[Linux] and xref:agent_windows#install[Windows].
+
+. Register the host +
+Registering the host with the {CMK} server establishes a trust relationship between the two.
+Communication between the host and the server is then encrypted using Transport Layer Security (TLS).
+Registration is performed manually via the command line, as described in the articles on xref:agent_linux#registration[Linux] and xref:agent_windows#registration[Windows].
+
+. Testing and troubleshooting +
+Finally, the slideout shows you a command that you can use to verify that the registration was successful. +
+With so many individual steps, it is possible that something might not go as planned.
+Unfortunately, even {CMK} cannot override Murphy’s Law ("Anything that can go wrong will go wrong").
+Things are especially likely to go wrong when you are trying something for the first time.
+That’s why having good options for troubleshooting is important. +
+The articles on xref:agent_linux#test[Linux] and xref:agent_windows#test[Windows] devote a separate, detailed chapter to the topic of testing and diagnostics. +
++
+This step concludes the slideout.
+The host is now fully configured but must still be added to monitoring.
+This requires two additional steps that you must complete without the help of an assistant.
+
+. Perform service discovery +
+After closing the slideout, return to the host properties page.
+Here, click the [.guihint]#Save & run service discovery# button to start the xref:glossar#service_discovery[service discovery], which involves defining the services to be monitored on the host.
+The article on xref:wato_services#discovery[services] describes the options available to you.
+
+. Activate changes +
+{CMK} initially saves all changes you make only in a temporary xref:glossar#configuration_environment[configuration environment], which does not yet affect the currently running monitoring.
+Only when you "activate pending changes" are these changes transferred to the xref:glossar#monitoring_environment[monitoring environment].
+You can learn more about the background of this in the xref:wato#activate_changes[article on configuring {CMK}]. +
+You can see the number of changes that have not yet been activated in the navigation bar, in the [.guihint]#Changes# menu, indicated by the number in the yellow circle.
+If you click the icon, you will see the details of these changes. +
+The listed changes can only be activated together.
+Click the [.guihint]#Activate pending changes# button to apply the changes.
+After a short wait, you will receive confirmation that the changes have been successfully activated and everything is up to date.
+The number in the [.guihint]#Changes# menu has disappeared and will remain so until the next change is pending.
+
+The verification process is exactly as described in the xref:first[previous section].
+Go to the xref:glossar#monitoring_environment[monitoring environment], for example via [.guihint]#Monitor > Overview > Main dashboard#, and check whether the newly created host is displayed.
+
+If everything has worked correctly, you can add additional Linux and Windows hosts using the same procedure.
+endif::[]
+
+
+[#more_hosts]
+== Adding more hosts
+
+For help setting up hosts for common application scenarios, see the xref:intro_welcome#[welcome page].
+Right in the first topic [.guihint]#Add your first host#, you will find buttons that let you start creating hosts for both on-premises and cloud environments.
+The following sections explain the general procedure for creating hosts for these usage cases.
+
+
+ifdef::onprem[]
+[#windows]
+=== Monitoring Windows
+
+Just as for Linux, {CMK} also has its own agent for Windows.
+This is packaged as an MSI package.
+You can download, install, and register the {CMK} agent for Windows in the same way as is described in the xref:linux[previous section] for a Linux host.
+To display the appropriate Windows commands, simply select [.guihint]#Windows# instead of [.guihint]#Linux# in the slideout for installing the {CMK} agent.
+Be sure to create the host in the designated `Windows` folder.
+
+Since Windows is structured differently from Linux, the agent naturally detects different services.
+You can find a detailed introduction to this topic in the article on xref:agent_windows#[monitoring Windows].
+endif::[]
+
+
+[#snmp]
+=== Monitoring with SNMP
+
+Professional quality switches, routers, printers and many other devices and appliances already have a built-in interface for monitoring from the manufacturer
+-- the Simple Network Management Protocol (SNMP).
+Such devices can be monitored very easily with {CMK} -- and you do not even need to install an agent.
+
+ifdef::onprem[]
+{cee-only}
+In {UE}, you can monitor SNMP devices that cannot transmit their data directly to the {CMK} server using the xref:glossar#checkmk_relay[{CMK} Relay].
+endif::[]
+ifdef::saas[]
+In {CE}, SNMP devices are monitored using the xref:glossar#checkmk_relay[{CMK} Relay].
+endif::[]
+
+Before SNMP devices can be configured to use a {CMK} Relay, the relay must first be set up.
+For instructions on how to do this, see the article xref:relay#[The {CMK} Relay].
+
+The basic procedure for setting up an SNMP device is always as follows:
+
+. In the device's management interface, enable SNMP for *read* access from the IP address of the {CMK} server.
+
+. Assign a *community*.
+This is simply a password for access.
+Since this is usually transmitted in plain text over the network, there is limited benefit to choosing a very complex password.
+Most users simply use the same community for all devices within a company.
+This also greatly simplifies configuration in {CMK}.
+
+ifdef::onprem[]
+. In {CMK}, create the host for the SNMP device as xref:create_host[described above], this time in the designated `Network` folder.
+endif::[]
+ifdef::saas[]
+. In {CMK}, create the host for the SNMP device using [.guihint]#Setup > Hosts > Hosts > Add host#.
+endif::[]
+
+ifdef::onprem[]
+. If the host is to be monitored via a {CMK} Relay, enable the [.guihint]#Monitored on relay# attribute in the host's properties under [.guihint]#Basic settings# and select the name of the previously configured {CMK} Relay.
+endif::[]
+ifdef::saas[]
+. In the host's properties, in the [.guihint]#Basic settings# box, enable [.guihint]#Monitored on relay# and select the name of the previously configured {CMK} Relay.
+endif::[]
+This attribute is only displayed if the xref:intro_gui#show_less_more[Show-more mode] is enabled in this box. +
++
+.A {CMK} Relay can only be selected if it has been set up beforehand
+image::intro_snmp_configuration_basic.png[alt="Properties dialog when creating a host via SNMP: the 'Basic settings'."]
+
+. In the host properties, in the [.guihint]#Monitoring agents# section, enable [.guihint]#{CMK} agent / API integrations# and select [.guihint]#No API integrations, no {CMK} agent#.
+
+. In the same box, enable [.guihint]#SNMP# and select [.guihint]#SNMPv2 or v3#.
+
+. If the community is not `public`, enable the [.guihint]#SNMP credentials# entry, select [.guihint]#SNMP community (SNMP Versions 1 and 2c)#, and enter the community in the input field below. +
+For the last 3 steps, the result should then look like the image below: +
++
+.Configuring the monitoring agent for SNMP
+image::intro_snmp_configuration.png[alt="Properties dialog when creating a host via SNMP: the 'Monitoring agents'."]
+
+[TIP]
+====
+If you have created a separate folder for all SNMP devices, simply configure the [.guihint]#Monitoring agents# for that folder.
+This will automatically apply the settings to all of the hosts in that folder.
+====
+
+The rest proceeds as usual.
+If you like, you can click the [.guihint]#Save & go to connection tests# button to view the [.guihint]#Test connection to host# page.
+There you can immediately see whether SNMP access is working; here, for example, for a switch:
+
+image::intro_snmp_diagnostics.png[alt="Result of the connection test to the host via SNMP."]
+
+On the [.guihint]#Properties of host# page, click [.guihint]#Save & run service discovery# to display the list of all services.
+Of course, this looks completely different than on Linux or Windows.
+By default, {CMK} monitors all ports currently in use on all devices.
+You can customize this later as desired.
+In addition, one service that is always {OK} displays general information about the device, and another service displays the uptime.
+
+You can find a detailed description in the xref:snmp#[article on monitoring via SNMP].
+
+
+[#cloud]
+=== Monitoring cloud, containers and virtual machines
+
+You can also monitor cloud services, containers and virtual machines (VM) with {CMK}, even if you do not have access to the actual servers.
+{CMK} uses the application programming interfaces (API) provided by the manufacturers for this purpose.
+These interfaces always use HTTP or HTTPS for access.
+
+The basic principle is always the following:
+
+. Prepare access for {CMK} in the manufacturer's management interface.
+. Create a host in {CMK} to access the API.
+. Configure this host by specifying the objects to be monitored, such as VMs, EC2 instances, containers, etc.
+. For the monitored objects create additional hosts in {CMK} or automate their creation.
+
+In the User Guide you can find step-by-step instructions for setting up a monitoring of xref:monitoring_aws#[Amazon Web Services (AWS)], xref:monitoring_azure#[Microsoft Azure], xref:monitoring_gcp#[Google Cloud Platform (GCP)], xref:monitoring_docker#[Docker], xref:monitoring_kubernetes#[Kubernetes] and xref:monitoring_vmware#[VMware ESXi].
+
+xref:intro_gui#[Continue with the {CMK} user interface]

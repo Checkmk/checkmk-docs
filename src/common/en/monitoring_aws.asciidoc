@@ -1,0 +1,391 @@
+// -*- coding: utf-8 -*-
+// IGNORE ReadOnlyAccess AssumeRole
+// NONASCII
+include::global_attr.adoc[]
+= Monitoring Amazon Web Services (AWS)
+:title: Monitoring Amazon Web Services (AWS)
+:description: {CMK} can monitor data and costs of Amazon S3, EC2, EBS, RDS, ELB and related products. Read here how to manage the monitoring.
+
+{related-start}
+xref:monitoring_azure#[Monitoring Microsoft Azure]
+link:https://checkmk.com/integrations[Catalog of check plug-ins^]
+xref:dcd#[Dynamic host management]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+[{image-left}]
+image::logo_aws.png[width=140]
+
+{CMK} includes a extensive module for link:https://checkmk.com/guides/aws-cloud-monitoring[monitoring Amazon Web Services (AWS)^], consisting of a connector to AWS and a comprehensive collection of check plug-ins that retrieve and evaluate various metrics and statuses for you.
+
+In addition to general information about the link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_costs[costs] that are incurred by your AWS environment
+and the current link:https://checkmk.com/integrations/aws_status[status^] of AWS in your region,
+you can monitor the following AWS products with 
+ifdef::onprem[]
+all editions of {CMK}:
+endif::[]
+ifdef::saas[]
+{CE}:
+endif::[]
+
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_ec2[Elastic Compute Cloud (EC2)]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_ebs[Elastic Block Store (EBS)^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_s3[Simple Storage Service (S3)^] and 
+link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_glacier[S3 Glacier^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_rds[Relational Database Service (RDS)^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_dynamodb[DynamoDB]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_elb[Elastic Load Balancing (ELB) - Application, Network, Classic^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_cloudwatch[CloudWatch^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_waf[AWS Web Application Firewall (WAF)^]
+
+ifdef::onprem[]
+With {CCE} you can also include the following products in your monitoring system:
+endif::[]
+
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_lambda[AWS Lambda^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_ecs[Elastic Container Service (ECS)^]
+* link:https://checkmk.com/integrations/aws_route53[Route 53^]
+* link:https://checkmk.com/integrations/aws_cloudfront[CloudFront^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=elasticache[ElastiCache for Redis^]
+* link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=aws_sns[Simple Notification Service (SNS)^]
+
+A complete listing of all available check plug-ins for monitoring AWS can be found in our link:https://checkmk.com/integrations?tags=aws[Catalog of check plug-ins^] and we describe how to include your Amazon EKS (Amazon Elastic Kubernetes Service) clusters in {CMK} in the article xref:monitoring_kubernetes#[Monitoring Kubernetes].
+
+
+[#quick_setup]
+== Setting up monitoring via Quick Setup (optional)
+
+The quickest way to set up an easy-to-read monitoring for AWS environments is with our _Quick Setup_.
+To do this, open [.guihint]#Setup > Quick Setup > Amazon Web Services (AWS)# and click on [.guihint]#Add configuration#.
+The Quick Setup will then guide you step by step to your goal.
+
+Detailed instructions on how to make the necessary preparations in your AWS environment can be found in the chapter xref:preparation[Preparing AWS for {CMK}].
+
+The biggest advantage of Quick Setup is certainly that any errors will be displayed immediately during the configuration process.
+If the worst comes to the worst, you will then receive a clear and dedicated indication of what you need to correct before you can move on to the next step.
+
+If you want or need to make changes to the xref:glossar#quick_setup_configuration[configuration] created by the Quick Setup at a later time, you can go back to [.guihint]#Setup > Quick Setup#.
+There, click on the icon:icon_edit[] icon and then select the component you want to edit.
+
+[TIP]
+====
+The other chapters of this article are only intended as a reference for users of Quick Setup.
+However, if your AWS environment is rather complex, it is recommended that you continue to carry out the setting up according to the following steps.
+====
+
+
+[#implementation]
+== Concrete implementation of AWS monitoring
+
+=== Hosts and services
+
+In {CMK} all objects to be monitored are arranged in a hierarchical structure of hosts and services.
+The concept of hosts does not exist in cloud-based services.
+However to retain the simplicity and consistency of {CMK},
+we still map AWS objects according to the host/service schema.
+
+How that is achieved can best be illustrated by an example: In one region several
+EC2 instances have been configured. An EC2 is usually assigned to EBS. This
+constellation looks like this in {CMK}:
+
+* There is a host that matches the AWS account. This host gives an overview of all EC2 instances and their status as a service.
+* The EC2 instances themselves are their own hosts.
+* On these EC2 hosts you can find services with the actual metrics.
+* The EBS are interpreted as a type of hard disk, and accordingly provide metrics to I/O (e.g., the number of bytes read or written). For this purpose, in each EBS there are separate services in {CMK} with the name `AWS/EBS Disk IO` which are assigned to the EC2 instance.
+
+
+=== Access to AWS
+
+AWS provides an HTTP-based API over which monitoring data is also available.
+{CMK} accesses this API via the `agent_aws` xref:glossar#special_agent[special agent] -- which replaces the {CMK} agent -- but in contrast this agent runs locally on the {CMK} server.
+
+
+[#preparation]
+== Preparing AWS for {CMK} 
+
+=== Creating a user
+
+To enable monitoring via {CMK}, it is best to achieve it by creating a special AWS user under your root account.
+link:https://console.aws.amazon.com[Log in^] to AWS as the root user, and navigate in [.guihint]#All services# to [.guihint]#Security, Identity, & Compliance > IAM# (Identity and Access Management).
+Go to [.guihint]#Users# and create a new user with [.guihint]#Add user#.
+As a username choose, for example, `check-mk`.
+It is important that you select the [.guihint]#Access key - Programmatic access# for [.guihint]#Select AWS credential type#.
+
+[{image-border}]
+image::aws_create_user.png[]
+
+
+=== Permissions
+
+The user you just created should only be used for monitoring by {CMK} and only needs read-only access to AWS.
+We recommend simply assigning the policy [.guihint]#ReadOnlyAccess# to this user.
+To find this policy, first click [.guihint]#Attach existing policies directly# and then type `readonlyaccess` in the search box.
+In the list below the search field, you still have to scroll down quite far, because there are quite a few policies that contain this string.
+
+image::aws_create_user_policies.png[]
+
+
+=== Keys
+
+After completing the user creation an access key will be generated automatically for you.
+*Important:* The key’s secret is displayed only once -- directly after its creation.
+Therefore without fail copy the key and save it, for example, in the {CMK} password store.
+Alternatively specify it in plain text as a rule (see below).
+For {CMK} you need the [.guihint]#Access key ID# in addition to the secret.
+The name of the user (in our example `check-mk`) does not matter here.
+
+image::aws_create_user_key.png[]
+
+If for some reason you should lose the secret, you can create a new access key for the user and get a new secret:
+
+image::aws_create_access_key.png[]
+
+
+=== Access to billing information
+
+If you want {CMK} to have read access for the billing information (in order to perform the [.guihint]#Costs and Usage# global check),
+you need another policy for your AWS user -- a policy you yourself must first define.
+
+Under [.guihint]#Security, Identity, & Compliance > IAM > Policies# select the [.guihint]#Create Policy# button.
+Select from [.guihint]#Select a Service > Service > Choose a Service# the [.guihint]#Billing# service.
+Under [.guihint]#Actions# tick the [.guihint]#Read# checkbox.
+We have to set an additional permission.
+Add one via the [.guihint]#Add additional permissions# button.
+Select from [.guihint]#Select a Service > Service > Choose a Service# the [.guihint]#Cost Explorer Service# service.
+Under [.guihint]#Actions# again tick the [.guihint]#Read# checkbox.
+
+image::aws_policies.png[]
+
+Click [.guihint]#Review# to go to step two.
+Set `BillingViewAccess` as the [.guihint]#Name#, and save it with the [.guihint]#Create policy# button.
+
+You must now add this new policy to the user.
+Go again to [.guihint]#Security, Identity, & Compliance > IAM > Policies# -- in the [.guihint]#Filter Policies# search box look for `BillingViewAccess`,
+select this by clicking in the circle to the left, and then go to [.guihint]#Policy actions > Attach#.
+Here you will find your `check-mk` user, select this and confirm it with [.guihint]#Attach policy#.
+
+
+[#setup]
+== Setting up monitoring in {CMK}
+
+[#create_host]
+=== Creating a host for AWS
+
+Now create a host to monitor AWS in {CMK}.
+You can assign the host name as you wish.
+Important: Because AWS as a service has no IP address or DNS name (access is granted by the special agent itself),
+you need to set the [.guihint]#IP address family# to [.guihint]#No IP#.
+
+image::monitoring_aws_add_host_no_ip.png[]
+
+
+[#agent_rule]
+=== Configuring the AWS agent
+
+AWS cannot be queried through the regular {CMK} agent, so next set up the AWS xref:glossar#special_agent[special agent].
+To do so, under [.guihint]#Setup > Agents > VM, cloud, container > Amazon Web Services (AWS)# add a rule
+whose xref:wato_rules#conditions[conditions] apply only to the just-created AWS host.
+
+In the actual content of the rule, you will first find the information for the login.
+Here enter the 'Access key ID' for the newly-created AWS user `check-mk`.
+Also choose here if you need a proxy to fetch the data and which global data you want to monitor,
+i.e., those that are independent of a region.
+That is currently only the data relating to the costs:
+
+image::aws_rule_1.png[]
+
+In the image above you can also see the option [.guihint]#Use STS AssumeRole to assume a different IAM role#.
+If you do use different accounts at AWS, you may use a single monitoring user to monitor the other accounts, too.
+
+But the really interesting data is assigned to regions.
+Therefore here select your AWS region(s):
+
+image::aws_rule_2.png[]
+
+Under [.guihint]#Services by region to monitor# you specify which information you want to retrieve from these regions.
+At default all AWS services and the monitoring of their xref:limits[limits] are activated.
+In the following image are all but one deactivated to get a better overview:
+
+image::aws_rule_3.png[]
+
+You now can restrict the fetched data per web service or globally with [.guihint]#Restrict monitoring services by one of these AWS tags#.
+The global restriction will be overwritten, if you restrict by web service.
+Also you not only have the option to restrict by AWS tags but additionally to specify the explicit names:
+
+image::aws_rule_4.png[]
+
+Don't forget to assign the special agent to the previously created host by entering that host name in [.guihint]#Conditions > Explicit hosts#.
+
+
+=== Services on the AWS host itself
+
+Now switch to the service discovery of the newly created AWS host in {CMK}, where {CMK} should now find several services.
+After you add the services and after an xref:wato#activate_changes[activating changes] it will look something like this in monitoring:
+
+image::aws_services_ec.png[]
+
+
+[#ec2-hosts]
+=== Creating hosts for the EC2 instances
+
+Services that are assigned to EC2 instances are not assigned to the AWS host, but to so-called xref:glossar#piggyback[piggybacked] hosts.
+This works in such a way that data retrieved from the AWS host is distributed to these piggybacked hosts, which operate without their own monitoring agents.
+A piggybacked host is assigned to each EC2 instance.
+
+For the naming of these piggybacked hosts, you can choose between two schemes when configuring the special agent.
+On the one hand, you can name the hosts according to their private IP DNS name or you can choose the somewhat longer but unique naming according to IP, region and instance ID.
+The latter variant is our default setting as of {CMK} {v22}.
+The variant without region and instance ID is still offered only for compatibility reasons.
+Such a piggybacked host could thus be named `172.23.1.123-ap-northeast-2-i-0b16121900a32960c`, for example.
+Either create these hosts manually or - if possible - leave this task to the dynamic host management.
+
+
+==== Setting up dynamic host management
+
+ifdef::onprem[]
+{cee-only}
+As a user of one of our commercial editions,
+endif::[]
+ifdef::saas[]
+As a user of {CE},
+endif::[]
+you can simply leave the creation and deletion of hosts for your VM instances to the xref:dcd#[dynamic host management].
+The [.guihint]#Setup > Hosts > Dynamic host management# menu item takes you to the overview page for all connections that have already been configured.
+Click on icon:icon_new[] [.guihint]#Add connection# and then give the connection an [.guihint]#ID# and a [.guihint]#Title#.
+
+Not all options available in the [.guihint]#Connection properties# are covered below.
+Consult the inline help and the main article linked above if you have any questions.
+
+First, make sure that the [.guihint]#Connection properties# box has the xref:intro_gui#show_less_more[Show more mode] enabled so that all available options are displayed.
+
+Next, under [.guihint]#Piggyback creation options# click [.guihint]#Add new element#.
+Customize the folder in which the hosts of your VM instances are to be created.
+The pre-selected [.guihint]#Host attributes# are basically correct for piggybacked hosts and do not really need to be altered.
+
+By activating the [.guihint]#Delete vanished hosts# option, you can ensure that piggybacked hosts from which no more fresh data is received over a specified period of time will be automatically deleted.
+
+As a part of monitoring your GCP projects, the option [.guihint]#Restrict source hosts# should be activated.
+Enter your GCP host from the section xref:create_host[Creating a host for AWS] here.
+
+As an example, a configuration of such a connection could then look like this:
+
+image::monitoring_aws_connection_properties.png[alt="Exemplary configuration of connection properties."]
+
+
+==== Manually creating hosts for EC2 instances
+
+Alternatively, you can create hosts for the piggyback data manually.
+In doing so, it is important that the names of the hosts correspond exactly to the xref:ec2-hosts[scheme described above].
+
+ifdef::onprem[]
+[TIP]
+====
+With the command `cmk-piggyback list orphans` you can find all xref:piggyback#orphaned_piggyback_data[orphaned piggybacked hosts] for which there is data but which have not yet been created as hosts in {CMK}.
+====
+endif::[]
+
+Configure the hosts for these EC2 instances without an IP address (analogous to the AWS host) and select [.guihint]#No API integrations, no {CMK} agent# as monitoring agent.
+If you also select the [.guihint]#Always use and expect piggyback data# option under [.guihint]#Piggyback#, you will be warned accordingly if the data fails to arrive.
+
+image::monitoring_aws_add_host_for_piggyback_data.png[]
+
+
+=== Hosts for the ELB (Classic Load Balancer)
+
+The services for the ELB are also assigned to piggybacked hosts.
+The names correspond to their DNS names.
+
+
+=== Monitor traffic statistics of S3 buckets
+
+With {CMK} you can monitor the traffic of each of your S3 buckets.
+In {CMK} you simply have to activate the option [.guihint]#Request metrics# below [.guihint]#Simple Storage Service (S3)#.
+
+image::monitoring_aws_request_metrics.png[alt="Option for S3-Buckets with activated request metrics.",width=68%]
+
+In AWS, a little more work is required.
+Here you still need to set up these _Request metrics_ for the buckets you want to monitor.
+AWS describes how this works in detail in the article link:https://docs.aws.amazon.com/AmazonS3/latest/userguide/configure-request-metrics-bucket.html[Creating a CloudWatch metrics configuration for all the objects in your bucket^].
+During setup in AWS, you will be asked to create a filter.
+You *have to* name this filter `EntireBucket` so that it is recognized by {CMK}.
+Any filter with a different name will be ignored by {CMK}.
+So you are free to define other filters for this bucket without affecting the functionality in {CMK}.
+
+image::monitoring_aws_s3_create_filter.png[alt="Creation of a filter for the request metrics."]
+
+How you choose the so-called (filter) [.guihint]#Scope# in AWS is also up to you.
+In most cases, however, it will make sense to include all objects in the bucket in the filter.
+
+After setting up the _Request metrics_, it will take a few minutes before any metrics are stored at all.
+AWS specifies this time as 15 minutes.
+
+*Important:* As long as the graphs inside the S3 console are still empty, nothing will arrive in {CMK} via the special agent either.
+Only when metrics have been recorded, {CMK} can create the corresponding services.
+If necessary, perform again a xref:wato_services#discovery[service discovery] on the AWS host.
+
+
+[#limits]
+=== Monitoring limits
+
+Some web services of AWS do have limits and {CMK} is able to monitor them.
+Here some examples:
+
+* link:https://checkmk.com/integrations/aws_ebs_limits[AWS EBS: Limits^]
+* link:https://checkmk.com/integrations/aws_ec2_limits[AWS EC2: Limits^]
+* link:https://checkmk.com/integrations/aws_elb_limits[AWS ELB: Limits^]
+* link:https://checkmk.com/integrations/aws_elbv2_limits[AWS ELBv2: Application and Network Limits^]
+* link:https://checkmk.com/integrations/aws_glacier_limits[AWS Glacier: Limits^]
+* link:https://checkmk.com/integrations/aws_rds_limits[AWS RDS: Limits^]
+* link:https://checkmk.com/integrations/aws_s3_limits[AWS S3: Limits^]
+* link:https://checkmk.com/integrations/aws_cloudwatch_alarms_limits[AWS CloudWatch: Alarm Limits^]
+
+As soon as such a check plug-in creates services and checks them later on, the special agent will always fetch *all* elements of the web service. 
+Only in this way {CMK} is able to reasonably calculate the current workload at these limits and check the thresholds.
+That's also the case even if you restrict the fetched data by some tags or names in the configuration.
+
+The checking of the limits is activated by default for each monitored web service.
+If you want to restrict the fetched data in the xref:agent_rule[special agent rule] to limit the amount of transferred data,
+you need also to turn off the limits.
+
+
+=== Further services
+
+The other web services in AWS are assigned as follows:
+
+[cols="10,25,~"]
+|===
+| |Service |Assignment 
+
+|CE |[.guihint]#Costs & Usage# |At the AWS host
+|EBS |[.guihint]#Block Storages# |Appended to the EC2 instance if it belongs to the instance, otherwise to the AWS host
+|S3 |[.guihint]#Simple Storages# |At the AWS host
+|RDS |[.guihint]#Relational databases# |At the AWS host
+|===
+
+
+[#dashboards]
+== Dashboards
+
+ifdef::onprem[]
+{CCE-only}
+For a convenient start into monitoring AWS, {CMK} ships in {CE}
+endif::[]
+ifdef::saas[]
+For a convenient start into monitoring AWS, {CE} ships
+endif::[]
+the two built-in xref:glossar#dashboard[dashboards], [.guihint]#AWS EC2 instances# and [.guihint]#AWS S3#.
+Both of these can be found as menu items in the monitoring under [.guihint]#Monitor > Cloud#.
+
+To provide a clearer impression, following are two examples of how these dashboards are structured.
+First, the EC2 instances dashboard, where you can compare the current state on the left side and the chronological history of the most important metrics on the right side:
+
+image::monitoring_aws_dashboard_vm.png[alt="Dashboard for the AWS EC2 instances."]
+
+The dashboard for the S3 buckets is structured quite similarly.
+On the left-hand side you will find the current memory usage for the respective buckets.
+On the right, the most important metrics are again displayed chronologically.
+
+image::monitoring_aws_dashboard_storage.png[alt="Dashboard for the AWS S3 buckets."]

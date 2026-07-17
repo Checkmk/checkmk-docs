@@ -1,0 +1,320 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Der Piggyback-Mechanismus
+:title: Der Piggyback-Mechanismus
+:description: {CMK} kann mit dem Piggyback-Mechanismus Daten über Hosts beim Abfragen anderer Hosts erhalten. Lesen Sie hier, wie Sie Piggyback-Hosts einrichten.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring-Agenten]
+xref:dcd#[Dynamische Host-Verwaltung]
+xref:monitoring_azure#[Microsoft Azure überwachen]
+xref:monitoring_aws#[Amazon Web Services (AWS) überwachen]
+xref:monitoring_gcp#[Google Cloud Platform (GCP) überwachen]
+xref:monitoring_kubernetes#[Kubernetes überwachen]
+xref:monitoring_docker#[Docker überwachen]
+xref:monitoring_vmware#[VMware ESXi überwachen]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Der Piggyback-Mechanismus wurde bereits in den frühen Zeiten von {CMK} eingeführt -- und zwar im Rahmen der Überwachung von xref:monitoring_vmware#[VMware].
+Hier ist die Situation, dass Daten von einem bestimmten Host abgefragt werden müssen, weil sie nur dort bereitstehen (z.B. von einem ESX-Host-System oder dem vCenter),
+diese aber im Monitoring einen ganz anderen Host betreffen (z.B. eine virtuelle Maschine).
+
+Das ist mit dem normalen Mechanismus von {CMK} nicht zu realisieren, denn dieser ordnet Daten und Services, die er von einem Host holt, automatisch diesem zu.
+Und es wäre schließlich sehr unpraktisch für das Monitoring, wenn alle Informationen zu allen VMs immer direkt beim ESX-Host oder gar vCenter erschienen.
+
+Der Begriff „Piggyback“ (im Deutschen „Huckepack“) drückt aus, dass Monitoring-Daten zu Host B quasi _huckepack_ beim Abfragen von Host A mit übertragen werden.
+
+Heute kommt Piggyback bei vielen weiteren Monitoring-Plugins zum Einsatz, z.B. bei der Überwachung von:
+
+* xref:monitoring_aws#[AWS]
+* xref:monitoring_azure#[Azure]
+* xref:monitoring_gcp#[GCP]
+* xref:monitoring_docker#[Docker]
+* xref:monitoring_kubernetes#[Kubernetes] 
+* Proxmox VE
+* xref:monitoring_vmware#[VMware]
+
+Neben Virtualisierungsumgebungen kann der Piggyback-Mechanismus auch beim Monitoring von Mobilgeräten oder dem Klima-Monitoring im Rechenzentrum (MQTT) eingesetzt werden.
+Da die Abfrageschnittstellen sehr simpel sind, ist es sehr einfach, den Piggyback-Mechanismus selbst zu verwenden.
+Sie können ihn beispielsweise beim Realisieren eigener Check-Plugins nutzen, um Daten aus einer Quelle beliebigen anderen Hosts zuzuordnen.
+
+
+[#principle]
+== Das Piggyback-Prinzip
+
+Das Grundprinzip von Piggyback funktioniert wie in der folgenden Abbildung dargestellt.
+Ein Host A kennt nicht nur seine Monitoring-Daten, sondern auch die anderer Hosts -- oder allgemeiner gesagt: anderer Objekte.
+So kennt z.B. ein ESX-Host den Zustand und viele aktuelle Metriken zu jeder seiner virtuellen Maschinen (VMs).
+Der Host A wird in diesem Zusammenhang als _Piggyback-Host_ bezeichnet.
+
+Wenn {CMK} jetzt von A in seinem minütlichen Rhythmus die Monitoring-Daten abruft --
+sei es vom normalen {CMK}-Agenten oder von einem Spezialagenten über eine Hersteller-API -- ,
+bekommt es in der Antwort speziell markiert auch Daten zu den anderen Hosts/Objekten B, C usw. mitgeteilt.
+Diese _Piggyback-Daten_ legt es dann für die spätere Verarbeitung in Dateien auf dem {CMK}-Server ab.
+Die Hosts B, C usw. werden als _Piggybacked-Hosts_ bezeichnet.
+
+Wenn {CMK} dann später die Monitoring-Daten von B oder C benötigt, liegen diese bereits in den Dateien vor und können direkt verarbeitet werden, ohne einen Agenten abzufragen:
+
+image::piggyback_scheme_1.png[width=50%,alt="Schematische Darstellung der indirekten Datenweitergabe über den Piggyback-Mechanismus."]
+
+Es ist auch möglich und sinnvoll, normales Monitoring und Piggyback zu kombinieren.
+Nehmen wir wieder das VMware-Beispiel:
+Vielleicht haben Sie ja in Ihrer VM B einen {CMK}-Agenten installiert, der lokale Informationen aus der VM auswertet, die dem ESX-Host nicht bekannt sind (z.B. die in der VM laufenden Prozesse).
+In diesem Fall wird der Agent abgefragt, und die Daten werden mit den Piggyback-Daten über B, die von Host A bereitgestellt wurden, zusammengefasst:
+
+image::piggyback_scheme_2.png[width=50%,alt="Schematische Darstellung der kombinierten Datenweitergabe: Ein Teil der Daten kommt via Piggyback, der Rest direkt vom überwachten Host."]
+
+
+[#piggyback_in_practice]
+== Piggyback in der Praxis
+
+=== Einrichten von Piggyback
+
+Die gute Nachricht ist, dass der Piggyback-Mechanismus häufig völlig automatisch funktioniert:
+
+* Wenn beim Abfragen von A Piggyback-Daten für andere Hosts entdeckt werden, werden diese automatisch für die spätere Auswertung gespeichert.
+* Wenn beim Abfragen von B Piggyback-Daten über B von einem anderen Host auftauchen, werden diese automatisch verwendet.
+
+Allerdings ist -- wie immer in {CMK} -- alles konfigurierbar.
+So können Sie beispielsweise bei den Eigenschaften eines Hosts (Host B) im Kasten [.guihint]#Monitoring agents# einstellen, wie dieser auf vorhandene oder fehlende Piggyback-Daten reagieren soll:
+
+image::piggyback_settings.png[alt="Die Umleitung der Piggyback-Daten wird in den Agenten-Einstellungen festgelegt"]
+
+Der Standard ist [.guihint]#Use piggyback data from other hosts if present#.
+Falls vorhanden, werden also Piggyback-Daten verwendet, und wenn keine da sind, verwendet der Host eben nur seine „eigenen“ Monitoring-Daten.
+
+Wenn Sie die Einstellung [.guihint]#Always use and expect piggyback data# wählen, _erzwingen_ Sie die Verarbeitung von Piggyback-Daten.
+Wenn diese fehlen oder veraltet sind, wird der Service [.guihint]#Check_MK# eine Warnung ausgeben.
+
+Bei [.guihint]#Never use piggyback data# werden eventuell vorhandene Piggyback-Daten einfach ignoriert -- eine Einstellung, die Sie nur in Ausnahmefällen brauchen werden.
+
+
+[#existing_hosts]
+=== Hosts müssen vorhanden sein
+
+Damit ein Host Piggyback-Daten verarbeiten kann, muss dieser natürlich im Monitoring vorhanden sein.
+Im Beispiel von ESX bedeutet das, dass Sie Ihre VMs auch als Hosts in {CMK} aufnehmen müssen, damit sie überhaupt überwacht werden.
+
+ifdef::onprem[]
+{cee-only}
+In den kommerziellen Editionen
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+können Sie dies mithilfe der xref:dcd#[dynamischen Host-Verwaltung] automatisieren und Hosts, für die Piggyback-Daten vorhanden sind, automatisch anlegen lassen.
+
+
+[#renamehosts]
+=== Host-Namen und ihre Zuordnung
+
+Im Beispiel oben war es irgendwie logisch, dass die Daten über Objekt B auch dem Host B im Monitoring zugeordnet wurden.
+Aber wie genau funktioniert das?
+
+Beim Piggyback-Mechanismus geht die Zuordnung immer über einen _Namen_.
+Der (Spezial-)Agent schreibt zu jedem Satz von Piggyback-Daten einen Objektnamen.
+Im Fall von ESX ist das z.B. der Name der virtuellen Maschine.
+Manche Plugins wie z.B. xref:monitoring_docker#[Docker] haben auch mehrere Möglichkeiten, was als Name verwendet werden soll.
+
+[TIP]
+====
+Piggyback-Daten von Hosts, deren Namen mit einem Punkt beginnen, werden nicht in {CMK} verarbeitet.
+Dies betrifft z.B. Namen wie `.`, `.hostname` oder `.hostname.domain.com`.
+Um diese Hosts ins Monitoring aufzunehmen, müssen die Host-Namen wie im Folgenden beschrieben geändert werden.
+====
+
+Damit die Zuordnung klappt, muss der Name des passenden Hosts in {CMK} natürlich identisch sein -- auch die Groß-/Kleinschreibung betreffend.
+
+Was aber, wenn die Namen der Objekte in den Piggyback-Daten für das Monitoring ungeeignet oder unerwünscht sind? 
+Ungeeignet sind z. B. Namen von Piggybacked-Hosts, die nur aus einem Punkt bestehen oder mit einem Punkt beginnen, wie `.myhostname`, da diese in {CMK} nicht verarbeitet werden.
+Für die Umbenennung von Piggybacked-Hosts gibt es einen speziellen xref:glossar#rule_set[Regelsatz] [.guihint]#Host name translation for piggybacked hosts#, den Sie im Setup-Menü unter [.guihint]#Setup > Agents > Agent access rules# finden.
+
+Um eine Umbenennung zu konfigurieren, führen Sie die folgenden zwei Schritte aus:
+
+. Legen Sie eine Regel an und stellen Sie die Bedingung so ein, dass Sie auf den _Piggyback-Host_ greift -- also quasi auf Host A.
+. Legen Sie im Wert der Regel eine passende Namenszuordnung fest.
+
+Hier ist ein Beispiel für den Wert der Regel.
+Zu Beginn wird mit [.guihint]#Convert FQHN# der Hostname gekürzt, indem die Domain entfernt wird.
+Danach werden alle Host-Namen aus den Piggyback-Daten in Kleinbuchstaben umgewandelt.
+Schließlich werden noch die beiden Hosts `vm0815` bzw. `vm081` in die {CMK}-Hosts `mylnxserver07` bzw. `mylnxserver08` umgewandelt:
+
+image::piggyback_hostname_translation.png[alt="Optionen der 'Host name translation', Entfernen des Domain-Parts, Umwandlung nach Kleinbuchstaben und explizites Mapping."]
+
+Flexibler ist die Methode mit xref:regexes#[regulären Ausdrücken,] die Sie unter [.guihint]#Multiple regular expressions# finden.
+Diese bietet sich an, wenn die Umbenennung von vielen Hosts notwendig ist und diese nach einem bestimmten Schema erfolgt.
+Gehen Sie wie folgt vor:
+
+. Aktivieren Sie die Option [.guihint]#Multiple regular expressions#.
+. Fügen Sie mit dem Knopf [.guihint]#Add expression# einen Übersetzungseintrag an. Jetzt erscheinen zwei Felder.
+. Geben Sie im Feld [.guihint]#Regular expression# einen regulären Ausdruck ein, der auf die ursprünglichen Objektnamen matcht und der mindestens eine Subgruppe enthält -- also einen Teilausdruck, der in runde Klammern gesetzt ist.
+Eine gute Erklärung zu diesen Gruppen finden Sie im xref:regexes#matchgroups[Artikel zu regulären Ausdrücken].
+. Geben Sie bei [.guihint]#Replacement# ein Schema für den gewünschten Namen des Ziel-Hosts an, wobei Sie die Werte, die mit den Subgruppen „eingefangen“ wurden, durch `\1`, `\2` usw. ersetzen können.
+
+Ein Beispiel für den regulären Ausdruck wäre z.B. `vm(pass:[.*])-local`.
+Die Ersetzung `myvm\1` würde dann z.B. den Namen `vmharri-local` in `myvmharri` übersetzen.
+
+
+[#outdated_data]
+=== Veraltete Piggyback-Daten
+
+Verändert sich Ihr Netzwerk, so können sich auch die Piggyback-Daten ändern.
+Das wirft neue Fragen auf.
+Wie reagiert das Monitoring darauf, wenn ein Host nicht erreichbar ist?
+Was passiert, wenn Piggyback-Daten veralten, zum Beispiel, weil das Objekt temporär -- oder sogar dauerhaft -- nicht mehr vorhanden ist?
+Werden alle Piggyback-Daten gleich behandelt oder gibt es Unterschiede?
+Wie bei vielen anderen Themen in {CMK} ist das Verhalten auch hier wieder Einstellungs- und damit Regelsache.
+Mit der Regel [.guihint]#Processing of piggybacked host data#, die Sie unter [.guihint]#Setup > Agents > Agent access rules# finden, können Sie verschiedene Optionen einstellen.
+
+Im Abschnitt [.guihint]#Processing of piggybacked host data# geben Sie die eigentlich interessanten Angaben zur Verarbeitung der Piggyback-Daten an.
+
+image::piggyback_processing_rule2.png[alt="Festlegung der Regeln für veraltete Piggyback-Daten."]
+
+{CMK} erleichtert Ihnen die Arbeit bei der Verwaltung der Piggyback-Daten.
+So entfernt es unter anderem automatisch alle Hosts/Objekte, zu denen keine Piggyback-Daten (mehr) von einem Piggyback-Host geliefert werden.
+Mit der Option [.guihint]#Keep hosts while piggyback source sends piggyback data only for other hosts# legen Sie fest, nach welcher Zeit die betroffenen Dateien mit Piggyback-Daten gelöscht werden.
+Achten Sie darauf, dass dieser Zeitraum mindestens so groß sein muss wie das Check-Intervall für die Piggybacked-Hosts.
+
+Über die beiden Optionen in [.guihint]#Set period how long outdated piggyback data is treated as valid# legen Sie fest, für wie lange vorhandene Piggyback-Daten noch als valide angesehen werden sollen, wenn der Host keine neuen Daten mehr liefert.
+Nach Ablauf des definierten Zeitraums werden die Services, die auf den Piggyback-Daten basieren, als xref:monitoring_basics#stale[_stale_] angezeigt.
+Außerdem legen Sie den Zustand des Services [.guihint]#Check_MK# in diesem Zeitraum fest.
+Insbesondere wenn es immer wieder zu kurzzeitigen Verbindungsunterbrechungen kommen kann, können Sie damit unnötige Warnungen umgehen.
+
+Nachdem Sie die Behandlung der Piggyback-Daten im Allgemeinen festgelegt haben, können Sie unter [.guihint]#Exceptions for piggybacked hosts# mit den beschriebenen Optionen gezielt für einzelne Hosts eine gesonderte Behandlung (nach dem gleichen Schema) definieren.
+
+In den [.guihint]#Conditions# müssen Sie zum Abschluss auf jeden Fall in der Option [.guihint]#Explicit hosts# den Namen des Piggyback-Hosts angeben.
+
+
+[#technology]
+== Die Technik dahinter
+
+[#transport]
+=== Transport der Piggyback-Daten
+
+Wie oben beschrieben werden die Piggyback-Daten zu anderen Hosts in der Agentenausgabe des Piggyback-Hosts transportiert.
+Die Ausgabe des {CMK}-Agenten ist ein einfaches textbasiertes Format.
+
+Neu ist jetzt, dass im Output eine Zeile erlaubt ist, die mit `&lt;&lt;&lt;&lt;` beginnt und mit `&gt;&gt;&gt;&gt;` endet.
+Dazwischen steht ein Host-Name.
+Alle weiteren Monitoring-Daten ab dieser Zeile werden dann diesem Host zugeordnet.
+Hier ist ein beispielhafter Auszug, der die Sektion `+<<<esx_vsphere_vm>>>+` dem Host `316-VM-MGM` zuordnet:
+
+[{file}]
+----
+<<<<316-VM-MGM>>>>
+<<<esx_vsphere_vm>>>
+config.datastoreUrl url /vmfs/volumes/55b643e1-3f344a10-68eb-90b11c00ff94|uncommitted 12472944334|name EQLSAS-DS-04|type VMFS|accessible true|capacity 1099243192320|freeSpace 620699320320
+config.hardware.memoryMB 4096
+config.hardware.numCPU 2
+config.hardware.numCoresPerSocket 2
+guest.toolsVersion 9537
+guest.toolsVersionStatus guestToolsCurrent
+guestHeartbeatStatus green
+name 316-VM-MGM
+...
+<<<<>>>>
+----
+
+Diese Zuordnung *muss* immer durch eine Zeile mit dem Inhalt `&lt;&lt;&lt;&lt;&gt;&gt;&gt;&gt;` wieder aufgehoben werden.
+Die weitere Ausgabe gehört dann wieder zum Piggyback-Host.
+
+ifdef::onprem[]
+Bei der Verarbeitung der Agentenausgabe extrahiert {CMK} die Teile, die für andere Hosts bestimmt sind, und legt sie in Dateien unterhalb von `~/tmp/check_mk/piggyback` ab.
+Darunter befindet sich für jeden Piggybacked-Host (z.B. für jede VM) ein Unterverzeichnis -- in unserem Beispiel also ein Ordner mit dem Namen `B`.
+Darin ist dann pro Piggyback-Host eine Datei mit den eigentlichen Daten.
+Deren Name wäre in unserem Beispiel `A`.
+Warum ist das so kompliziert gelöst?
+Nun, ein Host kann in der Tat Piggyback-Daten von _mehreren_ Hosts bekommen, somit wäre eine einzelne Datei nicht ausreichend.
+
+[TIP]
+====
+Wenn Sie neugierig sind, wie die Piggyback-Daten bei Ihnen aussehen, finden Sie die Agentenausgaben Ihrer Hosts in der Monitoring-Instanz im Verzeichnis `~/tmp/check_mk/cache`.
+Eine Übersicht über alle beteiligten Dateien und Verzeichnisse finden Sie xref:files[weiter unten].
+====
+
+Mit dem Befehl `cmk-piggyback list sources` erhalten Sie eine Liste aller Piggyback-Hosts, die Daten über andere Hosts bereitgestellt haben.
+Das Gegenstück dazu ist der Befehl `cmk-piggyback list piggybacked`, um eine Liste aller Piggybacked-Hosts zu erhalten (unabhängig davon, ob diese im Monitoring bereits eingerichtet sind).
+
+Mit `cmk-piggyback` stehen Ihnen noch weitere Möglichkeiten zur Verfügung, um die Behandlung von Piggyback-Daten im Monitoring nachzuvollziehen.
+Sie können beispielsweise mit `cmk-piggyback track` nachverfolgen, welche Piggyback-Daten auf dem {CMK}-Server eintreffen.
+Mit `cmk-piggyback create-sections` erzeugen Sie beispielhafte Piggyback-Daten.
+endif::[]
+
+ifdef::saas[]
+Bei der Verarbeitung der Agentenausgabe extrahiert {CMK} die Teile, die für andere Hosts bestimmt sind, und legt sie auf dem {CMK}-Server ab.
+Für jeden Piggybacked-Host existiert dabei ein Verzeichnis.
+Die Daten jedes Piggyback-Hosts werden in einer Datei im entsprechenden Zielverzeichnis abgelegt.
+Dadurch kann ein Host im Monitoring Piggyback-Daten von _mehreren_ Hosts bekommen, hierfür wäre eine einzelne Datei nicht ausreichend.
+endif::[]
+
+
+ifdef::onprem[]
+[#orphaned_piggyback_data]
+=== Verwaiste Piggyback-Daten
+
+Wenn Sie in in einer Umgebung arbeiten, in der Hosts automatisiert den Piggyback-Host wechseln, empfehlen wir die Nutzung der xref:dcd#[dynamischen Host-Verwaltung].
+Wird deren Einsatz nicht benötigt oder erwünscht (beispielsweise weil virtuelle Maschinen manuell umgezogen werden),
+dann kann es Ihnen passieren, dass Piggyback-Daten für einen Host vorhanden sind, den Sie in {CMK} gar nicht angelegt haben.
+Das kann Absicht sein, vielleicht aber auch ein Fehler -- z.B. weil ein Name nicht genau übereinstimmt.
+
+Mit dem Befehl `cmk-piggyback list orphans` erhalten Sie eine Liste alle Objekte, für die es zwar Piggyback-Daten gibt, die aber noch nicht als Hosts in {CMK} angelegt sind.
+Pro Zeile wird der Name eines nicht überwachten Piggybacked-Hosts ausgegeben:
+
+[{shell}]
+----
+{c-omd} cmk-piggyback list orphans
+fooVM01
+barVM02
+----
+
+Diese Ausgabe ist „sauber“, und Sie können sie z.B. in einem Skript weiterverarbeiten.
+
+endif::[]
+
+
+ifdef::onprem[]
+[#distributed_piggyback]
+=== Piggyback im verteilten Monitoring
+
+Im xref:glossar#distributed_monitoring[verteilten Monitoring] können Sie Ihre Piggyback-Daten entsprechend Ihrer betrieblichen Strukturen ordnen.
+Das heißt, Piggyback-Daten, die über einen Host ins Monitoring einfließen, können -- auch instanzübergreifend -- einem anderen Host für die Auswertung zugewiesen werden.
+Diese Weiterleitung der Piggyback-Daten erfolgt über die Zentralinstanz.
+
+Standardmäßig werden Piggyback-Daten immer auf der Instanz verarbeitet, auf der sie erkannt werden.
+Sie sind dabei automatisch dem Host zugeordnet, auf dem sie ankommen.
+Über die Eigenschaften des Hosts können Sie dies ändern.
+
+image::piggyback_basic_settings.png[alt="Einstellung der überwachenden Instanz."]
+
+Wählen Sie hier die andere Instanz -- egal ob Zentralinstanz oder Remote-Instanz -- auf der Sie die Piggyback-Daten überwachen wollen.
+Für die Hosts auf der "neuen" Instanz gilt ebenfalls: xref:existing_hosts[Hosts müssen vorhanden sein].
+
+Um Ihre Zentralinstanz zu entlasten, können Sie die Piggyback-Daten von einer Remote-Instanz zu einer anderen alternativ auch direkt übertragen -- also ohne Beteiligung der Zentralinstanz.
+Weitere Informationen zu dieser Peer-to-Peer-Verbindung finden Sie im Artikel xref:distributed_monitoring#peer-to-peer[Verteiltes Monitoring].
+endif::[]
+
+
+ifdef::onprem[]
+[#files]
+== Dateien und Verzeichnisse
+
+=== Pfade auf dem {CMK}-Server
+
+[cols="35,~"]
+|===
+|Pfad |Bedeutung 
+
+|`~/tmp/check_mk/piggyback/` |Ablageort für Piggyback-Daten
+|`~/tmp/check_mk/piggyback/B/` |Verzeichnis von Piggyback-Daten _für_ Host B
+|`~/tmp/check_mk/piggyback/B/A` |Datei mit Piggyback-Daten _von_ Host A _für_ Host B
+|`~/tmp/check_mk/piggyback_sources/` |Metadaten zu den Hosts, die Piggyback-Daten erzeugen
+|`~/tmp/check_mk/cache/A` |Agentenausgabe von Host A -- inklusive eventuell vorhandenen Piggyback-Daten in Rohform
+| `~/bin/cmk-piggyback` |Hilfsskript mit Analysewerkzeugen für Piggyback-Funktionen. Informationen zur Verwendung des Skripts erhalten Sie mit `cmk-piggyback -h`.
+|===
+endif::[]

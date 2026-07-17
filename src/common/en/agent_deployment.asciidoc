@@ -1,0 +1,1523 @@
+// -*- coding: utf-8 -*-
+// IGNORE TMPDIR
+// NONASCII
+include::global_attr.adoc[]
+= Automatic agent updates
+:title: Automatic agent updates - Distribute agents and plug-ins automatically
+:description: In this article you will learn how to create custom installation packages for agents in {CMK}, and if required, distribute them automatically.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+ifdef::onprem[]
+xref:update#[Updates and Upgrades]
+xref:cmk_commandline#[{CMK} on the command line]
+endif::[]
+{related-end}
+
+ 
+[#intro]
+== Introduction
+
+ifdef::onprem[]
+{cee-only}
+The commercial editions can update their agents on Linux, Windows and Solaris automatically.
+endif::[]
+ifdef::saas[]
+{CE} can update its agents on Linux, Windows and Solaris automatically.
+endif::[]
+This feature enables easy updating of the agents in the case of new {CMK} versions, and even a changed configuration of the agents can be applied automatically.
+In this way you can take advantage of the xref:wato_monitoringagents#bakery[Agent Bakery] to apply individual configurations to hosts.
+
+// start translation
+////
+Ermöglicht werden die automatischen Aktualisierungen des {CMK}-Agenten auf den überwachten Hosts durch das Agentenplugin _Agent Updater_.
+Nach der erstmaligen Einrichtung sorgt der Agent Updater dafür, dass Konfigurationsänderungen für Ihre Agenten regelmäßig automatisch auf den betroffenen Hosts verfügbar gemacht werden.
+Der Vorteil für große Umgebungen mit vielen überwachten Hosts mit ähnlichen Eigenschaften liegt auf der Hand:
+Änderungen werden von Ihnen einmalig umgesetzt, und die Verteilung der geänderten Agenten läuft ganz von alleine ab, ohne dass Sie auf jeden überwachten Host manuell zugreifen und dort den neuen Agenten herunterladen und aktivieren müssen.
+////
+// end translation
+
+This article describes how to set up automatic agent updates on your monitored hosts.
+
+* In the chapter xref:setup_automatic_updates[Setting up automatic updates], you will learn what preparatory steps are required and how to enable automatic agent updates for hosts.
+
+* The chapter xref:diagnosis[Diagnosis] helps you assess whether all updates are being distributed as intended.
+
+* The chapter xref:maintenance[Maintenance] summarizes one-time and recurring tasks.
+
+ifdef::onprem[]
+* The chapter xref:scenarios[Deployment scenarios] provides tips for implementing the typical scenarios described and highlights additional considerations for each.
+endif::[]
+
+ifdef::onprem[]
+* The configuration of automatic updates in distributed monitoring is covered separately in the chapter xref:central_setup[Agent updates in distributed monitoring].
+endif::[]
+
+ifdef::onprem[]
+* Since we strongly recommend using HTTPS, you will find specific instructions for securing your setup in the chapter xref:https_handling[Working with HTTPS].
+endif::[]
+
+* The chapter xref:faq[Troubleshooting] lists some common errors, their causes, and possible solutions.
+
+ifdef::onprem[]
+* In the chapter xref:files[Files and directories], you will find all relevant paths on the {CMK} server and on the monitored host.
+endif::[]
+
+ifdef::saas[]
+* In the chapter xref:files[Files and directories], you will find all relevant paths on the monitored host.
+endif::[]
+
+
+[#setup_automatic_updates]
+== Setting up automatic updates
+
+To implement the updates, follow these steps:
+First open [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX# and select [.guihint]#Agents > Automatic updates#:
+
+image::agent_deployment_automatic_agent_updates.png[alt="Prerequisites for the automatic agent updates."]
+
+See [.guihint]#Prerequisites# for a list of prerequisites that need to be met for the automatic updates to work correctly.
+You can simply tick these off in order.
+Do not forget that you can get more information for each of these items via [.guihint]#Help > Show inline help#.
+Clicking on icon:icon_edit[alt="Icon for editing."] will take you directly to the setting you need to configure.
+Specifically, the settings described in the following five sections must be made and then activated via the [.guihint]#Master switch#.
+
+
+[#create_signature_key]
+=== Creating a signature key
+
+The system is designed in a way that the agents can download updates via HTTP or HTTPS from their central monitoring server.
+Because agents contain executable code it is especially important to guard against the possibility of falsified agents coming from an attacker.
+Signature keys are used for this purpose.
+These keys consist of a pair of public and private keys (the public-key method).
+
+You can create as many signature keys as you like.
+Each of these is secured with a passphrase, which you will subsequently need to enter each time you sign.
+This prevents, for example, an attacker gaining access to a monitoring server backup from signing agents.
+
+To generate a signature key,
+for the first entry, [.guihint]#Signature keys#, click icon:icon_edit[alt="Edit icon."] and, on the next page, click [.guihint]#Generate key#.
+
+.You must specify a description and passphrase for a signature key
+image::agent_deployment_add_signature_key.png[alt="Dialog for creating a signature key."]
+
+Enter the passphrase, make a note of it, and click [.guihint]#Create# to generate the key.
+
+[IMPORTANT]
+====
+The signature key cannot be changed or recovered later.
+If the key or passphrase is lost, this may mean that all agents will have to be updated manually.
+====
+
+Signature keys have a limited lifespan.
+This means that it is sometimes necessary to replace a signature key.
+For more information, see the chapter xref:replace_signature_key[Maintenance].
+
+
+[#configure_update_plugin]
+=== Configuring the update plug-in
+
+The actual update is performed by an agent plug-in named `cmk-update-agent`.
+This is called by the agent in a definable cycle (e.g. once per hour).
+At this time it asks the deployment server (your central monitoring system) if there is a new package available for this host, and if so it will then perform the update.
+
+The plug-in must of course be present and correctly configured in the agent.
+To do this, extend the agents with this plug-in using the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule set.
+You can find this rule set by clicking on the [.guihint]#Configuration of update plug-in# entry on the [.guihint]#Automatic agent updates# page.
+
+Note that the rule set here follows the xref:wato_rules#matching_type['First rule per parameter wins'] principle.
+This allows you to define basic settings in general so that they do not have to be set again and again in the more specific rules.
+In addition, the xref:user_interface#inline_help[inline help] provides more information about each item as soon as you activate it.
+
+.In the Agent Updater plug-in configuration rule, you specify details regarding the behavior of the Updater plug-in in the agent package
+image::agent_deployment_agent_updater_empty.png[alt="The still empty rule for configuring the Agent Updater plug-in."]
+
+Below are a few explanations of the individual points.
+
+
+[#activation]
+==== Activation
+
+Check the [.guihint]#Activation# option and select the appropriate value ([.guihint]#Deploy plugin ...#) to add the plug-in to the agent.
+Here, for example, rule inheritance can be used to set a default in a higher-level folder and override this for individual hosts/folders as needed.
+
+
+[#update_server_information]
+==== Update server information
+
+Optional configuration data for the connection of the Agent Updater to the {CMK} server can be entered here.
+If this entry is not configured, the information must be entered later when registering the Agent Updater.
+
+
+[#fixed_update_server]
+===== Usage
+
+ifdef::onprem[]
+In the case of xref:glossar#central_setup[distributed monitoring with central setup], the Agent Updater receives its relevant update server by default from the {CMK} site to which it connects.
+This option can be used to configure that the update server entered here is used permanently and that the automatic update server will be ignored.
+endif::[]
+ifdef::saas[]
+This setting is only relevant for the on-premises editions of {CMK} and has no effect for {CE}.
+endif::[]
+
+
+[#dns_name_update_server]
+===== DNS name or IP address of update server
+
+Here you enter--with a few exceptions--the name of the server on which you are currently configuring this rule.
+Therefore, you can copy the URL from your current browser window.
+
+An exception to this approach would be if the affected hosts should be 'moved' to another {CMK} server.
+ifdef::onprem[]
+For this situation, once only, enter a different server here.
+See also below under xref:scenarios[Deployment scenarios].
+Enter the DNS name under which the {CMK} server can be accessed.
+It is important here that the host to be monitored can resolve this DNS name and that it has been configured as a host in {CMK}.
+When using HTTPS, make sure that the name of the certificate matches the name of the {CMK} server known to the host.
+endif::[]
+
+
+[#cmk_site_update_server]
+===== Name of {CMK} site of update server
+
+Here you enter--with a few exceptions--the name of the site on which you are currently configuring this rule.
+An exception to this approach would be if the affected hosts should be 'moved' to another {CMK} site.
+ifdef::onprem[]
+In such a case, for one time only, enter a different site here.
+See also below under xref:scenarios[Deployment scenarios].
+In a xref:glossar#central_setup[distributed monitoring with central setup], the site where you want to register may also be different from the central site where this rule is configured.
+endif::[]
+
+
+[#update_protocol]
+===== Protocol to use for fetching updates
+
+ifdef::saas[]
+For {CE} only HTTPS is relevant.
+endif::[]
+
+ifdef::onprem[]
+If--as we recommend--you use HTTPS,
+you must ensure that the Agent Updater also has a CA certificate (CA = Certification Authority) available to verify the connection.
+
+[IMPORTANT]
+====
+Depending on the server configuration, the use of HTTPS (including forwarding from HTTP to HTTPS) may be forced.
+In such a case, configuring this rule to HTTP has no effect.
+====
+endif::[]
+
+
+[#certificates_for_https]
+==== Certificates for HTTPS verification
+
+ifdef::saas[]
+For updates obtained from your {CE} site, this setting is irrelevant and can be left empty.
+endif::[]
+ifdef::onprem[]
+
+xref:certificates#[CA or self-signed certificates] configured here are available to the Agent Updater for the verification of HTTPS connections.
+Alternatively, in the case of a xref:glossar#central_setup[distributed monitoring with central setup], certificates can also be made available to the Agent Updater from the {CMK} site,
+or these can be imported directly during the connection via command line parameters.
+
+[IMPORTANT]
+====
+If the server's certificate chain is signed with a public CA, the connection can normally be verified without imported certificates.
+However, as soon as imported certificates from one of the mentioned sources are available to the Agent Updater, all other CA certificate authorities are ignored!
+In the case of problems with the configuration of HTTPS, please consult the xref:faq4[following FAQ] below.
+====
+endif::[]
+
+
+[#interval_for_update_check]
+==== Interval for update check
+
+Here you specify the interval in which the Agent Updater queries the configured monitoring server whether any updates are available.
+As long as the specified interval has not expired, a cached call is returned, so as to burden the network load as little as possible.
+It usually makes sense to use an interval of not less than 10 minutes,
+otherwise there is the very great danger that your network will be very heavily burdened if you have a large number of {CMK} agents.
+If you do not set a value here a default value of 1 hour will apply.
+
+
+[#proxy_settings]
+==== Proxy settings
+
+This rule setting is likewise optional.
+The Agent Updater initially assumes that there is a direct connection to the {CMK} server on the target host, even with configured proxy settings, and ignores all local proxy settings.
+If this is the desired behavior this rule setting can therefore be omitted.
+Otherwise either enter proxy settings manually, or use the host's existing environment variables.
+
+
+[#executable_format]
+==== Executable format (Linux)
+
+ifdef::saas[]
+Leave this setting set to [guihint]#packaged binary#.
+endif::[]
+
+ifdef::onprem[]
+You can optionally specify how the plug-in is to be added to the agent installation package.
+The selection you make here affects only the creation of the updater for Linux hosts.
+
+For 64-bit systems, you can select the [.guihint]#packaged binary# option.
+The prerequisite for this option is a x86-64 Linux system with _glibc_ 2.17 or higher.
+For deployment on 32-bit systems, or in contexts where for other reasons you do not wish to use the binary, select the [.guihint]#Python script# option instead.
+The following system requirements apply:
+
+* Python version 3.7 or newer
+* The Python modules _cryptography_, _requests_, and _pysocks_ (the last one for SOCKS proxy support)
+
+On hosts running other operating systems, the Agent Updater is deployed in an automatically selected format.
+For these hosts, your selection for the [.guihint]#Executable format (Linux)# option is not taken into account.
+endif::[]
+
+
+[#signature_keys]
+==== Signature keys the agent will accept
+
+Select at least one signature key whose signature should be accepted by the Agent Updater.
+You can also optionally specify multiple keys.
+This can be the case if, for example, you want to disable an old key.
+For this purpose the host's Agent Updater must in the interim accept both keys.
+
+
+[#registration]
+==== Registration
+
+Starting with {CMK} {v25}, it is possible to register the Agent Updater together with the Agent Controller.
+Using the setting for [.guihint]#Registration#, you can specify whether and how the joint registration should be performed.
+
+If you want the registration of the Agent Controller to be xref:one_registration[coupled with the Agent Updater registration], choose between the first two options:
+
+* With [.guihint]#On first agent controller registration#, the first site where you register the Agent Controller will also be used for registering the Agent Updater.
+In this scenario, you can later register the host on a different {CMK} site without overwriting the Agent Updater's registration.
+* With [.guihint]#On every agent controller registration#, the most recent site on which the Agent Controller was registered is also used for registering the Agent Updater.
+
+If you prefer to always register the Agent Updater xref:register_separate[separately from the Agent Controller], select the last option, [.guihint]#Manual#.
+With this setting, you still have the option to perform the registration of the Agent Updater together with the registration of the Agent Controller on individual hosts.
+
+ifdef::onprem[]
+.Should you register the Agent Updater together with, or separately from, the Agent Controller?
+[%collapsible]
+====
+Generally, registering them together is the more convenient option.
+Separate registration is also available if, for example, due to changes in the responsibilities of different sites in xref:central_setup[distributed monitoring], you want to register the Agent Updater individually on a different site without changing the Agent Controller's registration.
+====
+endif::[]
+ifdef::saas[]
+If you have already registered the Agent Controller, for example via xref:hosts_autoregister#autoregister[Auto-registration], you will only need to register the Agent Updater individually.
+endif::[]
+
+ifdef::onprem[]
+.After you have configured all settings in the rule as needed, the completed rule will look something like this
+image::agent_deployment_agent_updater.png[alt="The completed rule for configuring the Agent Updater plug-in."]
+endif::[]
+ifdef::saas[]
+.After you have configured all settings in the rule as needed, the completed rule will look something like this. The use of an IP address instead of a hostname, as shown here, is only relevant for on-premises editions of {CMK}.
+image::agent_deployment_agent_updater.png[alt="The completed rule for configuring the Agent Updater plug-in."]
+endif::[]
+
+Save all your entries by clicking on icon:icon_save[alt="Icon for saving."] [.guihint]#Save#.
+
+
+[#bakery]
+=== Baking and signing agents
+
+Next, you can immediately bake and sign the agents configured in this way in a single action.
+This is because the newly created and customized rules will not be found in the installation packages until you have created/baked them again.
+
+To do this, click the [.guihint]#Baked agents# entry on the [.guihint]#Automatic agent updates# page, and then click [.guihint]#Bake and sign agents#.
+You must now enter the passphrase for the signature key.
+After you click [.guihint]#Bake and sign#, the baking procedure will start as a background process.
+When this process has completed, you will be informed:
+
+image::agent_deployment_agent_baking_successful.png[alt="Success message about baking the agent packages."]
+
+[#sign_agent]
+All agents signed in this way will be assigned to a corresponding icon:icon_user_locked[alt="Icon of a signature key."] symbol.
+If you have created multiple keys, sign with these additional keys separately.
+
+It is sufficient for the Agent Updater on the host to be monitored if the new package has been signed with one of the keys known to the updater.
+
+The properties of each available baked agent package appear in the Agent Bakery overview.
+Here you can check, for example, whether the updater plug-in is included in the agent package ([.guihint]#Deploy plug-in that updates agent automatically#).
+
+The screenshot shows the left side of the overview table.
+To the right of it (not shown here) are the icons for downloading this agent package for various target systems.
+The table also displays the hash for the agent package.
+This allows you to map agents installed on hosts to entries in the Agent Bakery and thus track which properties were configured for that specific agent.
+
+.This baked and signed agent contains the Agent Updater plug-in with the [.guihint]#On first Agent Controller registration# setting
+image::agent_deployment_baked_agent_properties.png[alt="Properties of a baked agent in the Agent Bakery overview."]
+
+
+[#register_agent]
+=== Registering the Agent Updater
+
+// start translation - this block replaces the following text
+////
+Registrieren Sie im nächsten Schritt die Hosts, für die Sie den Agent Updater einrichten wollen, am {CMK}-Server.
+
+.Zweck der Registrierung
+[%collapsible]
+====
+[#about_registration]
+Die Registrierung dient dazu, das Vertrauensverhältnis zwischen Host und {CMK}-Server herzustellen.
+Der Agent Updater auf einem Host darf nach der Registrierung jederzeit *seinen eigenen* Agenten ohne Passwort vom Server herunterladen.
+Ein Herunterladen von Agenten, die für andere Hosts vorgesehen sind, ist nicht möglich (da diese vertrauliche Daten enthalten könnten).
+
+Damit der {CMK}-Server weiß, welcher Agent für welchen Host bereitgestellt werden muss, vereinbaren Agent und Server bei der Registrierung einen geheimen Schlüssel (_Host Secret_).
+Dieser Schlüssel wird zusammen mit dem Namen des Hosts, wie er im Monitoring bekannt ist, lokal auf dem {CMK}-Server gespeichert.
+
+ifdef::onprem[]
+Diese Signatur stellt die Authentizität des Agenten unabhängig vom gewählten Protokoll sicher.
+Dennoch ist der empfohlene Weg die xref:https_handling[Verwendung von HTTPS], da HTTP keine Verschlüsselung der Übertragung bietet.
+Der Agent kann in Skripten und Konfigurationsdateien Passwörter enthalten.
+endif::[]
+====
+
+Da ein neuer Host dem {CMK}-Server bisher noch nicht vertraut, und dieser auch noch nicht weiß, dass der Host automatisch aktualisiert werden soll, muss der Agent auf dem Host einmalig von Hand installiert werden.
+
+Laden Sie dafür zunächst unter [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX# das für den Host passende Paket aus der xref:wato_monitoringagents#bakery_download[Agentenbäckerei] herunter.
+Achten Sie darauf, dass das Paket auch wirklich das Agent-Updater-Plugin xref:bakery[enthält].
+
+Die nötigen Schritte für die Umsetzung werden in den folgenden Abschnitten erklärt.
+
+
+[#agent_updater_controller]
+==== Registrierung des Agent Updaters und Agent Controllers
+
+Der Agent Updater existiert separat vom xref:wato_monitoringagents#agents[Agent Controller], dessen Aufgabe darin besteht, die ermittelten Daten des Agentenskripts bzw. des Agentenprogramms auf einem überwachten Host an die {CMK}-Instanz weiterzugeben.
+Der Agent Controller kommt überall dort zum Einsatz, wo ein Host mit einem {CMK}-Agenten überwacht wird.
+ifdef::onprem[]
+Er steht in jeder Edition von {CMK} zur Verfügung und muss nicht manuell eingerichtet werden, weil er mit dem Agenten selbst ausgeliefert und installiert wird.
+endif::[]
+ifdef::saas[]
+Er muss nicht manuell eingerichtet werden, weil er mit dem Agenten selbst ausgeliefert und installiert wird.
+endif::[]
+
+Eine Gemeinsamkeit von Agent Updater und Agent Controller ist die einmalige Registrierung bei der {CMK}-Instanz.
+Die Registrierung etabliert in beiden Fällen das Vertrauensverhältnis und ermöglicht dann eine verschlüsselte Kommunikation.
+
+Wenn Sie mit dem Agent Updater arbeiten, ist die {CMK}-Instanz für die Registrierung typischerweise die gleiche, bei der Sie auch den Agent Controller bei der Ersteinrichtung des Agenten auf dem jeweiligen Host registriert haben.
+Daher gibt es seit {CMK} {v25} die Möglichkeit, beide Registrierungen mit einem einzigen Befehlsaufruf durchzuführen.
+Mehr darüber erfahren Sie im Abschnitt über die xref:#one_registration[gleichzeitige Registrierung des Agent Controllers und des Agent Updaters].
+////
+// end translation
+// delete from here
+In the next step register the hosts to be monitored on the {CMK} server.
+Since a new host is not yet trusted by the {CMK} server, and the server does not yet know that the host should be updated automatically, the agent must be installed manually--once-only--on the host.
+
+To do this, first go to [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX# and download the appropriate package for the host from the xref:wato_monitoringagents#bakery_download[Agent Bakery].
+Make sure that the package really xref:bakery[includes] the Agent Updater plug-in.
+
+Both the Agent Controller and the Agent Updater must each be registered once with your {CMK} site.
+The steps required to achieve this are explained in the following sections.
+
+[#about_registration]
+.The purpose of registration
+[%collapsible]
+====
+The registration process serves to establish a relationship of trust between the host and the {CMK} server.
+After registration, the Agent Updater on a host may download *its own* agent from the server at any time without a password.
+Downloading agents that are meant for other hosts is not possible (as these may contain confidential data).
+
+To ensure that the {CMK} server knows which agent must be provided for which host, the agent and server agree on a secret key (_host secret_) during registration.
+This key is stored locally on the {CMK} server, along with the host's name as it is known in the monitoring system.
+
+ifdef::onprem[]
+This signature ensures the agent's authenticity regardless of the selected protocol.
+However, the recommended approach is to xref:https_handling[use HTTPS], since HTTP does not provide transmission encryption.
+The agent may contain passwords in scripts and configuration files.
+endif::[]
+====
+// delete to here
+
+[#user]
+==== Selecting a user for registration
+
+When registering the Agent Controller and the Agent Updater, you must provide the credentials of a {CMK} user with the appropriate permissions.
+The user `agent_registration`, which is available by default in new {CMK} sites, is suitable for this purpose.
+ifdef::onprem[]
+However, you can also specify another user, provided they have the required permissions.
+
+.Permissions for registering the Agent Controller or Agent Updater
+[%collapsible]
+====
+* [.guihint]#Use the GUI at all# is a prerequisite for contacting the deployment endpoint.
+* To register the Agent Controller, the user needs _one_ of the following permissions, depending on whether they are meant to register only their own hosts, or any hosts:
+** [.guihint]#Register any existing host# (all hosts)
+** [.guihint]#Register managed existing host# (only hosts for which the user is a contact)
+* To register the Agent Updater, the user additionally needs _one_ of the following permissions:
+** [.guihint]#Enable agent updates on all hosts & download all monitoring agents# (all hosts)
+** [.guihint]#Enable agent updates on hosts & download monitoring agents# (only hosts for which the user is a contact)
+====
+
+Since {CMK} {v25}, the `agent_registration` user has all the permissions required to register the Agent Controller and the Agent Updater.
+endif::[]
+
+In addition to the username, you will also need the corresponding [.guihint]#Automation secret#.
+For information on configuring the automation user and the corresponding automation password, see the User Guide article on xref:wato_user#automation[users and permissions].
+
+The automation password is required only once for registration.
+Following a successful registration, the host authenticates itself to the {CMK} server using the _host secret_, which was automatically established during registration.
+
+When registering, you must also specify the name of the host as it is known in the monitoring system.
+Note that this name is not necessarily identical to the hostname of the computer itself.
+
+The following sections demonstrate registration using the `agent_registration` user.
+As an example, the host `myhost` is registered with the {CMK} server `myserver.example.com` for the {CMK} site `mysite`.
+
+When you configured the update plug-in, you already decided whether you want to perform the xref:registration[registration of the Agent Updater] simultaneously with the registration of the Agent Controller or handle these two registrations separately.
+Depending on the selected configuration, proceed now to the section on xref:one_registration[simultaneous registration], or to the section on xref:register_separate[separate registration].
+
+
+[#one_registration]
+==== Simultaneous registration of the Agent Controller and the Agent Updater
+
+The specific command for simultaneous registration depends on xref:registration[the value you selected] for the [.guihint]#Registration# setting in the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule.
+The two options [.guihint]#On first agent controller registration# and [.guihint]#On every agent controller registration# ensure that the Agent Updater will be automatically registered when the Agent Controller is registered.
+The difference between the two options lies in whether the Agent Updater registration is overwritten if you register the Agent Controller with multiple sites.
+
+If you have selected the value [.guihint]#Manual#, you can still include the Agent Updater registration in the command for registering the Agent Controller on individual hosts.
+To do this, include the `--automatic-updates` option when running the command.
+
+The following examples illustrate a scenario in which simultaneous registration via the [.guihint]#Registration# option has been configured in the rule [.guihint]#Agent updater (Linux, Windows, Solaris)#.
+Therefore, the `--automatic-updates` option is _not_ required during registration in this case.
+Simply execute the command for xref:agent_linux#register_host[registering the Agent Controller]—the additional registration of the Agent Updater is already included in the agent package and does not need to be explicitly specified when running the command:
+
+[.tabs]
+====
+[#linux_register_once]#Linux#::
++
+--
+[{shell},highlight=30-31]
+----
+{c-root} cmk-agent-ctl register \ 
+    -s myserver.example.com \
+    -i mysite \
+    -H myhost \
+    -U agent_registration
+Attempting to register at myserver.example.com, port 8017. Server certificate details:
+
+PEM-encoded certificate:
+-----BEGIN CERTIFICATE-----
+MIIFkDCCA3igAwIBAgIUWlP10RwdFF93PtHeU4BAmA/OkXowDQYJKoZIhvcNAQEN
+...
+U9qelb7ICObY8Ikk+8QX8pmfYeWKT7YHvN27r5JPKsEWiGV3
+-----END CERTIFICATE-----
+
+Issued by:
+	Site 'mysite' local CA
+Issued to:
+	mysite
+Validity:
+	From Tue, 03 Mar 2026 13:44:51 +0000
+	To   Mon, 03 Mar 2036 13:44:51 +0000
+
+Do you want to establish this connection? [Y/n]
+pass:[>] Y
+
+Password for Checkmk user 'agent_registration':
+pass:[>] 
+
+Registration complete.
+Attempting to register Agent Updater...
+Agent Updater registration complete.
+----
+--
+[#windows_register_once]#Windows#::
++
+--
+[{powershell},highlight=30-31]
+----
+PS C:\Windows\system32> & "C:\Program Files (x86)\checkmk\service\cmk-agent-ctl.exe" register `
+    -s myserver.example.com `
+    -i mysite `
+    -H mywindowshost `
+    -U agent_registration
+Attempting to register at myserver.example.com, port 8000. Server certificate details:
+
+PEM-encoded certificate:
+-----BEGIN CERTIFICATE-----
+MIIFijCCA3KgAwIBAgIUaJdZuULIWevTdrW/UjVk8mFWio8wDQYJKoZIhvcNAQEN
+...
+Ayk0aiwc7ylx3cyz9KUyf0fdKaagz2ZLzofuTdjG
+-----END CERTIFICATE-----
+
+Issued by:
+        Site 'mysite' local CA
+Issued to:
+        mysite
+Validity:
+        From Wed, 11 Mar 2026 11:56:18 +0000
+        To   Tue, 11 Mar 2036 11:56:18 +0000
+
+Do you want to establish this connection? [Y/n]
+pass:[>] Y
+
+Password for Checkmk user 'agent_registration':
+pass:[>] 
+
+Registration complete.
+Attempting to register Agent Updater...
+Agent Updater registration complete.
+----
+--
+====
+
+The output during registration is similar to the output when registering the Agent Controller without the Agent Updater.
+The highlighted lines at the end indicate that the Agent Updater registration has also been initiated and completed successfully.
+
+To verify the results of the registration, you can, for example, view the xref:show_config[local configuration] of the Agent Updater on the host .
+
+You can now xref:master_switch[enable] the distribution of automatic updates in your {CMK} site.
+
+
+[#register_separate]
+==== Registering the Agent Updater separately
+
+You can register the Agent Updater separately from the Agent Controller.
+The prerequisite for this is that a baked and signed agent package with the following properties is available on the host:
+
+* It contains the Agent Updater plug-in--after all, you only want to perform the registration manually, not the regular updating of the agent.
+* It contains the value [.guihint]#Manual# for the setting xref:registration[[.guihint]#Registration#] in the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule.
+
+ifdef::onprem[]
+{cce-only}
+endif::[]
+If you use the auto-registration available in {CE}, those agent packages that are configured for it will _always_ include the updater plug-in, with the setting [.guihint]#Manual# for the updater's registration.
+
+ifdef::saas[]
+This also applies to the preconfigured agent packages that are available in {CE} from the start for the automatic creation of hosts.
+endif::[]
+
+In the Agent Bakery you can xref:bakery[view] the properties of a baked agent package to ensure that the above conditions have been met.
+
+For the scenario described here, it is assumed that the host is already known in the monitoring and that the Agent Controller on the host is already registered with your site.
+
+Install the downloaded agent package.
+The existing Agent Controller registration remains unchanged, and the Agent Updater plug-in has now also been installed--but the Agent Updater has not yet been registered.
+You can verify this by viewing the xref:show_config[local configuration] of the Agent Updater on the host.
+On a Linux host, the file `cmk-update-agent.state` contains only a single piece of information at this point:
+
+./var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state
+[{file}]
+----
+{'last_error': 'The agent updater is not registered at the deployment server'}
+----
+
+After installation, you will find the Agent Updater plug-in in the `/usr/lib/check_mk_agent/plugins/3600/cmk-update-agent` directory.
+The `3600` subdirectory corresponds to the xref:interval_for_update_check[update check interval] in seconds (here, the default value of one hour).
+A script with the same name is also stored under `/usr/bin/`, so `cmk-update-agent` is also available as a command.
+Use `cmk-update-agent --help` to get an overview of all available options and modes.
+
+You can now manually register the Agent Updater at any time.
+
+If you enter `cmk-update-agent register` without any additional arguments, the interactive mode of the Agent Updater will start.
+You will be prompted to enter values for various fields that do not yet exist in any configuration file.
+You have slightly more control in non-interactive mode, as you can set all fields displayed in the help there.
+The values you specify will override those stored in the `cmk-update-agent.state` file.
+However, values from the `cmk-update-agent.cfg` file are not overwritten.
+More details on this can be found below under xref:show_config[Viewing the local configuration].
+
+In the scenario prepared here, the `cmk-update-agent.state` file does not yet contain any useful information for registration.
+The code examples below demonstrate the interactive mode, in which you enter all necessary information.
+The specific inputs required depend on the information you have already provided in the step xref:configure_update_plugin[Configuring the update plug-in].
+
+[.tabs]
+====
+Linux::
++
+--
+[#register_linux]
+
+[{shell}]
+----
+{c-root} cmk-update-agent register -v
+pass:[+]-------------------------------------------------------------------pass:[+]
+|                                                                   |
+|  Checkmk Agent Updater v{current} - Registration                   |
+|                                                                   |
+|  Activation of automatic agent updates. Your first step is to     |
+|  register this host at your deployment server for agent updates.  |
+|  For this step you need a user with the permission                |
+|  "Register all hosts" on that Checkmk site.                       |
+|                                                                   |
+pass:[+]-------------------------------------------------------------------pass:[+]
+Deployment server to connect to: 
+myserver.example.com
+
+Auto-detected protocol: https
+Checkmk site on deployment server: 
+mysite
+
+Our host name in the monitoring: 
+myhost
+
+Checkmk user with registration permissions: 
+agent_registration
+
+Password for Checkmk user: 
+
+Going to register agent at deployment server
+Applying new update URL from deployment server
+Successfully registered agent of host "myhost" for deployment.
+You can now update your agent by running 'cmk-update-agent -v'
+Saved your registration settings to /var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state.
+
+Hint: you can do this in scripts with the command:
+
+cmk-update-agent register -s myserver.example.com -i mysite -H myhost -p https -U agent_registration -P ************ -v
+----
+
+--
+
+Windows::
++
+--
+[#register_windows]
+
+After installing the agent package, the Agent Updater is integrated into the Windows agent at `C:\Program Files (x86)\checkmk\service\check_mk_agent.exe`.
+You can then always issue commands to the updater itself using `check_mk_agent.exe updater`.
+
+The command shown below starts the interactive mode.
+On Windows, this must be done in a command prompt with administrator privileges.
+
+[{powershell}]
+----
+PS C:\WINDOWS\system32> & "C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" updater register
+pass:[+]-------------------------------------------------------------------pass:[+]
+|                                                                   |
+|  Checkmk Agent Updater v{current} - Registration                   |
+|                                                                   |
+|  Activation of automatic agent updates. Your first step is to     |
+|  register this host at your deployment server for agent updates.  |
+|  For this step you need a user with the permission                |
+|  "Register all hosts" on that Checkmk site.                       |
+|                                                                   |
+pass:[+]-------------------------------------------------------------------pass:[+]
+Using previous settings from C:\ProgramData\checkmk\agent\config\cmk-update-agent.state.
+Deployment server to connect to:
+myserver.example.com
+
+Checkmk site on deployment server:
+mysite
+
+Our host name in the monitoring:
+mywindowshost
+
+Checkmk user with registration permissions:
+agent_registration
+
+Password for Checkmk user:
+
+
+Successfully registered agent of host "mywindowshost" for deployment.
+----
+
+As an alternative, you can also perform the registration in the non-interactive mode by passing the desired arguments via the command line.
+You can view an overview of the available options by running `"C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" updater --help`.
+
+The complete command for registration is as follows:
+
+[{powershell}]
+----
+PS C:\WINDOWS\system32> & "C:\Program Files (x86)\checkmk\service\check_mk_agent.exe" updater register `
+    -s myserver.example.com `
+    -i mysite `
+    -H mywindowshost `
+    -U agent_registration `
+    -v
+----
+--
+====
+
+Once the Agent Updater has been registered, proceed to the xref:master_switch[Master switch], which allows you to enable automatic update distribution in your site.
+
+
+[#master_switch]
+=== Master switch
+
+From now on, the hosts you have equipped with the agent package and the Agent Updater will check with their assigned {CMK} site at the specified interval to see if agent updates are available.
+By default, automatic agent distribution is initially disabled globally in your site.
+To finalize the setup, activate it by clicking icon:icon_edit[alt="Icon for editing."] [.guihint]#Master switch#.
+This changes the [.guihint]#Activation of automatic agent updates# global setting under [.guihint]#Setup > General > Global Settings > Automatic Agent Updates#.
+
+All conditions should should now have been fulfilled.
+The [.guihint]#Prerequisites# table should now look like this:
+
+image::agent_deployment_prerequisites_fulfilled.png[alt="Automatic agent updates with the prerequisites met."]
+
+From now on, the Agent Updater will regularly check for a new version of the agent, following the configured update interval.
+As soon as a new version is available _and signed_, the Updater will automatically download and install it.
+
+At the same time, the [.guihint]#Master switch# provides a way to xref:deactivate_automatic_updates[globally disable] updates.
+
+To verify that updates are being distributed as intended, you can now jump to the section on xref:diagnosis[diagnosis].
+
+
+
+[#diagnosis]
+== Diagnosis
+
+There are quite a few sources of information for diagnosing whether all updates work as intended.
+
+
+[#statistics]
+=== Agent deployment statistics
+
+image::agent_deployment_update_status.png[]
+
+This overview on the [.guihint]#Automatic agent updates# page shows how individual hosts behave during agent updates.
+The xref:user_interface#inline_help[inline help] gives further explanations.
+Clicking on icon:icon_view_20[] provides a detailed list of the individual hosts.
+You can also get to the complete list of all registered hosts via the [.guihint]#Monitor > System > Agent update status# view.
+There you can then search for individual hosts.
+
+image::agent_deployment_status_view.png[]
+
+In this list you will also find documentation on how the hash of an agent starts, which agent is intended for a host ([.guihint]#Target Agent#),
+which agent was most recently downloaded from the host ([.guihint]#Downloaded Agent#),
+and which agent is currently installed on the host ([.guihint]#Installed Agent#).
+In this way you can always see if the specifications have been met or where the process is currently located.
+
+The status information shown in the screenshot is acquired directly during communication between the Agent Bakery and the Agent Updater.
+To the right of the displayed section, there are also the fields [.guihint]#Update Check# and [.guihint]#Update Check Output#.
+Since {CMK} {v25}, the values in these fields are provided by a dedicated status plug-in (`cmk-update-agent-status` on Linux/Solaris, `cmk-update-agent-status.ps1` on Windows) on every request by the agent, and thus always correctly represent the current state.
+
+
+[#check_mk_agent]
+=== The [.guihint]#Check_MK Agent# service
+
+If you have installed the Agent Updater plug-in on an agent, it regularly reports the current status of the update in the form of monitoring data.
+This information is available in the [.guihint]#Check_MK Agent# service, in addition to general information about the {CMK} agent, such as the version or the number of agent plug-ins and local checks.
+You can therefore use this service to receive notifications about any issues with the updates.
+
+.The [.guihint]#Check_MK Agent# service in {WARN} state
+image::agent_deployment_agent_check.png[alt="The 'Check_MK Agent' service in service discovery."]
+
+The service also displays information about the status of the signature keys trusted by the Agent Updater.
+This information is displayed in the service details.
+Only if a signature key has already expired will this cause the service to enter a {WARN} state.
+For information on the _timely_ replacement of a key before its expiration, see the chapter on xref:replace_signature_key[Maintenance].
+
+
+[#show_config]
+=== Viewing the local configuration
+
+The behavior of the Agent Updater is governed by the two files `cmk-update-agent.cfg` and `cmk-update-agent.state`.
+It always applies that defined values from the `.cfg` file override those from the `.state` file.
+
+Since {CMK} {v25}, the Agent Updater does not run as `root` anymore on Linux, but instead under the Agent Controller user (`cmk-agent`).
+Correspondingly, the status and log files of the Agent Updater are found in dedicated xref:files_host[directories] owned by this user.
+If you used the Agent Updater prior to {CMK} {v25}, the existing files `cmk-update-agent.log` and `cmk-update-agent.state` automatically get migrated during the update.
+
+If the Agent Updater shows unexpected behavior, it is sometimes worth having a look at the configuration.
+There is also a handy feature if you call the Agent Updater directly from the command line:
+
+[{shell}]
+----
+{c-root} cmk-update-agent show-config
+Showing current configuration...
+
+Configuration from agent info file (/usr/lib/check_mk_agent/agent_info.json):
+hash: e70741b34c1be776
+platform: linux_deb
+agent_controller_user: cmk-agent
+
+Configuration from config file (/etc/check_mk/cmk-update-agent.cfg):
+certificates: []
+ignore_update_url: False
+interval: 3600
+signature_keys: ['-----BEGIN CERTIFICATE-----\n pass:q[[...]] \n-----END CERTIFICATE-----\n']
+use_proxy_env: False
+
+Configuration from state file (/var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state):
+update_url: 
+host_secret: OU4yYR1OMIXOXHCaCArryXm23J0zxF11vpKNspY5MeJo8v6TT6BM1CL4OfbgIvuO
+server: myserver.example.com
+site: mysite
+host_name: myhost
+protocol: http
+user: agent_registration
+
+----
+
+In Windows, the corresponding command is `'C:\Program Files (x86)\checkmk\service\check_mk_agent.exe' updater show-config`.
+
+
+[#logs_on_host]
+=== Log messages
+
+In the event of a problem you will also find log data for the updates on the host to be monitored.
+On Linux `cmk-update-agent` logs important information to syslog--such as warnings and errors:
+
+./var/log/syslog
+[{file}]
+----
+Jul 02 13:59:23 myhost [cmk-update-agent] WARNING: Missing config file at ./cmk-update-agent.cfg. Configuration may be incomplete.
+Jul 02 13:59:23 myhost [cmk-update-agent] ERROR: Not yet registered at deployment server. Please run 'cmk-update-agent register' first.
+----
+
+A more detailed log file `cmk-update-agent.log` including debug output and possible tracebacks can be found on Linux and on Windows:
+
+./var/lib/check_mk_agent/log/cmk-update-agent/cmk-update-agent.log
+[{file}]
+----
+2026-01-16 07:49:23,295 [288229] DEBUG: Starting Checkmk Agent Updater v2.4.0p19
+2026-01-16 07:49:23,295 [288229] DEBUG: Updating the certificate store "/var/lib/check_mk_agent/cmk-update-agent/cas/all_certs.pem"...
+2026-01-16 07:49:23,297 [288229] INFO: Updated the certificate store "/var/lib/check_mk_agent/cmk-update-agent/cas/all_certs.pem" with 1 certificate(s)
+...
+2026-01-16 07:49:23,326 [288229] DEBUG: Successfully read /var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state.
+2026-01-16 07:49:23,326 [288229] DEBUG: Successfully read /var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state.
+2026-01-16 07:49:23,327 [288229] DEBUG: Saved deployment status to /var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state.
+2026-01-16 07:49:23,327 [288229] INFO: Target state (from deployment server):
+2026-01-16 07:49:23,327 [288229] INFO:   Agent available:     True
+2026-01-16 07:49:23,327 [288229] INFO:   Signatures:          1
+2026-01-16 07:49:23,327 [288229] INFO:   Target hash:         37221b87f5cb46a2
+2026-01-16 07:49:23,327 [288229] INFO: Agent 37221b87f5cb46a2 already installed.
+2026-01-16 07:49:23,340 [288229] DEBUG: Caught Exception:
+Traceback (most recent call last):
+  File "cmk_update_agent.py", line 1733, in main
+  File "cmk_update_agent.py", line 714, in run
+  File "cmk_update_agent.py", line 1372, in _run_mode
+  File "cmk_update_agent.py", line 1071, in _do_update_as_command
+  File "cmk_update_agent.py", line 1150, in _do_update_agent
+  File "cmk_update_agent.py", line 1221, in _check_signatures
+Exception: No valid signature found.
+----
+
+Under both systems you can also use the command line option `--logfile LOGFILE` to specify an alternate path for the log file.
+
+
+[#maintenance]
+== Maintenance
+
+If you use automatic agent updates, you may—or may even need to—take care of certain matters from time to time, as described in this chapter.
+
+
+[#deactivate_automatic_updates]
+=== Skip or disable automatic updates
+
+Once set up, at the configured interval the Agent Updater will download and install any new compatible agents from the Agent Bakery.
+If you want to temporarily or permanently disable the automatic distribution of updates for one, several, or all hosts, you have the following options.
+
+
+[#remove_updater]
+==== Removing the Agent Updater plug-in from a host completely
+
+To completely remove the Agent Updater from a specific host, use the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule set to adjust the host's settings so that the update plug-in is disabled there.
+The agent will then remove its updater automatically with the next scheduled update!
+
+It goes without saying that the Updater can only be reactivated by manually installing a new agent package.
+However, the registration will remain unchanged and does not need to be renewed.
+
+
+[#host_selection]
+==== Restricting the distribution of updates to specific hosts
+
+To restrict the distribution of agent updates to specific hosts in your site, you can configure distribution conditions.
+This can be useful, for example, to test a new agent on a small number of hosts first before rolling it out to a larger number of hosts.
+This important step prevents a potential error from becoming more widespread.
+
+The middle box on the [.guihint]#Automatic agent updates# page is used for this purpose:
+
+image::agent_deployment_host_selection.png[]
+
+The conditions are always linked by a conjunction (_logical AND_). Only hosts that meet _all_ of the specified conditions will receive the update. 
+Once you have defined conditions for selecting hosts here, you can enter individual host names in the [.guihint]#Test hostname before activation# field and check whether updates are now enabled for these hosts or not.
+
+You can also access the page for configuring the conditions via [.guihint]#Setup > Global settings > Automatic agent updates > Selection of hosts to activate agent updates for#.
+
+To clear all conditions and thereby reactivate the distribution of updates to all hosts, use the [.guihint]#Reset to default# option on the [.guihint]#Setup > Global settings > Automatic agent updates > Selection of hosts to activate agent updates for# page.
+
+
+[#deactivate_master_switch]
+==== Disabling the master switch
+
+To stop the distribution of agent updates entirely within your site, simply disable the xref:master_switch[[.guihint]#Master switch#].
+All settings you have configured in the instance and on the hosts will be preserved.
+
+You can re-enable the [.guihint]#Master switch# at any time.
+
+
+ifdef::onprem[]
+[#move_to_new_monitoring_server]
+=== Migrating to a new monitoring site
+
+Should you want to move to a new {CMK} site in a single-site setup without losing the hosts registered on the server,
+it should be noted that for a successful agent update process the following information on server and host must match:
+
+* The name under which the host is monitored and registered.
+* The xref:show_config[host secret], which was automatically assigned during registration.
+* The signature used to sign the agents.
+
+To achieve this, follow these steps:
+
+. First add all hosts whose registration information is to be migrated to the new site to the monitoring.
+Make sure the hosts in the new site are monitored under the same name.
+Then copy the `~/var/check_mk/agent_deployment` folder from the old to the new monitoring site.
+
+. Export the signature key(s) that are accepted by the agents installed on the hosts.
+The signature keys can be exported and imported using [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agents > Signature keys#.
+
+. Import these signature keys from step 2 on the new monitoring site.
+
+. Configure the Agent Updater rule on the new monitoring site according to the instructions, and sign the baked agents with the imported signature key(s).
+
+. Lastly, in the Agent Updater rule on the old site, configure the fields for the update server and the name of the {CMK} site conforming to your new monitoring site, and bake the agents again.
+*Note*: Please check at this point that you have specified everything correctly _before_ you re-bake the agents.
+
+As soon as the next automatic updates have been processed on the hosts, the Agent Bakery of the old monitoring site will be locked out.
+From that time on the hosts to be monitored will only answer to the new {CMK} server.
+Following the second automatic update the agent will be installed by the new {CMK} server accordingly.
+endif::[]
+
+
+[#replace_signature_key]
+=== Replacing a signature key
+
+Newly created signature keys for the Agent Updater are valid for 10 years in {CMK}.
+However, this was not always the case.
+Signature keys created with older versions of {CMK} may be valid for significantly longer, or they may only be valid for 2 years.
+In link:https://checkmk.com/werk/17102[Werk pass:q[#]17102^] you can find out from which patch version {CMK}  started  creating signature keys with a 10-year validity period.
+That page also explains how it came to be that keys have different validity periods.
+
+It is therefore entirely possible that you will need to deal with expired signature keys in the near or distant future.
+Starting with the {CMK} patch version specified in Werk pass:q[#]17102, you can view the expiration date of a signature key in the Agent Bakery under [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agents > Signature keys#.
+
+Information about signature keys that are about to expire is sent by {CMK} in a timely manner to allow sufficient time to generate a new key and replace the expiring one.
+{CMK} administrators receive a xref:wato_user.html#messages[message] in the {CMK} user interface 90 days before a key expires.
+Then, 20 days before expiration, all {CMK} users receive a warning via email.
+
+
+==== Replacing a signature key before it expires
+
+[IMPORTANT]
+====
+When replacing a signature key, you must always ensure that the new key is recognized as valid and trustworthy before removing the old one.
+====
+
+A key replacement is performed using the following steps:
+
+. Create a new signature key. +
+Before you can replace a signature key, you must first create a new one.
+Follow the procedure described in the section xref:create_signature_key[Creating a signature key].
+If the old key has the description `signature`—as in the examples in this article—the new one could be named `signature_new`, for example.
+
+. Enter the new signature key in the existing rule [.guihint]#Agent updater (Linux, Windows, Solaris)#. + 
+The xref:configure_update_plugin[configuration of the update plug-in] currently contains only the old key `signature`.
+Edit this rule and add the new signature key `signature_new` to the parameter [.guihint]#Signature keys the agent will accept#. 
+We recommend adding the new key to the rule and _not yet_ removing the old key—at least not until you are certain that the agent update works with the new key.
+The relevant change to the rule might look something like this: +
++
+.With this setting, the Agent Updater will accept two signature keys
+image::agent_deployment_two_signature_keys.png[alt="Agent updater rule with two signature keys selected."]
+
+. Bake and sign the agent with the old key. +
+In principle, follow the same procedure described above in the xref:agent_deployment#bakery[Baking and signing agents] section. +
+_It is very important_ that you sign the package with the _old_ signature key, not the new one.
+Why the old one?
+The new signature key you have just created is not (yet) recognized by any host.
+Therefore, no Agent Updater will accept a package signed with the new key, which is unknown to it.
+So, to get the package installed on the host using the new signature key, you must sign it with the old one.
+Once you understand this principle, the procedure is not nearly as strange as it seems at first glance.
+
+. Coffee break. +
+Now you have to wait until the newly built packages, which contain the new signature key, have been distributed to *all* hosts.
+How long this takes depends on how you have configured the xref:interval_for_update_check[Interval for update check] option. +
+You can check the current status in [.guihint]#Monitor > System > Agent update status#.
+
+. Check for success. +
+As mentioned in the previous chapter on xref:check_mk_agent[Diagnosis], the details of the [.guihint]#Check_MK Agent# service displays information about the Agent Updater: +
++
+.The Agent Updater will now accept both the old and the new signature keys
+image::agent_deployment_agent_check_details.png[alt="The 'Check_MK Agent' service details showing information about the signature keys."]
+
+. Bake and sign the agent with the new key. +
+Since {CMK} shows you that the Agent Updater now also accepts the new key, you can complete the key change.
+Remove the old key from the Agent Updater rule, and then build and sign the agent again—this time with the new key.
+After that, it's time for a second coffee break, followed of course by a success check.
+
+. Finally, you can delete the old signature key under [.guihint]#Setup > Agents > Windows, Linux, Solaris, AIX > Agents > Signature keys#.
+{CMK} only allows you to delete a key if it is not used in any Agent Updater rule.
+
+
+==== Replacing an expired signature key
+
+If all of the signature keys accepted by the Agent Updater have expired, there is unfortunately no way around having to manually trigger the update of a previously created agent package on the host.
+
+The following procedure omits the details of the individual steps, which you can find in the previous section:
+
+. Create a new signature key.
+
+. Enter the new signature key in the existing rule [.guihint]#Agent updater (Linux, Windows, Solaris)#.
+
+. Bake and sign the agent with the new key.
+
+. Log in to the host and force a one-time update of the agent from the {CMK} server, without a signature check, using the following command: +
++
+[{shell}]
+----
+{c-root} cmk-update-agent --skip-signatures
+----
+
+. Verify the success in the details of the [.guihint]#Check_MK Agent# service.
+
+
+ifdef::onprem[]
+[#scenarios]
+== Deployment scenarios
+
+[#automatic_installer]
+=== The Agent Updater as automatic installer
+
+[IMPORTANT]
+====
+This is not an official feature of the Agent Updater.
+These instructions are therefore intended primarily for more experienced users.
+The official way to install a {CMK} Agent on a host is to download and run the agent package appropriate for the system.
+It is however also possible to allow the {CMK} Agent to be installed initially by the Agent Updater, since this also works as a stand-alone program.
+====
+
+Proceed as follows:
+
+. Copy the cmk-update-agent binary or the `cmk_update_agent.py` script to the host to be monitored (both can be found at `~/share/check_mk/agents/plugins` on the {CMK} server).
+. Register the host on the {CMK} server by invoking `cmk-update-agent register`.
+Here it makes sense to pass the required registration information directly via the command line
+– especially if you want to use an installation script.
+The corresponding options can be displayed when calling `cmk-update-agent register --help`.
+. Then, with a final call to the Agent Updater plug-in, install the agent with all of the configuration details for the host being monitored.
+However since there is no local configuration (the Agent Updater also displays a corresponding warning), and thus no signature for the agent package to be downloaded, call the updater once more with `cmk-update-agent --skip-signatures` to explicitly trust the downloaded package.
+The prerequisite for the installation by Agent Updater is, of course, that the Agent Bakery has a suitable agent package ready for the target host on the {CMK} server.
+endif::[]
+
+
+ifdef::onprem[]
+[#central_setup]
+== Agent updates in distributed monitoring
+
+Since {CMK} {v20} it has also been possible to distribute baked agents via remote sites.
+The prerequisite for this is a xref:glossar#central_setup[distributed monitoring with central setup]
+and a connection which allows the central site to be reached from the remote sites via HTTP/HTTPS.
+
+Such a distributed monitoring can--especially temporarily--also be operated with different {CMK} versions.
+This makes it possible to successively switch larger systems to a new {CMK} version.
+In this case, however, be sure to follow the notes on mixed-version monitoring environments in xref:distributed_monitoring#mixed_versions[distributed monitoring].
+
+
+[#functionality]
+=== Functionality
+
+Technically, the feature is implemented in such a way that requests for updates on remote sites are forwarded to the central site
+-- so that the entire configuration as well as the baking of the agents takes place exclusively on the central site.
+Agent packages that have already been requested at a remote site are cached on the remote site (as long as they are valid),
+so that the packages do not have to be downloaded again from the central site.
+In addition, the requested data will be checked for consistency on the remote site, so that unnecessary connections to the central site are avoided.
+
+Unlike in a single-site setup, the appropriate update server for the hosts does not originate exclusively from the set of rules for the Agent Updater,
+but is communicated to the requesting Agent Updater by the contacted {CMK} site.
+In this process, a host is provided with its server by the site from which it is being monitored.
+The specification of a {CMK} server is therefore only needed for the one-time registration, which can theoretically take place at any site--that is accessible from the host--in the entire distributed monitoring system.
+If the connection to the automatically determined server fails,
+the previously saved server (from the rule configuration or previously-entered manually during registration) is used as a fallback.
+
+
+[#configuration_distributed_monitoring]
+=== Configuration
+
+The distribution of agent packages via remote sites does not have to be activated separately
+-- the respective remote site recognizes the situation automatically and accordingly communicates with the central site as well as the requesting Agent Updater.
+If the agents are to report explicitly only to the central site for updates, this can be done via a fixed update server in the xref:fixed_update_server[rule set for the Agent Updater].
+
+However, to ensure that agent updates actually work in distributed monitoring, a few settings must still be configured on the central site--these are all located in [.guihint]#Setup > General > Global settings# in the section titled [.guihint]#Automatic agent updates#.
+If the settings differ for each remote site, they can be edited separately as well.
+To do so, go to [.guihint]#Setup > General > Distributed monitoring# and choose the gear icon icon:icon_site_globals[] in the desired site's row to access that site's [.guihint]#Site specific global settings#.
+
+
+[#connection_to_central_bakery]
+==== Connection to central agent bakery
+
+At this point, the URL through which the central site can be accessed from the remote site must be specified, including its protocol and the character string `/check_mk/`, for example `\https://myserver.example.com/mysite/check_mk/`.
+While the {CMK} site will try to identify all other missing settings itself, the specification of this URL is not optional, as this connection direction will otherwise not be established in the case of a central configuration.
+If the protocol is HTTPS, the remote site automatically uses the CA or self-signed certificates available in the setup for the verification of the connection [.guihint]#Setup > General > Global Settings > Site management > Trusted certificate authorities for SSL#.
+
+
+[#connection_to_remote_bakery]
+==== Connection to remote agent bakery
+
+Since the remote sites are not necessarily accessible from the respective monitored hosts via the same URL as from the central site,
+a URL can be configured here for this purpose.
+This URL is then automatically communicated to the host (or the requesting Agent Updater) when a connection is made to a {CMK} site.
+The configuration as [.guihint]#Site specific global settings# makes particular sense here.
+If no URL is specified, it is assumed that the remote sites are accessible from both the central site and from the monitored hosts under the identical URL.
+If it is an HTTPS connection, the appropriate certificate can also be automatically made available to the host.
+Since the central CA store cannot be used for this, appropriate certificates can be specified at this point.
+Alternatively, the certificates can also be specified in the Agent Updater rules.
+endif::[]
+
+
+ifdef::onprem[]
+[#https_handling]
+== Working with HTTPS
+
+At various points in this article there are references to securing the respective connections via HTTPS.
+Here, we will once again provide a general overview of what needs to be done to fully secure connections via HTTPS.
+Both the connection from a remote to its central site, and from a host to a {CMK} site can and should be secured via TLS, i.e. using HTTPS.
+This is independent of whether it is a single site setup or a xref:glossar#distributed_monitoring[distributed monitoring].
+
+
+[#https_usage]
+=== Configuring HTTPS
+
+In order to be able to connect to a {CMK} site via HTTPS, first the monitoring server must be configured for HTTPS. 
+This can be achieved, for example, via a suitable xref:omd_https#[configuration of the system Apache], or most simply via the HTTPS settings on the {CMK} appliance.
+
+Whether a {CMK} server is then addressed via HTTP or HTTPS is determined by the URL configured in each case.
+If this begins with `https://`, the server is addressed via the HTTPS protocol using port 443. 
+This also applies to the protocol you configured with the xref:update_server_information[[.guihint]#Update server information#] setting.
+In principle, you can force forwarding from HTTP to HTTPS on the Apache side and (initially) exclude individual paths for this.
+For configuration details, see the Apache documentation for the `mod_rewrite` and `mod_redirect` modules.
+
+
+[#provide_certificates]
+=== Providing certificates
+
+In order for an HTTPS connection to be established, it must be possible to verify the contacted server's certificate chain or the self-signed certificate (depending on how the server is configured).
+The provision of suitable CA or self-signed certificates makes this possible and can be realized in various ways.
+
+
+[#connection_to_cmk_server]
+==== Connections from a host to a {CMK} server
+
+The Agent Updater always attempts to verify HTTPS connections and terminates these if a verification is  not possible.
+Certificates for verification are available to the Agent Updater from the following sources:
+
+*The Agent Updater:*
+By default, the Agent Updater comes with a Python runtime environment including any required modules.
+Also included is the certificate bundle of the link:https://pypi.org/project/certifi/#[Certifi module^], which in turn is based on the Mozilla project's certificate collection.
+This ensures that public CAs are made known to the Agent Updater in a timely manner, even when operating system updates are pending.
+
+*Certificates via the Agent Bakery:*
+Certificates contained in the Certifi module are ignored once one or more certificates have been imported via one of the following mechanisms.
+Certificates from the following sources are stored locally on the host and used only by the Agent Updater:
+
+. Using the xref:certificates_for_https[[.guihint]#Certificates for HTTPS verification#] setting, certificates can be baked into an agent package and will be available to the Agent Updater from installation (or an update).
+
+. When configuring the connection to the remote site via [.guihint]#Setup > General > Global settings > Automatic agent updates > Connection to remote agent bakery#, you can specify certificates that can be used to verify the HTTPS connection to the respective remote site.
+This is especially useful if it is not yet clear at configuration time which host will be assigned to which site.
+This import option can also be used to reduce the number of agents to be baked, since the correct certificates for the respective update servers do not have to be host-specifically configured.
+
+*Certificate Store:*
+the Agent Updater _may_ use the operating system's Certificate Store only if the Agent Updater has been configured to use the xref:executable_format[System-Python] instead of the supplied Python runtime environment, and no Certifi module is configured in the System-Python.
+Since many factors such as the installation parameters or the `_PIP_STANDALONE_CERT` environment variable are involved here, we do not officially support such a configuration.
+
+*Certificate via command line - Import certificate:*
+You can also call the Agent Updater with the command line argument `--trust-cert`.
+This retrieves and imports the server certificate.
+This is done without taking into account the type of certificate:
+The certificate is trusted without further checking of a possible chain--regardless of whether it is a self-signed certificate, a certificate at the end of a public certificate chain or a certificate signed with an internal CA.
+
+[IMPORTANT]
+====
+. If a certificate is imported in this way, you must ensure the authenticity of the server itself, since the certificate does not come from an independent source.
+. As only the server certificate is imported, which is sometimes very short-lived, you must provide xref:certificate_change[new certificates] via the Agent Bakery in good time before expiry.
+====
+
+*Certificate via command line - Ignore certificate:*
+If there is no valid certificate available to the Agent Updater at all, the certificate validation can be bypassed by using the `--insecure` command line argument for a call.
+This can be useful if the valid certificate is already waiting to be retrieved from the server on the next connection, 
+but the Agent Updater will be 'locked out' by this missing certificate.
+
+[IMPORTANT]
+====
+This actually completely deactivates the certificate check for this call.
+Communication still takes place in encrypted form, so the use of this argument is 'better than nothing'.
+====
+
+
+[#connection_from_remote_to_central_site]
+==== Connection from a remote site to a central site
+
+The distribution of certificates is simpler when connecting from a remote to the central site, since the setup procedure is not exited at all.
+The remote site can use the {CMK} certificate store under [.guihint]#Global settings > Site management > Trusted certificate authorities for SSL#.
+It is therefore sufficient to import the certificate(s) via the central site, if necessary also via [.guihint]#Site specific global settings# when the central site is accessible under multiple URLs.
+
+
+[#certificate_change]
+==== Procedure for replacing a certificate
+
+If you work with your own certification infrastructure, you ideally use a root certificate that is valid for a very long time and whose associated key is regularly used to create intermediate certificates. These are then in turn used to sign the server certificates.
+In this case, you roll out intermediate certificates as a certificate chain on the {CMK} server.
+The hosts that receive automatic agent updates now only need to be made aware of the root certificate.
+
+If you are unsure whether a new server certificate requires a new root certificate, use the following command.
+Use it to determine the identifier of the root key used to sign a server certificate:
+
+[{shell}]
+----
+{c-root} openssl x509 -noout -text -in cert.pem | grep -A1 'X509v3 Authority Key'
+            X509v3 Authority Key Identifier: 
+                14:2E:B3:17:B7:58:56:CB:AE:50:09:40:E6:1F:AF:9D:8B:14:C2:C6
+----
+
+If the displayed identifier is identical for both the old and the new certificate, no further action is required.
+Hosts that trust this root certificate can continue to obtain updates even if the certificate chain changes--provided that the chain was correctly stored in the system Apache.
+
+If a self-signed certificate or a short-lived root certificate from an internal CA has been used up to now, or if the previous root key of one of your internal CAs has been compromised, proceed as follows when replacing the certificate:
+
+. Add the new certificate using the [.guihint]#Certificates for HTTPS verification# parameter (in the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule).
+. Re-bake the agent packages and update all hosts in the monitoring.
+Ensure that this update has been run for all hosts before proceeding.
+. Now replace the server certificate.
+. Test with a few hosts in which it is easy to reinstall the agent manually if it fails, to see if it is possible to update again using the new certificate.
+. If the preceding step (4) could be performed successfully--you _can_ (the certificate will expire), or _must_ (the key was compromised)—remove the old certificate and perform another agent update.
+endif::[]
+
+
+[#faq]
+== Troubleshooting
+
+This chapter first deals with typical, general errors and their causes:
+
+.Errors already fixed in the [.guihint]#Check_MK Agent# service
+[%collapsible]
+====
+[#faq1]
+
+The Agent Updater will really only be run once within the update interval,
+so an error will be continuously-displayed until either you call the plug-in manually, or the next interval is pending.
+====
+
+
+.Registration fails after a manual reinstallation of the {CMK} agent
+[%collapsible]
+====
+[#faq2]
+
+The Agent Updater creates its own status file `cmk-update-agent.state` independently (under Linux/Unix in `/var/lib/check_mk_agent/cmk-update-agent/`, and under Windows in the `config` folder).
+This file remains on the host after uninstallation, so that the registry information does not get lost.
+A new installation will find the file and continue using it.
+If this situation is undesirable, simply delete the `cmk-update-agent.state` file manually after an uninstall.
+====
+
+
+ifdef::onprem[]
+.Update status for hosts with no automatic updates active
+[%collapsible]
+====
+[#faq3]
+
+The [.guihint]#Monitor > System > Agent Update Status# page displays all of the hosts that are are in the monitoring and for which a status file exists on the {CMK} server.
+It does not matter if the host actually reports to the {CMK} server for automatic updates.
+Should an unexpected host be displayed here, it is worth taking a look in the `/omd/sites/mysite/var/check_mk/agent_deployment` folder
+-- the cause will probably be an old or accidentally-created registry.
+====
+endif::[]
+
+
+ifdef::onprem[]
+.The connection over SSL/TLS does not function
+[%collapsible]
+====
+[#faq4]
+
+The Agent Updater is designed to explicitly trust only the certificates
+which are usually specified under [.guihint]#Agent updater (Linux, Windows, Solaris)# in the xref:certificates_for_https[HTTPS configuration].
+In particular locally-installed certificates are ignored.
+It can also occur that the {CMK} server is accessible through the browser, while the Agent Updater cannot connect due to an incorrect configuration.
+
+In the HTTPS configuration of the Agent Updater rule a _root certificate_ must be specified with which the connection to the {CMK} server can be verified.
+In other words:
+the _certificate chain_ included in the {CMK} server's _server certificate_ must be verifiable by the certificate given here.
+Often the server certificate is specified here instead--this is however not suitable for this purpose.
+
+Take a look at the {CMK} server's certificate chain with the _OpenSSL_ tool.
+Due to the chain's length, for clarity here only a relevant section is shown and the omitted sections marked by `pass:q[[...]]`:
+ 
+[{shell}]
+----
+{c-root} openssl s_client -connect mymonitoring.example.net:443
+pass:q[[...]]
+subject=/CN=mymonitoring.example.net
+issuer=/C=DE/O=Deutsche Telekom AG/OU=T-TeleSec Trust Center/CN=Deutsche Telekom Root CA 2
+---
+No client certificate CA names sent
+Peer signing digest: SHA512
+Server Temp Key: ECDH, P-256, 256 bits
+---
+SSL handshake has read 3832 bytes and written 302 bytes
+Verification: OK
+---
+pass:q[[...]]
+----
+
+For the last entry--in our case `subject=/CN=mymonitoring.example.net`—you need a valid root certificate.
+This must not necessarily be--as in this example--the issuer of the certificate.
+It will usually be a chain of issuers.
+
+Then look at the certificate used.
+Here too due to the length it will be shortened as in the above example:
+
+[{shell}]
+----
+{c-root} openssl x509 -text -noout -in myca.pem
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 38 (0x26)
+    Signature Algorithm: sha1WithRSAEncryption
+        Issuer: C = DE, O = Deutsche Telekom AG, OU = T-TeleSec Trust Center, CN = Deutsche Telekom Root CA 2
+        Validity
+            Not Before: Jul  9 12:11:00 1999 GMT
+            Not After : Jul  9 23:59:00 2019 GMT
+        Subject: C = DE, O = Deutsche Telekom AG, OU = T-TeleSec Trust Center, CN = Deutsche Telekom Root CA 2
+        pass:q[[...]]
+        X509v3 extensions:
+            pass:q[[...]]
+            X509v3 Basic Constraints:
+                CA:TRUE, pathlen:5
+            pass:q[[...]]
+----
+
+The top certificate--seen in the above excerpt--is not permitted to have a dependency on another certificate.
+You can see that the `Issuer` and the `Subject` are identical and that the option `CA:TRUE` is included.
+In addition the issuer's chain that authenticates an object must be consistent up until the final entry.
+You therefore also need all intermediate certificates if the issuer of the last certificate should not be a CA.
+====
+endif::[]
+
+
+ifdef::onprem[]
+.RPM installation fails on Red Hat Enterprise Linux/CentOS
+[%collapsible]
+====
+[#faq7]
+
+It has occasionally occurred--especially on Red Hat/CentOS systems--that the call to `rpm` triggered by the automatic update repeatedly fails,
+while a manual call to `cmk-update-agent` processes successfully.
+The cause in these cases was a SELinux policy that prevented an error-free call if `rpm` was called by a child process of `xinetd`.
+You can solve the problem, i.e., get to the bottom of it by analyzing the SELinux logs, and adjusting the policy accordingly using the `audit2allow` tool.
+====
+endif::[]
+
+
+The following section deals with problems that are indicated by specific error messages:
+
+.Error message: Cannot open self cmk-update-agent or archive cmk-update-agent.pkg
+[%collapsible]
+====
+[#faq5]
+
+On some Linux systems the program _Prelink_ is installed and a cronjob is activated
+which regularly examines all binary files on the system, and adapts them if necessary to speed up the programs.
+However the Agent Updater plug-in is packaged with the _PyInstaller_ program which is not compatible with such actions, and is therefore _broken_.
+{CMK} therefore has a blacklist entry for deb/rpm packages which is stored under `/etc/prelink.conf.d`,
+and--if prelink exists--sets an entry in the existing `/etc/prelink.conf` file.
+Since this problem is difficult to handle, it can still happen that these measures do not take effect--especially in the case of a subsequent setup of prelink.
+
+Therefore, if you install prelink later, set the entry yourself and add the following line to the file with the following command:
+
+[{shell}]
+----
+{c-root} echo "-c /etc/prelink.conf.d/cmk-update-agent.conf" >> /etc/prelink.conf
+----
+====
+
+
+.Error message cmk-update-agent: error while loading shared libraries: libz.so.1: failed to map segment from shared object
+[%collapsible]
+====
+[#faq6]
+
+This error message occurs when the `/tmp` directory with the flag `noexec` was mounted in the system.
+To fix this problem, you can either remove the flag, or--if you deliberately set and require the flag--on the {CMK} server
+in [.guihint]#Setup# create a rule under [.guihint]#Agents > Windows, Linux, Solaris, AIX > Agents > Agent rules > Installation paths for agent files (Linux, Unix)#.
+There you can define the tmp directory in the [.guihint]#Directory for storage of temporary data (set TMPDIR environment variable)# option yourself.
+The Agent Updater plug-in will then in future write temporary files in the defined directory.
+That works even if you call the plug-in manually with the helper script in `/usr/bin/cmk-update-agent`.
+====
+
+
+.Error message: No valid signature found
+[%collapsible]
+====
+[#faq8]
+
+If the [.guihint]#Check_MK Agent# service displays the warning `No valid signature found`, this means that the agent package intended for the host in the Agent Bakery has *not* been signed with one of the xref:signature_keys[accepted keys].
+
+image::agent_deployment_no_valid_signature.png[]
+
+In the simplest case, all you need to do is sign your agents using the [.guihint]#Sign agents# function in the Agent Bakery with one of the keys displayed under [.guihint]#Signature keys the agent will accept#.
+
+image::agent_deployment_sign_agent.png[]
+
+As soon as the Agent Updater makes its next report from the affected host to the {CMK} server, *and* the cache interval for the service has expired, the warning will disappear.
+
+However, if the host does not have (or no longer has) a single signature key that is located on the {CMK} server, you must repeat the xref:bakery[bake and sign] with a key displayed under [.guihint]#Signature keys the agent will accept#, then copy the baked agent to the affected host and reinstall it there.
+
+On an affected host, you can run `cmk-update-agent -v` or `check_mk_agent.exe updater -v` to get more details about this error.
+The detailed error message explicitly lists the signatures from the xref:files[Agent updater plug-in's configuration file] that do not have an accepted (i.e. configured) counterpart on your {CMK} server.
+
+[{shell}]
+----
+Ignoring signature #1 for certificate: certificate is unknown.
+No valid signature found.
+----
+====
+
+
+[#files]
+== Files and directories
+
+ifdef::onprem[]
+[#files_cmk]
+=== File paths on the {CMK} server
+
+[cols="40,~",options="header"]
+|===
+|File path |Description
+|`~/var/check_mk/agents/` |Contains the baked agents, sorted first in subdirectories by operating system (e.g. `linux_rpm`) and below by hosts via soft link.
+|`~/var/check_mk/agent_deployment/` |Contains files with the names of the registered hosts. One such file contains the time of the last registration and the _host secret_.
+|===
+endif::[]
+
+
+[#files_host]
+=== File paths on the monitored host
+
+[.tabs]
+====
+Linux::
++
+--
+[cols="60,~",options="header"]
+|===
+|File path |Description
+|`/usr/lib/check_mk_agent/plugins/3600/cmk-update-agent` |The Agent Updater plug-in as binary or script, depending on the configuration in xref:executable_format[executable format].
+The subdirectory `3600` stands for the xref:interval_for_update_check[interval for the update check] in seconds (here for the default value of one hour).
+|`/usr/bin/cmk-update-agent` |Script to call the Agent Updater plug-in and register the agent with the command `cmk-update-agent register`.
+|`/etc/check_mk/cmk-update-agent.cfg` |Configuration file for the Agent Updater plug-in, which contains the settings of the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule.
+Do not edit this file, because it is written to during installations and updates.
+|`/var/lib/check_mk_agent/cmk-update-agent/cmk-update-agent.state` |File with registry information, including the _host secret_.
+|`/var/lib/check_mk_agent/log/cmk-update-agent/cmk-update-agent.log` |Extensive log file with debug messages.
+|===
+--
+
+Windows::
++
+--
+[cols="60,~",options="header"]
+|===
+|File path |Description
+|`C:\ProgramData\checkmk\agent\plugins\cmk_update_agent.checkmk.py` |The Agent Updater plug-in as a Python file.
+|`C:\Program Files (x86)\checkmk\service\check_mk_agent.exe` |Agent program to register the agent with the command `check_mk_agent.exe updater register`.
+|`C:\ProgramData\checkmk\agent\config\cmk-update-agent.cfg` |Configuration file for the Agent Updater plug-in, which contains the settings of the [.guihint]#Agent updater (Linux, Windows, Solaris)# rule.
+Do not edit this file, because it is written to during installations and updates.
+|`C:\ProgramData\checkmk\agent\config\cmk-update-agent.state` |File with registry information including the _host secret_.
+|`C:\ProgramData\checkmk\agent\log\cmk-update-agent.log` |Extensive log file with debug messages.
+|`C:\ProgramData\checkmk\agent\bakery\check_mk.bakery.yml` |Configuration file created by the Agent Bakery, which among other things defines the interval for the update check.
+|===
+--
+====

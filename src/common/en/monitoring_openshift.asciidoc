@@ -1,0 +1,440 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Monitoring OpenShift
+:title: Monitoring OpenShift
+:description: You can also use {CMK} to monitor the Kubernetes-based OpenShift container platform. Read here how to set up and use the monitoring.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:monitoring_docker#[Monitoring Docker]
+xref:monitoring_kubernetes#[Monitoring Kubernetes]
+link:https://checkmk.com/integrations[Catalog of check plug-ins^]
+{related-end}
+
+
+[#preface]
+== Preface
+
+ifdef::saas[]
+[TIP]
+====
+You can monitor OpenShift clusters with {CE-saas} using the xref:glossar#checkmk_relay[{CMK} Relay].
+To do this, the host with the Kubernetes xref:glossar#special_agent[special agent] must be monitored via the {CMK} Relay.
+Monitoring with {CE-saas} without the relay requires opening ports to allow access to the Kubernetes API from the internet.
+For security reasons, we recommend restricting this access to the IP address of the {CMK} server.
+====
+endif::[]
+
+ifdef::onprem[]
+{cee-only}
+endif::[]
+There is already a separate xref:monitoring_kubernetes#[Monitoring Kubernetes] article describing the setting up of a monitoring of Kubernetes and its various flavors.
+However, since OpenShift in general and in particular its setup work a bit differently, we have decided to create a separate article for describing the setting up of an OpenShift monitoring and respectively the Kubernetes clusters running in it.
+In the rest of this article, we will refer to these same clusters -- for readability and simplicity -- as OpenShift clusters.
+ifdef::onprem[]
+Monitoring OpenShift clusters is only possible with one of the {CMK} commercial editions.
+endif::[]
+
+
+[#intro]
+== Introduction
+
+{CMK} helps you to monitor your OpenShift clusters.
+ifdef::onprem[]
+Starting with version {v23}, you can use any of our commercial editions to monitor the following objects:
+endif::[]
+ifdef::saas[]
+With {CE}, you can monitor the following objects:
+endif::[]
+
+* Clusters
+* Deployments
+* Nodes
+* Pods
+* DaemonSets
+* StatefulSets
+* CronJobs
+
+For a complete listing of all of the available check plug-ins for the monitoring of Kubernetes, see our link:https://checkmk.com/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=kube_[Catalog of check plug-ins^].
+
+
+ifdef::onprem[]
+=== Setting up the monitoring environment
+
+Since OpenShift clusters can also undergo major changes very quickly in terms of the number and location of individual components, we recommend creating a separate {CMK} site for monitoring an OpenShift environment.
+This can then be connected to the central site as usual via the xref:distributed_monitoring#[distributed monitoring] procedure.
+endif::[]
+
+
+=== The process of monitoring OpenShift in {CMK}
+
+{CMK} monitors your OpenShift clusters in two ways:
+
+* {CMK} fetches basic information directly from your cluster via the Kubernetes API.
+This can already be used to retrieve the states of nodes and containers. Most metadata from your pods and deployments is also obtained in this way.
+For a comprehensive monitoring, however, something is still missing up to this point.
+The questions of how much load, for example, a particular deployment is generating on the CPU, or how much memory a DaemonSet is currently tying up, cannot be answered with this method.
+* Since Prometheus is already installed by default in OpenShift clusters, {CMK} can query exactly this Prometheus instance within your OpenShift environment and prepare the resulting data for you in the usual {CMK} manner.
+For a fully comprehensive monitoring of your OpenShift environment, we strongly recommend setting up this connection.
+Additionally, using the xref:dashboards[Kubernetes dashboards] is only useful if the appropriate workload data is available.
+
+
+[#prerequisites]
+== Creating prerequisites in the cluster
+
+To be able to monitor the OpenShift environment in {CMK}, first create the prerequisites in your cluster.
+
+
+=== Create a namespace and service account
+
+First, you need to set up a namespace and service account for {CMK} in your OpenShift cluster.
+The quickest way to do this is via the OpenShift CLI (`oc` for short).
+
+In the following example, we will name this namespace `checkmk-monitoring`.
+If you want or need to choose a different name, you will also need to make this change when creating the service account.
+
+[{shell}]
+----
+{c-user} oc create namespace checkmk-monitoring
+namespace/checkmk-monitoring created
+----
+
+The service account with its associated role and the so-called RoleBinding can be created by specifying our ready-made link:https://github.com/Checkmk/checkmk_kube_agent/blob/checkmk_docs/deploy/kubernetes/checkmk-serviceaccount.yaml[YAML file published on GitHub^].
+Check its contents and then run the following command:
+
+[{shell-raw}]
+----
+{c-user} oc apply -f https://raw.githubusercontent.com/Checkmk/checkmk_kube_agent/checkmk_docs/deploy/kubernetes/checkmk-serviceaccount.yaml
+serviceaccount/checkmk created
+clusterrole.rbac.authorization.k8s.io/checkmk-metrics-reader created
+clusterrolebinding.rbac.authorization.k8s.io/checkmk-metrics-reader-binding created
+----
+
+Alternatively, you can first download this YAML file, customize it according to your needs, and then apply `oc apply -f` to this local copy of the file.
+
+
+=== Obtain API endpoints, token and certificate
+
+With the `oc` command line tool you can now also read out all of the information from your cluster, which you will usually have to specify to set up the special agent.
+If you have changed the service account name or namespace, you must edit this information as described for the following commands.
+
+
+[#get_kubernetes_endpoint]
+==== Retrieve the Kubernetes API endpoint
+
+The Kubernetes API endpoint is displayed by `oc` with the following command:
+
+[{shell-raw}]
+----
+{c-user} oc cluster-info
+Kubernetes control plane is running at https://api.myopenshift.example.com:6443
+----
+
+This address, including the specified port, will later be included in the [.guihint]#API server connection > Endpoint# field in the xref:rule[Kubernetes rule].
+
+
+[#get_prometheus_endpoint]
+==== Retrieve the Prometheus API endpoint
+
+Obtaining the address from the Prometheus instance's API endpoint in your cluster may be easier via OpenShift's GUI.
+In the administrator role, you can find a more or less long list via [.guihint]#Networking > Routes#.
+Here you should also find a route that probably has the word Prometheus in its name.
+This also simply depends on the configuration of your OpenShift cluster.
+Under Location you will then find the very URL which you will later require for the [.guihint]#Prometheus API endpoint# field.
+
+You may also be able to get the FQDN on the command line with the following command.
+
+[{shell}]
+----
+{c-user} oc get routes --all-namespaces | grep prometheus
+openshift-monitoring    prometheus-k8s   prometheus-k8s-openshift-monitoring.apps.myopenshift.example.com   prometheus-k8s  web  reencrypt/Redirect   None
+----
+
+You will then only need to later prefix the protocol to the `prometheus-k8s-openshift-monitoring.apps.myopenshift.example.com` string in the [.guihint]#Prometheus API endpoint# field within the xref:rule[Kubernetes rule].
+
+
+[#get_token]
+==== Retrieve the token
+
+The following command can be used to read out the token, which is usually the one you will later need to specify for the special agent in {CMK}:
+
+[{shell}]
+----
+{c-user} oc get secret $(oc describe sa checkmk -n checkmk-monitoring | grep 'Tokens' | awk '{ print $2 }') -n checkmk-monitoring -o=jsonpath='{.data.token}' | base64 --decode
+eyJhbGciOiJSUzI1NiIsImtpZCI6IkxFbDdZb25t...
+----
+
+Leave the shell open with this information or copy the token to a location that you can access during the following setup in {CMK}.
+
+
+[#get_certificate]
+==== Retrieve the certificate
+
+The following command can be used to retrieve the certificate which you will later need to specify under [.guihint]#Global settings# in {CMK}.
+
+[{shell}]
+----
+{c-user} oc get secret $(oc describe sa checkmk -n checkmk-monitoring | grep 'Tokens' | awk '{ print $2 }') -n checkmk-monitoring -o=jsonpath='{.data.ca\.crt}' | base64 --decode
+----
+
+Leave the shell open with this information, or copy the certificate -- including the `BEGIN CERTIFICATE` and `END CERTIFICATE` lines -- to a location that you can access during the following setup in {CMK}.
+
+If the output here is empty, the same tip applies as in the preceding xref:get_token[Retrieve the token] section.
+
+
+[#setupincheckmk]
+== Setting up the monitoring in {CMK}
+
+Next, in the {CMK} GUI, we move on to setting up the xref:glossar#special_agent[special agent] and a rule for automatically creating hosts for your Kubernetes objects.
+However, to set up the special agent, first there are a few prerequisites that will need to be met:
+
+
+[#token]
+=== Storing the password (token) in {CMK}
+
+It is best to store the xref:get_token[service account's password (token)] in the {CMK} password store.
+This is the safest option, since you can separate the storage and use of the password in an organized way.
+Alternatively, enter the password directly in plain text when creating the rule (see below).
+
+To add the password to the {CMK} password store, navigate to [.guihint]#Setup > General > Passwords > Add password#.
+We use `My OpenShift Token` as the ID and title in our example:
+
+image::kubernetes_password.png[]
+
+
+[#certimport]
+=== Importing a service account’s CA certificate into {CMK}
+
+In order for {CMK} to trust the xref:get_certificate[service account's certificate chain], you will need to store it in {CMK}.
+Copy everything here -- including the lines containing `BEGIN CERTIFICATE` and `END CERTIFICATE` -- and add the certificate in the Setup menu under [.guihint]#Setup > General > Global settings > Site management > Trusted certificate authorities for SSL#:
+
+image::kubernetes_ca.png[]
+
+
+[#source-host]
+=== Creating the piggyback host
+
+Create a new host in {CMK} in the usual way and name it `myopenshiftclusterhost` for example.
+As the title and host name suggest, this host is used to collect the xref:glossar#piggyback[piggyback] data and also to map all services and metrics at the cluster level.
+Since this host receives data exclusively through the special agent, in the host's properties be sure to set the [.guihint]#IP address family# option to [.guihint]#No IP#.
+Confirm this whole configuration by pressing the [.guihint]#Save & view folder# button.
+
+image::monitoring_openshift_add_host_no_ip.png[alt="Example setup for a cluster host with the important 'No IP' setting."]
+
+
+=== Setting up dynamic host management
+
+To ensure separation between objects in different Kubernetes clusters, it is usually convenient to create a folder per cluster via [.guihint]#Setup > Hosts > Add folder#, in which the xref:dcd#[dynamic host management] can create all of a cluster's hosts automatically.
+However, creating and using such a folder is optional.
+
+Next, set up a connection for the incoming piggyback data.
+To do this, navigate to [.guihint]#Setup > Hosts > Dynamic host management > Add connection#.
+First enter a title and then under [.guihint]#Connection Properties# click [.guihint]#show more#.
+
+The next very important step is to enter the previously created xref:source-host[piggyback host] under [.guihint]#Restrict source hosts#.
+
+Then, under [.guihint]#Piggyback creation options# click [.guihint]#Add new element# and under [.guihint]#Create hosts in# select the previously created folder.
+
+You can leave the default attributes under [.guihint]#Host attributes to set# as they are.
+These ensure that {CMK} only accepts the piggyback data from the automatically created hosts and does not attempt to ping these or access them via SNMP, for example.
+
+In an OpenShift environment where monitorable and monitored objects continuously come and go, it is usually recommended to also enable the [.guihint]#Automatically delete hosts without piggyback data# option.
+What exactly this option does and under which circumstances hosts are then actually deleted is explained in the xref:dcd#automatic_deletion_of_hosts[automatic deletion of hosts] chapter in the article on dynamic host management.
+
+Finally, enable the [.guihint]#Discover services during creation# option.
+
+The [.guihint]#Connection Properties# section of this new connection might look like the following:
+
+image::monitoring_openshift_connection_properties.png[alt="Example settings for a dynamic host management."]
+
+
+=== Customizing the periodic service discovery
+
+By default, {CMK} performs a service discovery every two hours and displays the result from this discovery in the [.guihint]#Check_MK Discovery# service.
+You can find this setting in the [.guihint]#Periodic service discovery# rule set.
+In the context of OpenShift, we recommend creating a rule with the label `cmk/kubernetes:yes` for all hosts.
+This is because every host representing Kubernetes objects automatically receives this label from {CMK}.
+In this case you should choose a shorter interval than two hours for the service discovery, and also activate the [.guihint]#Automatically update service configuration# option.
+The settings in the below screenshot are only examples.
+You will need to decide what makes sense for your clusters on a case-by-case basis.
+
+image::monitoring_kubernetes_periodic_service_discovery.png[alt="An example setup for the periodic service discovery for Kubernetes objects."]
+
+To restrict this rule to all hosts in your cluster,  under [.guihint]#Host labels# simply enter `cmk/kubernetes:yes` in the [.guihint]#Conditions#.
+However, if you also want to create different rules for different clusters, just use the respective cluster-specific label here.
+These labels are always in the form `cmk/kubernetes/cluster:mycluster`.
+
+image::monitoring_kubernetes_periodic_service_discovery_conditions.png[alt="Example a restriction to hosts using a cluster-specific label."]
+
+
+[#rule]
+=== Setting up the special agent
+
+Now that all prerequisites have been created in the cluster and in {CMK}, you can turn your attention to the special agent configuration.
+This can be found via [.guihint]#Setup > Agents > VM, cloud, container > Kubernetes#.
+Create a new rule with [.guihint]#Add rule#.
+
+First of all, you must assign a name for the cluster to be monitored.
+This name can be specified freely as desired.
+It is used to assign a unique name to all objects that originate from this specific cluster.
+For example, if you enter `mycluster` here, the names of the hosts for all of the pods in this cluster will later begin with `pod_mycluster`.
+The next part of the host name will then always be the namespace in which this Kubernetes object exists.
+For example, the host name of a pod could then be `pod_mycluster_kube-system_svclb-traefik-8bgw7`.
+
+Under [.guihint]#Token#, now select the xref:token[previously created entry] from the {CMK} password store.
+
+image::monitoring_openshift_cluster_name_and_token.png[alt="Sample cluster name and token selection."]
+
+Under [.guihint]#API server connection > Endpoint#, {CMK} now requires you to enter the URL through which your Kubernetes API server can be contacted.
+The port is only required if the service is not provided via a virtual host.
+Here, enter the address that you determined in the xref:get_kubernetes_endpoint[Retrieve the Kubernetes API endpoint] section.
+
+If you have so far followed these instructions step by step and have -- xref:certimport[as described above] -- deposited your cluster's CA certificate in {CMK}, then under [.guihint]#SSL certificate verification# select [.guihint]#Verify the certificate#.
+
+image::monitoring_openshift_rule_api_server_connection.png[alt="Example for specifying the API server connection."]
+
+Enable the [.guihint]#Enrich with usage data# option, select [.guihint]#Use data from OpenShift# in the following menu, and enter the [.guihint]#Prometheus API endpoint# that you determined in the xref:get_prometheus_endpoint[Retrieve the Prometheus API endpoint] section.
+
+image::monitoring_openshift_rule_enrich.png[alt="Example of specifying the cluster collector connection."]
+
+The list under [.guihint]#Collect information about...#  allows you to select which objects within your cluster should be monitored.
+This list covers the most relevant objects.
+If you also decide to monitor the [.guihint]#Pods of CronJobs#, please refer to the xref:user_interface#inline_help[inline help] for this option.
+
+image::monitoring_openshift_rule_collect_info_about.png[alt="Example list of a selection of Kubernetes objects that are to be monitored."]
+
+The next two selections allow you to further narrow down the objects to be monitored.
+If you are only interested in the objects from certain namespaces, set this accordingly under [.guihint]#Monitor namespaces#.
+Here you can either enter individual namespaces to be monitored or explicitly exclude individual namespaces from monitoring.
+
+The [.guihint]#Cluster resource aggregation# option allows you to designate nodes that do not provide resources for your cluster's workload.
+These nodes should be excluded from the calculation of available resources.
+Otherwise, there is a risk that capacity bottlenecks will not be detected.
+We therefore by default exclude the `control-plane` and `infra` nodes from the calculation.
+
+image::monitoring_openshift_namespaces_and_resource_aggregation.png[alt="Example configuration for namespaces and resource aggregation."]
+
+As a final option, you can import so-called _annotations_ from Kubernetes.
+In {CMK}, these annotations become xref:glossar#label[host labels] and can thus be further used as conditions in rules.
+Use regular expressions to specify which annotations should be imported.
+Consult the detailed inline help again at this point.
+
+*Note:* The [.guihint]#Import all valid annotations# option is provided here only for completeness.
+We do not recommend importing _all_ annotations at once, because this can create a very large mountain of useless labels in {CMK}.
+
+*Important:* Under [.guihint]#Conditions > Explicit hosts# *you must* now enter the xref:source-host[previously created host]:
+
+image::monitoring_openshift_explicit_hosts.png[alt="Rules for special agents must always be explicitly set to specific hosts, as seen here."]
+
+Then save the rule and perform a service discovery for this host.
+The first cluster-level services will appear right away here:
+
+image::monitoring_openshift_service_discovery.png[alt="Example view of the first service discovery after completing the configuration."]
+
+Now activate all of the changes you have made and let the dynamic host management do the work from now on.
+This will generate all of the hosts for your Kubernetes objects within a short period of time.
+
+
+[#labels_k8s]
+== Labels for Kubernetes objects
+
+{CMK} automatically generates labels for objects such as clusters, deployments, or namespaces during a service discovery.
+All labels for these objects that {CMK} automatically generates start with `cmk/kubernetes/`.
+For example, a pod will always get a label from the node (`cmk/kubernetes/node:mynode`), a label that identifies the object as a pod (`cmk/kubernetes/object:pod`) and a label for the namespace (`cmk/kubernetes/namespace:mynamespace`).
+This makes it very easy to create filters and rules for all objects of the same type or in the same namespace.
+
+
+[#dashboards_views]
+== Dashboards and views
+
+[#dashboards]
+=== Kubernetes dashboards
+
+ifdef::onprem[]
+{cee-only}
+The {CMK} commercial editions are supplied with six built-in dashboards for Kubernetes.
+endif::[]
+ifdef::saas[]
+{CE} is supplied with six built-in dashboards for Kubernetes.
+endif::[]
+In order to make sense of these dashboards, it is necessary to have our Cluster Collector installed and configured.
+Specifically, these dashboards are called:
+
+* Kubernetes (Overview)
+* Kubernetes Cluster
+* Kubernetes DaemonSet
+* Kubernetes Deployment
+* Kubernetes Namespace
+* Kubernetes StatefulSet
+
+The entry point is always the [.guihint]#Kubernetes# dashboard, which you can access via [.guihint]#Monitor > Applications > Kubernetes#:
+
+image::monitoring_kubernetes_kubernetes_dashboard.png[alt="Example of the overview dashboard."]
+
+In the [.guihint]#Kubernetes# dashboard, all of your monitored clusters are listed on the left side.
+This listing of clusters is also your entry point for drilling deeper into the dashboards.
+Clicking on the name of a cluster will take you to the [.guihint]#Kubernetes Cluster# dashboard for the selected cluster.
+In the [.guihint]#Kubernetes Cluster# dashboard, clicking on the respective name then takes you to the other context-dependent dashboards:
+
+image::monitoring_kubernetes_cluster_dashboard.png[alt="Detail of the cluster dashboard with paths to the other dashboards."]
+
+
+=== The HW/SW inventory
+
+Monitoring OpenShift with {CMK} also supports xref:inventory#[HW/SW inventory].
+For example, in the cluster dashboard above, clicking on the cluster's ID name (here: [.guihint]#mycluster#) will take you to the cluster's inventory.
+
+In the same way, i.e. in the other dashboards via the boxes with the ID names of the objects, the inventory for each respective object can be displayed.
+The following example shows the HW/SW inventory for a pod:
+
+image::kubernetes_monitoring_hw_sw_inventory.png[width=88% alt="Example of a view of the HW/SW inventory for a pod"]
+
+
+[#check_install]
+== Checking the installation
+
+In the {CMK} GUI you can verify that an installation and configuration have been successful.
+
+The most important services here are definitely the [.guihint]#Kubernetes API# and [.guihint]#Cluster collector#.
+These must be present on the cluster host you have created and should also display specific, real information.
+
+image::monitoring_openshift_check_installation.png[alt="The most important services to check for a correct installation."]
+
+Under [.guihint]#Summary# the [.guihint]#Kubernetes API# service should normally report [.guihint]#Live, Ready#, and if the Cluster collector is set up, it will ideally show [.guihint]#Successfully queried usage data from Prometheus#.
+
+In the [.guihint]#Kubernetes# dashboard, you can determine very early on if the Cluster collector is running and collecting data in a cluster.
+If set up correctly, the [.guihint]#Kubernetes# dashboard should look something like this:
+
+image::monitoring_openshift_validation_dashboard.png[alt="Kubernetes dashboard with data for CPU and memory resources."]
+
+If you now click on the cluster name here, you will land in the [.guihint]#Kubernetes Cluster# dashboard for the respective cluster.
+Here the three boxes [.guihint]#Primary datasource#, [.guihint]#Cluster collector# and [.guihint]#API health# should be green and show [.guihint]#OK#.
+
+image::monitoring_kubernetes_cluster_state.png[alt="A correctly-functioning cluster monitoring."]
+
+
+[#remove]
+== Removing monitoring components from OpenShift
+
+=== Deleting the service account
+
+If you have used our default YAML file to create the service account, you can also delete it as follows:
+
+[{shell-raw}]
+----
+{c-user} oc delete -f https://raw.githubusercontent.com/Checkmk/checkmk_kube_agent/checkmk_docs/deploy/kubernetes/checkmk-serviceaccount.yaml
+serviceaccount "checkmk" deleted
+clusterrole.rbac.authorization.k8s.io "checkmk-metrics-reader" deleted
+clusterrolebinding.rbac.authorization.k8s.io "checkmk-metrics-reader-binding" deleted
+----
+
+
+=== Removing the namespace, when required
+
+[{shell}]
+----
+{c-user} oc delete namespace checkmk-monitoring
+namespace "checkmk-monitoring" deleted
+----

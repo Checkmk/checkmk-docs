@@ -1,0 +1,1301 @@
+// -*- coding: utf-8 -*-
+// IGNORE OrderBy IOs
+// NONASCII …​
+include::global_attr.adoc[]
+= Statusdaten abrufen via Livestatus
+:title: Statusdaten abrufen via Livestatus
+:description: Livestatus ermöglicht Ihnen den direkten Zugriff auf alle Daten der mit {CMK} überwachten Objekte. Hier erfahren Sie, wie Sie die Livestatus-API nutzen.
+:experimental:
+
+{related-start}
+xref:livestatus_references#[Livestatus Befehlsreferenz]
+xref:cmk_commandline#[{CMK} auf der Befehlszeile]
+xref:rest_api#[Die {CMK} REST-API]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Der Livestatus ist die wichtigste Schnittstelle in {CMK}. Durch sie bekommen
+Sie schnellstmöglich und live Zugriff auf alle Daten der überwachten Hosts
+und Services. So werden z.B. die Daten im xref:user_interface.html#overview[Overview] direkt über
+diese Schnittstelle abgerufen. Da diese direkt aus dem RAM geholt werden,
+werden langsame Festplattenzugriffe vermieden und es gibt einen schnellen
+Zugriff auf das Monitoring, ohne das System zu sehr zu belasten.
+
+Um die Daten zu strukturieren, werden sie in Tabellen und Spalten geordnet. Die
+Tabelle `hosts` enthält dann z.B. die Spalten `name`,
+`state` und viele weitere. Jede Zeile in der Tabelle `hosts`
+repräsentiert dabei einen Host, in der Tabelle `services` einen
+Service usw. Auf diese Weise können die Daten einfach durchsucht und
+abgerufen werden.
+
+Dieser Artikel soll Ihnen helfen, diese Schnittstelle für eigene Abfragen,
+Erweiterungen und Anpassungen zu nutzen. Alle Abfragen und Befehle in diesem
+Artikel können Sie als Instanzbenutzer durch Copy&Paste direkt ausprobieren.
+
+
+[#lql]
+== Die Livestatus Query Language (LQL)
+
+[#lql_shell]
+=== Nutzung der LQL in der Shell
+
+Der Zugriff zum Livestatus erfolgt über einen Unix-Socket unter Benutzung
+der _Livestatus Query Language (LQL)_. Diese ist in ihrer Syntax an
+HTTP angelehnt.
+
+Sie können auf der Befehlszeile auf verschiedene Arten auf die Schnittstelle
+zugreifen. Eine Möglichkeit ist es, über die Befehle `printf` und
+`unixcat` den Befehl an den Socket zu leiten. {CMK} liefert für
+den Instanzbenutzer das Tool `unixcat` bereits mit. *Wichtig:*
+Alle Eingaben an den Socket unterscheiden Groß- und Kleinschreibung, so
+dass diese immer eingehalten werden muss:
+
+[{shell}]
+----
+{c-omd} printf "GET hosts\nColumns: name\n" | unixcat ~/tmp/run/live
+----
+
+Die Schnittstelle erwartet alle Befehle und Header in jeweils einer eigenen
+Zeile. Markieren Sie daher jeden Zeilenumbruch mit einem `\n`. Als
+Alternative zu dem Befehl oben können Sie auch den Skriptbefehl `lq`
+nutzen, welcher Ihnen einiges bei der Eingabe abnimmt:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name"
+----
+
+Oder Sie starten den interaktiven Eingabe-Stream und geben dann den Befehl
+und die Header nacheinander ein. Mit einer Leerzeile führen Sie den Befehl
+mit seinen Headern aus und eine weitere Zeile beendet den Zugriff auf den
+Socket. Beachten Sie, dass in dem Beispiel alles vor der ersten Leerzeile
+zum Befehl gehört und alles zwischen der ersten und zweiten Leerzeile
+die Antwort ist:
+
+[{shell}]
+----
+{c-omd} lq
+GET hosts
+Columns: name
+
+myserver123
+myserver124
+myserver125
+
+{c-omd}
+----
+
+Die folgenden Beispiele werden immer mit dem `lq`-Befehl ausgeführt; in direkter
+Form, wenn der Aufruf kurz ist und als Eingabe-Stream bei einem längeren.
+
+
+==== Befehle der LQL
+
+In den ersten Beispielen haben Sie bereits den ersten der beiden Befehle
+gesehen: Mit `GET` können Sie alle verfügbaren Tabellen abrufen. In
+der Befehlsreferenz finden Sie eine vollständige Liste aller verfügbaren
+xref:livestatus_references#tables[Tabellen] mit einer Beschreibung In diesem
+Artikel wird die generelle Benutzung des Livestatus gezeigt.
+
+Mit `COMMAND` können Sie Befehle direkt an den Core schicken,
+um z.B. eine Downtime zu setzen oder Benachrichtigungen komplett zu
+deaktivieren. Eine Liste aller verfügbaren Befehle finden Sie ebenfalls
+in der Befehlsreferenz bei den xref:livestatus_references#commands[Befehlen].
+
+
+==== Header in der LQL
+
+Zu jedem GET-Befehl können Sie verschiedene Header hinzufügen, um das
+Ergebnis der Abfrage einzugrenzen, nur bestimmte Spalten einer Tabelle
+auszugeben und vieles mehr. Die beiden wichtigsten Header sind die folgenden:
+
+[cols="30,~"]
+|===
+|Header |Beschreibung
+
+|Columns |Es werden nur die angegebenen Spalten einer Abfrage ausgegeben.
+|Filter |Es werden nur die Einträge ausgegeben, auf die eine bestimmte Bedingung zutrifft.
+|===
+
+
+Eine Liste aller Header mit einer Kurzbeschreibung finden Sie
+xref:livestatus_references#hdr[hier].
+
+
+[#columns]
+==== Verfügbare Spalten und Tabellen anzeigen
+
+Sie werden sich nicht alle Tabellen und deren Spalten merken können und
+haben vielleicht auch nicht immer auf dieses Handbuch (mit den Referenzen
+in der Online-Version) Zugriff. Es lässt sich jedoch schnell eine Abfrage
+erstellen, welche die gewünschten Informationen bereitstellt. Um eine Liste
+aller verfügbaren Tabellen zu bekommen führen Sie die folgende Abfrage aus
+und entfernen in der Ausgabe die duplizierten Zeilen mit `sort`. In
+der Ausgabe sehen Sie die ersten vier Zeilen als Beispielausgabe:
+
+[{shell}]
+----
+{c-omd} lq "GET columns\nColumns: table" | sort -u
+columns
+commands
+comments
+contactgroups
+----
+
+Für die Abfrage aller Spalten zu einer Tabelle müssen Sie diese natürlich
+angeben. Ersetzen Sie daher `hosts` durch die gewünschte Tabelle. Auch
+hier sind die ersten vier Zeilen der Ausgabe als Beispiel zu sehen:
+
+[{shell}]
+----
+{c-omd} lq "GET columns\nFilter: table = hosts\nColumns: name"
+accept_passive_checks
+acknowledged
+acknowledgement_type
+action_url
+----
+
+
+[#lql_python]
+=== Nutzung der LQL in Python
+
+Da {CMK} sehr stark auf Python aufbaut, bieten sich Skripten in dieser
+Sprache an. Für den Zugriff auf den Socket des Livestatus können Sie das
+folgende Skript als Ausgangsbasis nutzen:
+
+.live_example.py
+[{python}]
+----
+#!/usr/bin/env python
+# Sample program for accessing Livestatus from Python
+
+import json, os, socket
+
+# for local site only: file path to socket
+address = f"{os.getenv('OMD_ROOT')}/tmp/run/live"
+# for local/remote sites: TCP address/port for Livestatus socket
+# address = ("localhost", 6557)
+
+# connect to Livestatus
+family = socket.AF_INET if isinstance(address, tuple) else socket.AF_UNIX
+with socket.socket(family, socket.SOCK_STREAM) as sock:
+    sock.connect(address)
+
+    # send our request and let Livestatus know we're done
+    sock.sendall(b"GET status\nOutputFormat: json\n")
+    sock.shutdown(socket.SHUT_WR)
+
+    # receive the reply as a JSON string
+    chunks = []
+    while not chunks or chunks[-1] != b"":
+        chunks.append(sock.recv(4096))
+
+reply = b"".join(chunks).decode()
+
+# print the parsed reply
+print(json.loads(reply))
+----
+
+
+[#api]
+=== Nutzung der Livestatus-API
+
+{CMK} stellt auch eine API für die Programmiersprache Python zur Verfügung, welche den Zugriff auf den Livestatus vereinfachen.
+Zu dieser API steht Ihnen Beispielcode zur Verfügung, welcher die Nutzung erläutert.
+Sie finden diese API auf link:https://github.com/Checkmk/checkmk/tree/master/packages/cmk-livestatus-client/[GitHub^].
+
+
+[#simple_queries]
+== Einfache Abfragen
+
+=== Spalten abfragen (Columns)
+
+Bisher wurden in den Beispielen alle Informationen zu allen Hosts abgefragt. In
+der Praxis möchten Sie aber wahrscheinlich nur bestimmte Informationen
+(Spalten) haben. Mit dem bereits erwähnten Header `Columns` können
+Sie die Ausgabe auf diese Spalten eingrenzen. Die einzelnen Spaltennamen
+werden durch ein einfaches Leerzeichen getrennt.
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name address"
+myserver123;192.168.0.42
+myserver234;192.168.0.73
+----
+
+Wie Sie sehen, erfolgt die Trennung der einzelnen Werte einer Zeile wiederum
+durch ein Semikolon.
+
+[TIP]
+====
+Wenn Sie diesen Header benutzen, werden die Kopfzeilen in der Ausgabe unterdrückt.
+Sie können diese aber mit dem Header xref:livestatus#columnheader[ColumnHeaders] der Ausgabe wieder hinzufügen.
+====
+
+
+=== Einfache Filter setzen (Filter)
+
+Um die Abfrage nur auf bestimmte Zeilen einzugrenzen, können Sie Spalten auf
+bestimmte Inhalte filtern. Wenn Sie also nur Services mit einem bestimmten
+Status suchen, können Sie das durch einen Filter realisieren:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description state\nFilter: state = 2"
+myserver123;Filesystem /;2
+myserver234;ORA MYINST Processes;2
+----
+
+In dem Beispiel wird nach allen Services gesucht, deren Status {CRIT} ist;
+anschließend werden der Hostname, die Servicebeschreibung und dessen Status ausgegeben. Sie
+können solche Filter natürlich auch kombinieren und weiter einschränken
+auf Services, deren Status {CRIT} ist *und* noch nicht bestätigt wurde:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description state\nFilter: state = 2\nFilter: acknowledged = 0"
+myserver234;Filesystem /;2
+----
+
+Wie Sie sehen, kann man auch nach Spalten filtern, die nicht in `Columns`
+aufgelistet sind.
+
+
+==== Operatoren und reguläre Ausdrücke
+
+Bisher haben Sie nur auf die Übereinstimmung von Zahlen gefiltert. Sie
+können das vorläufige Ergebnis einer Abfrage aber auch auf
+„kleiner als“ bei Zahlen oder auf Zeichenketten durchsuchen. Die
+Ihnen zur Verfügung stehenden Operatoren finden Sie im Kapitel
+xref:livestatus_references#operators[Operatoren]
+der Befehlsreferenz. Dadurch können Sie z.B. auch über reguläre Ausdrücke
+in den Spalten filtern:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description state\nFilter: description ~~ exchange database|availability"
+myserver123;Exchange Database myinst1;1
+myserver123;Exchange Availability Service;0
+myserver234;Exchange Database myinst3;0
+----
+
+Mit dem richtigen Operator können Sie auf verschiedene Art und Weise
+mit regulären Ausdrücken die Spalten durchsuchen. Der Livestatus
+wird einen solchen Ausdruck grundsätzlich immer als „kann irgendwo in
+der Spalte vorkommen“ interpretieren, sofern das nicht entsprechend
+anders definiert wurde. Auf den Anfang einer Zeile verweisen Sie z.B. mit
+dem Zeichen `^`, während Sie mit dem Zeichen `$` auf das
+Ende einer Zeile hinweisen. Eine ausführliche Liste aller Sonderzeichen
+für Reguläre Ausdrücke in {CMK} finden Sie in dem Artikel für
+xref:regexes#characters[Reguläre Ausdrücke].
+
+=== Ausgabe sortieren (OrderBy)
+
+Mit dem Header `OrderBy` können Sie die Ausgabe nach den Inhalten beliebiger Spalten oder auch den Werten beliebiger Dictionary-Schlüssel sortieren.
+So lässt sich bspw. eine alphabetische Auflistung aller Host erstellen:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name\nOrderBy: name"
+ahost
+anotherhost
+yetanotherhost
+----
+
+Implizit wird die Ausgabe erwartungsgemäß aufsteigend sortiert (`asc`).
+Sie können die gewünschte Sortierung aber auch explizit angeben und durch die Angabe von `desc` umdrehen:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name\nOrderBy: name desc"
+yetanotherhost
+anotherhost
+ahost
+----
+
+Mit etwas längeren Abfragen und bspw. einer Sortierung nach Performance-Daten, können interessante Ranglisten entstehen.
+Im folgenden Beispiel werden die Hosts absteigend nach ihrer Uptime sortiert ausgegeben:
+
+[{shell}]
+----
+{c-omd}  lq "GET services\nColumns: host_name performance_data\nFilter: description = Uptime\nOrderBy: performance_data.uptime desc"
+anotherhost;uptime|249531.1
+yetanotherhost;uptime|149142.3
+ahost;uptime|48959
+----
+
+
+[#complex_queries]
+== Komplexe Abfragen
+
+[#filter]
+=== Filter für Listen
+
+Manche Spalten einer Tabelle liefern nicht nur einen Wert zurück,
+sondern gleich eine ganze Liste davon. Damit Sie auch diese
+effektiv durchsuchen können, haben die Operatoren hier eine andere
+Bedeutung. Eine vollständige Liste der Operatoren finden Sie bei den
+xref:livestatus_references#list_operators[Operatoren für Listen].
+So hat z.B. der Operator `>=` die Bedeutung „enthält“. Mit diesem
+können Sie z.B. nach einem bestimmten Kontakt suchen:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name address contacts\nFilter: contacts >= hhirsch"
+myserver123;192.168.0.42;hhirsch,hhirsch,mfrisch
+myserver234;192.168.0.73;hhirsch,wherrndorf
+----
+
+Wie Sie in dem Beispiel sehen, werden die Kontakte in der Spalte
+`contacts` kommasepariert aufgelistet. Dadurch lassen sie sich eindeutig
+von dem Beginn einer neuen Spalte unterscheiden. Eine Besonderheit stellt
+bei den Listen der Gleichheitsoperator dar. Er prüft, ob eine Liste leer ist:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name contacts\nFilter: contacts ="
+myserver345;
+myserver456;
+----
+
+
+[#combining]
+=== Filter kombinieren
+
+Bereits vorher wurden mehrere Filter kombiniert. Dabei erscheint es intuitiv,
+dass die Daten alle Filter passieren müssen, um angezeigt zu werden. Die
+Filter werden also mit einem logischen *und* verknüpft. Um bestimmte
+Filter mit einem logischen *oder* zu verknüpfen, können Sie am Ende der
+Filterreihe ein `Or:` gefolgt von einer Ganzzahl  einfügen. Der Counter
+bestimmt, wie viele der letzten Zeilen zu einem *oder* zusammengefasst
+werden. Dadurch können Sie Gruppen bilden und diese beliebig kombinieren. Ein
+einfaches Beispiel ist das folgende. Hier werden zwei Filter so kombiniert,
+dass alle Services angezeigt werden, die entweder den Status {WARN} oder
+{UNKNOWN} haben:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Columns: host_name description state
+Filter: state = 1
+Filter: state = 3
+Or: 2
+
+myserver123;Log /var/log/messages;1
+myserver123;Interface 3;1
+myserver234;Bonding Interface SAN;3
+
+{c-omd}
+----
+
+Sie können das Ergebnis einer Kombination aber auch negieren oder Gruppen
+wiederum zu Gruppen zusammenfassen. In dem Beispiel werden alle Services
+angezeigt, deren Status nicht {OK} ist und deren Beschreibung entweder nicht
+mit `Filesystem` anfängt oder einen anderen Status als {UNKNOWN} hat:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Columns: host_name description state
+Filter: state = 3
+Filter: description ~ Filesystem
+And: 2
+Filter: state = 0
+Or: 2
+Negate:
+
+myserver123;Log /var/log/messages;1
+myserver123;Interface 3;1
+myserver234;Filesystem /media;2
+myserver234;Filesystem /home;2
+
+----
+
+
+=== Das Ausgabeformat festlegen
+
+Sie können das Ausgabeformat auf zwei verschiedene Arten festlegen.
+Zum einen können Sie die Separatoren der Standardausgabe neu definieren. Zum
+anderen kann die Ausgabe auch Python- oder JSON-konform erfolgen.
+
+
+[#csv]
+==== `csv` anpassen
+
+Wie bereits beschrieben, können Sie die genaue Formatierung des Standardausgabeformates `csv` (kleingeschrieben!)
+anpassen und definieren, wie die einzelnen Elemente voneinander getrennt werden
+sollen. {CMK} kennt hier vier verschiedene Separatoren, um die Daten zu
+strukturieren. Nach dem Doppelpunkt geben Sie dazu die entsprechenden Standard-ASCII-Werte an, so dass der Filter wie folgt aufgebaut ist:
+
+[{shell}]
+----
+Separators: 10 59 44 124
+----
+
+Diese Trenner haben nun die folgende Bedeutung:
+
+. Trenner für die Datensätze: `10` (Zeilenumbruch)
+. Trenner für die Spalten eines Datensatzes: `59` (Semikolon)
+. Trenner für die Elemente einer Liste: `44` (Komma)
+. Trenner für die Elemente einer Serviceliste: `124` (Pipe)
+
+Jeden dieser Werte können Sie anpassen, um die Ausgabe nach den eigenen
+Wünschen zu strukturieren. In dem folgenden Beispiel werden die einzelnen
+Spalten eines Datensatzes nicht mit Hilfe eines Semikolons (59), sondern mit
+einem Tabulator (9) getrennt:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Columns: host_name description state
+Filter: description ~ Filesystem
+Separators: #10 9 44 124#
+
+myserver123     Filesystem /opt     0
+myserver123     Filesystem /var/some/path       1
+myserver123     Filesystem /home        0
+
+----
+
+[TIP]
+====
+Die Reihenfolge der Separatoren ist fest und darf daher nicht vertauscht werden.
+====
+
+
+[#output_format]
+==== Ausgabeformat ändern
+
+Neben einer Ausgabe in `csv` kann Livestatus für Sie auch andere
+Formate erzeugen. Diese haben den Vorteil, dass sie sich in höheren
+Programmiersprachen leichter und sauberer parsen lassen. Sie können sich die
+Ausgabe demnach in den folgenden Formaten kodieren lassen:
+
+[cols=2]
+|===
+|Format |Beschreibung 
+
+|python |Erzeugt die Ausgabe als Liste kompatibel zu Python 2.x. Text wird in Unicode formatiert.
+|python3 |Erzeugt ebenso die Ausgabe als Liste und berücksichtigt dabei Änderungen in den Datentypen, wie z.B. die automatische Konvertierung von Text zu Unicode.
+|json |Die Ausgabe wird ebenfalls als Liste zurückgegeben. Es werden dabei jedoch nur JSON-kompatible Formate verwendet.
+|CSV |Formatiert die Ausgabe nach link:https://tools.ietf.org/html/rfc4180[RFC-4180^].
+|csv |Siehe xref:livestatus#csv[`csv` anpassen]. Das ist das Standardformat, wenn nichts angegeben wird und an das offizielle CSV-Format angelehnt.
+|===
+
+
+Verwechseln Sie das `CSV-Format` bitte nicht
+mit der `csv`-Ausgabe des Livestatus, welches verwendet wird, wenn
+kein Ausgabeformat festgelegt wurde. Eine korrekte Groß-/Kleinschreibung
+ist daher absolut notwendig. Für die Anpassung übergeben Sie am Ende ein
+`OutputFormat` statt des `Separator`:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Columns: host_name description state
+Filter: description ~ Filesystem
+OutputFormat: json
+
+[["myserver123","Filesystem /opt",0]
+["myserver123","Filesystem /var/some/path",1]
+["myserver123","Filesystem /home",0]]
+
+----
+
+
+[#retrieving_statistics]
+== Statistiken abrufen (Stats)
+
+=== Einleitung
+
+Es wird Situationen geben, in denen Sie gar nicht daran interessiert sind,
+wie der Status eines einzelnen oder einer Gruppe von Services ist. Vielmehr
+ist die Anzahl der Services wichtig, welche gerade {WARN} sind oder die
+Anzahl der überwachten Datenbanken. Livestatus ist in der Lage mit
+`Stats` Statistiken zu erstellen und auszugeben.
+
+
+=== Zählen
+
+Der [.guihint]#Overview# bekommt seine Daten, indem er über Livestatus
+Statistiken zu Hosts, Services und Events abruft und dann in der Oberfläche
+von {CMK} darstellt. Mit dem direkten Zugriff auf Livestatus können
+Sie ebenfalls eigene Aufsummierungen erstellen:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Stats: state = 0
+Stats: state = 1
+Stats: state = 2
+Stats: state = 3
+
+34506;124;54;20
+
+----
+
+Solche Statistiken lassen sich übrigens auch mit allen
+xref:livestatus#filter[Filtern] kombinieren.
+
+
+=== Gruppieren
+
+Auch Statistiken lassen sich mit `and/or` zusammenfassen. Die Header
+heißen dann `StatsAnd` oder `StatsOr`. Wenn Sie die Ausgabe
+umkehren wollen, benutzen Sie `StatsNegate`. In dem Beispiel wird
+die Gesamtzahl der Hosts ausgegeben (das erste `Stats`) und dazu die
+Anzahl derer, die als `stale` markiert wurden und sich nicht in einer
+Downtime befinden (Stats 2 und 3 werden mit einem logischen UND verknüpft):
+
+[{shell}]
+----
+{c-omd} lq
+GET hosts
+Stats: state >= 0
+Stats: staleness >= 3
+Stats: scheduled_downtime_depth = 0
+StatsAnd: 2
+
+734;23
+
+----
+
+Verwechseln Sie nicht die unterschiedlichen Möglichkeiten, die Ergebnisse der
+Filter und Statistiken zusammenzufassen. Während bei dem Header
+xref:livestatus#combining[`Filter`] alle Hosts ausgegeben werden, auf die
+die Bedingungen zutreffen, wird bei den Statistiken die Summe ausgegeben, wie oft
+die `Stats`-Filter zutreffen.
+
+
+=== Minimum, Maximum, Durchschnitt etc.
+
+Sie können auch Berechnungen an Werten durchführen und
+z.B. den Durchschnittswert oder das Maximum ausgeben lassen. Eine
+vollständige Liste der möglichen Operatoren finden Sie
+xref:livestatus_references#stats[hier].
+
+In dem folgenden Beispiel wird die durchschnittliche, minimale und maximale
+Zeit ausgegeben, welche die Check-Plugins eines Hosts für die Berechnung
+eines Status benötigen:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Filter: host_name = myserver123
+Stats: avg execution_time
+Stats: max execution_time
+Stats: min execution_time
+
+0.0107628;0.452087;0.008593
+----
+
+Berechnungen von Metriken werden etwas besonders behandelt. Auch hier sind
+alle Funktionen des `Stats`-Header möglich. Diese werden jedoch auf
+*alle* Metriken eines Service *einzeln* angewandt. Nachfolgend werden
+als Beispiel die Metriken der CPU-Benutzung einer Host-Gruppe aufsummiert:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+Filter: decription ~ CPU utilization
+Filter: host_groups >= cluster_a
+Stats: sum perf_data
+
+guest=0.000000 steal=0.000000 system=34.515000 user=98.209000 wait=23.008000
+----
+
+
+[#limit]
+== Begrenzung der Ausgabe (Limit)
+
+Die Anzahl der Zeilen in der Ausgabe ist begrenzbar. Das kann z.B. nützlich
+sein, wenn Sie nur sehen wollen, ob überhaupt eine Antwort auf eine
+Livestatus-Anfrage zurückkommt, aber eine seitenlange Ausgabe verhindern
+wollen:
+
+[{shell}]
+----
+{c-omd}  lq "GET hosts\nColumns: name\nLimit: 3"
+myserver123
+myserver234
+myserver345
+----
+
+Beachten Sie, dass dieses Limit auch funktioniert, wenn Sie es mit anderen
+Headern kombinieren. Wenn Sie z.B. mit `Stat` zählen, wie viele Hosts den Status {UP}
+haben und die Ausgabe auf 10 begrenzen, werden nur die ersten 10 Hosts
+berücksichtigt.
+
+
+[#timelimit]
+== Zeitbeschränkungen (Timelimit)
+
+Sie können nicht nur die Anzahl der ausgegebenen Zeilen einschränken. Auch
+die maximale Zeit, wie lange eine Abfrage dauern darf, können Sie
+begrenzen. Damit verhindern Sie, dass eine Livestatus-Abfrage nicht für immer
+eine Verbindung blockiert, weil sie aus irgendwelchen Gründen hängt. Die
+Zeitbeschränkung gibt dabei die Zeit in Sekunden an, die die Verarbeitung einer
+Abfrage dauern darf:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nTimelimit: 1"
+----
+
+
+[#columnheader]
+== Kopfzeilen aktivieren (ColumnHeaders)
+
+Mit den `ColumnHeaders` können Sie zu der Ausgabe die Namen der
+Spalten ausgeben lassen. Diese werden normalerweise unterdrückt, um die
+Weiterbearbeitung zu vereinfachen:
+
+[{shell}]
+----
+{c-omd}  lq "GET hosts\nColumns name address groups\nColumnHeaders: on"
+name;address;groups
+myserver123;192.168.0.42;cluster_a,headnode
+myserver234;192.168.0.43;cluster_a
+myserver345;192.168.0.44;cluster_a
+
+----
+
+
+[#authuser]
+== Berechtigungen (AuthUser)
+
+Wenn Sie Skripten auf Basis des Livestatus zur Verfügung stellen möchten,
+sollen die Nutzer wahrscheinlich nur die Daten sehen, für die sie auch
+berechtigt sind. {CMK} stellt dafür den Header `AuthUser` mit
+der Einschränkung zur Verfügung, dass dieser nicht in den folgenden
+Tabellen benutzt werden kann:
+
+* `columns`
+* `commands`
+* `contacts`
+* `contactgroups`
+* `eventconsolerules`
+* `eventconsolestatus`
+* `status`
+* `timeperiods`
+
+Umgekehrt bedeutet es, dass Sie diesen Header in allen Tabellen nutzen können,
+die auf die Tabellen `hosts` oder `services` zugreifen. Ob ein
+Nutzer nun berechtigt ist, hängt dabei von seinen Kontaktgruppen ab.
+
+Auf diese Weise werden bei einer Abfrage nur diejenigen Daten ausgegeben,
+die der Kontakt auch sehen darf. Beachten Sie hier den Unterschied
+zwischen xref:wato_user#visibility_host[`strict` und `loose`] bei den
+Berechtigungseinstellungen:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description contacts\nAuthUser: hhirsch"
+myserver123;Uptime;hhirsch
+myserver123;TCP Connections;hhirsch
+myserver123;CPU utilization;hhrisch,kkleber
+myserver123;File /etc/resolv.conf;hhirsch
+myserver123;Kernel Context Switches;hhrisch,kkleber
+myserver123;File /etc/passwd;hhirsch
+myserver123;Filesystem /home;hhirsch
+myserver123;Kernel Major Page Faults;hhrisch
+myserver123;Kernel Process Creations;hhirsch
+myserver123;CPU load;hhrisch,kkleber
+----
+
+
+[#wait]
+== Verzögerungen (Wait)
+
+Mit den Wait-Headern erstellen Sie Abfragen, um bestimmte Datensätze zu
+bekommen, ohne wissen zu müssen, wann die Bedingungen für die Daten
+erfüllt sind. Das kann nützlich sein, wenn Sie zu einem bestimmten
+Fehlerbild Vergleichsdaten benötigen, aber das System nicht durchgehend
+sinnlos belasten wollen. Informationen werden demnach nur dann abgerufen,
+wenn Sie auch wirklich benötigt werden.
+
+Eine vollständige Liste der Wait-Header finden Sie link:livestatus_references.html#hdr[hier].
+
+In dem folgenden Beispiel wird der Service [.guihint]#Disk IO SUMMARY# eines
+ESXi-Servers ausgegeben, sobald der Status des Service [.guihint]#CPU load# auf einer
+bestimmten VM {CRIT} wird. Durch den Header `WaitTimeout` wird die
+Abfrage auch dann ausgeführt, wenn sie nach 10000 Millisekunden
+nicht eingetreten ist. Das verhindert, dass die Livestatus-Verbindung lange
+blockiert wird:
+
+[{shell}]
+----
+{c-omd} lq
+GET services
+WaitObject: myvmserver CPU load
+WaitCondition: state = 2
+WaitTrigger: state
+WaitTimeout: 10000
+Filter: host_name = myesxserver
+Filter: description = Disk IO SUMMARY
+Columns: host_name description plugin_output
+
+myesxserver;Disk IO SUMMARY;OK - Read: 48.00 kB/s, Write: 454.54 MB/s, Latency: 1.00 ms
+
+----
+
+Ein weiterer Anwendungsfall ist die Kombination mit einem xref:livestatus#commands[Befehl].
+Sie können einen Befehl absetzen und die Ergebnisse abrufen, sobald diese verfügbar sind.
+In dem nachfolgenden Beispiel werden die aktuellen Daten eines Services abgerufen und angezeigt.
+Dafür wird zuerst der Befehl übergeben und danach eine normale Abfrage erstellt.
+Diese prüft, ob die Daten des Services [.guihint]#Check_MK# jünger sind als der definierte Zeitpunkt.
+Sobald die Bedingung erfüllt ist, wird der Status des Service [.guihint]#Memory# ausgegeben.
+
+[{shell}]
+----
+{c-omd} lq "COMMAND [$(date +%s)] SCHEDULE_FORCED_SVC_CHECK;myserver;Check_MK;$(date +%s)"
+{c-omd} lq
+GET services
+WaitObject: myserver Check_MK
+WaitCondition: last_check >= 1517914646
+WaitTrigger: check
+Filter: host_name = myserver
+Filter: description = Memory
+Columns: host_name description state
+
+myserver;Memory;0
+----
+
+[TIP]
+====
+Achten Sie darauf, dass der Zeitstempel in `last_check` aus dem Beispiel durch einen aktuellen ersetzt werden muss.
+Andernfalls ist die Bedingung immer erfüllt und die Ausgabe kommt sofort.
+====
+
+
+[#localtime]
+== Zeitzonen (Localtime)
+
+Viele größere Monitoring-Umgebungen rufen auf globaler Ebene Hosts und
+Services ab. Da kann es schnell zu einer Situation kommen, bei der die
+beteiligten Monitoring-Instanzen in verschiedenen Zeitzonen arbeiten. Da
+{CMK} die zeitzonenunabhängige Unixzeit benutzt, sollte es hier zu
+keinen Problemen kommen.
+
+Falls einer der Server jedoch einer falschen Zeitzone zugeordnet wurde, können
+Sie diese Differenz mit dem Header `Localtime` ausgleichen. Übergeben
+Sie dazu der Abfrage die aktuelle Zeit. {CMK} wird dann selbstständig
+auf die näher liegende halbe Stunde runden und die Differenz ausgleichen. Sie können
+die Zeit automatisch übergeben, wenn Sie eine direkte Abfrage nutzen:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name last_check\nFilter: name = myserver123\nLocaltime: $(date +%s)"
+myserver123;1511173526
+----
+
+Ansonsten übergeben Sie das Ergebnis aus `date +%s`, wenn Sie den
+Eingabe-Stream nutzen möchten:
+
+[{shell}]
+----
+{c-omd} lq
+GET hosts
+Columns: name last_check
+Filter: name = myserver123
+Localtime: 1511173390
+
+myserver123;Memory;1511173526
+
+----
+
+
+[#response_header]
+== Statuscodes (ResponseHeader)
+
+Wenn Sie eine API schreiben, wollen Sie sehr wahrscheinlich auch einen
+Statuscode als Rückmeldung haben, um die Ausgabe besser verarbeiten zu
+können. Der Header `ResponseHeader` unterstützt die Werte `off`
+(Standard) und `fixed16` und bietet damit eine exakt 16 Bytes lange
+Statusnachricht in der ersten Zeile der Antwort. Im Falle eines Fehlers
+enthalten die weiteren Zeilen eine ausführliche Fehlerbeschreibung zu
+dem Statuscode. Sie eignet sich dadurch auch gut für eine Fehlersuche in
+der Abfrage.
+
+Die Statusnachricht der ersten Zeile setzt sich folgendermaßen zusammen:
+
+* Byte 1-3: Der Statuscode. Die komplette Tabelle der möglichen Codes finden Sie xref:livestatus_references#response[hier].
+* Byte 4: Ein einfaches Leerzeichen (ASCII-Zeichen: 32).
+* Byte 5-15: Die Länge der eigentlichen Antwort als Ganzzahl. Nicht benötigte Bytes werden mit Leerzeichen aufgefüllt.
+* Byte 16: Ein Zeilenvorschub (ASCII-Zeichen: 10).
+
+In dem folgenden Beispiel führen Sie eine fehlerhafte Abfrage aus, indem Sie
+einen Filter falsch setzen bzw. mit dem Namen einer Spalte _verwechseln._
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nName: myserver123\nResponseHeader: fixed16"
+400          33
+Coluns: undefined request header
+----
+
+Das xref:livestatus#output_format[Ausgabeformat] ist im Fehlerfall immer eine Fehlermeldung in Textform.
+Das gilt unabhängig davon, wie Sie es angepasst haben.
+
+
+[#keepalive]
+== Verbindung aufrecht erhalten (KeepAlive)
+
+Gerade bei Skripten, welche eine Livestatus-Verbindung über das
+xref:livestatus#network[Netzwerk] aufbauen, wollen Sie vielleicht den Kanal
+offen halten, um sich den Overhead des Verbindungsaufbaus zu sparen. Sie
+erreichen das mit dem Header `KeepAlive` und sind so in der Lage, sich
+einen Kanal zu _reservieren_. Nach einem xref:livestatus#commands[Befehl]
+bleibt eine Livestatus-Verbindung übrigens immer offen. Sie benötigen dafür
+keine Angabe eines zusätzlichen Headers.
+
+[TIP]
+====
+Da der Kanal für die Dauer der Verbindung für andere Prozesse blockiert ist, kann das zu einem Problem werden, wenn keine Verbindungen mehr zur Verfügung stehen.
+Andere Prozesse müssen dann warten, bis wieder eine Verbindung frei ist.
+In der Standardkonfiguration hält {CMK} 20 Verbindungen bereit
+-- erhöhen Sie bei Bedarf die maximale Anzahl dieser Verbindungen in [.guihint]#Setup > General > Global Settings > Monitoring Core > Maximum concurrent Livestatus connections#.
+====
+
+Kombinieren Sie `KeepAlive` immer mit dem
+xref:livestatus#response_header[`ResponseHeader`], um die
+einzelnen Antworten voneinander korrekt unterscheiden zu können:
+
+[{shell}]
+----
+{c-omd} lq
+GET hosts
+ResponseHeader: fixed16
+Columns: name
+KeepAlive: on
+
+200          33
+myserver123
+myserver234
+myserver345
+GET services
+ResponseHeader: fixed16
+Columns: host_name description last_check
+Filter: description = Memory
+
+200          58
+myserver123;Memory;1511261122
+myserver234;Memory;1511261183
+
+----
+
+Achten Sie darauf, dass es zwischen der ersten Antwort und der zweiten
+Abfrage anders als sonst keine Leerzeile gibt. Sobald Sie in einer Abfrage
+den Header weglassen, wird die Verbindung nach der darauf folgenden Ausgabe
+durch die übliche Leerzeile geschlossen.
+
+
+[#logs]
+== Logs abrufen
+
+=== Übersicht
+
+Über die Tabelle `log` im Livestatus haben Sie direkten Zugriff
+auf die Monitoring-Historie des Cores, so dass Sie mit der LQL bequem nach
+bestimmten Ereignissen filtern können. Verfügbarkeiten werden zum Beispiel
+auf Basis dieser Tabelle berechnet. Um die Übersicht zu erhöhen und eine
+Abfrage thematisch einzugrenzen, haben Sie auf die folgenden Log-Klassen
+zugriff:
+
+[cols="20,~"]
+|===
+|Klasse |Beschreibung 
+
+|0 |Alle Nachrichten, welche nicht über andere Klassen abgedeckt sind
+|1 |Host- und Service-Alerts
+|2 |Wichtige Ereignisse des Programms
+|3 |Benachrichtigungen
+|4 |Passive Checks
+|5 |Externe Befehle
+|6 |Initiale oder aktuelle Statuseinträge (z.B. nach einer Rotation des Logs)
+|7 |Änderungen des Programmstatus
+|===
+
+
+Mit Hilfe dieser Log-Klassen können Sie bereits sehr gut eingrenzen, welche Art
+von Einträgen angezeigt werden soll. Zusätzlich dazu wird der Zeitraum
+eingeschränkt, der bei der Abfrage berücksichtigt werden soll. Das ist wichtig,
+da andernfalls die gesamte Historie der Instanz durchsucht wird. Das kann
+logischerweise das System aufgrund der Informationsflut stark ausbremsen.
+
+Eine weitere sinnvolle Einschränkung der Ausgabe sind die Spalten
+(`Columns`), die zu einem Eintrag angezeigt werden sollen. In dem
+folgenden Beispiel wird nach allen Benachrichtigungen gesucht, welche in der
+letzten Stunde geloggt wurden:
+
+[{shell}]
+----
+{c-omd} lq "GET log\nFilter: class = 3\nFilter: time >= $(pass:[(]$(date +%s) - 3600pass:[)])\nColumns: host_name service_description time state"
+myserver123;Memory;1511343365;0
+myserver234;CPU load;1511343360;3
+myserver123;Memory;1511343338;2
+myserver234;CPU load;1511342512;0
+----
+
+[TIP]
+====
+Achten Sie darauf, dass Sie im interaktiven Modus des Eingabe-Streams keine Variablen wie in dem Beispiel nutzen können.
+Und schränken Sie die Abfragen *immer* auf einen Zeitraum ein.
+====
+
+
+=== Die Monitoring-Historie konfigurieren
+
+Sie
+haben die Möglichkeit, die Rotation der Dateien und deren maximale Größe
+zu beeinflussen. Zusätzlich können Sie auch bestimmen, wie viele Zeilen einer
+Datei eingelesen werden sollen, bevor {CMK} abbricht. Das alles kann,
+abhängig von dem Aufbau der Instanz, Auswirkungen auf die Performance Ihrer
+Abfragen haben. Es stehen dabei die folgenden drei Parameter zur Verfügung,
+welche Sie in unter [.guihint]#Setup > General > Global Settings > Monitoring Core# finden und anpassen können:
+
+[cols=2]
+|===
+|Name |Beschreibung 
+
+|[.guihint]#History log rotation: Regular interval of rotations# |Hier wird festgelegt, in welchem Zeitintervall die Historie in einer neuen Datei weitergeführt wird.
+|[.guihint]#History log rotation: Rotate by size (Limit of the size)# |Unabhängig von dem Zeitintervall wird hier die maximale Größe einer Datei festgelegt. Die Größe stellt einen Kompromiss zwischen der möglichen Leserate und den möglichen IOs dar.
+|[.guihint]#Maximum number of parsed lines per log file# |Nach der angegeben Anzahl an Zeilen wird eine Datei nicht weiter gelesen. Das verhindert Timeouts, falls eine Datei aus irgendwelchen Gründen doch sehr groß geworden sein sollte.
+|===
+
+
+[#availability]
+== Verfügbarkeiten prüfen
+
+Mit der Tabelle `statehist` können Sie die Rohdaten zu der
+Verfügbarkeit von Hosts und Services abfragen und haben somit auf alle
+Informationen Zugriff, die auch bei der xref:availability#[Verfügbarkeit] in der
+Oberfläche genutzt werden. Geben Sie auch hier immer einen Zeitraum an,
+da sonst alle verfügbaren Logs durchsucht werden, was das System sehr stark
+auslasten kann. Zusätzlich gelten folgende Besonderheiten:
+
+* Der Zeitraum, in der ein Host/Service einen bestimmten Status hatte, kann sowohl absolut in Unix-Zeit ausgegeben werden, als auch relativ als prozentualer Anteil zum abgefragten Zeitraum.
+* In Zeiten, in denen ein Host/Service nicht überwacht wurde, ist der Status `-1`.
+
+Die Überprüfung, ob, wann und wie lange ein Host/Service überwacht wurde,
+ist in {CMK} durch das Logging von initialen Status möglich. Dadurch
+können Sie nicht nur sehen, welcher Status zu einem bestimmten Zeitpunkt
+bestand, sondern auch nachvollziehen ob dieser zu diesem Zeitpunkt überhaupt
+überwacht wurde. *Wichtig:* Auch bei dem Nagios-Core ist dieses Logging
+aktiviert. Hier können Sie es jedoch deaktivieren:
+
+.~/etc/nagios/nagios.d/logging.cfg
+[{file}]
+----
+log_initial_states=0
+----
+
+In dem folgenden Beispiel sehen Sie, wie die Abfrage einer prozentualen
+Verteilung und absoluten Zeiten von bestimmten Status aussieht. Als Zeitraum
+wurden hier die letzten 24 Stunden eingestellt und die Abfrage wurde auf die
+Verfügbarkeit eines Service von einem bestimmten Host eingeschränkt:
+
+[{shell}]
+----
+{c-omd} lq
+GET statehist
+Columns: host_name service_description
+Filter: time >= 1511421739
+Filter: time < 1511436139
+Filter: host_name = myserver123
+Filter: service_description = Memory
+Stats: sum duration_ok
+Stats: sum duration_warning
+Stats: sum duration_critical
+Stats: sum duration_part_ok
+Stats: sum duration_part_warning
+Stats: sum duration_part_critical
+
+myserver123;Memory;893;0;9299;0.0620139;0;0.645764
+
+----
+
+Wie Sie eine vollständige Liste der verfügbaren Spalten abrufen, wird in der
+xref:livestatus#columns[Befehlsreferenz] näher erläutert.
+
+
+[#variables]
+== Variablen im Livestatus
+
+Sie können an verschiedenen Stellen in der {CMK}-Oberfläche Variablen
+nutzen, um Hosts/Services kontextbezogen zuzuweisen. Einige dieser Daten
+sind auch über Livestatus abrufbar. Da diese Variablen auch aufgelöst werden
+müssen, stehen solche Spalten in einer Tabelle doppelt zur Verfügung:
+Einmal als wörtlicher Eintrag und einmal als Variante, in der die Variable
+durch den entsprechenden Wert ersetzt wurde. Ein Beispiel dafür ist die
+Spalte `notes_url`, welche eine URL mit der Variable ausgibt:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name notes_url"
+myserver123;\https://mymonitoring/heute/wiki/doku.php?id=hosts:$HOSTNAME$
+----
+
+Wenn Sie jedoch stattdessen die Spalte `note_url_expanded` abfragen,
+bekommen Sie den eigentlichen Wert des Makros ausgegeben:
+
+[{shell}]
+----
+{c-omd} lq "GET hosts\nColumns: name notes_url_expanded"
+myserver123;\https://mymonitoring/heute/wiki/doku.php?id=hosts:myserver123
+----
+
+
+[#network]
+== Livestatus über das Netzwerk nutzen
+
+=== Verbindung per TCP/IP
+
+Um über das Netzwerk auf den Livestatus zuzugreifen, können Sie den Unix-Socket des Livestatus an einen TCP-Port binden.
+Auf diese Weise können Sie Skripte über das auf entfernten Maschinen ausführen und die Daten direkt dort erheben, wo sie auch verarbeitet werden sollen.
+
+Den Zugriff über TCP aktivieren Sie bei abgeschalteter Site mit dem
+`omd`-Befehl:
+
+[{shell}]
+----
+{c-omd} omd config set LIVESTATUS_TCP on
+----
+
+Nach dem Start der Instanz ist Livestatus per TCP in der Regel auf dem xref:ports#[Standardport 6557] aktiv.
+Bei {CMK}-Servern mit mehreren Sites, die Livestatus per TCP nutzen, wird der nächsthöhere freie Port gewählt.
+
+Alle Einstellungen wie Port und xref:security#livestatus[berechtigte IP-Adressen] können Sie per `omd config` vornehmen.
+Alternativ sind diese Einstellungen im Setup möglich.
+In {CMK} ist SSL-Verschlüsselung der Livestatus-Kommunikation standardmäßig aktiviert:
+
+.Livestatus-Einstellungen im Setup
+image::livestatus_setup.png[alt="Livestatus-Einstellungen im Setup."]
+
+==== Lokaler Test der SSL-Verbindung
+
+Livestatus nutzt ein Zertifikat, welches beim Erstellen der Site automatisch generiert wird.
+Dieses befindet sich mit allen anderen CA-Zertifikaten, denen die Site vertraut in der Datei `var/ssl/ca-certificates.crt`.
+Damit das Befehlszeilentool `openssl s_client` das vom Livestatus-Server genutzte Zertifikat validieren kann, muss diese Datei als _Certificate Authority File_ bekannt gemacht werden.
+
+Die Ausgabe des Befehlszeilenaufrufs haben wir hier stark gekürzt, `[...]` zeigt die Auslassungen an:
+
+[{shell}]
+----
+{c-omd} openssl s_client -CAfile var/ssl/ca-certificates.crt -connect localhost:6557
+CONNECTED(00000003)
+Can't use SSL_get_servername
+depth=1 CN = Site 'mysite' local CA
+verify return:1
+depth=0 CN = mysite
+verify return:1
+---
+Certificate chain
+ 0 s:CN = mysite
+   i:CN = Site 'mysite' local CA
+ 1 s:CN = Site 'mysite' local CA
+   i:CN = Site 'mysite' local CA
+---
+Server certificate
+[...]
+    Start Time: 1664965470
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: no
+    Max Early Data: 0
+---
+read R BLOCK
+----
+
+Erfolgt keine weitere Ausgabe mehr, können Sie interaktiv LQL-Befehle absetzen, welche Sie mit einer Leerzeile (zweimal kbd:[Enter]-Taste) abschließen.
+Klappt dies, können Sie Livestatus-Abfragen auch per Pipeline übergeben, der zusätzliche Parameter `-quiet` unterdrückt hier Debugging-Ausgaben:
+
+[{shell}]
+----
+{c-omd} echo -e "GET hosts\nColumns: name\n\n" | \
+    openssl s_client -quiet  -CAfile var/ssl/ca-certificates.crt -connect localhost:6557
+Can't use SSL_get_servername
+depth=1 CN = Site 'mysite' local CA
+verify return:1
+depth=0 CN = mysite
+verify return:1
+myserver23
+myserver42
+myserver123
+myserver124
+----
+
+Die Ausgabe vor den vier Hostnamen schreibt `openssl` auf STDERR, Sie können diese durch anhängen von `2>/dev/null` unterdrücken.
+
+==== Remote-Zugriff auf Livestatus
+
+Wenn Sie von entfernten Rechnern auf Livestatus zugreifen, sollten Sie auf diesen nicht die gesamte Liste der von der {CMK}-Site vertrauten Zertifikate verwenden.
+Lesen Sie stattdessen alleine das Zertifikat der Site-CA aus dem Setup aus.
+
+Begeben Sie sich hierfür nach [.guihint]#Global Settings > Site management > Trusted certificate authorities for SSL#.
+Hier können Sie das verwendete Zertifikat der Site-CA per Copy and Paste übernehmen.
+Kopieren Sie den kompletten Text des ersten Zertifikats unter [.guihint]#Content of CRT/PEM file# in eine Datei, im Beispiel verwenden wir `/tmp/mysite_ca.pem`.
+
+.Anzeige des Zertifikats der Site CA im Setup
+image::livestatus_ca_copy_paste.png[alt="Anzeige des Zertifikats der Site CA im Setup."]
+
+Wenn der entfernte Host nun für den Livestatus-Zugriff freigeschaltet wurde, sind mit dieser Zertifikatsdatei Livestatus-Abfragen per Skript möglich:
+
+[{shell}]
+----
+{c-user} echo -e "GET hosts\nColumns: name\n\n" | \
+    openssl s_client -quiet  -CAfile /tmp/mysite_ca.pem -connect cmkserver:6557
+----
+
+Beachten Sie: Die Zertifikatsdatei bietet keine Authentifizierung, sie stellt lediglich die Transportverschlüsselung sicher!
+Zugriffsschutz wird ausschließlich über die IP-Adressen geregelt, welche auf den Livestatus-Port zugreifen dürfen. 
+
+==== Livestatus mit stunnel
+
+Falls Sie einen entfernten verschlüsselten Livestatus Port als lokal unverschlüsselten Port erreichbar machen wollen, können Sie das Programm link:https://www.stunnel.org/[stunnel^] verwenden.
+
+./etc/stunnel/cmk_myremotesite.conf
+[{file}]
+----
+[pinning client]
+client = yes
+accept = 0.0.0.0:6557
+connect = <myremotesiteip>:6557
+verifyPeer = yes
+CAfile = /etc/stunnel/myremotesite.pem
+----
+
+Nach Neustart des stunnel ist der Zugriff auf den lokalen Port unverschlüsselt möglich:
+
+[{shell}]
+----
+{c-user} echo -e "GET hosts\nColumns: name\n\n" | nc localhost 6557
+----
+
+==== SSL im Skript
+
+Falls Sie per Skript via SSL auf Livestatus zugreifen wollen, verwenden Sie möglichst nicht `openssl s_client`.
+Primärer Zweck dieses Tools ist der Test des Verbindungsaufbaus und das Debugging von Zertifikatsketten.
+Um im Falle von Verbindungsabbrüchen zu erkennen, ob die erwartete Ausgabe vollständig war, empfehlen wir, den xref:response_header[`ResponseHeader`] auszuwerten.
+Eine gut gepflegtes API, welche SSL und Header-Auswertung unterstützt, ist jene für Python, die Sie auf link:https://github.com/Checkmk/checkmk/tree/master/packages/cmk-livestatus-client/[GitHub^] finden.
+
+
+=== Verbindung über SSH
+
+Wenn Zugriff auf Livestatus von außerhalb Ihres lokalen Netzwerkes erforderlich ist, mag Zugriffsschutz alleine auf Basis von IP-Adressen nicht praktikabel sein.
+Der einfachste Weg, authentifizierten Zugriff zu erlangen, ist hier die Verwendung der _Secure Shell_.
+
+Mit SSH haben Sie die Möglichkeit, einen Befehl zu übergeben, welches auf dem entfernten Server ausgeführt wird:
+
+[{shell}]
+----
+{c-user} ssh mysite@myserver 'lq "GET hosts\nColumns: name"'
+myserver123
+myserver234
+----
+
+Alternativ können Sie den Livestatus-Port per SSH-Tunnel auf den Host weiterleiten, auf dem Sie aktuell arbeiten:
+
+[{shell}]
+----
+{c-user} ssh -L 6557:localhost:6557 mysite@myserver
+----
+
+Wenn die Verbindung steht, können Sie in einer zweiten Konsolensitzung testen, ob mit `openssl s_client` Zugriff möglich ist:
+
+[{shell}]
+----
+{c-user} openssl s_client -CAfile /tmp/mysite_ca.pem -connect localhost:6557
+----
+
+Klappt dieser Test, können Sie jedes Skript, dass Sie für direkten Livestatus-Netzwerkzugriff geschrieben haben, auf `localhost` einsetzen.
+
+
+[#commands]
+== Befehle setzen
+
+=== Übersicht
+
+Sie können Livestatus nicht nur für die Abfrage von Daten nutzen,
+sondern auch, um Befehle live und direkt an den Core (CMC oder Nagios) zu
+schicken. Ein korrekter Befehl enthält immer einen Zeitstempel. Dieser
+kann zwar beliebig sein. Da er aber in den xref:livestatus#logs[Logs] dazu
+benutzt wird, den Zeitpunkt der Ausführung nachzuvollziehen, ist es
+sinnvoll, möglichst die exakte Zeit anzugeben. Befehle mit fehlendem
+Zeitstempel werden ohne Fehlermeldung und lediglich mit einem Eintrag im
+xref:livestatus#files[`cmc.log`] verworfen!
+
+Damit der Zeitstempel so genau, wie möglich ist, bietet es sich an,
+den Befehl nicht über den Eingabe-Stream zu setzen, sondern direkt zu
+übergeben. Sie haben in diesem Fall auch Zugriff auf Variablen und können
+automatisch die gerade aktuelle Zeit übergeben:
+
+[{shell}]
+----
+{c-omd} lq "COMMAND [$(date +%s)] DISABLE_NOTIFICATIONS"
+----
+
+Dieses Format funktioniert sowohl mit dem Nagios-Core von {CRE},
+als auch mit dem CMC der kommerziellen Editionen. Allerdings überschneiden sich
+bei den beiden Cores nur teilweise die Befehle. Eine vollständige Liste der
+Befehle für den Nagios-Core finden Sie direkt auf der Internetseite von
+link:https://old.nagios.org/developerinfo/externalcommands/commandlist.php[Nagios^].
+Die für {CMK} relevanten und für den CMC verfügbaren Befehle finden Sie in der
+xref:livestatus_references#commands[Befehlsreferenz].
+
+
+=== Besonderheiten bei Nagios
+
+{cre-only}
+In der Liste der Befehle werden Sie die Syntax in der folgenden Form
+vorfinden:
+
+[{file}]
+----
+#!/bin/sh
+# This is a sample shell script showing how you can submit the CHANGE_CUSTOM_HOST_VAR command
+# to Nagios.  Adjust variables to fit your environment as necessary.
+
+now=`date +%s`
+commandfile='/usr/local/nagios/var/rw/nagios.cmd'
+
+/bin/printf "[%lu] CHANGE_CUSTOM_HOST_VAR;host1;_SOMEVAR;SOMEVALUE\n" $now > $commandfile
+----
+
+Wie Sie gelernt haben, benutzt {CMK} ein sehr viel einfacheres Format
+für die Übergabe des Befehls. Um dieses Format für {CMK} kompatibel
+zu übertragen, benötigen Sie lediglich den Befehl, den Zeitstempel und
+gegebenenfalls die Variablen:
+
+[{shell}]
+----
+{c-omd} lq "COMMAND [$(date +%s)] CHANGE_CUSTOM_HOST_VAR;host1;_SOMEVAR;SOMEVALUE"
+----
+
+
+[#files]
+== Dateien und Verzeichnisse
+
+[cols="55,~"]
+|===
+|Pfad |Bedeutung 
+
+|`~/tmp/run/live` |Der Unix-Socket zur Übergabe der Abfragen und Befehle.
+|`~/bin/lq` |Skriptbefehl für die einfachere Übergabe der Abfragen und Befehle an den Unix-Socket des Livestatus.
+|`~/var/log/cmc.log` |Die Log-Datei des CMC, in der unter anderem die Abfragen/Befehle dokumentiert werden.
+|`~/var/check_mk/core/history` |Die Log-Datei des CMC, in der alle zur Laufzeit des Core auftretenden Änderungen eingetragen werden, wie z.B. Statusänderungen eines Host/Service.
+|`~/var/check_mk/core/archive/` |Hier werden die `history`-Log-Dateien archiviert. Diese werden nur nach Bedarf eingelesen.
+|`~/var/log/nagios.log` |Die Log-Datei des Nagios-Core, in der unter anderem die Abfragen/Befehle dokumentiert werden.
+|`~/var/nagios/archive/` |Hier werden die `history`-Log-Dateien archiviert. Diese werden nur nach Bedarf eingelesen.
+|`~/share/doc/check_mk/livestatus/LQL-examples/` |In diesem Verzeichnis finden Sie einige Beispiele zu Livestatus-Abfragen, die Sie ausprobieren können. Die Beispiele werden an den Skriptbefehl `lq` geleitet, wie z.B.: `lq < 1.lql`
+|===

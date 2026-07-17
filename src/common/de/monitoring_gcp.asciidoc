@@ -1,0 +1,309 @@
+// -*- coding: utf-8 -*-
+// IGNORE Tabellen Arbeitsbereich
+// The above IGNORE tokens appear in guihints and therefore need special treatment
+// NONASCII
+include::global_attr.adoc[]
+= Google Cloud Platform (GCP) überwachen
+:title: Google Cloud Platform (GCP) überwachen
+:description: {CMK} bietet ein umfangreiches Monitoring von Google Cloud-Produkten und ihren Kosten. Lesen Sie hier, wie Sie die Integration einrichten und nutzen.
+
+{related-start}
+link:https://checkmk.com/de/integrations[Katalog der Check-Plugins^]
+xref:dcd#[Dynamische Host-Verwaltung]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+[{image-left}]
+image::logo_google_cloud.png[width=120]
+
+{CMK} enthält ein effektives link:https://checkmk.com/de/guides/gcp-cloud-monitoring[Monitoring von Google Cloud Platform (GCP),^] welches aus einem Konnektor zu GCP und einer stattlichen Sammlung von Check-Plugins besteht, die für Sie verschiedenste Metriken und Zustände abrufen und auswerten.
+
+Neben den allgemeinen Informationen zu den link:https://checkmk.com/de/integrations/gcp_cost[Kosten^] Ihrer Google Cloud
+und dem aktuellen link:https://checkmk.com/de/integrations/gcp_status[Status^] der Google-Dienste in Ihrer Region,
+können Sie mit {CMK} die folgenden Google Cloud-Produkte überwachen:
+
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_gce[Compute Engine (GCE)^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_gcs[Cloud Storage (GCS)^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_filestore[Filestore^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_sql[Cloud SQL^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_http_lb[Cloud Load Balancing^]
+
+ifdef::onprem[]
+Mit {CCE} können Sie darüber hinaus noch die folgenden Produkte in Ihr Monitoring aufnehmen:
+endif::[]
+
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_function[Cloud Functions^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_run[Cloud Run^]
+* link:https://checkmk.com/de/integrations?distributions%5B%5D=check_mk&distributions%5B%5D=check_mk_cloud&search=gcp_redis[Memorystore for Redis^]
+
+Eine vollständige Auflistung aller verfügbaren Check-Plugins für die Überwachung von GCP finden Sie in unserem link:https://checkmk.com/de/integrations?tags=gcp[Katalog der Check-Plugins^]. Wie Sie Ihre GKE-Cluster (Google Kubernetes Engine) ins Monitoring aufnehmen, beschreiben wir im Artikel xref:monitoring_kubernetes#[Kubernetes überwachen].
+
+
+[#quick_setup]
+== Monitoring per Quick Setup einrichten (optional)
+
+Das Monitoring einzelner GCP-Projekte lässt sich am schnellsten mit unserem _Quick Setup_ einrichten.
+Öffnen Sie dafür [.guihint]#Setup > Quick Setup > Google Cloud Platform (GCP)# und klicken Sie dort auf [.guihint]#Add configuration#.
+Das Quick Setup führt Sie dann Schritt für Schritt ans Ziel.
+
+Eine detaillierte Anleitung, wie Sie an die notwendigen Informationen zu Ihrem Projekt in GCP gelangen, finden Sie im Kapitel xref:preparation_gcp[GCP für {CMK} vorbereiten].
+
+Der größte Vorteil des Quick Setup liegt sicherlich darin, dass etwaige Fehler unmittelbar während der Einrichtung angezeigt werden.
+Im Fall der Fälle erhalten Sie dann einen klaren und dedizierten Hinweis, was Sie korrigieren müssen, bevor Sie zum nächsten Schritt gehen können.
+
+Falls Sie zu einem späteren Zeitpunkt Änderungen an der durch das Quick Setup erzeugten xref:glossar#quick_setup_configuration[Konfiguration] vornehmen wollen oder müssen, können Sie erneut den Weg über [.guihint]#Setup > Quick Setup# nehmen.
+Klicken Sie dort auf das Symbol icon:icon_edit[] und wählen Sie anschließend diejenige der angezeigten Komponenten, die Sie bearbeiten möchten.
+
+[TIP]
+====
+Die weiteren Kapitel dieses Artikels dienen Nutzern des Quick Setup lediglich als Referenz.
+Sollte Ihre GCP-Umgebung hingegen eher komplex sein, empfiehlt es sich, die Einrichtung weiterhin nach den folgenden Schritten durchzuführen.
+====
+
+
+[#implementation_gcp]
+== Konkrete Umsetzung der GCP-Überwachung
+
+=== Hosts und Services
+
+In {CMK} ordnen sich alle zu überwachenden Objekte in eine hierarchische Struktur von Hosts und Services ein.
+Nun gibt es bei Cloud-basierten Diensten das Konzept von Hosts in dieser Form nicht.
+Um die Einfachheit und Konsistenz von {CMK} zu bewahren, bilden wir GCP-Objekte auf das Schema Host/Service ab.
+Jedes Ihrer Projekte in der Google Cloud wird dabei einem eigenen Host in {CMK} zugewiesen.
+Alle Cloud-Produkte, die Sie in diesem Projekt überwachen möchten, werden dann auf mehrere Services auf diesem speziellen Host aufgeteilt.
+
+Ein kleines Projekt, in dem nur eine Compute Engine-VM läuft, kann dann in der Überwachung in {CMK} so aussehen:
+
+image::monitoring_gcp_example_host.png[]
+
+
+=== Zugriff auf GCP
+
+GCP stellt eine HTTP-basierte API bereit, über die auch Monitoring-Daten abrufbar sind.
+{CMK} greift auf diese API über den xref:glossar#special_agent[Spezialagenten] `agent_gcp` zu.
+Dieser tritt an die Stelle des {CMK}-Agenten, wird aber -- anders als dieser -- lokal auf dem {CMK}-Server ausgeführt.
+
+
+[#preparation_gcp]
+== GCP für {CMK} vorbereiten
+
+[#acquire_project_id]
+=== Projekt-ID besorgen
+
+Melden Sie sich in der link:https://console.cloud.google.com[Konsole von Google Cloud^] an.
+Achten Sie darauf, dass in der Titelzeile das korrekte Projekt ausgewählt ist bzw. wählen Sie hier das zu überwachende Projekt aus.
+
+Öffnen Sie dann das Dashboard des Projekts.
+Hier sollten Sie -- wenn das Dashboard noch dem Standard entspricht -- eine Karte finden, auf der die [.guihint]#Project ID# angegeben ist.
+Kopieren oder notieren Sie diese.
+
+image::monitoring_gcp_project_info.png[width=56%]
+
+Sollte die Karte mit den Projektinformationen nicht mehr Teil Ihres Dashboards sein, finden Sie die notwendige ID auch über die [.guihint]#Project settings#:
+
+image::monitoring_gcp_project_settings.png[width=30%]
+
+
+=== Benutzer anlegen
+
+Öffnen Sie als nächstes die Benutzerverwaltung unter [.guihint]#IAM & Admin#.
+In der Übersicht auf der linken Seite müssen Sie nun [.guihint]#Service Accounts# auswählen und dann oben auf [.guihint]#Create Service Account# klicken.
+Legen Sie anschließend einen Namen für den Service Account fest.
+Wir empfehlen hier einen Namen zu vergeben, der sofort klar macht, wofür dieser Account da ist, bspw. `checkmk-monitoring`.
+Zusätzlich zu einem sprechenden Namen können Sie optional noch eine Beschreibung -- eine Service Account Description -- angeben.
+Nach einem Klick auf [.guihint]#Create and continue# müssen Sie diesem Service-Account noch die beiden Rollen _Monitoring Viewer_ und _Cloud Asset Viewer_ zuweisen.
+Klicken Sie dafür jeweils in das Feld [.guihint]#Select a role# und geben Sie den Rollennamen ein.
+
+*Achtung:* Wenn Sie _Monitoring Viewer_ in das Feld eingeben, werden Ihnen eine ganze Reihe Rollen mit ähnlichen Namen angezeigt.
+Achten Sie darauf, tatsächlich _Monitoring Viewer_ zu wählen.
+
+Nach der Auswahl der Rollen können Sie den nächsten optionalen Schritt überspringen und direkt auf [.guihint]#Done# klicken.
+
+
+[#create_key]
+=== Schlüssel erzeugen
+
+Damit Sie über diesen neuen Service Account auch tatsächlich auf die Monitoring- und Asset-Daten Ihrer Google Cloud zugreifen können, müssen Sie noch einen Schlüssel erzeugen.
+Diesen hinterlegen Sie später in der entsprechenden Regel in {CMK} bzw. im [.guihint]#Password store#.
+
+In der Übersicht [.guihint]#Service accounts for project My Project# können Sie dazu in der Zeile Ihres neuen Service Accounts auf die drei Punkte klicken und dort [.guihint]#Manage keys# auswählen.
+Klicken Sie sodann auf [.guihint]#Add key# und dann auf [.guihint]#Create new key#.
+Wählen Sie als Format unbedingt `JSON` aus und klicken Sie auf [.guihint]#Create#.
+Mit diesem Klick auf [.guihint]#Create# wird -- leicht übersehbar -- eine Datei im JSON-Format heruntergeladen.
+Bewahren Sie diese Datei vorübergehend gut auf, da Sie sie *nicht* erneut herunterladen können.
+Wir empfehlen allerdings, auch diese Datei zu löschen, nachdem Sie deren Inhalt in {CMK} hinterlegt haben (siehe xref:agent_rule[Regel für GCP-Agenten anlegen]).
+Bei Bedarf sollte ein neuer Schlüssel erzeugt und der alte gänzlich verworfen werden.
+
+
+[#enable_apis]
+=== APIs im GCP-Projekt aktivieren
+
+Auf der Übersichtsseite Ihres GCP-Projekts finden Sie auch den Menüpunkt [.guihint]#APIs & Services#.
+Überprüfen Sie in dieser Übersicht, ob die `Cloud Asset API` in der Liste der [.guihint]#Enabled APIs & services# auftaucht.
+Wenn dies nicht der Fall ist, aktivieren Sie diese API über den Knopf [.guihint]#Enable APIs and services#.
+Nach der Aktivierung dauert es noch einige Minuten, bis die API auch tatsächlich ansprechbar ist.
+
+
+=== Abrechnungsinformationen überwachen
+
+In der Google Cloud Platform werden Abrechnungsinformationen separat von den Ressourcen gespeichert.
+Im Regelfall werden dazu eigene Projekte für die Kostenanalyse in GCP angelegt, in welchen dann wiederum die Abrechnungsinformationen für andere Projekte gesammelt werden.
+Um diese Informationen auch mit {CMK} überwachen zu können, ist es unerlässlich, dass diese Daten innerhalb der GCP nach BigQuery exportiert werden.
+Nur Daten, die in Tabellen von BigQuery vorliegen, sind von außen -- und somit für {CMK} -- abrufbar.
+Wie ein solcher Export innerhalb von GCP eingerichtet wird, wird in dem Dokument link:https://cloud.google.com/billing/docs/how-to/export-data-bigquery?hl=de[Cloud Billing-Daten nach BigQuery exportieren^] der GCP-Hilfe ausführlich erklärt.
+
+Wenn Sie BigQuery eingerichtet haben bzw. ohnehin bereits nutzen, finden Sie im [.guihint]#SQL-Arbeitsbereich# des Abrechnungsprojekts eine Auflistung der enthaltenen Tabellen.
+Öffnen Sie die Tabelle des Abrechnungsprojekts und klicken Sie auf den Reiter [.guihint]#Details#.
+Unter [.guihint]#Tabellen-ID# finden Sie die Information, die Sie beim Anlegen der Regel in {CMK} unter [.guihint]#Costs > BigQuery table ID# eintragen müssen.
+
+Der Service für die Überwachung der Projektkosten ist als Übersicht ausgelegt.
+Es werden ausschließlich die monatlichen Kosten der einzelnen Projekte angezeigt und überwacht.
+Schwellwerte für diese monatlichen Kosten können Sie mit der Regel [.guihint]#GCP Cost# festlegen.
+
+
+[#configure_cmk]
+== Monitoring in {CMK} konfigurieren
+
+[#create_host]
+=== Host für GCP anlegen
+
+Legen Sie für die Überwachung von GCP nun einen Host in {CMK} an.
+Den Host-Namen können Sie nach Belieben vergeben.
+Wenn Sie mehrere Projekte in GCP überwachen wollen, müssen Sie für jedes Projekt einen eigenen Host in {CMK} anlegen.
+
+*Wichtig:* Da GCP als Dienst weder eine IP-Adresse noch einen DNS-Namen hat (den Zugriff macht der Spezialagent von selbst), müssen Sie die [.guihint]#IP address family# auf [.guihint]#No IP# einstellen.
+
+image::monitoring_gcp_no_ip.png[]
+
+
+[#agent_rule]
+=== Den GCP-Agenten konfigurieren
+
+Wie eingangs erwähnt, werden Projekte auf der Google Cloud Platform von einem xref:glossar#special_agent[Spezialagenten] überwacht.
+Dieser wird mit einer Regel konfiguriert, welche Sie über [.guihint]#Setup > Agents > VM, cloud, container > Google Cloud Platform (GCP)# finden.
+
+Tragen Sie hier im entsprechenden Feld die [.guihint]#Project ID# ein, welche Sie zuvor xref:acquire_project_id[in Ihrem Projekt nachgeschlagen haben].
+
+Unter [.guihint]#JSON credentials for service account# muss als nächstes der Schlüssel eingetragen werden, welchen Sie xref:create_key[für Ihren Service Account erzeugt haben].
+Sie müssen hier das gesamte JSON-Objekt (inklusive der geschweiften Klammern) hineinkopieren.
+
+image::monitoring_gcp_id_and_key.png[]
+
+Unter [.guihint]#GCP services to monitor# können Sie nun auswählen, welche GCP-Produkte durch den Spezialagenten überwacht werden sollen.
+Um die API-Abfragen möglichst sparsam zu gestalten, empfehlen wir nur die Produkte auszuwählen, die tatsächlich in Ihrem Projekt verwendet werden.
+
+
+=== Services auf dem GCP-Host selbst
+
+Starten Sie nun eine xref:glossar#service_discovery[Service-Erkennung] des neu angelegten GCP-Hosts, wo {CMK} nun etliche Services finden sollte.
+Nachdem Sie die Services hinzugefügt haben, sieht das nach einem xref:glossar#activate_changes[Aktivieren der Änderungen] im Monitoring etwa so aus:
+
+image::monitoring_gcp_services.png[]
+
+
+[#vm-hosts]
+=== Hosts für die Compute Engine VM-Instanzen anlegen
+
+Services, die Compute Engine VM-Instanzen zugeordnet sind, werden nicht dem GCP-Host zugeordnet, sondern sogenannten xref:glossar#piggyback[Piggybacked]-Hosts.
+Dies funktioniert so, dass Daten, die vom GCP-Host abgerufen wurden, an diese Piggybacked-Hosts, die ohne eigene Monitoring-Agenten arbeiten, verteilt werden.
+Dabei wird jeder VM-Instanz ein Piggybacked-Host zugeordnet.
+Die Namen dieser Piggybacked-Hosts setzen sich aus der ID Ihres Projekts, einem Unterstrich und dem vollständigen Namen der Instanz zusammen.
+Wenn Ihr Projekt beispielsweise die Projekt-ID `my-project-19001216` trägt und Sie dann eine VM mit dem Namen `my-instance01` überwachen, heißt der Piggybacked-Host `my-project-19001216_my-instance01`.
+Legen Sie diese Hosts entweder von Hand an oder -- falls möglich -- überlassen Sie diese Aufgabe der dynamischen Host-Verwaltung.
+
+
+==== Dynamische Host-Verwaltung einrichten
+
+ifdef::onprem[]
+{cee-only}
+Als Nutzer einer unserer kommerziellen Editionen
+endif::[]
+ifdef::saas[]
+Als Nutzer von {CE}
+endif::[]
+können Sie die Erstellung und Löschung von Hosts für Ihre VM-Instanzen einfach der xref:dcd#[dynamischen Host-Verwaltung] überlassen.
+Der Menüeintrag [.guihint]#Setup > Hosts > Dynamic host management# bringt Sie zur Übersichtsseite aller bereits konfigurierten Verbindungen.
+Klicken Sie hier auf icon:icon_new[] [.guihint]#Add connection# und geben Sie der Verbindung anschließend eine [.guihint]#ID# und einen [.guihint]#Title#.
+
+Im Folgenden werden nicht alle Optionen der [.guihint]#Connection properties# behandelt.
+Konsultieren Sie bei Fragen die Inline-Hilfe und den oben verlinkten Hauptartikel.
+
+Stellen Sie zuerst sicher, dass für den Kasten [.guihint]#Connection properties# der xref:intro_gui#show_less_more[Show-more-Modus] aktiviert ist, damit alle verfügbaren Optionen angezeigt werden.
+
+Klicken Sie als nächstes unter [.guihint]#Piggyback creation options# auf [.guihint]#Add new element#.
+Passen Sie den Ordner an, in dem die Hosts Ihrer VM-Instanzen erstellt werden sollen.
+Die vorausgewählten [.guihint]#Host attributes# sind für Piggybacked-Hosts im Grunde korrekt und bedürfen eher nicht der Anpassung.
+
+Mit dem Aktivieren der Option [.guihint]#Delete vanished hosts# können Sie dafür sorgen, dass Piggybacked-Hosts, für die über einen bestimmten Zeitraum keine frischen Daten mehr kommen, automatisch wieder gelöscht werden.
+
+Im Rahmen der Überwachung Ihrer GCP-Projekte sollte die Option [.guihint]#Restrict source hosts# aktiviert werden.
+Tragen Sie hier Ihren GCP-Host aus dem Abschnitt xref:create_host[Host für GCP in {CMK} anlegen] ein.
+
+Eine exemplarische Konfiguration der Verbindung könnte dann so aussehen:
+
+image::monitoring_gcp_connection_properties.png[alt="Exemplarische Konfiguration der Connection Properties."]
+
+
+==== Hosts für VM-Instanzen manuell anlegen
+
+Alternativ können Sie Hosts für die Piggyback-Daten auch manuell anlegen.
+Dabei ist es wichtig, dass die Namen der Hosts exakt dem xref:vm-hosts[oben beschriebenen Schema] entsprechen.
+
+ifdef::onprem[]
+[TIP]
+====
+Mit dem Befehl `cmk-piggyback list orphans` finden Sie alle xref:piggyback#orphaned_piggyback_data[verwaisten Piggybacked-Hosts], für die es zwar Daten gibt, die aber noch nicht als Hosts in {CMK} angelegt sind.
+====
+endif::[]
+
+Konfigurieren Sie die Hosts für diese Compute Engine VMs ohne IP-Adresse (analog zum GCP-Host) und wählen Sie als Monitoring-Agent [.guihint]#No API integrations, no {CMK} agent# aus.
+Wenn Sie unter [.guihint]#Piggyback# auch noch die Option [.guihint]#Always use and expect piggyback data# wählen, werden Sie beim Ausbleiben der Daten entsprechend gewarnt.
+
+image::monitoring_gcp_add_host_for_piggyback_data.png[]
+
+
+[#diagnose]
+== Diagnosemöglichkeiten
+
+=== Der Service Exceptions
+
+Um Sie bei der Einrichtung des GCP-Monitorings zu unterstützen und auch zukünftig bei Problemen in der Kommunikation mit der Google Cloud API zu helfen, gibt es den Service [.guihint]#Exceptions#.
+Hier werden alle Fehlermeldungen, welche die Google Cloud API an den Spezialagenten zurückliefert, gesammelt und aufbereitet.
+Im Fehlerfall wird dieser Service standardmäßig {CRIT} und gibt bereits in der [.guihint]#Summary# einen Hinweis darauf, wo das Problem liegt.
+
+image::monitoring_gcp_exceptions.png[]
+
+Nach einem Klick auf den Namen des Services erhalten Sie dann eine sehr detaillierte Meldung, die oft einen Link an genau die Stelle in Ihrem GCP-Projekt enthält, an der es beispielsweise einer anderen Einstellung bedarf.
+In folgendem Beispiel ist die [.guihint]#Cloud Asset API# im überwachten Projekt deaktiviert.
+
+image::monitoring_gcp_exceptions_details.png[]
+
+Ein Klick auf den WWW-Globus icon:icon_link[] bringt Sie dann genau auf die Seite in Ihrem Projekt, auf der sich diese API aktivieren lässt.
+
+
+[#dashboards]
+== Dashboards
+
+ifdef::onprem[]
+{CCE-only}
+Zum komfortablen Einstieg in die Überwachung von GCP liefert {CMK} in {CE}
+endif::[]
+ifdef::saas[]
+Zum komfortablen Einstieg in die Überwachung von GCP liefert {CE}
+endif::[]
+die beiden eingebauten xref:glossar#dashboard[Dashboards] [.guihint]#GCP GCE instances# und [.guihint]#GCP storage buckets# mit aus.
+Beide finden Sie im Monitoring als Menüeinträge unter [.guihint]#Monitor > Cloud#.
+
+Damit Sie einen direkten Eindruck bekommen, finden Sie nachfolgend zwei Beispiele, wie diese Dashboards aufgebaut sind.
+Zuerst das Dashboard zu den Compute-Engine-Instanzen, bei der Sie auf der linken Seite den aktuellen Zustand und auf der rechten Seite den zeitlichen Verlauf der wichtigsten Metriken vergleichen können:
+
+image::monitoring_gcp_dashboard_vm.png[alt="Dashboard zu den GCP Compute-Engine-Instanzen."]
+
+Das Dashboard zu den Storage Buckets ist ganz ähnlich aufgebaut.
+Auf der linken Seite finden Sie aktuelle Daten der jeweiligen Buckets.
+Auf der rechten werden wieder die wichtigsten Metriken im zeitlichen Verlauf dargestellt:
+
+image::monitoring_gcp_dashboard_storage.png[alt="Dashboard zu den GCP Storage Buckets."]

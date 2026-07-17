@@ -1,0 +1,134 @@
+// -*- coding: utf-8 -*-
+// IGNORE backends siloed
+// NONASCII 
+include::global_attr.adoc[]
+= The {CMK} metrics backend
+:title: The {CMK} metrics backend
+:description: The {CMK} metrics backend provides efficient background storage for monitoring data in dynamic environments.
+
+
+[#intro]
+== Introduction
+
+ifdef::onprem[]
+{cee-only} Until now, {CUE}
+endif::[]
+ifdef::saas[]
+Until now, {CMK}
+endif::[]
+has stored metrics in xref:graphing#rrds[Round Robin Databases ](RRDs for short), event information in SQLite files, and inventory data in JSON files.
+What they all have in common is that they are relatively simple, file-based formats whose size and performance are highly predictable, and which offer sufficient flexibility for core tasks.
+
+However, RRDs in particular no longer meet all the requirements of a modern monitoring system with many dynamic objects.
+While querying a metric over a defined time period is easily possible, more complex queries--such as identifying time periods during which multiple metrics exhibited anomalies--require extracting large volumes of data and processing them separately.
+ifdef::onprem[]
+Furthermore, the approach taken in {CMK} {v24}--making OpenTelemetry data available in {CMK} via a special agent using 'traditional' methods--came with a certain overhead in terms of conversion and copying operations.
+endif::[]
+
+For these reasons,
+ifdef::onprem[]
+{UE} {v25}
+endif::[]
+ifdef::saas[]
+{CMK}
+endif::[]
+decided to initially use a column-based database as the metrics backend for OpenTelemetry data.
+We chose _ClickHouse_ here because its data transfer from the OpenTelemetry Collector to the database is very efficient.
+Column-based databases deliver excellent performance when many values of a metric need to be read--a typical use case for this is, for example, generating graphs from metrics.
+
+Currently, the metrics backend is used only for xref:opentelemetry#[OpenTelemetry metrics].
+For future versions, we reserve the right to use the metrics backend for additional monitoring data in addition to RRDs.
+Where RRDs satisfactorily fulfill their purpose, {CMK} will continue to use them in the future.
+
+ifdef::saas[]
+No explicit setup is required.
+{com} operates one ClickHouse cluster per AWS region.
+When your {CMK} xref:glossar#site[site] was created, the database associated with it was also automatically created in this cluster.
+endif::[]
+
+
+ifdef::onprem[]
+[#setup]
+== Setup
+
+Note that any processing of OpenTelemetry _metrics_ requires an enabled metrics backend.
+Only the forwarding of OpenTelemetry _logs_ to the xref:glossar#ec[Event Console] does not require this.
+
+You can enable this in the global settings ([.guihint]#Setup > General > Global settings > Site management > Metric backend#).
+Unless otherwise specified, {CMK} uses three seemingly random high-numbered ports--for data collection by the OpenTelemetry Collector, data querying, and a web GUI acting as an SQL console.
+The ports used are derived from the site's name, so they are always the same three ports for {CMK} sites with the same name.
+
+You can do without the web GUI as an SQL console.
+However, this can be helpful during testing, so we recommend keeping it at least until you have completed all tests.
+endif::[]
+
+
+ifdef::onprem[]
+[#distributed]
+=== Distributed monitoring
+
+Currently, no forwarding mechanisms are planned in xref:glossar#distributed_monitoring[distributed monitoring].
+Therefore, if you send OpenTelemetry metrics to OpenTelemetry Collectors and thus to metrics backends of remote sites, these metrics can only be viewed there as a siloed solution.
+
+For upcoming versions of {CMK}, we are therefore evaluating the possibility of creating a central site for the metrics backend enabling the use of a distributed ClickHouse cluster.
+Details will be available in the road map documentation in due course.
+
+In {CMK} {v25}, the most pragmatic approach is likely to be using the OpenTelemetry Collector and metrics backend solely on the central site.
+If this approach is not feasible due to network segmentation, you can also run OpenTelemetry Collectors and metrics backends as a standalone solution on remote sites.
+Note that in this case, only data that passes through xref:opentelemetry#special_agent_option[the special agent] can be used in distributed monitoring.
+The use of xref:opentelemetry#custom_graphs[custom graphs] is only possible at their source.
+endif::[]
+
+
+ifdef::onprem[]
+[#troubleshooting]
+=== Troubleshooting
+
+You can confirm whether data is being received and stored with the expected metadata in the ClickHouse SQL console.
+The `checkmk.metrics_samples_*` tables are usually the ones you want to explore.
+
+.With a basic understanding of SQL you can determine whether expected data is landing in the metrics backend
+image::metric_backend_sql_console.png[alt="With a basic understanding of SQL, you can determine whether expected data is landing in the metrics backend.",fullscreen=1]
+endif::[]
+
+
+[#license_calculation]
+== Basics for calculating licensing
+
+[#custom_metrics]
+=== Custom Metrics
+
+A _Custom Metric_ corresponds to a time series of data identified by _Service Name_, _Metric Name_ (in the terminology of the metrics backend or the OpenTelemetry Collector), and other attributes.
+You can view the current number of Custom Metrics at any time via the [.guihint]#OMD mysite metric backend# service in your {CMK} site's self-monitoring.
+
+The billing-relevant number of Custom Metrics is determined every 20 minutes.
+Only Custom Metrics that have received updates within this 20-minute interval are included in the count.
+Once a day, an average of these numbers is calculated across all 20-minute intervals over the past 24 hours.
+From this, the monthly average is calculated at the end of the month.
+
+
+[#frequency_incoming_data]
+=== Frequency of incoming data
+
+ifdef::onprem[]
+The frequency of incoming data for {UE} is currently limited only by your hardware, settings such as the connector's storage limit, and the network connection of the {CMK} server.
+endif::[]
+
+ifdef::saas[]
+For {CE}, the frequency of incoming data is limited to one data point every 15 seconds.
+If traffic spikes occur for only a few minutes per day, they do not result in throttling of incoming traffic.
+endif::[]
+
+
+[#retention_period]
+=== Retention period
+
+ifdef::onprem[]
+The retention period for telemetry data is limited to 14 days.
+This value cannot currently be configured in {CMK}.
+If changes are made to configuration files, we reserve the right not to provide support.
+endif::[]
+
+ifdef::saas[]
+The retention period for telemetry data is limited to 14 days.
+endif::[]

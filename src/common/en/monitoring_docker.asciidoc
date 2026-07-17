@@ -1,0 +1,278 @@
+// -*- coding: utf-8 -*-
+// IGNORE 
+// NONASCII
+include::global_attr.adoc[]
+= Monitoring Docker
+:title: Monitoring Docker
+:description: {CMK} can monitor Docker nodes and their containers. Read here how to set up and use the monitoring based on the piggyback mechanism.
+
+{related-start}
+xref:wato_monitoringagents#[Monitoring agents]
+xref:agent_linux#[Monitoring Linux]
+xref:intro_setup_monitor#[Setting up monitoring]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+[{image-left}]
+image::docker_logo_breit.png[alt="Logo of the Docker, Inc. company.", width=335]
+
+Worldwide, Docker has become one of the most widely used software products for container virtualization.
+As necessary as end-to-end and transparent monitoring of containers is, it is also complex due to these containers' dynamic and multi-layered architecture.
+
+{CMK} can monitor Docker containers directly via the xref:agent_linux#[Linux agent].
+But {CMK} monitors not only the general status of the daemon or the container, but also the container itself.
+A full list of the elements that can currently be monitored can be found in the link:https://checkmk.com/integrations[Catalog of check plug-ins^].
+
+Alongside the status and inventory information which {CMK} can determine over the node (docker-jargon for 'the host on which the containers are running'), {CMK} can also determine detailed status information for the containers.
+For this every container has to be added as a separate host in {CMK} if the container is to be monitored.
+Its data will be xref:glossar#piggyback[piggybacked] from the node to this host.
+
+ifdef::onprem[]
+Within the commercial editions,
+endif::[]
+ifdef::saas[]
+Within {CE},
+endif::[]
+container hosts can be automatically created or removed using the xref:dcd#[dynamic host management].
+
+
+[#setup]
+== Setting up
+
+[#install_agent_plugin]
+=== Installing the agent and plug-in
+
+To be able to monitor a Docker node with {CMK}, it must first be monitored with the normal xref:agent_linux#[Linux agent].
+This will give you a basic monitoring of the host system, however there will be no information about the Docker daemon or about the container.
+
+You will need the `mk_docker.py` xref:glossar#agent_plugin[agent plug-in], which you can find here: [.guihint]#Setup > Agents > Other operating systems > Plugins#
+
+Install the plug-in to the agent's plug-in folder (usually `/usr/lib/check_mk_agent/plugins`).
+For detailed information on installing an agent plug-in, see the xref:agent_linux#plugins[Linux agent article].
+
+[{shell}]
+----
+{c-root} install -m 0755 mk_docker.py /usr/lib/check_mk_agent/plugins
+----
+
+ifdef::onprem[]
+In the commercial editions
+endif::[]
+ifdef::saas[]
+In {CE}
+endif::[]
+you can also do this with the xref:wato_monitoringagents#bakery[Agent Bakery], which comes with the appropriate rule set for monitoring Docker: [.guihint]#Docker node and containers#
+
+To properly function, the Python module `docker` is required.
+You can easily check presence of the module with `python` on the command line:
+
+[{shell}]
+----
+{c-root} python3
+Python 3.12.3 (main, Jun 18 2025, 17:59:45) [GCC 13.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import docker
+>>> docker.version
+'5.0.3'
+----
+
+If required, install the missing module.
+Using the package management tool of your Linux distribution is the preferred installation method.
+Installing using the `pip3` command carries the risk of damaging distribution-supplied Python modules.
+
+[TIP]
+====
+In some cases you have to rely on a link:https://docs.python.org/3/library/venv.html[Python Virtual Environment (`venv`)^] to install a sufficiently recent version of the Python module `docker`.
+If this is necessary, you can use the configuration file `$MK_CONFDIR/python_path.cfg` to specify the absolute path to the required Python interpreter as variable `PYTHON3`.
+====
+
+If you now perform the xref:wato_services#[service discovery] in {CMK} and activate the changes, you should find some new services that affect the Docker node itself:
+
+image::docker_basic_services.png[alt="View of the Docker services currently having been found in {CMK}."]
+
+[#finetuning]
+=== Fine tuning the plug-in
+
+You can configure different parameters of the plug-in.
+For example you can save resources by deactivating unnecessary sections or, if required, by customizing the Docker API Engine endpoint (the default is the Unix socket `unix://var/run/docker.sock`).
+
+Create the configuration file `/etc/check_mk/docker.cfg` on the Docker host.
+A template with detailed explanations can be found in the {CMK} directory `~/share/check_mk/agents/cfg_examples/docker.cfg`.
+
+In the commercial editions you can easily configure all parameters with the xref:wato_monitoringagents#bakery[Agent Bakery].
+
+
+[#monitoring_containers]
+=== Monitoring the containers
+
+==== Creating the container hosts
+
+Of course the interesting aspect is the monitoring of the Docker containers.
+This will be implemented automatically by installing the plug-ins, however the services will not be assigned to the docker node, rather {CMK} assumes a single host per docker container.
+
+The mechanism used here is called xref:glossar#piggyback[piggyback]:
+The plug-in or special agent transports data of other hosts—​'piggybacked' so to speak--alongside its own data.
+{CMK} places this data in the `~/tmp/check_mk/piggyback` directory.
+All you have to do in the Setup is to create hosts with the correct names, and the services will then be automatically assigned to them.
+
+In the commercial editions you can have these hosts created automatically.
+Use the [.guihint]#Piggyback data# connection type in the xref:dcd#[dynamic host management].
+Note the following, if you create the hosts manually:
+
+* The host name must exactly match the directory created in `~/tmp/check_mk/piggyback`. By default, this is the 12-character short ID of the container (for example, `2ed23056480f`).
+* If the containers do not have their own IP addresses (which is usually the case), set [.guihint]#Network address# > IP address family# to [.guihint]#No IP#.
+* For [.guihint]#Monitoring agents# be sure to set [.guihint]#{CMK} agent / API integrations# to [.guihint]#No API integrations, no {CMK} agent#.
+* You can set the [.guihint]#Parents# field in the section [.guihint]#Basic settings# to the host name of the Docker node.
+* It is also important that the Docker node and its containers are monitored from the same {CMK} site.
+
+Once the container hosts have been created, and after performing a service discovery, new services appear on these.
+
+If you have a xref:agent_linux#install[Linux agent] installed in the container, it will be executed automatically.
+However since many services monitored by the agent within the containers actually show information from the node (for example, CPU load, temperature and many other operating system parameters), these were removed.
+
+
+==== Alternative names for container hosts
+
+By default--as mentioned above--the 12-character short ID for the container is used as the name for the container host.
+This can optionally be configured differently.
+To do this, in the configuration file `docker.cfg` (see xref:finetuning[Fine tuning the plug-in]) set the `container_id` option to `long` in order to use the complete container ID as the name, or to `name` in order to use the container name.
+Additionally, you can prefix the container name with the Docker hostname.
+This can be done using the `combined` option.
+To determine the Docker hostname, we use the output of `uname -n`.
+
+Commercial editions users can set this up in the xref:wato_monitoringagents#bakery[Agent Bakery] using the rule [.guihint]#Docker node and containers#, option [.guihint]#Host name used for containers#.
+
+image::docker_host_name_used.png[alt="Rule for selecting the host names of the containers.", width=70%]
+
+Incidentally: With the [.guihint]#Host name translation for piggybacked hosts# rule set you can define quite flexible rules for renaming host names contained in piggyback data.
+With this method you can also solve the problem of having containers with the same name on two different Docker nodes, for example.
+
+image::docker_hostname_translation.png[alt="Rule for renaming the host names contained in the piggyback data."]
+
+See the xref:piggyback#renamehosts[The piggyback mechanism] article for more options and a more detailed description of this function.
+
+
+==== Monitoring the host state
+
+ifdef::onprem[]
+Since a container's xref:monitoring_basics#hosts[host state] cannot really be verified using xref:cmc_differences#smartping[TCP packets or ICMP], this must be determined in another way.
+The [.guihint]#Docker container status# service facilitates this--in any case it checks whether the container is running, and can thus be used as a secure tool for detecting the host state.
+endif::[]
+ifdef::saas[]
+For monitoring the container's xref:monitoring_basics#hosts[host state], using the  [.guihint]#Docker container status# service seems obvious--in any case it checks whether the container is running, and can thus be used as a secure tool for detecting the host state.
+endif::[]
+Define a rule in the [.guihint]#Host check command# rule set for this purpose, and set the [.guihint]#Use the status of the service...# option to the mentioned service.
+Don't forget to set the conditions so that only containers are affected.
+In our example all containers are located in a folder with the same name:
+
+image::docker_container_hoststatus.png[alt="Rule for the command to check the host state of the containers."]
+
+
+==== Operating the agent directly in the container
+
+To monitor details in the container itself (e.g., running processes, databases, log files, etc.), it is necessary that the {CMK} agent is installed and executed in the container itself.
+This is especially true for the roll out of agent plug-ins.
+The three plug-ins `mem`, `cpu` and `diskstat` (Disk I/O) work without an agent in the container though, and are analyzed by the {CMK} agent on the node itself.
+
+Especially for self-created Docker images you might want to roll out the agent itself into the container.
+In this case the data is no longer analyzed--as described above--by the Docker node's agent.
+Instead of this a separate agent runs in each container.
+Calling this agent will still be bundled in a piggyback procedure via the Docker node however.
+
+However the agent installed in the container only works if all necessary commands are also present in the container.
+Especially with minimally-built containers based on Alpine Linux it could very well be that elemental things such as Bash are not present.
+In such a situation you should monitor the container from the Docker node.
+
+ifdef::onprem[]
+The use of the [.guihint]#Host check command# rule set will in this case only be required if the container is not pingable--but it will otherwise function exactly as described above.
+endif::[]
+
+
+[#diagnose]
+== Diagnostic options
+
+[#diagnosis_docker_host]
+=== Diagnosis of a Docker node
+
+Should the setup not be successful, there are a number of options for analyzing the problem.
+ifdef::onprem[]
+If applicable, verify that a {CMK} agent with at least version {v15} or a later version is installed on the host.
+endif::[]
+
+If the version of the agent on the host is suitable, next check if the data is present in the agent's output.
+You can download the output as a text file: in a host view in monitoring via the [.guihint]#Download agent output# action menu entry:
+
+image::docker_node_dropdown.png[alt="Action menu of the host in monitoring with the entry for downloading the agent output.", width=65%]
+
+ifdef::onprem[]
+Alternatively, you could search the agent cache directly.
+For clarity the output in the following example is abbreviated to the output for the node:
+
+[{shell-raw}]
+----
+{c-omd} strings tmp/check_mk/cache/mydockerhost | grep "<<<docker"
+<<<docker_node_info>>>
+<<<docker_node_disk_usage:sep(44)>>>
+<<<docker_node_images>>>
+<<<docker_node_network:sep(0)>>>
+----
+endif::[]
+
+If the sections are not shown here, the Docker installation will not be recognized.
+The following command is used for the [.guihint]#Docker node info# service.
+This command must be executable in exactly this form on the host.
+If necessary, check your Docker installation:
+
+[{shell}]
+----
+{c-root} docker info 2>&1
+----
+
+[#diagnosis_container_host]
+=== Diagnosis for a container host
+
+If the container host receives no data, or respectively, no services are detected, first check if piggyback data is available for this host.
+The host's name must be identical to the ID of the container.
+Alternatively, you can also make a manual assignment using the [.guihint]#Host name translation for piggybacked hosts# rule set.
+Here, however, only the [.guihint]#Explicit hostname mapping# option is suitable:
+
+image::docker_container_namemapping.png[alt="Rule for translating host names of hosts with piggyback data."]
+
+ifdef::onprem[]
+To verify whether piggyback data will be created for an ID, you can check the following directory:
+
+[{shell}]
+----
+{c-omd} ls -l tmp/check_mk/piggyback/
+76adfc5a7794  f0bced2c8c96  bf9b3b853834
+----
+endif::[]
+
+
+[#host_labels]
+== Host labels
+
+In {CMK} there are so-called xref:labels#[host labels].
+Amongst others the Docker monitoring automatically sets these labels:
+
+* for the Docker node the `cmk/docker_object:node` label,
+* for each of the containers the `cmk/docker_image`, `cmk/docker_image_name`, `cmk/docker_image_version` and `cmk/docker_object` labels.
+
+You can use these labels, e.g. in conditions for your xref:wato_rules#[rules], to make your monitoring configuration dependent on the image used in a container.
+
+
+ifdef::onprem[]
+[#files]
+== Files and directories
+
+[cols="30,~"]
+|===
+|File path |Function 
+
+|`~/tmp/check_mk/piggyback/` |{CMK} saves the piggyback data here. For each piggybacked host a subfolder is created with the host's name--this subfolder contains a text file with the host's data. The filename is the name of the piggyback host providing the data.
+|`~/tmp/check_mk/cache/` |Here the most recent agent output from all hosts is saved temporarily. The contents of a host's file is identical to that from the `cmk -d myserver123` command.
+|===
+endif::[]

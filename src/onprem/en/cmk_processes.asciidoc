@@ -1,0 +1,132 @@
+// -*- coding: utf-8 -*-
+// IGNORE Addons Crontab
+// NONASCII
+include::global_attr.adoc[]
+= Site services - {CMK} under the hood
+:title: Site services - {CMK} under the hood
+:description: Operating a {CMK} site requires many individual services/processes. These are briefly presented here.
+
+{related-start}
+xref:intro_setup#[Setting up {CMK}]
+xref:omd_basics#[Site administration with omd]
+xref:wato_rules#[Rules]
+{related-end}
+
+
+[#intro]
+== Introduction
+
+A {CMK} xref:glossar#site[site] requires all kinds of services, first and foremost the monitoring core, but also an Apache web server for the web interface, Cron for scheduling tasks, and many others.
+You can see all of these services when you start a site using `omd start` in the terminal -- some services are present in all xref:glossar#edition[editions] and by default, others only in certain editions and/or when their corresponding functions are activated.
+
+The command `omd status` in a commercial edition could result in the following output:
+
+[{shell}]
+----
+{c-omd} omd status
+jaeger:             [green]#running#
+agent-receiver:     [green]#running#
+mkeventd:           [green]#running#
+liveproxyd:         [green]#running#
+mknotifyd:          [green]#running#
+rrdcached:          [green]#running#
+redis:              [green]#running#
+automation-helper:  [green]#running#
+ui-job-scheduler:   [green]#running#
+cmc:                [green]#running#
+apache:             [green]#running#
+dcd:                [green]#running#
+stunnel:            [green]#running#
+xinetd:             [green]#running#
+crontab:            [green]#running#
+rabbitmq:           [green]#running#
+---------------------------
+Overall state:      [green]#running#
+----
+
+
+[#siteservices]
+== Overview of services
+
+The following table provides a brief overview and shows the following for each service
+
+* the displayed process name,
+* whether it exists in {CRE} and/or in the commercial editions,
+* whether it exists by default without explicit configuration, and
+* a brief description of what the service actually does.
+
+Most services are explained in more detail in the linked articles, while others are largely self-explanatory (such as the Apache service).
+We will discuss a few other services that only perform their tasks in the background in the xref:siteservicesdetails[following chapter].
+
+[cols="20,~,~,~,40",options="header"]
+|===
+|Service |{CRE} |Commercial editions |Enabled by default |Description
+|`agent-receiver` |Yes |Yes |Yes |Endpoint for xref:wato_monitoringagents#agents[communication with the {CMK} agent]
+|`apache` |Yes |Yes |Yes |Web server
+|`automation-helper` |Yes |Yes |Yes |Helper service for improving performance for GUI and REST API requests, more details xref:automation-helper[below]
+|`cmc` |No |Yes |Yes |xref:cmc#[{CMK} Micro Core] -- Monitoring core in the commercial editions
+|`crontab` |Yes |Yes |Yes |Crontab file for internal task scheduling
+|`dcd` |No |Yes |Yes |Dynamic Configuration Daemon for xref:dcd#[dynamic host management] of transient hosts (such as containers)
+|`jaeger` |No |Yes |No |Analysis tool for traces received via xref:opentelemetry#[OpenTelemetry] -- for internal bug fixing, more details xref:jaeger[below]
+|`liveproxyd` |Yes |Yes |Yes |Interface for retrieving status data via xref:glossar#livestatus[Livestatus]
+|`mkeventd` |Yes |Yes |Yes |Service for processing events with the xref:glossar.html#ec[Event Console]
+|`mknotifyd` |No |Yes |No |xref:notifications#async[Notification spooler] for asynchronous delivery and distributed environments
+|`nagios` |Yes |No |Yes |Monitoring core of {RE} and old commercial edition installations (can be there xref:cmc_migration#[migrated] to CMC)
+|`npcd` |Yes |No |Yes |link:https://linux.die.net/man/8/npcd[Nagios Performance C Daemon] for processing Nagios performance data in {RE}
+|`piggyback-hub` |Yes |Yes |No |Piggyback hub in xref:glossar#distributed_monitoring[distributed monitoring], more details xref:rabbitmq[below]
+|`rabbitmq` |No |Yes |No |Message broker RabbitMQ, more details xref:rabbitmq[below]
+|`redis` |Yes |Yes |Yes |In-memory database as temporary storage (provides the search index, for example)
+|`rrdcached` |Yes |Yes |Yes |xref:graphing#rrds[RRD cache daemon] for temporary storage of measured values
+|`stunnel` |Yes |Yes |No |Builds in distributed monitoring a xref:distributed_monitoring#livestatus_tls[tunnel] from a local, unencrypted Livestatus port to a remote encrypted one 
+|`ui-job-scheduler` |No |Yes |No |Scheduler for asynchronous tasks of the web interface, more details xref:ui-job-scheduler[below]
+|`xinetd` |Yes |Yes |No |Service for providing agent output
+|===
+
+Incidentally, most of the services listed here are automatically included in monitoring as part of {CMK}'s xref:self_monitoring#[self-monitoring] along with several others.
+If you notice performance issues, it may be worthwhile to further expand the monitoring of the {CMK} server itself.
+
+
+[#siteservicesdetails]
+== Services in detail
+
+[#jaeger]
+=== Jaeger
+link:https://www.jaegertracing.io[Jaeger^] is an analysis tool for tracking, analyzing, and visualizing requests in a complex system.
+In {CMK}, these could be the individual parts of a network scan, i.e., requests to the internal database, pings, file operations, and so on.
+All of these small elements require time, and Jaeger can help to understand performance issues and detect bottlenecks.
+
+Jaeger was primarily added for the development of {CMK} and is only active if the sending and receiving of traces has been explicitly enabled in the site configuration via xref:omd_basics#omd_config[`omd config`] in the menu [.guihint]#Addons > TRACE RECEIVE# or [.guihint]#TRACE SEND#.
+When enabled, you can access the Jaeger web interface via `\http://mycmkserver/mysite/jaeger`.
+For more information, see the related link:https://checkmk.com/werk/16565[Werk 16565^].
+
+Jaeger should be disabled during normal operation.
+
+
+[#rabbitmq]
+=== RabbitMQ and piggyback hub 
+
+link:https://www.rabbitmq.com[RabbitMQ^] is basically a message broker that is suitable for sending any form of message by using queues.
+In {CMK}, RabbitMQ is currently used as a function in conjunction with the piggyback hub.
+Briefly explained: When xref:glossar#piggyback[piggyback] data is generated in distributed monitoring, RabbitMQ ensures that the data is forwarded from the sites where it is generated to the sites where it is needed/evaluated.
+A detailed technical explanation of how this works can be found in the presentation link:https://www.youtube.com/watch?v=WQ-3rFQub6U[Piggyback unleashed -- a new way for intersite communication^] from the 11th {CMK} conference.
+
+For information on how to activate piggyback hub and RabbitMQ, refer to the article on xref:distributed_monitoring#central_setup_config[distributed monitoring].
+
+
+[#ui-job-scheduler]
+=== `ui-job-scheduler`
+
+The `ui-job-scheduler` service organizes asynchronous tasks that occur in the web interface.
+The most prominent example is probably the xref:glossar#activate_changes[activation of changes].
+This involves updating the web interface, displaying an animated progress bar, applying changes, and finally updating the view again and displaying any resulting status messages.
+During these activities, additional child processes appear and disappear, and the processor load increases briefly.
+
+
+[#automation-helper]
+=== `automation-helper`
+
+The `automation-helper` service speeds up some GUI interactions, such as xref:glossar#service_discovery[service discovery] and activating changes,
+especially in small to medium-sized installations (see also link:https://checkmk.com/werk/17678[Werk 17678^]).
+
+The service can be disabled via `omd config` in the menu [.guihint]#Basic > AUTOMATION HELPER#.
+

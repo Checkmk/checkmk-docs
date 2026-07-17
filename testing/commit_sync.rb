@@ -1,0 +1,291 @@
+#!/usr/bin/env ruby
+# encoding: utf-8
+
+require 'json'
+require 'optparse'
+
+def retrieve_commits() 
+    commitlist = []
+    IO.popen("git log --oneline --since #{@cfg["start_date"]}") { |l|
+        while l.gets
+            ltoks = $_.split(' ', 2)
+            cid = ltoks[0]
+            cmsg = ltoks[1]
+            cdt = ` git show -s --format='%aI %ae' #{cid} `.strip
+            commitlist.push( [ cdt, cid, cmsg ] )
+        end
+    }
+    commitlist.each { |c|
+        IO.popen("git show --pretty="" --name-only #{c[1]}") { |l|
+            files = []
+            while l.gets
+                files.push $_.strip
+            end
+            c.push files.sort
+        }
+    }
+    return commitlist
+end
+
+def check_present(commitlist, commitdate)
+    commitlist.each { |c|
+        return true if c[0] == commitdate
+    }
+    return false
+end
+
+# Convert the list of all to a tree
+# Challenges:
+#  * Commit IDs change when a commit is picked
+#  * The timestamp is only 1s resolution
+#  * Commit messages might be the same when commited via a script
+# 
+# Solution: Create a data structure that supports checking for the same of:
+#  * Commit timestamp
+#  * Author email
+#  * Files affected
+
+def commitlist_to_tree(commitlist)
+	committree = {}
+	commitlist.each { |c|
+		# Create an empty list with the timestamp/email pair as key
+		committree[c[0]] = [] unless committree.has_key? c[0]
+		commitmeta = { c[1] => c[3] }
+		committree[c[0]].push commitmeta
+	}
+	return committree
+end
+
+def check_present_tree(committree, commitinfo)
+	return false unless committree.has_key? commitinfo[1]
+	committree[commitinfo[0]].each { |cid, cfiles|
+		return true if cfiles & commitinfo[3] == cfiles
+	}
+	return false
+end
+
+# Create a hash containing the checksums of all files affected
+# in a commit tree
+
+def checksum_list(committree)
+	csumlist = {}
+	committree.each { |k,commitinfo|
+		commitinfo.each { |c|
+			c.each { |id,fs|
+				fs.each { |f|
+					unless csumlist.has_key? f
+						if File.exist? f
+							csum = `sha256sum "#{f}"`.strip
+							puts csum
+							csumlist[f] = csum
+						end
+					end
+				}
+			}
+		}
+	}
+	return csumlist
+end
+
+def switch_branch(target)
+    ret = system("git checkout #{target}")
+	raise "CheckoutFailed" unless ret
+    system("git pull")
+end
+
+def check_against_ignores(commitinfo)
+	return true if @cfg["ignore_commits"].include?(commitinfo[1])
+	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords.each { |c|
+		return true if @cfg["ignore_tickets"].include? c
+	}
+	commitinfo[3].each { |f|
+		fname = f.split("/")[-1]
+		return true if @cfg["ignore_files"].include? fname
+	}
+	return false
+end
+
+def check_against_forced(commitinfo)
+	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords.each { |c|
+		return true if @cfg["force_tickets"].include? c
+	}
+	commitinfo[3].each { |f|
+		fname = f.split("/")[-1]
+		return true if @cfg["force_files"].include? fname
+	}
+	return false
+end
+
+def check_against_only(commitinfo)
+	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords.each { |c|
+		return true if @cfg["only_tickets"].include? c
+	}
+	commitinfo[3].each { |f|
+		fname = f.split("/")[-1]
+		return true if @cfg["only_files"].include? fname
+	}
+	return false
+end
+
+def get_config()
+	@cfg = {}
+	opts = OptionParser.new
+	opts.on('--config', :REQUIRED) { |i|
+		cfgfile = i
+		@cfg = JSON.parse(File.read(cfgfile))
+		@cfg['cfgfile'] = cfgfile
+	}
+	opts.on('--since', :REQUIRED) { |i| @cfg["start_date"] = i }
+	opts.on('--only-files', :REQUIRED) { |i| @cfg["only_files"] = i.split(',') }
+	opts.on('--only-tickets', :REQUIRED) { |i| @cfg["only_tickets"] = i.split(',') }
+	opts.on('--force-tickets', :REQUIRED) { |i| @cfg["force_tickets"] = i.split(',') }
+	opts.on('--force-files', :REQUIRED) { |i| @cfg["force_files"] = i.split(',') }
+	opts.parse!
+	[ "ignore_files", "ignore_tickets", "ignore_commits", "only_files", "only_tickets", "force_files", "force_tickets" ].each { |n|
+		@cfg[n] = [] unless @cfg.has_key? n
+	}
+end
+
+def try_to_pick(commitinfo)
+	ret = system("git cherry-pick #{commitinfo[1]}")
+	unless ret
+		puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
+		secdec = gets
+		if secdec.strip == "" || secdec.strip =~ /^e/
+			exit 1
+		else
+			commitinfo[3].each { |f| @files_with_skipped_commits.push f }
+			unless system("git cherry-pick --abort")
+				exit 1
+			end
+		end
+	end
+end
+
+def compare_checksums(files, csumsfrom, csumsto)
+	files.each { |f|
+		if csumsfrom.has_key?(f) && csumsto.has_key?(f) && csumsfrom[f] == csumsto[f]
+			# Do nothing, this is fine
+		else
+			return false
+		end
+	}
+	return true
+end
+
+def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
+	# Store the IDs of all commits from files where the checksum already is identical
+	obsolete_commits = []
+	# If only_files or only_commits is set, the everything else check should not be run
+	only_active = false
+	if @cfg["only_files"].size > 0 || @cfg["only_tickets"].size > 0
+		only_active = true
+	end
+	missingcommits.reverse.each { |c|
+		@allfiles.push c[3]
+		puts "#{c[0]} + #{c[1]} + #{c[2]}"
+		commitwords = c[2].gsub(',', ' ').split
+		nskipped = 0
+		c[3].each { |f|
+			s = ""
+			if @files_with_skipped_commits.include? f
+				s = " <= has skipped commits!"
+				nskipped += 1
+			end
+			puts "    #{f}#{s}"
+		}
+		ask = true
+		decision = "no"
+		puts "Only? #{only_active}"
+		if compare_checksums(c[3], csumsfrom, csumsto)
+			# All checksums currently match, this should not happen
+			puts "===> Checksums in source and target tree are identical which means"
+			puts "   > this commit probably cannot be cherry picked anymore."
+			obsolete_commits.push c[1]
+			ask = false
+			decision = "no"
+		elsif only_active && check_against_only(c)
+			# Override for only first, these also override the ignores if defined
+			# and they beat the next comparison for forced files/tickets
+			defdec = "yes"
+			puts "===> Try to pick? [Y/n] "
+		elsif only_active
+			# Hard ignore if the only option is set, but other criteria are not met 
+			puts "===> No decision needed, ticket or files not on only ticket/file list."
+			c[3].each { |f| @files_with_skipped_commits.push f }
+			ask = false
+			decision = "no"
+		elsif check_against_forced(c)
+			# Forced tickets/files second, these also override the ignores if defined
+			defdec = "yes"
+			puts "===> Try to pick? [Y/n] "
+		elsif check_against_ignores(c)
+			# Ignore ticket IDs or files on the ignore list, do not ask
+			puts "===> No decision needed, ticket or files on ignore list."
+			c[3].each { |f| @files_with_skipped_commits.push f }
+			ask = false
+			decision = "no"
+		elsif nskipped > 0
+			# If there are skipped commits in this session, default to: no
+			defdec = "no"
+			puts "===> Try to pick? [N/y] "
+		elsif commitwords.include? @cfg["keyword"]
+			# If the correct pick keyword is present, default to: yes
+			defdec = "yes"
+			puts "===> Try to pick? [Y/n] "
+		else
+			# Everything else, default to: no
+			defdec = "no"
+			puts "===> Try to pick? [N/y] "
+		end
+		decision = gets if ask == true
+		decision = defdec if decision.strip == ""
+		puts "Decision: #{decision}"
+		if decision.strip =~ /^y/i
+			try_to_pick(c)
+		else
+			c[3].each { |f| @files_with_skipped_commits.push f }
+		end
+	}
+	return obsolete_commits
+end
+
+
+@cfg = {}
+get_config
+
+missingcommits = []
+@allfiles = []
+# Hold all files with already skipped commits, these should not pick as default
+@files_with_skipped_commits = []
+
+switch_branch @cfg["pick_from_branch"]
+clist = retrieve_commits
+ctree = commitlist_to_tree(clist)
+ccsums = checksum_list(ctree)
+
+switch_branch @cfg["pick_to_branch"]
+olist = retrieve_commits
+otree = commitlist_to_tree(olist)
+ocsums = checksum_list(otree)
+
+clist.each { |c|
+    missingcommits.push c unless check_present_tree(otree, c)
+}
+
+obsolete_commits = ask_and_pick(missingcommits, ccsums, ocsums)
+
+puts "// Obsolete commits (checksum of both files already identical):" if obsolete_commits.size > 0 
+obsolete_commits.each { |o|
+	print "\"#{o}\", " unless @cfg["ignore_commits"].include? o
+}
+
+#~ @allfiles = @allfiles.sort.uniq
+
+#~ puts "All files currently not in sync:"
+#~ @allfiles.each { |f|
+	#~ puts f
+#~ }
