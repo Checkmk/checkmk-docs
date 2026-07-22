@@ -44,6 +44,23 @@ end
 #  * Commit timestamp
 #  * Author email
 #  * Files affected
+#
+# The current method is still ambiguous: Two different commits by the same
+# author in the same 1s window touching overlapping files would collide, which can
+# silently skip a legitimate pick or allow a double-pick.
+# Possibly more robust approach: record provenance and match on it.
+#   Benefits:
+#     * Exact identity, no timestamp/email/file collisions
+#     * Survives the pick (stored in the target commit), unlike the changing hash
+#     * Uses git's built-in mechanism, no extra bookkeeping file
+#   Where to change:
+#     * try_to_pick: cherry-pick with -x so the target commit records
+#       "(cherry picked from commit <source-sha>)"
+#     * retrieve_commits: for target commits, also parse that source-sha out of
+#       the message
+#     * check_present_tree: match a source commit by "is its sha referenced by
+#       any target commit", falling back to the timestamp/email/files heuristic
+#       for commits picked before -x was introduced
 
 def commitlist_to_tree(commitlist)
 	committree = {}
@@ -57,9 +74,11 @@ def commitlist_to_tree(commitlist)
 end
 
 def check_present_tree(committree, commitinfo)
-	return false unless committree.has_key? commitinfo[1]
-	committree[commitinfo[0]].each { |cid, cfiles|
-		return true if cfiles & commitinfo[3] == cfiles
+	return false unless committree.has_key? commitinfo[0]
+	committree[commitinfo[0]].each { |entry|
+		entry.each { |cid, cfiles|
+			return true if (cfiles & commitinfo[3]) == cfiles
+		}
 	}
 	return false
 end
