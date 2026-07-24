@@ -564,7 +564,7 @@ image::devel_special_services.png[alt="Ansicht der Services inklusive ometemp."]
 == Hilfsfunktionen
 
 {CMK} stellt einige Hilfsfunktionen bereit, die im Namensraum link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#module-cmk.server_side_programs.v1_unstable[`cmk.server_side_programs.v1_unstable`^] verfügbar sind.
-Falls Sie einen Spezialagenten in Python 3 implementieren und dieser immer von einer {CMK}-Instanz ausgeführt wird (manche Spezialagenten sind so geschrieben, dass sie auch als Agentenplugin genutzt werden können) erhalten Sie mit dem API einige interessante Erweiterungen.
+Falls Sie einen Spezialagenten in Python 3 implementieren und dieser immer von einer {CMK}-Instanz ausgeführt wird (manche Spezialagenten sind so geschrieben, dass sie auch als Agentenplugin genutzt werden können), erhalten Sie mit der API einige interessante Erweiterungen.
 
 [TIP]
 ====
@@ -577,16 +577,16 @@ Dennoch sollten Sie für die Migration Ihrer Plugins von {v25} nach {v30} zumind
 [#storage]
 === Daten zwischenspeichern
 
-Einige REST-APIs verwenden Rate-Limiting, um die Zahl der eingehenden Anfragen zu reduzieren.
+Einige REST-APIs verwenden Rate-Limiting, um die Zahl der zu verarbeitenden eingehenden Anfragen zu reduzieren.
 Nicht immer ist das Rate-Limiting statisch und verwendet immer exakt die gleiche zulässige Anzahl von Anfragen pro Zeiteinheit.
-Bei dynamischem Rate-Limiting sollte das REST-API den link:https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429[Status Code 429^] und die Angabe einer Wartezeit im _Retry-After_ Header-Feld zurückliefern.
+Bei dynamischem Rate-Limiting sollte die REST-API den link:https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429[HTTP-Status-Code 429^] und die Angabe einer Wartezeit im Header-Feld namens _Retry-After_ zurückliefern.
 Ist die Wartezeit für das Monitoring akzeptabel, kann es sinnvoll sein, auf zwischengespeicherte ältere Antworten zurückzugreifen.
 Hierfür steht die Klasse `Storage` zur Verfügung.
 
-Es handelt sich bei ihr um einen Schlüssel-Wert-Speicher, der einen String als Schlüssel verwendet, und auch als Werte nur Strings zulässt.
+Ein `Storage`-Objekt ist ein Schlüssel-Wert-Speicher, der einen String als Schlüssel verwendet und auch als Werte nur Strings zulässt.
 Zur Speicherung komplexerer Objekte ist die Verwendung von JSON meist ein pragmatischer Ansatz.
 
-Eine Erweiterung um das Storage-API könnte so aussehen:
+Eine Erweiterung um die Storage-API könnte so aussehen:
 
 .~/local/lib/python3/cmk_addons/plugins/ometemp/libexec/agent_ometemp
 [{python}]
@@ -629,7 +629,7 @@ if now > nexttry:
         storage.write("nexttry", str(now))
     elif response.status_code == 429:
         data = storage.read("data", None)
-        nexttry = now + float(response.header["retry-after"])
+        nexttry = now + float(response.headers["retry-after"])
         storage.write("nexttry", str(nexttry))
 else:
     data = storage.read("data", None)
@@ -637,16 +637,21 @@ else:
 print('<<<ometemp:sep(0)>>>')
 print(data)
 ----
+// ES: In der Zeile mit storage = Storage("ometemp", fullurl) übergeben wir hier die gesamte URL für ein Argument von Storage, das eigentlich einen Hostnamen erwartet. Ist das so geplant? Alternativ könnte für das Beispiel einfach ein Hostname hardgecodet werden.
+
+// ES: Verstehe ich es richtig, dass die Logik hier keine Schleifen drehen soll? Pro Check-Intervall wird genau einmal versucht, die API abzufragen, und wenn es nicht klappt, schreiben wir einfach die Ergebnisse von der zuletzt erfolgreich durchgeführten Abfrage (also den gespeicherten String aus dem Storage-Objekt) in die Ausgabe?
+
+// ES: Mich verwirrt hier das Feld "nexttry". Im Erfolgsfall erhalten wir Daten und speichern unter nexttry den genauen Zeitpunkt, zu dem wir zuletzt Daten erhalten haben. Im 429-Fall erhalten wir _keine_ Daten und speichern den Zeitpunkt, zu dem es nicht geklappt hat plus etwas Pufferzeit, nach der wir wieder einen Versuch starten können.
 
 Beachten Sie, dass das Beispiel bewusst extrem vereinfacht.
-Wird weiterhin ein Status Code 429 zurückgeliefert, wird sich der Spezialagent mitunter ewig im `Storage`-Objekt bedienen.
+Wird weiterhin der HTTP-Status-Code 429 zurückgeliefert, wird sich der Spezialagent mitunter ewig im `Storage`-Objekt bedienen.
 In den meisten Fällen dürfte es daher sinnvoll sein, zusätzlich den Zeitstempel des letzten erfolgreichen Aufrufs zu speichern und nach Erreichen eines maximalen Alters einen Fehler zurückzuliefern.
 
 
 [#vcr]
 === Aufrufe und Antworten aufnehmen und abspielen
 
-Das im letzten Beispiel beschriebene Rate-Limiting kann besonders bei der Entwicklung von Spezialagenten stören, wo man denselben Aufruf oft zigmal hintereinander tätigt.
+Das im letzten Beispiel beschriebene Rate-Limiting kann besonders bei der Entwicklung von Spezialagenten stören, wo man möglicherweise denselben Aufruf innerhalb kurzer Zeit immer wieder tätigt.
 In solchen Fällen ist nicht nur Rate-Limiting problematisch, oft entstehen auch noch Kosten für REST-API-Aufrufe.
 
 Hier hilft die Bibliothek link:https://pypi.org/project/vcrpy/[`vcrpy`^], welche es erlaubt, HTTP-Requests aufzuzeichnen und abzuspielen. Für die Einbindung stellt {CMK} eine Funktion bereit, welche Sie über den Argument-Parser aktivieren:
@@ -682,9 +687,10 @@ args = parser.parse_args()
 # ...
 ----
 
-Wird mit dem Aufrufparameter `--vcrtrace` der Pfad zu einer Datei in `~/tmp/check_mk/debug` angegeben, werden unbekannte HTTP-Requests ausgeführt und deren Rückgaben aufgezeichnet.
-Bekannte Requests werden direkt aus der Datei bedient, ohne dass für diese noch Anfragen an den Server stattfinden.
+Wird mit dem Aufrufparameter `--vcrtrace` der Pfad zu einer Datei in `~/tmp/check_mk/debug` angegeben, wird der Spezialagent jeden HTTP-Request jeweils nur beim ersten Mal ausführen und die erhaltene Rückgabe aufzeichnen.
+Wenn später genau der gleiche HTTP-Request wieder gestellt werden soll, wird dieser bereits aufgezeichnete Request direkt aus der Datei bedient, ohne dass eine neue Anfrage an den Server stattfindet.
 Ohne Aufrufparameter `--vcrtrace` verhält sich der Spezialagent wie gewohnt.
+// ES: Hier wäre noch ein Hinweis schön, dass die aufgezeichneten Daten niemals verfallen und das Speichern deshalb nur in bestimmten Anwendungskontexten überhaupt sinnvoll sein wird. Wetterdaten im produktiven Monitoring aus dem Videorekorder zu holen ist eher keine vielversprechende Idee. In der Developer-Doku wird ja auch explizit betont, dass diese Funktion vor allem zum Debuggen gedacht ist.
 
 
 [#detect_errors]
