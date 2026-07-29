@@ -169,7 +169,7 @@ def get_config()
 end
 
 def try_to_pick(commitinfo)
-	ret = system("git cherry-pick #{commitinfo[1]}")
+	ret = system("git cherry-pick -x #{commitinfo[1]}")
 	unless ret
 		puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
 		secdec = gets
