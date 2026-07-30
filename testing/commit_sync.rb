@@ -6,6 +6,7 @@ require 'optparse'
 
 def retrieve_commits() 
     commitlist = []
+    already_picked = []
     IO.popen("git log --oneline --since #{@cfg["start_date"]}") { |l|
         while l.gets
             ltoks = $_.split(' ', 2)
@@ -23,8 +24,16 @@ def retrieve_commits()
             end
             c.push files.sort
         }
+		IO.popen("git show -s --format='%B' #{c[1]}") { |l|
+			while l.gets
+				line = $_
+				if line.strip =~ /cherry picked from commit/
+					already_picked.push line.split[-1][0..8]
+				end
+			end
+		}
     }
-    return commitlist
+    return commitlist, already_picked
 end
 
 def check_present(commitlist, commitdate)
@@ -44,6 +53,23 @@ end
 #  * Commit timestamp
 #  * Author email
 #  * Files affected
+#
+# The current method is still ambiguous: Two different commits by the same
+# author in the same 1s window touching overlapping files would collide, which can
+# silently skip a legitimate pick or allow a double-pick.
+# Possibly more robust approach: record provenance and match on it.
+#   Benefits:
+#     * Exact identity, no timestamp/email/file collisions
+#     * Survives the pick (stored in the target commit), unlike the changing hash
+#     * Uses git's built-in mechanism, no extra bookkeeping file
+#   Where to change:
+#     * try_to_pick: cherry-pick with -x so the target commit records
+#       "(cherry picked from commit <source-sha>)"
+#     * retrieve_commits: for target commits, also parse that source-sha out of
+#       the message
+#     * check_present_tree: match a source commit by "is its sha referenced by
+#       any target commit", falling back to the timestamp/email/files heuristic
+#       for commits picked before -x was introduced
 
 def commitlist_to_tree(commitlist)
 	committree = {}
@@ -57,9 +83,11 @@ def commitlist_to_tree(commitlist)
 end
 
 def check_present_tree(committree, commitinfo)
-	return false unless committree.has_key? commitinfo[1]
-	committree[commitinfo[0]].each { |cid, cfiles|
-		return true if cfiles & commitinfo[3] == cfiles
+	return false unless committree.has_key? commitinfo[0]
+	committree[commitinfo[0]].each { |entry|
+		entry.each { |cid, cfiles|
+			return true if (cfiles & commitinfo[3]) == cfiles
+		}
 	}
 	return false
 end
@@ -72,7 +100,9 @@ def checksum_list(committree)
 	committree.each { |k,commitinfo|
 		commitinfo.each { |c|
 			c.each { |id,fs|
+                # puts "ID: "
 				fs.each { |f|
+                    # puts "File: #{f}"
 					unless csumlist.has_key? f
 						if File.exist? f
 							csum = `sha256sum "#{f}"`.strip
@@ -263,17 +293,22 @@ missingcommits = []
 @files_with_skipped_commits = []
 
 switch_branch @cfg["pick_from_branch"]
-clist = retrieve_commits
+clist, unused_list = retrieve_commits
 ctree = commitlist_to_tree(clist)
 ccsums = checksum_list(ctree)
 
 switch_branch @cfg["pick_to_branch"]
-olist = retrieve_commits
+olist, plist = retrieve_commits
 otree = commitlist_to_tree(olist)
 ocsums = checksum_list(otree)
 
 clist.each { |c|
-    missingcommits.push c unless check_present_tree(otree, c)
+    # puts c
+    if plist.include? c[1]
+        puts "Found already picked commit: #{c[1]}"
+    else
+        missingcommits.push c unless check_present_tree(otree, c)
+    end
 }
 
 obsolete_commits = ask_and_pick(missingcommits, ccsums, ocsums)
