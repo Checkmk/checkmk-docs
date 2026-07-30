@@ -6,6 +6,7 @@ require 'optparse'
 
 def retrieve_commits() 
     commitlist = []
+	already_picked = []
     IO.popen("git log --oneline --since #{@cfg["start_date"]}") { |l|
         while l.gets
             ltoks = $_.split(' ', 2)
@@ -23,8 +24,16 @@ def retrieve_commits()
             end
             c.push files.sort
         }
+		IO.popen("git show -s --format='%B' #{c[1]}") { |l|
+			while l.gets
+				if l.strip =~ /cherry picked from commit/
+					already_picked.push l.split[-1][0..8]
+				end
+			end
+		}
+		
     }
-    return commitlist
+    return commitlist, already_picked
 end
 
 def check_present(commitlist, commitdate)
@@ -282,7 +291,7 @@ missingcommits = []
 @files_with_skipped_commits = []
 
 switch_branch @cfg["pick_from_branch"]
-clist = retrieve_commits
+clist, plist = retrieve_commits
 ctree = commitlist_to_tree(clist)
 ccsums = checksum_list(ctree)
 
@@ -292,7 +301,11 @@ otree = commitlist_to_tree(olist)
 ocsums = checksum_list(otree)
 
 clist.each { |c|
-    missingcommits.push c unless check_present_tree(otree, c)
+	if plist.include? c[0]
+		print "Found commit ID #{c[0]} in pick comments"
+	else
+		missingcommits.push c unless check_present_tree(otree, c)
+	end
 }
 
 obsolete_commits = ask_and_pick(missingcommits, ccsums, ocsums)
