@@ -26,8 +26,9 @@ def retrieve_commits()
         }
 		IO.popen("git show -s --format='%B' #{c[1]}") { |l|
 			while l.gets
-				if $_.strip =~ /cherry picked from commit/
-					already_picked.push l.split[-1][0..8]
+				line = $_
+				if line.strip =~ /cherry picked from commit/
+					already_picked.push line.split[-1][0..8]
 				end
 			end
 		}
