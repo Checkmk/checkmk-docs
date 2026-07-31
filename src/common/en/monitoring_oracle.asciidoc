@@ -13,6 +13,11 @@ xref:agent_windows#[Monitoring Windows]
 link:https://checkmk.com/integrations[Catalog of check plug-ins]
 {related-end}
 
+[TIP]
+====
+For a couple of days, this is a machine translation based on the German version of the article.
+====
+
 [#introduction]
 == Introduction
 
@@ -309,9 +314,224 @@ Instructions to follow.
 //SK In this how-to, we describe how to set up Oracle databases without using agents.
 
 
+[#setup_custom_sqls]
+== Setting Up Custom SQL Queries
+
+{cce-only}
+Custom SQL queries cannot be defined using the [.guihint]#Unified Oracle Plugin (Beta)# rule.
+You must perform the necessary configuration directly on the host from which you monitor your Oracle instances and databases.
+
+[#custom_sqls_why]
+=== Why Use Custom SQL Queries?
+
+{CMK} already provides a large number of SQL queries through the agent plugin that you can use to monitor your database instances.
+To ensure they meet as many technical and content-related requirements as possible, these queries are kept general.
+
+To meet the individual requirements of each company for monitoring a specific database, {CMK} offers the option to create your own custom SQL queries (_Custom SQLs_) and have them executed by the agent plugin.
+These are then automatically recognized and monitored as services in {CMK}.
+
+You have two options for passing your queries to the agent plugin:
+
+* Either write the queries directly into the configuration file `mk-oracle.yml`.
+* Or, instead, specify in the configuration file where the agent plugin can find the files in which your custom SQL queries are stored.
+
+The latter approach simplifies maintenance and also makes version control easier, since content is not mixed into the plugin's configuration file.
+However, if you are only dealing with a small number of queries anyway, you may want to skip the extra effort.
+
+We will start with a simple example that is written directly into the plugin's configuration file.
+
+[#custom_sqls_simple]
+=== Setting Up Simple Custom SQL Queries
+
+First, we will show you how to quickly get a result that returns real data from an Oracle instance.
+This example is only meant to illustrate how easy it *can* be to integrate custom SQL queries.
+Just how useful this exact query is in everyday work remains to be seen.
+
+For now, we will pretend we are just getting a feel for things and run the SQL query as `sysdba` in a test instance for testing purposes.
+
+[{shell}]
+----
+oracle@linux$ sqlplus / as sysdba
+----
+
+[{sql}]
+----
+sqlplus> SELECT 'details:Free memory: ' || ROUND(SUM(bytes)/1024/1024, 2) || ' MB' FROM v$sgastat WHERE name = 'free memory';
+'DETAILS:FREEMEMORY:'||ROUND(SUM(BYTES)/1024/1024,2)||'MB'
+---------------------------------------------------------- ------
+details:Free memory: 230.86 MB
+----
+
+We can ignore the header of this output—just as the agent plugin does.
+What's important is the keyword `details` that we specified in the query.
+The check plugin on the {CMK} server will grab the line that starts this way and use it to generate the [.guihint]#Summary# for the service.
+But how does {CMK} know what the service is actually supposed to be called?
+We specify the name of the service when we transfer the SQL query to the configuration for the agent plugin:
+
+.mk-oracle.yml
+[{yaml},highlight=10..12]
+----
+---
+oracle:
+  main:
+    connection:
+      hostname: localhost
+    authentication:
+      username: mymonitoringuser
+      password: mypassword
+      type: standard
+    custom_metrics:
+      - My service:
+          sql: “SELECT 'details:Free memory: ' || ROUND(SUM(bytes)/1024/1024, 2) || ' MB' FROM v$sgastat WHERE name = 'free memory'”
+----
+
+In this example, we see three things:
+
+* To include custom SQL queries, you always need a key named `custom_metrics`.
+* This is followed by a list (here: `My service`).
+In YAML, such a list begins with a `-`.
+The name of this list becomes part of the service name in {CMK} and can be chosen freely.
+* Next comes the line containing the query.
+It must begin with `sql:`, and the query itself must be enclosed in double quotes.
+Also make sure that the query *does not* end with a semicolon.
+
+After you have inserted this line into the agent plugin's configuration file on your Oracle host, you can return to your {CMK} server.
+There, perform a service discovery for the Oracle host.
+You will then see this new service:
+
+image::monitoring_oracle_custom_sql_discovery.png[]
+
+The service name consists of several components:
+
+* The name always begins with [.guihint]#ORA#.
+* This is followed by the SID (here: [.guihint]#FREE#).
+* The subsequent [.guihint]#SQL# indicates that this service was created by a custom SQL query.
+* This is followed by the string you were able to choose freely in the configuration file, in uppercase letters.
+
+In the Summary, you will then already see data derived from the results of the 
+
+
 
 [#reference]
 == References
+
+
+[#custom_sqls]
+=== Custom SQL Queries
+
+Use the `custom_metrics` configuration key to define ad hoc SQL queries whose results are evaluated on the {CMK} server by the check plugin link:https://checkmk.com/integrations/oracle_sql[oracle_sql^].
+Each entry is identified by an item name, which is displayed in {CMK} as part of the service name.
+
+==== Basics and Configuration
+
+You can either pass the SQL queries directly as a string or load them from a file.
+In the following example configuration, you will find an SQL query in the global section that is designated by the key `oracle.main`.
+Under the key `oracle.main.instances`, you can specify a key `custom_metrics`, which is then executed only for these instances.
+
+.mk-oracle.yml
+[{yaml}]
+----
+---
+oracle:
+  main:
+    connection:
+      hostname: localhost
+    authentication:
+      username: mymonitoringuser
+      password: mypassword
+      type: standard
+    custom_metrics:
+      - product_price: # Item name -> becomes the service “<SID> SQL PRODUCT_PRICE”
+          sql: “SELECT 'details:Price OK' FROM dual”
+    instances:
+      - service_name: FREE
+        custom_metrics:
+          - last_sessions: # Runs only against this specific instance
+              sql: “SELECT 'details:per-instance' FROM dual”
+----
+
+* An instance always executes both globally defined and its own instance-specific SQL queries.
+* If a global entry and an instance-specific entry share the same item name, the instance-specific entry always takes precedence.
+
+==== External SQL Files (path:)
+
+Instead of writing SQL queries directly into the agent plugin's configuration file via `sql:`, you can use `path:` to reference external `.sql` files.
+This works for both `custom_metrics` and predefined sections.
+
+===== Variations in Path Specification
+
+.mk-oracle.yml
+[{yaml}]
+----
+custom_metrics:
+  # 1. Absolute path to a file
+  - heavy_query:
+      path: '/opt/checkmk/sql/heavy_query.sql'
+
+  # 2. Relative path
+  # First searched for in MK_LIBDIR/... and then in MK_CONFDIR/...
+  - product_price:
+      path: 'queries/product_price.sql'
+
+  # 3. Directory path
+  # The filename is automatically derived from the item name (here: “sessions_stats.sql”)
+  - sessions_stats:
+      path: 'queries/'
+
+  # 4. File with inline fallback
+  # If the file cannot be resolved, the inline SQL is used
+  - last_resort:
+      path: 'queries/last_resort.sql'
+      sql: “SELECT 'details:fallback' FROM dual”
+----
+
+==== Resolution Rules
+
+Absolute vs. Relative::
+Absolute paths are used as-is.
+Relative paths are first searched for under `MK_LIBDIR/plugins/packages/mk-oracle/orasql/` and then under `MK_CONFDIR/orasql/`.
+If the file exists in both directories, the file in `MK_LIBDIR` takes precedence.
+
+File vs. Directory::
+A path can refer to a specific file (with or without a `.sql` extension) or to a directory.
+If it refers to a directory, the filename is derived from the item name for `custom_metrics` and from the section name for predefined sections.
+
+Version-Dependent Variants::
+In addition to the base file (`<name>.sql`), you can provide Oracle-specific variants in the format `<name>@<min_version>.sql` (e.g., `sessions@12010000.sql`).
+The plugin automatically selects the file with the highest `min_version` that is less than or equal to the version of the connected Oracle instance.
+An 8-digit numeric format is used for version numbers (`MMmmRRSSSS` for Major / Minor / Release / Patch).
+Example: 12.1.0.2 → 12010002.
+
+Fallback Chain::
+The order for determining the SQL query is: `path:` > (inline) `sql:` > provided default code (only for predefined sections).
+If `path:` fails and no `sql:` is defined, the section generates no output.
+
+
+==== SQL Parameters
+
+You can define named parameters that are inserted into the SQL code before execution.
+Each placeholder in the format `${<name>}` is replaced, on a text-by-text basis, with the configured value.
+This works for both inline SQL and `.sql` files.
+
+.mk-oracle.yml
+[{yaml}]
+----
+---
+custom_metrics:
+  - test:
+      sql: 'SELECT ${parameter_1} FROM dual; SELECT ${parameter_2} FROM dual'
+      sql_params:
+        parameter_1: 'value_1'
+        parameter_2: '${ENV_VAR_1}'
+----
+
+* `${ENV_VAR_1}` is resolved from the environment variables.
+* *Textual substitution (no bind variables)*: All values are inserted into the statement unchanged.
+This means you can also pass column or table names.
+* *Environment variables*: A value can refer to environment variables (format `$VAR` or `${VAR}`). These are resolved when the configuration is read.
+If a referenced variable is not set, the parameter is skipped with a warning.
+The placeholder
+
 
 [#options_ruleset]
 === Options in the [.guihint]#Unified Oracle Plugin# ruleset
