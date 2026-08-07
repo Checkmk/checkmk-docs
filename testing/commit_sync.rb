@@ -126,7 +126,7 @@ end
 def check_against_ignores(commitinfo)
 	commitwords = commitinfo[2].gsub(',', ' ').split
 	commitwords.each { |c|
-		return true if @cfg["ignore_tickets"].include? c
+		return true if @cfg["ignore_tickets"].include? c.upcase
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
