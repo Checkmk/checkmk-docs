@@ -559,38 +559,36 @@ The scripts described in this article for special agent, rule configuration, and
 image::devel_special_services.png[alt="View of services including ometemp."]
 
 
-// start translation
-////
 [#helpers]
-== Hilfsfunktionen
+== Helper functions
 
-{CMK} stellt einige Hilfsfunktionen bereit, die im Namensraum link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#module-cmk.server_side_programs.v1_unstable[`cmk.server_side_programs.v1_unstable`^] verfügbar sind.
-Falls Sie einen Spezialagenten in Python 3 implementieren und dieser immer von einer {CMK}-Instanz ausgeführt wird (manche Spezialagenten sind so geschrieben, dass sie auch als Agentenplugin genutzt werden können), erhalten Sie mit der API einige interessante Erweiterungen.
+{CMK} provides several helper functions that are available in the namespace link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#module-cmk.server_side_programs.v1_unstable[`cmk.server_side_programs.v1_unstable`^].
+If you implement a special agent in Python 3 and it is always executed by a {CMK} site (some special agents are written in such a way that they can also be used as agent plug-ins) the API offers some interesting extensions.
 
 [TIP]
 ====
-Wie der Import-Pfad bereits andeutet, handelt es sich hier um eine noch nicht als stabil markierte Programmierschnittstelle.
-Wir planen, diese in {CMK} {v30} als stabil zu veröffentlichen.
-Derzeit sind eher kleinere Erweiterungen als inkompatible Änderungen geplant.
-Dennoch sollten Sie für die Migration Ihrer Plugins von {v25} nach {v30} zumindest etwas Zeit zum Testen einplanen.
+As the import path suggests, this is a programming interface that has not yet been marked as stable.
+We plan to release it as stable in {CMK} {v30}.
+Currently, we are planning minor enhancements rather than incompatible changes.
+Nevertheless, you should allow at least some time for testing when migrating your plug-ins from {v25} to {v30}.
 ====
 
 
 [#storage]
-=== Daten zwischenspeichern
+=== Caching data
 
-Einige REST-APIs verwenden _Rate Limiting_, um die Zahl der zu verarbeitenden eingehenden Anfragen zu reduzieren.
-Nicht immer ist das Rate Limiting statisch und verwendet immer exakt die gleiche zulässige Anzahl von Anfragen pro Zeiteinheit.
-Bei dynamischem Rate Limiting sollte die REST-API den link:https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429[HTTP-Status-Code 429^] und die Angabe einer Wartezeit im Header-Feld namens _Retry-After_ zurückliefern.
-Ist die Wartezeit für das Monitoring akzeptabel, kann es sinnvoll sein, auf zwischengespeicherte ältere Antworten zurückzugreifen.
-Hierfür steht die Klasse `Storage` zur Verfügung.
+Some REST APIs use _rate limiting_ to reduce the number of incoming requests to be processed.
+Rate limiting is not always static and does not always use exactly the same allowed number of requests per unit of time.
+In the case of dynamic rate limiting, the REST API should return the link:https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429[HTTP status code 429^] and specify a wait time in the header field named _Retry-After_.
+If the wait time is acceptable for monitoring purposes, it may be useful to fall back on cached older responses.
+The `Storage` class is available for this purpose.
 
-Ein `Storage`-Objekt ist ein Schlüssel-Wert-Speicher, der ein Tupel aus zwei Strings als Schlüssel verwendet.
-Der erste String ist der Identifikator des Plugins, der zweite kann beispielsweise der Host-Name sein -- oder in Fällen, in denen ein `Storage`-Objekt zwischen Hosts geteilt werden kann, eine URL, bei der bestimmte Parameter eine bestimmte Antwort bedingen.
-Auch als Werte sind nur Strings zulässig.
-Zur Speicherung komplexerer Objekte ist die Verwendung von JSON meist ein pragmatischer Ansatz.
+A `Storage` object is a key-value store that uses a tuple of two strings as a key.
+The first string is the plug-in's identifier; the second can be, for example, the hostname—or, in cases where a `Storage` object can be shared across hosts, a URL where specific parameters trigger a specific response.
+Only strings are allowed as values as well.
+To store more complex objects, using JSON is usually a pragmatic approach.
 
-Eine Erweiterung um die Storage-API könnte demnach so aussehen:
+An extension to the Storage API could therefore look like this:
 
 .~/local/lib/python3/cmk_addons/plugins/ometemp/libexec/agent_ometemp
 [{python}]
@@ -647,51 +645,38 @@ if lastsuccess + MAXAGE > now:
     print(data)
 ----
 
-Wird weiterhin der HTTP-Status-Code 429 zurückgeliefert, bedient sich der Spezialagent auch künftig im `Storage`-Objekt.
-Im erweiterten Spezialagenten wird daher zusätzlich der Zeitpunkt des letzten erfolgreichen REST-API-Zugriffs gespeichert.
-In Kombination mit einer Konstanten für ein maximal zulässiges Alter (`MAXAGE` ist im Beispiel eine Stunde) sorgt dies dafür, dass bei zu alten Daten schlicht keine Agentenausgabe erfolgt und der Zustand des Services damit nach dieser Stunde zu {UNKNOWN} wechselt.
+If the HTTP status code 429 continues to be returned, the special agent will continue to use the `Storage` object in the future.
+The extended special agent therefore also stores the time of the last successful REST API access.
+In combination with a constant specifying the maximum allowed age (`MAXAGE` is one hour in the example), this ensures that if the data is too old, the agent simply does not produce any output, and the service status thus changes to {UNKNOWN} after that hour.
 
 
 [#vcr]
-=== Aufrufe und Antworten aufnehmen und abspielen
+=== Recording and playing back calls and responses
 
 [TIP]
 ====
-Der hier vorgestellte _Videokassettenrekorder (VCR) für REST-API-Aufrufe_ ist ausschließlich zu Debugging- und Testzwecken vorgesehen!
-Eine vergessene Trace-Datei im Produktiveinsatz wird ewig dieselbe Antwort -- und damit ganz sicher Haare raufen -- verursachen.
-Wenn Sie die hier beschriebene Funktionalität Nutzenden gegenüber in _Rule Specs_ sichtbar machen, weisen Sie in der Inline-Hilfe klar darauf hin, dass diese Option nur auf Support-Aufforderung gesetzt werden sollte.
+The _Video Cassette Recorder (VCR) for REST API Calls_ presented here is intended solely for debugging and testing purposes!
+A forgotten trace file in a production environment will cause the same response to be returned indefinitely—and is sure to drive you crazy.
+If you make the functionality described here visible to users in _Rule Specs_, clearly state in the inline help that this option should only be enabled upon request from support.
 ====
 
-Das im letzten Beispiel beschriebene Rate Limiting kann besonders bei der Entwicklung von Check-Plugins, welche die Ausgabe von Spezialagenten auswerten, stören.
-Tätigt man denselben Aufruf innerhalb kurzer Zeit immer wieder, ist nicht nur Rate Limiting problematisch, oft entstehen auch noch Kosten für REST-API-Aufrufe.
+The rate limiting described in the last example can be particularly disruptive when developing check plug-ins that evaluate the output of special agents.
+If you make the same call repeatedly within a short period of time, not only will rate limiting be a problem, but you'll often incur costs for REST API calls as well.
 
-Hier hilft die Bibliothek link:https://pypi.org/project/vcrpy/[`vcrpy` (_Video Cassette Recorder for Python_)^], welche es erlaubt, HTTP-Requests aufzuzeichnen und immer und immer wieder abzuspielen. Für die Einbindung stellt {CMK} link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#cmk.server_side_programs.v1_unstable.vcrtrace[eine Funktion bereit^], welche Sie über den Argument-Parser aktivieren.
-Wird mit dem Aufrufparameter `--vcrtrace` der Pfad zu einer Trace-Datei in `~/tmp/check_mk/debug` angegeben, wird der Spezialagent jeden HTTP-Request jeweils nur beim ersten Mal ausführen und die erhaltene Rückgabe aufzeichnen.
-Wenn später genau der gleiche HTTP-Request wieder gestellt werden soll, wird dieser bereits aufgezeichnete Request direkt aus der Datei bedient, ohne dass eine neue Anfrage an den Server stattfindet.
+The library link:https://pypi.org/project/vcrpy/[`vcrpy` (_Video Cassette Recorder for Python_)^] comes in handy here, as it allows you to record HTTP requests and play them back over and over again. To integrate this, {CMK} link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#cmk.server_side_programs.v1_unstable.vcrtrace[provides a function^] that you can activate via the argument parser.
+If the `--vcrtrace` command-line option is used to specify the path to a trace file in `~/tmp/check_mk/debug`, the special agent will execute each HTTP request only the first time and record the response received.
+If exactly the same HTTP request is to be made again later, this previously recorded request is served directly from the file without sending a new request to the server.
 
-Ohne Aufrufparameter `--vcrtrace` verhält sich auch der so angepasste Spezialagent weiterhin unauffällig.
-////
-// end translation
+Without the `--vcrtrace` command-line parameter, the customized special agent continues to behave unobtrusively.
 
 
 [#detect_errors]
 == Troubleshooting
 
-// delete from here
-Even when developing your own special agents, errors and problems can (unfortunately) occur.
-Identifying what has caused an error is just as important as fixing it.
-To get an initial idea of possible causes, you should first run `cmk-validate-config`.
-The following sections will help you further isolate the source of a problem.
-// delete to here
-
-// start translation
-////
-Auch bei der Entwicklung eigener Spezialagenten kann es immer wieder mal zu Fehlern und Problemen kommen.
-Deren Ursachen zu lokalisieren ist dann die Voraussetzung für die folgende Behebung.
-Für erste Hinweise auf mögliche Ursachen sollten Sie zunächst `cmk-validate-config` aufrufen.
-Die nächsten Abschnitte helfen, weiter einzugrenzen.
-////
-// end translation
+Even when developing your own custom agents, errors and problems can occur from time to time.
+Identifying the causes of these issues is the first step toward resolving them.
+For initial clues about possible causes, you should first run `cmk-validate-config`.
+The following sections will help you further narrow down the problem.
 
 
 [#serv_warn]
