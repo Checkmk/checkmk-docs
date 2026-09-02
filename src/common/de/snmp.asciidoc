@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE %
+// IGNORE % Kellerstraße GETNEXT
 // NONASCII
 include::global_attr.adoc[]
 = Überwachen via SNMP
@@ -35,6 +35,7 @@ Es ist allerdings nicht zu empfehlen, diese _anstelle_ des {CMK}-Agenten zu nutz
 SNMP ist nicht sehr performant und für die Überwachung benötigt der {CMK}-Server generell mehr CPU und Speicher pro Host, als wenn er mit seinem eigenen Agenten arbeitet.
 Außerdem sind die per SNMP bereitgestellten Daten unvollständig.
 ifdef::onprem[]
+// MFS: Theoretisch funktioniert das auch mit SaaS, dürfte aber sehr frickelig einzurichten sein
 In einigen Fällen kann allerdings die Überwachung per SNMP *zusätzlich* zum {CMK}-Agenten sinnvoll sein.
 Im Kapitel über xref:snmp_cmk_agent[SNMP und {CMK}-Agent] finden Sie mehr zu diesem Thema.
 
@@ -42,9 +43,12 @@ Sollte allerdings für eine Hard- oder Software-Komponente (beispielsweise einen
 Achten Sie in diesem Fall auf hinreichend lange Abfrageintervalle.
 endif::[]
 
+ifdef::saas[]
 Das Überwachen von SNMP-Geräten mit {CMK} ist sehr einfach.
+endif::[]
 Wenn Sie nur schnell mit SNMP starten möchten, genügt Ihnen wahrscheinlich der kurze Abschnitt über SNMP im xref:intro_setup_monitor#snmp[Leitfaden für Einsteiger].
 Dieser Artikel hier hingegen geht deutlich mehr in die Tiefe und zeigt Ihnen alle Einzelheiten und Sonderfälle der SNMP-Überwachung mit {CMK}.
+
 
 ifdef::saas[]
 [TIP]
@@ -62,6 +66,18 @@ Relays, die sich im selben Netzwerk wie die zu überwachenden SNMP-Geräte befin
 ====
 endif::[]
 
+.Was ist der Unterschied zwischen Query und Request?
+[%collapsible]
+====
+Die SNMP-Terminologie verwendet zwei Schlüsselworte, die leider häufig vertauscht werden -- besonders gerne in Übersetzungen: _Query_ (oft mit _Abfrage_ übersetzt) und _Request_ (meist als _Anfrage_ übersetzt).
+Der Unterschied liegt in der Ebene des Protokolls:
+
+* _Query_ bezeichnet die Nutzersicht, also _welche_ Daten eingeholt werden sollen: „Hey, SNMP-Client, besorge mir mal alle vorhandenen Daten zu den Ports des Switches in der Besenkammer der Kellerstraße 27!“. Der Begriff _Query_ ist nicht in der SNMP-Spezifikation enthalten, aber in der Dokumentation vieler Tools. 
+* _Request_ bezieht sich immer auf die konkrete Art, wie ein Gerät Daten liefert. Was man umgangssprachlich formulieren würde als: „Hey, SNMP-Gerät, liefere mir vorhandene Daten zur OID `.1.3.6.1.2.1.1.1.0` und sag mir dann die nächste OID, unter der Du Daten hast!“ wäre technisch ein _SNMP GETNEXT-REQUEST_ den der _SNMP Manager_ zum _SNMP Agent_ des Gerätes schickt.
+
+Was aus Nutzersicht als ein einziger _Query_ betrachtet wird, kann je nachdem, was das Gerät unterstützt und wie die verwendete SNMP-Bibliothek intern arbeitet, zu einem, mehreren oder tausenden notwendigen _Requests_ führen.
+====
+
 [#snmp_versions]
 === SNMP-Versionen
 
@@ -75,11 +91,11 @@ Hier ist eine Übersicht über alle relevanten Versionen von SNMP:
 |===
 |Version |Features |{CMK} |Bedeutung in der Praxis 
 |*v1* | |ja |Findet man nur bei sehr alten Geräten (etwa 15 Jahre und älter), die v2c nicht unterstützen oder deren v2c-Unterstützung Fehler hat.
-|*v2c* |Bulk-Abfragen, +
+|*v2c* |Bulk-Requests, +
 64-Bit-Counter |ja |Dies ist der Standard in der Praxis.
 v2c ist eine „Light“-Variante von v2, und das „c“ steht hier für _community,_ die bei SNMP die Rolle eines Passworts spielt.
 Die 64-Bit-Counter sind essenziell bei der Überwachung von Switch Ports mit 1 Gbit/s und mehr.
-Die Bulk-Abfragen beschleunigen das Monitoring um bis zu Faktor 10.
+Die Bulk-Requests beschleunigen das Monitoring um bis zu Faktor 10.
 |*v2* |Security |nein |Version 2 bietet zusätzlich zu den Features von v2c noch bessere Security-Möglichkeiten.
 In der Praxis ist Version 2 von SNMP nicht anzutreffen.
 Deswegen unterstützt {CMK} diese Protokollversion nicht.
@@ -260,7 +276,7 @@ Dabei werden verschiedene Protokollversionen von SNMP gleichzeitig ausprobiert, 
 
 * SNMPv1
 * SNMPv2c
-* SNMPv2c ohne Bulk-Anfragen
+* SNMPv2c ohne Bulk-Requests
 * SNMPv3
 
 Ein normales modernes Gerät sollte auf alle vier Varianten mit den gleichen Daten antworten, wobei das je nach Konfiguration eingeschränkt sein kann.
@@ -374,21 +390,21 @@ Legen Sie dazu für die betroffenen Hosts eine Regel an unter [.guihint]#Setup >
 Zwar werden dann auch keine Check-Plugins erkannt, die bestimmte Teile in diesem Text erwarten, aber das spielt in der Praxis keine Rolle, da die betroffenen Plugins so entwickelt wurden, dass sie diesen Fall berücksichtigen.
 
 
-==== SNMPv2c geht, aber Bulk-Anfragen scheitern
+==== SNMPv2c geht, aber Bulk-Requests scheitern
 
-Einige Geräte unterstützen zwar Version v2c (und werden in der Diagnose darauf auch eine Antwort liefern), allerdings fehlt im Protokoll die Umsetzung des Befehls `GetBulk`.
+Einige Geräte unterstützen zwar Version v2c (und werden in der Diagnose darauf auch eine Antwort liefern), allerdings fehlt im Protokoll die Umsetzung des Request-Befehls `GetBulk`.
 Dieser wird von {CMK} dazu verwendet, mit einer Anfrage möglichst viele Informationen auf einmal zu bekommen; er ist daher sehr wichtig für die Performance.
 
 Bei einem solchen Host werden auch einige einfache SNMP-Checks funktionieren, wie z.B [.guihint]#SNMP Info# oder [.guihint]#SNMP Uptime#.
 Aber andere Services fehlen -- insbesondere die Netzwerkschnittstellen, die eigentlich bei jedem Gerät vorhanden sein müssen.
 
-Falls Sie tatsächlich einen Host haben, bei dem das so ist, können Sie diesen mit v2c, aber ohne Bulk-Anfragen betreiben.
+Falls Sie tatsächlich einen Host haben, bei dem das so ist, können Sie diesen mit v2c, aber ohne Bulk-Requests betreiben.
 Konfigurieren Sie einen solchen Host wie folgt:
 
 . Setzen Sie bei den Host-Eigenschaften die SNMP-Version auf [.guihint]#SNMPv1#.
 . Legen Sie im Regelsatz [.guihint]#Setup > Agents > SNMP rules > Disable bulk walks# eine Regel für den Host an und stellen Sie in der Regel den Wert auf [.guihint]#Positive match (Add matching hosts to the set)#.
 
-Dadurch wird der Host gezwungen, trotz eingestellter Version 1 das Protokoll SNMPv2c zu verwenden, allerdings _ohne Bulk-Walk._
+Dadurch wird der Host gezwungen, trotz eingestellter Version 1 das Protokoll SNMPv2c zu verwenden, allerdings _ohne Bulk-Walk_.
 Wir empfehlen übrigens nicht den Einsatz von SNMPv1 -- selbst wenn das Protokoll unterstützt würde, denn hier werden keine 64-Bit-Counter unterstützt.
 Das kann zu fehlenden oder fehlerhaften Messdaten bei Netzwerkports führen, über die viel Verkehr läuft.
 
@@ -401,7 +417,7 @@ Hier kann es helfen, auf SNMPv1 zurück zu gehen (was normalerweise viel langsam
 Bevor Sie das versuchen, sollten Sie jedoch prüfen, ob der Hersteller ein Firmware-Upgrade bereitstellt, welches das Problem löst.
 
 Eine zweite Ursache kann sein, dass das Gerät sehr viele Switch Ports hat und gleichzeitig eine langsame SNMP-Implementierung.
-Falls Sie von den Ports nur sehr wenige überwachen möchten (z.B. nur die ersten beiden), können Sie {CMK} manuell auf die Abfrage von einzelnen Ports begrenzen.
+Falls Sie von den Ports nur sehr wenige überwachen möchten (z.B. nur die ersten beiden), können Sie {CMK} manuell auf die Abfrage von Daten einzelner Ports begrenzen.
 Details finden Sie weiter unten im Abschnitt zu xref:snmp#performance[Performance].
 
 
@@ -491,13 +507,13 @@ image::snmp_credentials_v3.png[alt="Konfiguration der SNMPv3 Sicherheitseinstell
 === Kontexte
 
 SNMPv3 führt das Konzept der _Kontexte_ ein.
-Dabei kann ein Gerät an derselben Stelle im SNMP-Baum unterschiedliche Informationen zeigen -- je nachdem, welche _Kontext-ID_ bei der Abfrage mitgegeben wird.
+Dabei kann ein Gerät an derselben Stelle im SNMP-Baum unterschiedliche Informationen zeigen -- je nachdem, welche _Kontext-ID_ bei den Requests mitgegeben wird.
 
 Falls Sie ein Gerät haben, das mit solchen Kontexten arbeitet, benötigen Sie in {CMK} zwei Einstellungen:
 
 * Zunächst muss das Gerät mit SNMPv3 abgefragt werden (wie im vorherigen Abschnitt beschrieben).
 * Dann benötigen Sie noch eine Regel im Regelsatz [.guihint]#SNMPv3 contexts to use in requests#.
-Hier wählen Sie das Check-Plugin aus, für das Kontexte aktiviert werden sollen, und dann die Liste der Kontexte, die im Monitoring abgefragt werden sollen.
+Hier wählen Sie das Check-Plugin aus, für das Kontexte aktiviert werden sollen, und dann die Liste der Kontexte, für die Monitoring-Daten eingeholt werden sollen.
 
 Zum Glück gibt es sehr selten Situationen, in denen man mit Kontexten arbeiten muss, denn es ist leider nicht möglich, dass das Monitoring diese automatisch erkennt.
 Eine manuelle Konfiguration der Kontexte ist immer notwendig.
@@ -514,14 +530,14 @@ Und die Überwachung mit SNMP benötigt mehr CPU und Speicher als die mit {CMK}-
 
 ifdef::onprem[]
 {cee-only}
-Während {RE} SNMP-Anfragen auf klassische Weise über die Befehle `snmpget` bzw. `snmpbulkwalk` macht, haben die kommerziellen Editionen eine eingebaute SNMP-Engine, die SNMP-Anfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
+Während {RE} SNMP-Abfragen auf klassische Weise über die Befehle `snmpget` bzw. `snmpbulkwalk` macht, haben die kommerziellen Editionen eine eingebaute SNMP-Engine, die SNMP-Abfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
 Die CPU-Last für die SNMP-Verarbeitung halbiert sich dadurch in etwa.
 Und durch die kürzeren Abfragezeiten reduziert sich auch die Anzahl der gleichzeitig benötigten {CMK}-Prozesse und damit auch der Speicherbedarf.
 Auch das in {UE} verwendbare {CMK} Relay unterstützt beide Abfragemöglichkeiten.
 endif::[]
 ifdef::saas[]
 Das {CMK} Relay unterstützt zwei Abfragemöglichkeiten für SNMP:
-die Befehle `snmpget` bzw. `snmpbulkwalk` und eine eingebaute SNMP-Engine, die SNMP-Anfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
+die Befehle `snmpget` bzw. `snmpbulkwalk` und eine eingebaute SNMP-Engine, die SNMP-Abfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
 Die CPU-Last für die SNMP-Verarbeitung ist mit dieser etwa halb so groß, weshalb sie als Standard verwendet wird.
 endif::[]
 
@@ -543,22 +559,22 @@ Ausnahmefällen für einzelne Hosts oder Checks erhöht wird.
 [#timing_settings]
 === Timing settings for SNMP access
 
-Standardmäßig erwartet {CMK} auf eine SNMP-Anfrage eine Antwort innerhalb von einer Sekunde.
+Standardmäßig erwartet {CMK} auf einen SNMP-Request eine Antwort innerhalb von einer Sekunde.
 Außerdem verschickt die Monitoring-Software insgesamt drei Anfragen, bevor sie aufgibt.
 Bei Geräten, die nur sehr langsam antworten oder über ein sehr langsames Netzwerk erreichbar sind, kann es notwendig sein, diese Parameter zu ändern.
 Das machen Sie über den Regelsatz [.guihint]#Timing settings for SNMP access#:
 
 image::snmp_timing_settings.png[alt="Erhöhen des Response Timeouts."]
 
-Beachten Sie, dass sich diese Einstellungen auf eine _einzelne SNMP-Anfrage_ beziehen.
-Der komplette Überwachungsvorgang eines Hosts besteht aus vielen Einzelanfragen.
+Beachten Sie, dass sich diese Einstellungen auf einen _einzelnen SNMP-Request_ beziehen.
+Der komplette Überwachungsvorgang eines Hosts besteht aus vielen einzelnen Requests.
 Der gesamte Timeout ist daher ein Vielfaches der hier angegebenen Einstellungen.
 
 
 [#bulk_walk]
 === Bulk-Walk: Number of OIDs per bulk
 
-SNMP überträgt pro `GetBulk`-Anfrage in der Voreinstellung 10 Antworten in einem Paket.
+SNMP überträgt pro `GetBulk`-Request in der Voreinstellung 10 Antworten in einem Paket.
 Mit dem Regelsatz [.guihint]#Bulk walk: Number of OIDs per bulk# können Sie ausprobieren, ob ein höherer Wert eine bessere Performance bringt.
 Das wird allerdings nur dann der Fall sein, wenn bei dem Host große Tabellen übertragen werden -- z.B. wenn es sich um einen Switch mit sehr vielen Ports handelt.
 
@@ -573,19 +589,18 @@ Dann kann es sinnvoll sein, die Anzahl zu senken.
 === Limit SNMP OID Ranges
 
 {CMK} arbeitet normalerweise so, dass es immer die Informationen zu allen Switch Ports holt, auch wenn nicht alle überwacht werden.
-Das ist auch gut so, denn im Normalfall ist das schneller, denn Einzelabfragen können nicht mit den effizienten Bulk-Anfragen gemacht werden.
-Zudem ist es aus unserer Sicht sowieso empfehlenswert, grundsätzlich alle Ports zu überwachen, um defekte Ports oder Kabel mit hohen Fehlerraten
-zu finden.
+Das ist auch gut so, denn im Normalfall ist das schneller, denn punktuelle Informationen können nicht mit den effizienten Bulk-Requests eingeholt werden.
+Zudem ist es aus unserer Sicht sowieso empfehlenswert, grundsätzlich alle Ports zu überwachen, um defekte Ports oder Kabel mit hohen Fehlerraten zu finden.
 Wenn Ports nicht zuverlässig {UP} sind, können Sie auch den Linkstatus {DOWN} als {OK} werten lassen.
 
 Nun gibt es aber Einzelfälle, wo Switches sehr viele Ports haben und aus irgendeinem Grund nur sehr langsam antworten oder SNMP sehr ineffizient verarbeiten, sodass eine Überwachung bei einem vollständigen Abrufen aller Port-Informationen nicht mehr möglich ist.
 
 Für solche Fälle gibt es den Regelsatz [.guihint]#Bulk walk: Limit SNMP OID Ranges#.
 Mit diesem können Sie die Liste der abgefragten Daten (z.B. Ports) statisch begrenzen.
-Im Wert der Regel legen Sie jeweils für ein bestimmtes Check-Plugin fest, welche Indizes der jeweiligen Tabelle geholt werden sollen.
+Im Wert der Regel legen Sie jeweils für ein bestimmtes Check-Plugin fest, welche Indizes der jeweiligen Tabelle eingeholt werden sollen.
 
 Der übliche Check-Typ für Switch Ports heißt [.guihint]#SNMP interface check with 64 bit counters (using v2c)#.
-Folgendes Beispiel zeigt eine Einstellung, bei der nur die ersten beiden Ports per SNMP geholt werden:
+Folgendes Beispiel zeigt eine Einstellung, bei der nur Daten für die ersten beiden Ports per SNMP eingeholt werden:
 
 image::snmp_limit_oid_ranges.png[alt="Bulk walk: limit SNMP OID ranges."]
 
