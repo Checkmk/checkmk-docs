@@ -1,0 +1,259 @@
+// -*- coding: utf-8 -*-
+// IGNORE
+// NONASCII
+include::global_attr.adoc[]
+= Tuning des Monitoring-Kerns
+:title: Tuning des Monitoring-Kerns
+:description: Optimale Ausnutzung von CPU und RAM bei Minimierung von Lastspitzen erreichen Sie mit einigen grundlegenden Einstellungen des Monitoring-Cores.
+:experimental:
+
+{related-start}
+xref:cmc#[Der {CMK} Micro Core]
+xref:rrds#[Round-Robin-Datenbanken (RRDs)]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Egal, ob Sie {CRE} mit dem Nagios-Kern nutzen oder eine der kommerziellen Editionen mit {CMK} Micro Core (CMC):
+In beiden Fällen können Sie mit den richtigen Einstellungen den Arbeitsspeicherbedarf minimieren, Lastspitzen vermeiden und so vorhandene Hardware optimal ausnutzen.
+
+{CMK} bringt einige Standardeinstellungen mit, die grob für den Betrieb auf acht bis 16 Gigabyte RAM mit 1000 bis 5000 Services (kommerzielle Editionen), beziehungsweise 1000 bis 3000 Services ({RE}) dimensioniert sind.
+Dieser Zahl liegt die Annahme zugrunde, dass der Großteil der Services durch das Monitoring mit xref:wato_monitoringagents#[Agenten] und xref:special_agents#[Spezialagenten] zustande kommt und nur wenige xref:active_checks#[aktive Checks] und xref:snmp#[SNMP-Checks] verwendet werden.
+
+Dieser Artikel ist insbesondere wichtig, wenn Ihre Monitoring-Umgebung von unserer Referenz-Umgebung abweicht, beispielsweise mit vielen aktiven Checks oder der Überwachung von Cloud-Infrastruktur mit vieles Spezialagenten.
+Er ist auch relevant, wenn Sie auf deutlich leistungsstärkerer Hardware eine sehr große Zahl von Hosts überwachen.
+Und schließlich:
+Monitoring-Admins, die genau wissen, was sie tun, können unter Umständen noch deutlich höhere Zahlen als oben genannt oder den Betrieb auf schwächerer Hardware erreichen.
+Garantien hierfür können wir keine geben, aber Sie erfahren hier die wichtigsten Kniffe, um alles aus Ihrer {CMK}-Installation herauszuholen.
+
+Hier vorgestellte Einstellmöglichkeiten berücksichtigen auch, wie stark mit der GUI gearbeitet wird und ob andere Anwendungen neben {CMK} auf derselben Maschine laufen müssen:
+In solchen Fällen ist es oft erwünscht, auch nach einem Neustart Lastspitzen etwas abzufedern und dafür {CMK} etwas länger Zeit zu geben, bis alle Services wieder einen bekannten Zustand haben.
+Bei Instanzen dagegen, mit denen wenig direkt interagiert wird, kann es hilfreich sein, mit kurzer, hoher Last schnell wieder alle Dienste aktuell zu haben. 
+
+[#othertuning]
+== Andere Tuning-Möglichkeiten
+
+Lesen Sie den xref:cmk_processes#[Artikel zu Instanzdiensten], um zu erfahren, auf welche Dienste Sie möglicherweise verzichten können und wie Sie den Instanz-Apache optimal auf das Nutzungsverhalten auf Ihrem {CMK}-Server einstellen.
+
+
+[#cmctuning]
+== Tuning des {CMK} Microcore
+
+{cee-only} Den Konzepten des CMC in {CSE} und {CUE} widmen wir xref:cmc#[einen eigenen Artikel], in diesem können Sie Architekturentscheidungen wie die starke Modularisierung nach Aufgaben wie das Einholen und die Auswertung von Daten nachlesen.
+Um immer im Blick zu haben, wie sich die aktuellen Performance-Einstellungen auf den gegenwärtigen Betrieb auswirken, sollten Sie in der {CMK} GUI das Sidebar-Snapin [.guihint]#Core statistics# aktiviert haben.
+Ebenso empfiehlt sich ein Blick in die xref:analyze_configuration#[Analyse der {CMK}-Konfiguration].
+
+Die hier vorgestellten Einstellungen nehmen Sie in [.guihint]#Setup > Global settings# im Abschnitt [.guihint]#Monitoring core# vor.
+
+[#num_checkers]
+=== Zahl der Checker
+
+Die _{CMK}-Checker_ bezeichnen die Hilfsprozesse, die Monitoringdaten verarbeiten, bevor diese in den Monitoring-Kern geschrieben werden.
+Ihr Job ist praktisch nur CPU lastig:
+Zu verarbeitende Daten liegen meist bereits im Arbeitsspeicher, weshalb kein auf IO wartender Prozess ausgelagert werden muss.
+
+Stellen Sie die Zahl der Checker daher zunächst auf die Zahl der physikalischen Prozessorkerne.
+Je nachdem, wie gut Ihre CPU Multithreading umsetzt, können Sie diese Zahl später ein klein wenig nach unten oder oben anpassen.
+
+Eine spätere Anpassung nach unten (auf ⅔ oder ¾ der Zahl der Kerne) stellt sicher, dass jeder Checker einem Kern zugewiesen bleibt, eine kleine Anpassung nach oben kann bei Daten, die Memory-to-Memory-Kopiervorgänge erfordern, dann doch mal den Checker bevorzugen, der schon alles bereit hat.
+Jede dieser Anpassungen sollte auch die jeweilige Auslastung berücksichtigen.
+
+[#num_fetchers]
+=== Zahl der Fetcher
+
+Etwas aufwendiger ist die Bestimmung der Zahl der Fetcher.
+Pauschale Aussagen zur Zahl können nicht getroffen werden, zu unterschiedlich sind die Anforderungen verschiedener Monitoring-Umgebungen.
+
+Prinzipiell gibt es zwei mögliche Herangehensweisen, die optimale Zahl zu bestimmen:
+
+* Sie ermitteln die Auswirkungen typischer und extremer Hosts auf die Fetcher-Auslastung und _errechnen_ daraus die optimale Zahl der Fetcher für die Zielmenge an Hosts.
+Diese Vorgehensweise bietet sich an, wenn eine Monitoring-Umgebung schnell hochskaliert werden soll.
+* Oder Sie _optimieren_ die Zahl der Fetcher auf die aktuelle Auslastungssituation.
+Dieser Weg dürfte in einer bereits etablierten Umgebung, in der immer wieder mal neue Checks und kleinere Zahlen von Hosts hinzukommen, der bevorzugte sein.
+
+In der Praxis werden Sie den anderen Weg meist als Rückkopplung zum primären verwenden wollen.
+
+Zur Berechnung ermitteln Sie zunächst die Zahl der mit regulären Agenten überwachten Hosts und deren durchschnittliche Ausführungsdauer.
+Multiplizieren Sie die Zahlen miteinander und addieren Sie diese auf.
+Das könnte dann so aussehen.
+
+[cols="10,65,15,10",options="header",grid="rows"]
+|===
+|Anzahl |Check |Ausführungszeit | Summe
+| 100 | Hosts mit {CMK}-Agent überwacht (normal schnell) | 3 s | 300 s
+| 10 | Hosts mit {CMK}-Agent überwacht (langsam) | 15 s | 150 s
+| 50 | Aktive Checks (bspw. `check_httpv2`) | 1 s | 50 s
+| 20 | SNMP-Geräte (ältere Hardware, nicht einmal besonders langsam) | 10 s | 200 s
+| 5 | Hosts ohne Agent, nur mit Spezialagent überwacht | 5 s | 25 s
+| | *Gesamtsumme* | | *725 s*
+|===
+
+////
+Multiplizieren Sie die Zahlen miteinander, beispielsweise 100 Hosts x 3 Sekunden: 300 Sekunden benötigte Fetcher-Zeit.
+Kommen noch 10 besonders langsam antwortende Hosts x 15 Sekunden dazu: Weitere 150 Sekunden benötigte Fetcher-Zeit.
+50 dieser Hosts verwenden `check_httpv2` und jeder Aufruf dauert insgesamt eine Sekunde: Noch einmal 50 Sekunden.
+20 alte SNMP-Geräte, die leider je 10 Sekunden benötigen, um alle Daten zu liefern: 200 Sekunden obendrauf.
+Bei reinen Spezialagentenhosts, die keinen normalen Agenten verwenden, finden Sie die Leistungsdaten im Dienst [.guihint]#Check_MK#.
+Insgesamt 5 Spezialagenten, die sehr viele Daten liefern und Fetcher 5 Sekunden beschäftigen: 25 Sekunden.
+////
+
+Unser Beispiel benötigt 725 Sekunden Fetcher-Zeit pro Check-Intervall.
+Die Standardeinstellung von 13 Fetchern kann 780 Sekunden Fetcher-Zeit pro Check-Intervall abdecken, womit sich die Defaults unmittelbar nach der Installation schon am Limit bewegen.
+
+Für ein initiales Setup sollten Sie um 50% Fetcher-Auslastung anstreben.
+Bei dem gezeigten Beispiel böte es sich also an, die Zahl der Fetcher auf 25 bis 30 etwa zu verdoppeln.
+Feedback in der Praxis liefert Ihnen das oben erwähnte Snap-In.
+Ergeben Ihre Berechnungen nur eine sehr kleine Zahl benötigter Fetcher, gehen Sie nicht unter drei.
+
+Wollen Sie den Arbeitsspeicherbedarf minimieren, können Sie die Zahl der Fetcher nach und nach so reduzieren, dass deren Auslastung typischerweise im Bereich von 70 bis 80% liegt.
+
+[TIP]
+====
+An diesem Punkt haben Sie die erste Möglichkeit, sich mit der Nutzung von Arbeitsspeicher vertraut zu machen:
+Ein Fetcher benötigt nur 50 bis 100 MB Arbeitsspeicher, davon aber 30 bis 60 MB resident.
+Bei 30 Fetchern sind also ein bis knapp zwei GB Arbeitsspeicher belegt.
+
+Wenn Sie {CE} nutzen, werden Sie möglichst viele Hosts auf Agenten im Push-Modus umstellen wollen:
+Das reduziert die benötigte Fetcher-Zeit für das Einholen der Agentenausgabe auf weit weniger als eine Sekunde.
+Und wenn Sie {SE} nutzen, können Sie immer noch langsame Plugins identifizieren und diese auf asynchron umstellen.
+Wenn Sie nun noch Ihre SNMP-Zugriffe optimieren, halbieren Sie in der Summe die Fetcher-Zeiten im obigen Beispiel und halbieren damit ebenso den Arbeitsspeicherbedarf der Fetcher.
+====
+
+[#cmc_restart]
+==== Verhalten bei Neustarts
+
+Eine Besonderheit des CMC ist, dass bei Änderungen an der Konfiguration nicht der ganze Monitoring-Core neu gestartet werden muss.
+Der CMC kann eine neue Konfiguration während des Betriebs einlesen und arbeitet dann nach Sekundenbruchteilen weiter.
+Die Einstellungen für einen echten Neustart des Cores sind daher eher bei Updates und Reboots des Servers relevant.
+
+Hier sehen die Standardeinstellungen 150 Millisekunden Wartezeit zwischen aktiven Checks und 1200 Millisekunden zwischen dem Einholen der Agentenausgabe vor.
+Das ist weit entspannter als der Standardwert der Fetcher sonst zulässt.
+Grund ist die Erwartung, dass während des Neustarts des Servers auch andere Dienste noch hochfahren.
+Bei großzügig dimensionierten Servern mit vielen Hosts im Monitoring bedeutet dies möglicherweise, dass bereits wenige Minuten nach dem Neustart zwar die Last niedrig ist, aber {CMK} noch lange nicht alle Services aktualisiert hat.
+
+Vorausgesetzt, die Zahl der Fetcher ist bereits optimiert, können Sie in solchen Fällen diese Intervalle deutlich senken.
+
+
+[#nagiostuning]
+== Tuning des Nagios Cores
+
+{cre-only} Der von {RE} verwendete Nagios-Kern ist recht robust, hat aber das Problem einer sehr teuren Ausführung von aktiven Checks:
+Für jede Ausführung eines aktiven Checks kopiert Nagios seinen Speicher, um dann an den Kindprozess weiterzugeben.
+Das Geheimnis des Tunings von Nagios liegt daher darin, diese Forks optimal zu steuern.
+
+Die in den nächsten Abschnitten erklärten Einstellungen können Sie in der Datei `~/etc/nagios/nagios.d/timing.cfg` vornehmen.
+In dieser Datei finden Sie auch weitere -- weniger relevante -- Konfigurationsmöglichkeiten.
+Nach jeder Änderung ist es erforderlich, mittels `omd restart nagios` den Kern neu zu starten.
+
+[#nagios_restart]
+=== Verhalten bei Neustarts
+
+Standardmäßig versucht Nagios eine smarte Berechnung des Abstandes, in dem Checks initial gestartet werden.
+In vielen Fällen führt dies zu viel zu optimistischen Annahmen, wie viele Checks CPU und Speicher verkraften.
+Daher kann es sinnvoll sein, einen fixen Wert einzutragen.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# SERVICE INTER-CHECK DELAY METHOD
+# This is the method that Nagios should use when initially
+# "spreading out" service checks when it starts monitoring.  The
+# default is to use smart delay calculation, which will try to
+# space all service checks out evenly to minimize CPU load.
+# Using the dumb setting will cause all checks to be scheduled
+# at the same time (with no delay between them)!  This is not a
+# good thing for production, but is useful when testing the
+# parallelization functionality.
+#       n       = None - don't use any delay between checks
+#       d       = Use a "dumb" delay of 1 second between checks
+#       s       = Use "smart" inter-check delay calculation
+#       x.xx    = Use an inter-check delay of x.xx seconds
+
+service_inter_check_delay_method=s
+----
+
+Wenn Sie einen fixen Wert eintragen, achten Sie darauf, dass alle Checks in ein Intervall passen.
+Angenommen, Sie haben 100 Hosts, die mit dem {CMK}-Agenten überwacht werden und im Schnitt einen weiteren aktiven Check verwenden.
+Dann sind 200 Checks gleichmäßig auf 60 Sekunden zu verteilen, was 0,3 Sekunden entspricht.
+Mit einem eingetragenen Wert von 0,2 bis 0,25 Sekunden sind Sie dann auf der sicheren Seite.
+
+Analog verhält es sich mit der Variable `host_inter_check_delay_method`, welche die gleiche Einstellung für Host-Checks vornimmt.
+In der Regel werden Sie `check_icmp` als Host-Check konfiguriert haben, dann ist die Rechnung einfach: ein Check pro Host.
+Bei den oben genannten Zahl von 100 Hosts würde als sinnvoller Wert 0,4 bis 0,5 Sekunden resultieren.
+
+
+[#nagios_sleep]
+=== Abstand zwischen Checks
+
+Schließlich können Sie für den Abstand zwischen Checks im regulären Betrieb den Abstand zwischen der Check-Ausführung setzen.
+Tragen Sie den kleinsten der beiden im letzten Abschnitt ermittelten Werte ein.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# SLEEP TIME
+# This is the number of seconds to sleep between checking for system
+# events and service checks that need to be run.
+
+sleep_time=0.25
+----
+
+Beobachten Sie den {CMK}-Server nach dem Neustart der Instanz und einigen Minuten danach.
+Eine [.guihint]#CPU load# von deutlich mehr als Eins pro Kern ist für einige Minuten in Ordnung, sollte sich aber bald normalisiert haben.
+Bleibt die Last auch beim Start der Instanz niedrig, können Sie `service_inter_check_delay_method` und `host_inter_check_delay_method` auf einen kleineren Wert als die `sleep_time` reduzieren.
+
+Treten immer wieder Peaks in Last und Speicherbedarf auf, hilft die nächste Einstellung.
+
+
+[#nagios_concurrency]
+=== Maximale Zahl gleichzeitiger Checks
+
+In der Standardkonfiguration sind beliebig viele parallele Checks möglich.
+Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgeführte Checks sich schnell wieder beenden und die folgenden Einstellungen daher die Last begrenzen.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# MAXIMUM CONCURRENT SERVICE CHECKS
+# This option allows you to specify the maximum number of
+# service checks that can be run in parallel at any given time.
+# Specifying a value of 1 for this variable essentially prevents
+# any service checks from being parallelized.  A value of 0
+# will not restrict the number of concurrent checks that are
+# being executed.
+
+max_concurrent_checks=0
+----
+
+Ist allerdings [.guihint]#Check_MK# der dominierende Dienst, kann es sinnvoll sein, hier harte Grenzen zu setzen, um den Arbeitsspeicherbedarf im Rahmen zu halten.
+Je nach Anteil der Ausführungszeit, welche die Agentenabfrage mit warten verbringt (aufs Netzwerk oder das Agentenskript), bieten sich Werte zwischen der doppelten und der achtfachen Zahl der CPUs an.
+Höhere Werte sorgen für schnellere Verfügbarkeit vieler Dienste nach einem Core-Neustart, aber auch größere Last in dieser Situation.
+
+Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihint]#Memory# im Blick behalten werden.
+
+[TIP]
+====
+Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
+Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste _stale_ werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
+In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
+Ändern Sie deren Ausführung zu asynchron.
+
+Helfen alle Optimierungen nicht, ermitteln Sie, bei welchen Checks eine Erhöhung des Check-Intervalls sinnvoll ist.
+Bei einer hohen Zahl von Checks auf vergleichsweise schwacher Hardware sollten Sie über ein Upgrade der Hardware oder den Wechsel zu einer der kommerziellen Editionen von {CMK} nachdenken.
+====
+
+
+[#community_distributed]
+=== Parallelisierung durch verteiltes Monitoring
+
+Der eigentliche Nagios-Kern (Scheduler, Statusberechnung) läuft Single-Threaded, kann also nicht von Mehrkernprozessoren profitieren.
+Da die als externe Prozesse geforkten Checks die Hauptarbeit leisten, ist zumindest bis vier Prozessorkerne meist der Monitoring-Kern nicht der Flaschenhals.
+Bei mehr Prozessorkernen _kann_ der Monitoring-Kern zum Flaschenhals werden.
+
+Mit dem Betrieb von {RE} erfahrene Admins verteilen daher die Arbeit oft auf mehrere Monitoring-Kerne, indem sie auf einer physikalischen Maschine ein xref:distributed_monitoring#[verteiltes Monitoring] einrichten.
+Wann dieser Schritt sinnvoll ist, variiert:
+Exakte Zahlen (beispielsweise Checks oder Services) können wir nicht nennen.
+Beobachten Sie die Prozessorauslastung aller Prozessorkerne separat.
+Ist zu sehen, dass ein Kern häufiger voll ausgelastet ist, während die anderen das nicht sind, sollten Sie den Umbau auf verteiltes Monitoring in Betracht ziehen.
