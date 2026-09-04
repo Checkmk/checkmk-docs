@@ -37,13 +37,21 @@ Bei Instanzen dagegen, mit denen wenig direkt interagiert wird, kann es hilfreic
 
 Lesen Sie den xref:cmk_processes#[Artikel zu Instanzdiensten], um zu erfahren, auf welche Dienste Sie möglicherweise verzichten können und wie Sie den Instanz-Apache optimal auf das Nutzungsverhalten auf Ihrem {CMK}-Server einstellen.
 
+Einen sehr guten Überblick über _alle_ Tuning-Möglichkeiten (inklusive der in diesem Artikel vorgestellten) liefert der link:https://www.youtube.com/watch?v=UM7wsc3-QKU[Vortrag von Lars Michelsen bei der {CMK}-Konferenz pass:[#11] (auf YouTube)^].
+
 
 [#cmctuning]
 == Tuning des {CMK} Micro Core (CMC)
 
 {cee-only} Den Konzepten des CMC in {CSE} und {CUE} widmen wir xref:cmc#[einen eigenen Artikel], in diesem können Sie Architekturentscheidungen wie die starke Modularisierung nach Aufgaben wie das Einholen und die Auswertung von Daten nachlesen.
+Werfen Sie zunächst einen Blick in die xref:analyze_configuration#[Analyse der {CMK}-Konfiguration]:
+Diese statische Analyse weist direkt darauf hin, wenn Einstellungen sehr weit von empfohlenen Einstellungen sind, was _zukünftig_ zu Problemen führen könnte.
+
 Um immer im Blick zu haben, wie sich die aktuellen Performance-Einstellungen auf den gegenwärtigen Betrieb auswirken, sollten Sie in der {CMK} GUI das Sidebar-Snapin [.guihint]#Core statistics# aktiviert haben.
-Ebenso empfiehlt sich ein Blick in die xref:analyze_configuration#[Analyse der {CMK}-Konfiguration].
+Hier interessieren insbesondere [.guihint]#xref:monitoring_basics#stale[Stale services]#, die darauf hinweisen, dass mehr Dienste geprüft werden sollen als aktuell verarbeitet werden können.
+
+Ebenfalls wichtig ist es, den Dienst [.guihint]#OMD mysite performance# im Blick zu behalten.
+Hier sehen Sie insbesondere in der Metrik [.guihint]#Helper usage# schnell, wie sich vorgenommene Änderungen auf Leistung und Auslastung auswirken.
 
 Die hier vorgestellten Einstellungen nehmen Sie in [.guihint]#Setup > Global settings# im Abschnitt [.guihint]#Monitoring core# vor.
 
@@ -55,10 +63,7 @@ Ihr Job ist praktisch nur CPU lastig:
 Zu verarbeitende Daten liegen meist bereits im Arbeitsspeicher, weshalb kein auf IO wartender Prozess ausgelagert werden muss.
 
 Stellen Sie die Zahl der Checker daher zunächst auf die Zahl der physikalischen Prozessorkerne.
-Je nachdem, wie gut Ihre CPU Multithreading umsetzt, können Sie diese Zahl später ein klein wenig nach unten oder oben anpassen.
-
-Eine spätere Anpassung nach unten (auf ⅔ oder ¾ der Zahl der Kerne) stellt sicher, dass jeder Checker einem Kern zugewiesen bleibt, eine kleine Anpassung nach oben kann bei Daten, die Memory-to-Memory-Kopiervorgänge erfordern, dann doch mal den Checker bevorzugen, der schon alles bereit hat.
-Jede dieser Anpassungen sollte auch die jeweilige Auslastung berücksichtigen.
+Wenn Sie dann die anderen in diesem Artikel beschriebenen Maßnahmen umgesetzt haben, können Sie die Anzahl wieder so weit reduzieren, dass die Auslastung bei etwa 80&nbsp;% liegt. 
 
 [#num_fetchers]
 === Zahl der Fetcher
@@ -76,17 +81,21 @@ Dieser Weg dürfte in einer bereits etablierten Umgebung, in der immer wieder ma
 In der Praxis werden Sie den anderen Weg meist als Rückkopplung zum primären verwenden wollen.
 
 Zur Berechnung ermitteln Sie zunächst die Zahl der mit regulären Agenten überwachten Hosts und deren durchschnittliche Ausführungsdauer.
-Multiplizieren Sie die Zahlen miteinander und addieren Sie diese auf.
+Bei der Ermittlung hilft der Blick ins Monitoring „typischer“ Hosts -- dort interessieren vor allem der Dienst [.guihint]#Check_MK#.
+Eine _Topliste_ liefert [.guihint]#Monitor > History > Service check durations#. 
+
+Multiplizieren Sie die ermittelte Dauer der Checks mit der Zahl betroffener Hosts und addieren Sie die Teilergebnisse auf.
 Das könnte dann so aussehen.
 
+[#calculate_fetchers]
 [cols="10,65,15,10",options="header",grid="rows"]
 |===
 |Anzahl |Check |Ausführungszeit | Summe
 | 100 | Hosts mit {CMK}-Agent überwacht (normal schnell) | 3 s | 300 s
 | 10 | Hosts mit {CMK}-Agent überwacht (langsam) | 15 s | 150 s
-| 50 | Aktive Checks (bspw. `check_httpv2`) | 1 s | 50 s
 | 20 | SNMP-Geräte (ältere Hardware, nicht einmal besonders langsam) | 10 s | 200 s
 | 5 | Hosts ohne Agent, nur mit Spezialagent überwacht | 5 s | 25 s
+| 2 | Sehr aufwendige Spezialagenten (bspw. Cloud-Dienste) | 25 s | 50 s
 | | *Gesamtsumme* | | *725 s*
 |===
 
@@ -102,27 +111,43 @@ Insgesamt 5 Spezialagenten, die sehr viele Daten liefern und Fetcher 5 Sekunden 
 Unser Beispiel benötigt 725 Sekunden Fetcher-Zeit pro Check-Intervall.
 Die Standardeinstellung von 13 Fetchern kann 780 Sekunden Fetcher-Zeit pro Check-Intervall abdecken, womit sich die Defaults unmittelbar nach der Installation schon am Limit bewegen.
 
-Für ein initiales Setup sollten Sie um 50% Fetcher-Auslastung anstreben.
+Für ein initiales Setup sollten Sie um 50&nbsp;% Fetcher-Auslastung anstreben.
 Bei dem gezeigten Beispiel böte es sich also an, die Zahl der Fetcher auf 25 bis 30 etwa zu verdoppeln.
 Feedback in der Praxis liefert Ihnen das oben erwähnte Snap-In.
 Ergeben Ihre Berechnungen nur eine sehr kleine Zahl benötigter Fetcher, gehen Sie nicht unter drei.
 
-Wollen Sie den Arbeitsspeicherbedarf minimieren, können Sie die Zahl der Fetcher nach und nach so reduzieren, dass deren Auslastung typischerweise im Bereich von 70 bis 80% liegt.
+Wollen Sie den Arbeitsspeicherbedarf minimieren, können Sie die Zahl der Fetcher nach und nach so reduzieren, dass deren Auslastung typischerweise im Bereich um 60&nbsp;% liegt.
 
 [TIP]
 ====
-An diesem Punkt haben Sie die erste Möglichkeit, sich mit der Nutzung von Arbeitsspeicher vertraut zu machen:
 Ein Fetcher benötigt nur 50 bis 100 MB Arbeitsspeicher, davon aber 30 bis 60 MB resident.
-Bei 30 Fetchern sind also ein bis knapp zwei GB Arbeitsspeicher belegt.
+Bei 30 Fetchern sind also ein bis knapp zwei GB Arbeitsspeicher dauerhaft belegt.
 
-Wenn Sie {CE} nutzen, werden Sie möglichst viele Hosts auf Agenten im Push-Modus umstellen wollen:
-Das reduziert die benötigte Fetcher-Zeit für das Einholen der Agentenausgabe auf weit weniger als eine Sekunde.
-Und wenn Sie {SE} nutzen, können Sie immer noch langsame Plugins identifizieren und diese auf asynchron umstellen.
+Das Limit von 60&nbsp;% empfehlen wir, um bei Netzwerkproblemen wie höheren Latenzen oder Paketverlust etwas Puffer zu haben.
+Selbstverständlich können Sie höher gehen, müssen dann eventuell bei Problemen Fetcher zugeben -- oder mit vereinzelten Services, die [.guihint]#stale# sind, leben.
+
+Der xref:glossar#push_mode[Push-Modus] in {CE} hilft in zwei Punkten, Fetcher-Nutzung zu optimieren -- stellen Sie daher wo möglich um:
+
+* Auf Festplatte vorhandene Agentenausgabe reduziert die benötigte Fetcher-Zeit für das Einholen der Agentenausgabe auf weit weniger als eine Sekunde.
+* Netzwerk-Probleme sind keine Fetcher-Probleme, sondern Probleme des Agent Controllers/Agent Receivers.
+
+Falls Sie {SE} nutzen, können Sie immer noch langsame Plugins identifizieren und diese auf asynchron umstellen -- auch hier hilft [.guihint]#Monitor > History > Service check durations#.
 Wenn Sie nun noch Ihre SNMP-Zugriffe optimieren, halbieren Sie in der Summe die Fetcher-Zeiten im obigen Beispiel und halbieren damit ebenso den Arbeitsspeicherbedarf der Fetcher.
 ====
 
+[#cmc_active]
+=== Aktive Checks
+
+Die Standardeinstellung für aktive Checks des CMC liegt bei maximal fünf gleichzeitigen.
+Bei der Abschätzung hilft wieder der Blick in die Hitliste [.guihint]#Monitor > History > Service check durations#.
+Hier werden Sie sehen, dass der (standardmäßig einmal pro Tag ausgeführte) Inventur-Check auch einmal 30 Sekunden benötigen kann, ein `check_cert` oft in ein paar hundert Millisekunden fertig ist und die Werte bei `check_httpv2` -- abhängig von der Performance des überprüften Endpunktes deutlich schwanken.
+Letztlich können Sie eine xref:calculate_fetchers[Rechnung wie oben] anstellen -- bei fünf aktiven Checks stehen pro Intervall 300 Sekunden zur Verfügung.
+
+Oder Sie werfen zuerst einen Blick in den Dienst [.guihint]#OMD mysite performance#, konkret in die Metrik [.guihint]#Helper usage# und dort die Graph-Linie [.guihint]#Active check helper usage#.
+
+
 [#cmc_restart]
-==== Verhalten bei Neustarts
+=== Verhalten bei Neustarts
 
 Eine Besonderheit des CMC ist, dass bei Änderungen an der Konfiguration nicht der ganze Monitoring-Core neu gestartet werden muss.
 Der CMC kann eine neue Konfiguration während des Betriebs einlesen und arbeitet dann nach Sekundenbruchteilen weiter.
@@ -236,7 +261,7 @@ Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihin
 [TIP]
 ====
 Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
-Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste _stale_ werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
+Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste xref:monitoring_basics#stale[_stale_] werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
 In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
 Ändern Sie deren Ausführung zu asynchron.
 
