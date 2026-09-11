@@ -123,39 +123,44 @@ def switch_branch(target)
     system("git pull")
 end
 
+def commit_tokens(msg)
+	# normalize commit message elements to downcase + split tokens on all punctuation
+	msg.downcase.split(/[^\p{Alnum}\-]+/).reject { |t| t.empty? }
+end
+
 def check_against_ignores(commitinfo)
-	return true if @cfg["ignore_commits"].include?(commitinfo[1])
-	commitwords = commitinfo[2].gsub(',', ' ').split
+	return true if @cfg["ignore_commits"].include?(commitinfo[1].downcase)
+	commitwords = commit_tokens(commitinfo[2])
 	commitwords.each { |c|
-		return true if @cfg["ignore_tickets"].include? c.upcase
+		return true if @cfg["ignore_tickets"].include? c
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		return true if @cfg["ignore_files"].include? fname
+		return true if @cfg["ignore_files"].include? fname.downcase
 	}
 	return false
 end
 
 def check_against_forced(commitinfo)
-	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords = commit_tokens(commitinfo[2])
 	commitwords.each { |c|
 		return true if @cfg["force_tickets"].include? c
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		return true if @cfg["force_files"].include? fname
+		return true if @cfg["force_files"].include? fname.downcase
 	}
 	return false
 end
 
 def check_against_only(commitinfo)
-	commitwords = commitinfo[2].gsub(',', ' ').split
+	commitwords = commit_tokens(commitinfo[2])
 	commitwords.each { |c|
 		return true if @cfg["only_tickets"].include? c
 	}
 	commitinfo[3].each { |f|
 		fname = f.split("/")[-1]
-		return true if @cfg["only_files"].include? fname
+		return true if @cfg["only_files"].include? fname.downcase
 	}
 	return false
 end
@@ -176,7 +181,9 @@ def get_config()
 	opts.parse!
 	[ "ignore_files", "ignore_tickets", "ignore_commits", "only_files", "only_tickets", "force_files", "force_tickets" ].each { |n|
 		@cfg[n] = [] unless @cfg.has_key? n
+		@cfg[n] = @cfg[n].map { |e| e.downcase }
 	}
+	@cfg["keyword"] = @cfg["keyword"].to_s.downcase
 end
 
 def try_to_pick(commitinfo)
@@ -184,7 +191,7 @@ def try_to_pick(commitinfo)
 	unless ret
 		puts "+++> Pick failed. Abort the commit and continue loop or exit? [E/a] "
 		secdec = gets
-		if secdec.strip == "" || secdec.strip =~ /^e/
+		if secdec.strip == "" || secdec.strip =~ /^e/i
 			exit 1
 		else
 			commitinfo[3].each { |f| @files_with_skipped_commits.push f }
@@ -217,7 +224,7 @@ def ask_and_pick(missingcommits, csumsfrom={}, csumsto={})
 	missingcommits.reverse.each { |c|
 		@allfiles.push c[3]
 		puts "#{c[0]} + #{c[1]} + #{c[2]}"
-		commitwords = c[2].gsub(',', ' ').split
+		commitwords = commit_tokens(c[2])
 		nskipped = 0
 		c[3].each { |f|
 			s = ""
