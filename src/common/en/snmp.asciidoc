@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE % Kellerstraße GETNEXT
+// IGNORE % GETNEXT 
 // NONASCII
 include::global_attr.adoc[]
 = Monitoring via SNMP
@@ -10,654 +10,691 @@ include::global_attr.adoc[]
 {related-start}
 xref:wato_monitoringagents#[Monitoring agents]
 ifdef::onprem[]
-xref:ec#[Die Event Console]
+xref:ec#[The Event Console]
 endif::[]
 xref:relay#[The Checkmk Relay]
 {related-end}
 
+// Remove after translation 
 
+[TIP]
+====
+This article is currently being translated after an overhaul.
+If you are interested in the new content, head over to the link:../de/snmp.html[German version] and use your favorite translation tool to translate to English.
+====
+
+////
+// Start full translation
 [#intro]
-== What is SNMP?
+== Was ist SNMP?
+
+SNMP (_Simple Network Management Protocol_) ist ein Netzwerkprotokoll, über das Sie bestimmte Typen von Objekten mit {CMK} überwachen können, auf denen die Installation eines {CMK}-Agenten nicht möglich ist.
+Geräte wie Router, Switches, Firewalls, Drucker, Appliances, USVs, Hardwaresensoren und viele andere haben bereits vom Hersteller aus eine eingebaute Schnittstelle für das Monitoring: einen _SNMP-Agenten_.
+{CMK} kann SNMP nutzen, um solche Geräte zu überwachen.
+
+Dieser Artikel beschreibt, wie Sie SNMP-fähige Hosts mit wenig Aufwand ins Monitoring aufnehmen und konfigurieren können.
 
 [#snmp_instead]
-=== Using SNMP instead of a {CMK} agent
+=== SNMP anstelle des {CMK}-Agenten
 
-Routers, switches, firewalls, printers, appliances, UPSs, hardware sensors, and many other devices do not allow the installation of a {CMK} agent.
-They do however already have a built-in interface for monitoring provided by their manufacturer – an _SNMP agent_.
-This agent can be accessed via the _Simple Network Management Protocol (SNMP)_.
-{CMK} uses SNMP to monitor such devices.
+Es gibt übrigens auch SNMP-Agenten für Windows und Linux. 
+Es ist allerdings nicht zu empfehlen, diese _anstelle_ des {CMK}-Agenten zu nutzen.
+SNMP ist nicht sehr performant, und für die Überwachung benötigt der {CMK}-Server generell mehr CPU und Speicher pro Host, als wenn er mit seinem eigenen Agenten arbeitet.
+Außerdem sind die per SNMP bereitgestellten Daten unvollständig.
 ifdef::onprem[]
-The benefit for you is that setting up the monitoring is very easy.
-endif::[]
-
-There are also SNMP agents for Windows and Linux, however using these _instead of_ the {CMK} agent is not recommended.
-SNMP is not very performant, so using this for monitoring generally means that the {CMK} server needs more CPU and memory per host than when working with its own agent.
-In addition the data provided via SNMP are incomplete.
-ifdef::onprem[]
-In some cases, however, monitoring via SNMP *in addition* to the {CMK} agent can be useful.
-See the chapter on xref:snmp_cmk_agent[SNMP and {CMK} agent] for more on this topic.
-
-However, if there is no {CMK} agent plug-in for monitoring a particular hardware or software component (e.g. a RAID controller), but the component has an SNMP interface, you can of course collect additional monitoring data via SNMP.
-In such a case, make sure that the query intervals are long enough.
+In einigen Fällen kann allerdings die Überwachung per SNMP _zusätzlich_ zum {CMK}-Agenten sinnvoll sein.
+Im Abschnitt zur xref:add_device[Aufnahme von Geräten ins Monitoring] finden Sie mehr zu diesem Thema.
 endif::[]
 
 ifdef::saas[]
-Monitoring SNMP devices with {CMK} is very easy.
+Das Überwachen von SNMP-Geräten mit {CMK} ist sehr einfach.
 endif::[]
-If you just want to get started quickly with SNMP, you will probably need to read the short section on SNMP in the xref:intro_setup_monitor#snmp[Beginner's guide].
-This article, on the other hand, goes into much more depth, and shows you all of the details and specific scenarios when SNMP monitoring with {CMK}.
+Wenn Sie nur schnell mit SNMP starten möchten, genügt Ihnen wahrscheinlich der kurze Abschnitt über SNMP im xref:intro_setup_monitor#snmp[Leitfaden für Einsteiger].
+Dieser Artikel hier hingegen geht deutlich mehr in die Tiefe und zeigt Ihnen alle Einzelheiten und Sonderfälle der SNMP-Überwachung mit {CMK}.
+
 
 ifdef::saas[]
 [TIP]
 ====
-{CE} requires the xref:relay#[{CMK} Relay] to monitor SNMP devices.
-Install it in the same network as the SNMP device you want to monitor.
+{CE} benötigt das xref:relay#[{CMK} Relay] zur Überwachung von SNMP-Geräten.
+Installieren Sie dieses im selben Netzwerk wie das zu überwachende SNMP-Gerät.
 ====
 endif::[]
 
 ifdef::onprem[]
 [TIP]
 ====
-{UE} provides a second method for monitoring SNMP devices using the xref:relay#[{CMK} Relay].
-Relays located in the same network as the SNMP devices being monitored can also collect data from SNMP devices that the monitoring server cannot reach directly. 
+{UE} erlaubt mit dem xref:relay#[{CMK} Relay] eine zweite Art der Überwachung von SNMP-Geräten.
+Relays, die sich im selben Netzwerk wie die zu überwachenden SNMP-Geräte befinden, können auch Daten von solchen SNMP-Geräten einsammeln, die der Monitoring-Server nicht direkt erreichen kann. 
 ====
 endif::[]
 
-.What is the difference between 'query' and 'request'?
+
+[#snmp_communication]
+=== Zwei mögliche Kommunikationsrichtungen
+
+ifdef::onprem[]
+{CMK} nutzt für die SNMP-Überwachung eine Pull-Methode.
+endif::[]
+ifdef::saas[]
+{CE} nutzt für die SNMP-Überwachung eine Pull-Methode.
+endif::[]
+Die SNMP-Terminologie verwendet dafür zwei Begriffe, die leider häufig vertauscht werden: _Query_ (oft als _Abfrage_ übersetzt) und _Request_ (oft als _Anfrage_ übersetzt).
+Der Unterschied liegt in der Ebene des Protokolls:
+
+* _Query_ bezeichnet die Nutzersicht, also _welche_ Daten eingeholt werden sollen: „Hey, SNMP-Client, besorge mir mal alle vorhandenen Daten zu den Ports des Switches in der Besenkammer der Kellerstraße 27!“
+Der Begriff _Query_ ist nicht in der SNMP-Spezifikation enthalten, aber in der Dokumentation vieler Tools. 
+* _Request_ bezieht sich immer auf die konkrete Art, _wie_ ein Gerät Daten liefert: „Hey, SNMP-Gerät, liefere mir vorhandene Daten zur OID `.1.3.6.1.2.1.1.1.0` und sag mir dann die nächste OID, unter der du Daten hast!“
+Eine solche Aufgabe wird beispielsweise technisch umgesetzt als _SNMP GETNEXT-REQUEST_, den der _SNMP Manager_ zum _SNMP Agent_ des Gerätes schickt.
+
+Was aus Nutzersicht als eine einzige _Query_ betrachtet wird, kann je nachdem, was das Gerät unterstützt und wie die verwendete SNMP-Bibliothek intern arbeitet, zu einem, mehreren oder tausenden notwendigen _Requests_ führen.
+
+Für solch einen Request sendet 
+ifdef::onprem[]
+{CMK} beziehungsweise
+endif::[]
+das Relay ein UDP-Paket (Port 161) mit einer SNMP-Anfrage an das Gerät mit der Bitte, bestimmte Daten zu liefern.
+Das Gerät antwortet dann seinerseits mit einem UDP-Paket, das die Daten (oder eine Fehlermeldung) enthält.
+
+[#snmp_traps]
+Aber SNMP hat noch eine zweite Spielart: _SNMP-Traps._
+Das sind spontane Meldungen, die Geräte an konfigurierte Adressen per UDP (Port 162) im Push-Verfahren versenden.
+Traps haben viele Nachteile gegenüber Abfragen im Pull-Verfahren, weswegen sie für das Monitoring keine große Bedeutung haben.
+ifdef::saas[]
+Das {CMK} Relay unterstützt aus diesen Gründen keinen Empfang von Traps.
+In den On-Premises-Editionen von {CMK} können Traps mit der Event Console empfangen werden.
+endif::[]
+ifdef::onprem[]
+
+.Einige der Nachteile von SNMP-Traps
 [%collapsible]
 ====
-The SNMP terminology uses two keywords, that unfortunately often get confused: _query_ and _request_.
-The difference lies in the protocol level:
+* Traps sind nicht zuverlässig.
+UDP-Pakete können verloren gehen.
+Es gibt keine Empfangsquittung.
+* Meist werden nur _Fehler_-Meldungen versendet, aber keine _Recovery_-Meldungen.
+Somit ist der aktuelle Status im Monitoring unklar.
+* Wenn Tausende von Switches gleichzeitig Traps senden (z.B. wenn für diese ein wichtiger Upstream-Dienst nicht verfügbar ist), kann der Trap-Empfänger sich dieser nicht erwehren und unter der Last einbrechen.
+Dadurch ist das Monitoring genau dann überlastet, wenn man es am meisten brauchen würde.
+* Bei einer Änderung der IP-Adresse des Trap-Empfängers müssen alle Geräte neu konfiguriert werden.
+* Traps sind nur schwer testbar.
+Die wenigsten Geräte haben überhaupt eine Funktion, um eine generische Test-Trap zu versenden -- vom Test realer Fehlermeldungen ganz zu schweigen.
+Daher kann man nur schwer vorhersagen, ob eine wichtige Trap dann richtig verarbeitet wird, wenn es nach ein paar Monaten oder Jahren das erste Mal soweit ist.
 
-* _Query_ refers to the user's perspective--that is, _what_ data should be retrieved:
-'Hey, SNMP client, get me all the available data on the ports of the switch in the broom closet at 27 Kellerstraße!'
-The term _query_ is not included in the SNMP specification, but it appears in the documentation for many tools.
-* _Request_ always refers to the specific way in _which_ a device provides data.
-What one might colloquially phrase as:
-'Hey, SNMP device, give me the available data for OID .1.3.6.1.2.1.1.1.0 and then tell me the next OID under which you have data!' would technically be an _SNMP GETNEXT-REQUEST_ that the _SNMP manager_ sends to the device's _SNMP agent_.
-
-What's perceived as a single _query_ from the user's perspective, can result in one, several, or even thousands of necessary _requests_, depending on what the device supports and how the SNMP library being used operates internally.
+Falls Sie dennoch mit Traps arbeiten wollen oder müssen, bietet die xref:ec#snmp[Event Console] dafür eine Lösung:
+Sie kann Traps empfangen und daraus Events generieren.
+Das {CMK} Relay unterstützt keinen Empfang von Traps.
 ====
-
+endif::[]
 
 [#snmp_versions]
-=== SNMP versions
+== SNMP-Versionen
 
-The SNMP protocol is available in different versions.
-These protocols are all incompatible with each other, and so the monitoring system and the monitored device must always consistently use the same protocol version.
-{CMK} supports versions v1, v2c, and v3.
-In practice, an estimated 99{nbsp}% of installations use v2c.
-Here is an overview of all of the relevant versions of SNMP:
+Das SNMP-Protokoll gibt es in verschiedenen Versionen.
+Diese sind nicht miteinander kompatibel, und so müssen sich das Monitoring-System und das überwachte Gerät immer einig sein, welche Protokollversion sie gerade verwenden.
+{CMK} unterstützt die Versionen v1, v2c und v3.
+In der Praxis wird in geschätzt 99{nbsp}% der Fälle v2c eingesetzt.
+Hier ist eine Übersicht über alle relevanten Versionen von SNMP:
 
 [cols="10,20,10,~",options="header"]
 |===
-|Version |Features |{CMK} |Description and application in practice 
-|*v1* | |yes |Use only on very old (say, 15 years and older) devices that do not support v2c, or their support for v2c is defective.
-|*v2c* |Bulk requests, +
-64-Bit-Counter |yes |This is the standard in practice.
-v2c is a 'light' variant of v2 and the 'c' here stands for _community_, which performs the role of a password in SNMP.
-The 64-bit counters are essential in monitoring switch ports with 1 Gbit/s and more.
-The bulk requests accelerate monitoring by up to a factor of 10.
-|*v2* |Security |no |Version 2 offers even better security options in addition to the features of v2c.
-Version 2 of SNMP is not found in practice, therefore {CMK} does not support this protocol version.
-If you need security use xref:snmp#v3[version 3] instead. +
-*Attention:* Since the 'real' version 2 has no relevance, many masks in {CMK} refer simply to v2, but always really mean v2c.
-|*v3* |Security, + 
-Context |yes |xref:snmp#v3[Version 3] is used when encrypting SNMP traffic.
-With v2c and v1 this runs in plain text – including in the community.
-In practice, version 3 is rather less common, because this version requires significantly more computing power, and also the cost of the configuration is significantly higher than with v2c.
-The _contexts_ are a concept in which different information is visible in the same area of the SNMP data structure (OID), depending on the context ID.
-This would be used for partitioning of Fibre Channel switches for example.
+|Version |Features |{CMK} |Bedeutung in der Praxis 
+|*v1* | |ja |Findet man nur bei sehr alten Geräten (etwa 15 Jahre und älter), die v2c nicht unterstützen oder deren v2c-Unterstützung Fehler hat.
+|*v2c* |Bulk-Requests, +
+64-Bit-Counter |ja |Dies ist der Standard in der Praxis.
+v2c ist eine „Light“-Variante von v2, und das „c“ steht hier für _community,_ die bei SNMP die Rolle eines Passworts spielt.
+Die 64-Bit-Counter sind essenziell bei der Überwachung von Switch Ports mit 1 Gbit/s und mehr.
+Die Bulk-Requests beschleunigen das Monitoring um bis zu Faktor 10.
+|*v2* |Security |nein |Version 2 bietet zusätzlich zu den Features von v2c noch bessere Security-Möglichkeiten.
+In der Praxis ist Version 2 von SNMP nicht anzutreffen.
+Deswegen unterstützt {CMK} diese Protokollversion nicht.
+Wenn Sie Security benötigen, verwenden Sie stattdessen xref:snmp#v3[Version 3]. +
+*Achtung:* Da die „echte“ Version 2 keine Relevanz hat, finden sich an vielen Stellen in {CMK} Erwähnungen von v2, die dann aber immer v2c meinen.
+|*v3* |Security, +
+Kontexte |ja |xref:snmp#v3[Version 3] kommt zum Einsatz, wenn der SNMP-Datenverkehr verschlüsselt werden soll.
+Bei v2c und v1 läuft dieser im Klartext -- inklusive der Community.
+In der Praxis ist Version 3 eher weniger verbreitet, weil diese Version deutlich mehr Rechenleistung benötigt und auch der Aufwand für die Konfiguration deutlich höher ist als bei v2c.
+Die _Kontexte_ sind ein Konzept, bei dem im gleichen Bereich der SNMP-Datenstruktur (OID) je nach Kontext-ID unterschiedliche Informationen sichtbar sind.
+Dies wird zum Beispiel beim Partitionieren von Fibre-Channel-Switches verwendet.
 |===
 
 [TIP]
 ====
-SNMPv3 is only applied – provided you have activated the appropriate rule – to those hosts that contain SNMPv3-style access data in their configuration. +
-SNMPv2c is only applied to those hosts for which the [.guihint]#Enable SNMPv2c for hosts# rule set has been explicitly activated. +
-SNMPv1 always applies automatically for all other hosts.
+SNMPv3 wird -- vorausgesetzt, Sie haben die passende Regel aktiviert -- ausschließlich auf diejenigen Hosts angewendet, die in ihrer Konfiguration Zugangsdaten im SNMPv3-Stil enthalten.
+
+SNMPv2c wird auf diejenigen Hosts angewandt, für die der Regelsatz [.guihint]#Enable SNMPv2c for hosts# aktiviert wurde.
+Standardmäßig ist solch ein Regelsatz aktiviert, der für Hosts greift, die nicht explizit für SNMPv1 konfiguriert sind. 
+Mit einer früher greifenden Regel für andere Hosts können Sie Ausnahmen definieren.
 ====
 
+[#enable_snmp]
+== Geräte für das Monitoring vorbereiten
 
-[#snmp_traps]
-=== SNMP traps
+Der erste Schritt ist das Vorbereiten des Gerätes.
+Jedes Gerät, das SNMP unterstützt, hat in seiner Setup-Oberfläche dafür irgendwo eine Konfigurationsmöglichkeit.
+Nehmen Sie dort folgende Einstellungen vor:
 
+. Gehen Sie zur Konfiguration für _aktive_ Abfragen (SNMP GET).
+Leider verwendet jeder Hersteller seine eigene Terminologie.
+Achten Sie auf jene Einstellmöglichkeiten, die _keine Traps_ konfigurieren und irgendwo _SNMP community_ erwähnen.
+. Aktivieren Sie SNMP für _lesende_ (_read-only_ oder _readable_) Anfragen.
+
+. Falls Ihr SNMP-Gerät Zugriffe auf IP-Adressen beschränkt:
 ifdef::onprem[]
-{CMK} uses _active requests_ for SNMP monitoring – a pull method.
-{CMK} sends a UDP packet (port 161) containing an SNMP request to the device requesting the provision of specific data.
+Tragen Sie als erlaubte IP-Adressen die Adressen Ihrer {CMK}-Server ein.
+Es kann auch nützlich sein, hier noch eine Testinstanz von {CMK} vorzusehen.
+Wichtig: Falls Sie mehrere redundante {CMK}-Server betreiben, vergessen Sie nicht, auch die IP-Adressen anzugeben, die nach einem Failover verwendet werden.
+Speziell bei der {CMK} Appliance ist es so, dass diese im Cluster-Betrieb als Quell-IP-Adresse bei ausgehenden Verbindungen jeweils die IP-Adresse des aktiven Nodes verwendet -- und nicht die Service-IP-Adresse.
+In einer xref:distributed_monitoring#[verteilten Umgebung] oder bei Verwendung des xref:relay#[{CMK} Relays] ist die IP-Adresse der Maschine entscheidend, von der aus das Gerät überwacht wird.
 endif::[]
 ifdef::saas[]
-{CE} uses _active requests_ for SNMP monitoring – a pull method.
-The Relay sends a UDP packet (port 161) containing an SNMP request to the device requesting the provision of specific data.
+Tragen Sie als erlaubte IP-Adresse die Adresse des verwendeten {CMK} Relays ein.
 endif::[]
-The device then responds with a UDP packet containing the response data (or an error message).
+. Vergeben Sie eine Community, wenn die Protokollversionen v1 und v2c verwendet werden.
 
-SNMP has a second process: _SNMP traps_.
-These are spontaneous push messages sent by devices at configured addresses via UDP (Port 162) in push mode.
-Traps have many disadvantages over active requests, which is the reason they are not very important for monitoring.
-ifdef::saas[]
-For these reasons, the {CMK} Relay does not support trap reception.
-In the on-premises editions of {CMK}, traps can be received using the Event Console.
-endif::[]
-ifdef::onprem[]
-Some of the drawbacks of SNMP traps are:
+Die _SNMP community_ ist eine Art Passwort, nur mit dem Unterschied, dass es bei SNMP keinen Benutzernamen gibt.
+Es gibt eine Konvention, nach der die Community `public` lautet.
+Das ist bei vielen Geräten -- und auch bei {CMK} -- der Standard.
+Nun kann man natürlich argumentieren, dass das unsicher ist und man eine andere Community vergeben sollte.
+Allerdings wird bei SNMP die Community im Klartext übertragen (außer bei xref:snmp#v3[SNMP-Version 3]).
+Jeder, der Pakete mithören kann, kann also sehr einfach die Community herausfinden.
+Andererseits haben Sie den Zugriff ja auf reine Lesezugriffe begrenzt, und meist sind die Informationen, die man per SNMP abrufen kann, nicht sehr kritisch.
 
-* Traps are not reliable.
-UDP packets can be lost.
-There is no confirmation of receipt.
-* Mostly only _error_ messages are sent, but no _recovery_ messages.
-Thus the current status in the monitoring is unclear.
-* If thousands of switches simultaneously send traps (for example, if an important upstream service is not available for them), the trap receiver will not be able to handle it and will break under the load.
-Monitoring will then be overloaded when you need it most.
-* When changing the trap receiver's IP address, all devices must be reconfigured.
-* Traps are hard to test.
-Few devices even have a function to send a generic test trap – let alone test real error messages.
-Therefore it is difficult to predict whether an important trap will be processed correctly when its first invocation occurs after a few months or years.
-
-However if you want or need to work with traps, the xref:ec#snmp[Event Console] provides a solution.
-This can receive traps and generate events from them.
-The {CMK} Relay does not support trap reception.
-endif::[]
+Ferner führt die Verwendung von _unterschiedlichen_ Communities bei mehreren Geräten zu einer sehr umständlichen Handhabung.
+Denn diese müssen ja dann nicht nur in den Geräten gepflegt werden, sondern auch im Monitoring-System.
+Deswegen ist es in der Praxis so, dass Anwender meist überall die gleiche Community verwenden --
+oder zumindest überall in einer Region, einer Abteilung, einem Rechenzentrum und so weiter.
 
 
 [#snmphost]
-== Setting-up SNMP in {CMK}
-
-[#enable_snmp]
-=== Preparing a device
-
-The first step is to prepare the device.
-Each device that supports SNMP has its own configuration mask somewhere in its configuration.
-Make the following settings in this configuration mask:
-
-. Go to configuration for _active_ queries (SNMP GET).
-(Do not confuse this with the traps – the terminology in the configuration dialogs can be very confusing).
-. Enable SNMP for _read_ requests.
-ifdef::onprem[]
-. Enter the addresses of your {CMK} servers as the permitted IP addresses.
-It may also be useful to provide a {CMK} test site here.
-Important: If you have multiple redundant {CMK} servers, do not forget to also specify the IP address(es) used after a failover.
-In the case of the {CMK} appliance in particular, this uses the IP address of the active node as the source IP address for outgoing connections – and not the service IP address.
-In a xref:distributed_monitoring#[distributed environment] or when using the xref:relay#[{CMK} Relay], the IP address of the machine from which the device is being monitored is critical.
-endif::[]
-ifdef::saas[]
-. Enter the address of the {CMK} Relay you are using as the permitted IP address.
-endif::[]
-. Assign a community if protocol versions v1 and v2c are to be used.
-
-The community is a kind of password, except that there is no username for SNMP.
-There is a convention that the community is `public`.
-This is the default for many devices – and also for {CMK}.
-Of course you can argue that this is insecure and that you should specify another community.
-This certainly makes sense, but you should know that SNMP transmits the community in plain text (except for xref:snmp#v3[SNMP version 3]).
-Anyone who can intercept packets can therefore very easily identify the community.
-On the other hand you have limited access to read-only access, and most of the information that can be retrieved via SNMP is not very critical.
-
-Furthermore, the use of _different_ communities per device is very cumbersome to handle.
-After all, these must not only be maintained in the devices, but also in the monitoring system.
-That is why in practice users usually use the same community everywhere --
-or at least everywhere within a region, department, data center, etc.
-
-If you want to increase the security even without SNMP version 3, it makes sense to extend the network concept so that you put the traffic with the management services, and thus also SNMP, in a separate management VLAN and secure that access with the firewall.
-
+== Einrichten von SNMP in {CMK}
 
 [#add_device]
-=== Adding a device into {CMK}
+=== Gerät in {CMK} aufnehmen
 
-Add the monitored devices as hosts in {CMK} in the usual way.
-If you have chosen your folder structure so that only one folder contains SNMP devices, you can make the other settings directly in that folder.
-This makes it easier to add additional hosts later, and also avoids errors.
+Nehmen Sie die zu überwachenden Geräte in {CMK} wie gewohnt als Hosts auf.
+Wenn Sie Ihre Ordnerstruktur so gewählt haben, dass in einem Ordner jeweils nur SNMP-Geräte sind, dann können Sie die weiteren Einstellungen direkt am Ordner vornehmen.
+Das vereinfacht später das Aufnehmen von weiteren Hosts und vermeidet zudem Fehler.
 
 ifdef::saas[]
-In the [.guihint]#Basic settings# box, you must first select the {CMK} Relay that will be used to monitor the SNMP host.
+Im Kasten [.guihint]#Basic settings# müssen Sie zunächst das {CMK} Relay auswählen, mit dem der SNMP-Host überwacht werden soll.
 endif::[]
 ifdef::onprem[]
-In {UE}, you can select in the [.guihint]#Basic settings# box the {CMK} Relay to monitor the SNMP host if it is not directly accessible from the {CMK} server.
+In {UE} können Sie im Kasten [.guihint]#Basic settings# das {CMK} Relay auswählen, mit dem der SNMP-Host überwacht werden soll, wenn er nicht direkt vom {CMK}-Server aus erreichbar ist.
 endif::[]
 
-Now in the properties of the host (or folder), in the [.guihint]#Monitoring agents# box set [.guihint]#{CMK} agent / API integrations# to [.guihint]#No API integrations, no {CMK} agent#:
+Setzen Sie jetzt in den Eigenschaften des Hosts (oder Ordners) im Kasten [.guihint]#Monitoring agents# die Einstellung [.guihint]#{CMK} agent / API integrations# auf [.guihint]#No API integrations, no {CMK} agent#:
 
-image::snmp_host_configuration.png[alt="Adding a host to monitoring via SNMP."]
+image::snmp_host_configuration.png[alt="Aufnahme eines Hosts ins Monitoring per SNMP."]
 
-In the same box, also activate [.guihint]#SNMP# and as the SNMP protocol select [.guihint]#SNMPv2 or v3#.
-The selection of protocol version 1 is an makeshift solution only for _very_ old devices.
-You should use this only if you know that v2 is really not supported, or when the implementation for the device is defective (in practice, only in isolated cases).
-Above all, SNMP version 1 is very slow because it does not support bulk accesses.
-This difference is very significant.
+Im selben Kasten aktivieren Sie außerdem den Punkt [.guihint]#SNMP# und wählen als SNMP-Protokoll [.guihint]#SNMPv2 or v3# aus.
+Die Auswahl von Protokollversion v1 ist nur für _sehr_ alte Geräte eine Notlösung.
+Sie sollten das nur dann verwenden, wenn Sie wissen, das v2 wirklich nicht unterstützt wird oder die Implementierung auf dem Gerät dafür defekt ist (dies kann in der Praxis vereinzelt vorkommen).
+SNMP-Version 1 ist vor allem sehr langsam, da sie keine Bulk-Zugriffe unterstützt -- der Unterschied ist gravierend.
 
-The third and final setting is called [.guihint]#SNMP credentials#.
-Here again a choice of the protocol version is necessary, since v2c and v3 differ here.
-We will discuss version 3 xref:snmp#v3[below].
-If you do not have very high security requirements, you will be well-served by v2c – or you can place the SNMP communication in a management VLAN and thus secure it.
-SNMPv2c requires the entry of the community as discussed above.
+Die dritte Einstellung heißt [.guihint]#SNMP credentials#.
+Hier ist zunächst wieder eine Wahl der Protokollversion notwendig, da sich v2c und v3 voneinander unterscheiden.
+Die Version 3 erläutern wir xref:snmp#v3[weiter unten].
+Wenn Sie nicht sehr hohe Sicherheitsanforderungen haben, liegen Sie mit v2c richtig, bzw. können die SNMP-Kommunikation in ein Management-VLAN legen und so absichern.
+SNMPv2c erfordert die Eingabe der oben besprochenen Community.
 
-There is an alternative way to configure the SNMP credentials, if you can not easily pass it through your folder structure:
-the [.guihint]#Setup > Agents > SNMP rules > SNMP credentials of monitored hosts# xref:wato_rules#[rule set].
-This will allow you to assign the credentials based on host tags, xref:labels#[labels] and similar properties.
-The principle is that a community that is set directly at the host or folder always takes precedence over the rules.
-
+Für die Konfiguration der SNMP-Credentials gibt es noch einen alternativen Weg, falls Sie diese nicht einfach über Ihre Ordnerstruktur vererben können: den xref:wato_rules#[Regelsatz] [.guihint]#Setup > Agents > SNMP rules > SNMP credentials of monitored hosts#. 
+Damit können Sie die Credentials anhand von Host-Merkmalen, xref:labels#[Labels] und ähnlichen Eigenschaften vergeben.
+Dabei gilt der Grundsatz, dass eine Community, die direkt beim Host oder Ordner festgelegt ist, immer Vorrang hat vor den Regeln.
 
 ifdef::onprem[]
-[#snmp_cmk_agent]
-==== Monitoring via SNMP and {CMK} agent
+[%collapsible]
+.[#snmp_cmk_agent]#Überwachung per SNMP und {CMK}-Agent?#
+====
+Gelegentlich kommt die Frage auf, ob es nicht möglich oder sogar sinnvoll wäre, Linux oder Windows mit SNMP statt mit dem {CMK}-Agenten zu überwachen.
+Die Antwort ist sehr einfach: möglich ja, sinnvoll nein. Warum?
 
-Occasionally the question comes up whether it would not be possible or even useful to monitor Linux or Windows using SNMP instead of the {CMK} agent.
-The answer is very simple: possible yes, useful no. Why?
+* Die Monitoring-Daten des SNMP-Agenten sind sehr begrenzt. Daher brauchen Sie den {CMK}-Agenten für eine halbwegs sinnvolle Überwachung sowieso.
+* Der SNMP-Agent liefert keine sinnvollen Daten, die nicht auch der {CMK}-Agent liefern würde.
+* Der SNMP-Agent ist umständlicher aufzusetzen.
+* Nicht zuletzt braucht das Protokoll SNMP deutlich mehr CPU- und Netzwerkressourcen als die normale Überwachung mit {CMK}.
 
-* The monitoring data of the SNMP agent is very limited. Therefore you need the {CMK} agent for halfway useful monitoring anyway.
-* The SNMP agent does not provide any meaningful data that the {CMK} agent would not provide.
-* The SNMP agent is more cumbersome to set up.
-* Last but not least, the SNMP protocol requires significantly more CPU and network resources than normal monitoring with {CMK}.
+Es gibt allerdings ein paar wenige Situationen, in denen eine Überwachung per SNMP _zusätzlich_ zum {CMK}-Agenten sinnvoll sein kann.
+Das kann dann sowohl den {CMK}-Agenten für xref:agent_linux#[Linux] als auch für xref:agent_windows#[Windows] betreffen.
+Ein typisches Beispiel ist, dass für eine Software- oder Hardware-Komponente (beispielsweise einen RAID-Controller) ein Tool des Server-Herstellers installiert ist und Überwachungsdaten nur per SNMP liefert, wie das z.B. bei Fujitsu ServerView der Fall ist.
+Dann können Sie selbstverständlich über SNMP zusätzliche Monitoring-Daten erheben.
+Achten Sie in diesem Fall auf hinreichend lange Abfrageintervalle.
+Bei Windows kann es außerdem vorkommen, dass eine Abfrage über PowerShell nicht möglich ist -- aufgrund der eingesetzten Windows-Version oder weil es für die Anwendung keine Cmdlets gibt.
 
-However, there are a few situations where monitoring via SNMP *in addition* to the {CMK} agent can be useful.
-This can then involve both the {CMK} agent for xref:agent_linux#[Linux] and for xref:agent_windows#[Windows].
-A typical example is that for a software or hardware component (for example, a RAID controller) a tool from the server manufacturer is installed and provides monitoring data only via SNMP, as is the case with Fujitsu ServerView, for example.
-Then you can of course collect additional monitoring data via SNMP.
-In this case, make sure that the query intervals are sufficiently long.
-With Windows it can also happen that a query via PowerShell is not possible--due to the Windows version used or because there are no cmdlets for the application.
+Falls Sie in so einem Fall den Linux- oder Windows-Host per {CMK}-Agent _und_ SNMP überwachen wollen, gehen Sie wie folgt vor:
+Setzen Sie in den Eigenschaften des Hosts im [.guihint]#Setup#-Menü im Kasten [.guihint]#Monitoring agents# die Option [.guihint]#{CMK} agent / API integrations# auf einen Wert mit {CMK}-Agent ([.guihint]#API integrations if configured, else {CMK} agent# oder [.guihint]#Configured API integrations and {CMK} agent#).
+Im gleichen Kasten aktivieren Sie die Option [.guihint]#SNMP# und setzen den Wert auf [.guihint]#SNMPv2 or v3# bzw. [.guihint]#SNMPv1#, wie oben beschrieben:
 
-In such a case, if you want to monitor the Linux or Windows host via {CMK} agent *and* SNMP, do the following:
-In the host's properties, in the [.guihint]#Setup# menu, in the [.guihint]#Monitoring agents# box, set the [.guihint]#{CMK} agent / API integrations# option to a value with {CMK} agent ([.guihint]#API integrations if configured, else {CMK} agent# or [.guihint]#Configured API integrations and {CMK} agent#).
-In the same box, enable the [.guihint]#SNMP# option and set the value to [.guihint]#SNMPv2 or v3# or [.guihint]#SNMP v1#, as described above:
+image::snmp_host_agent_and_snmp_configuration.png[alt="Aufnahme eines Hosts ins Monitoring per {CMK}-Agent und SNMP."]
 
-image::snmp_host_agent_and_snmp_configuration.png[alt="Include a host in monitoring via {CMK} agent and SNMP."]
-
-Services that are available via both SNMP and {CMK} agent (e.g. CPU usage, file systems, network cards) are then automatically fetched from the {CMK} agent and not via SNMP.
+Services, die sowohl per SNMP als auch per {CMK}-Agent verfügbar sind (z.B. CPU-Auslastung, Dateisysteme, Netzwerkkarten), werden dann automatisch vom {CMK}-Agenten geholt und nicht per SNMP.
+Damit wird eine Doppelübertragung automatisch vermieden.
+====
 endif::[]
+
+
+[#v3]
+==== SNMPv3
+
+SNMPv3 bietet xref:security[Verschlüsselung und eine echte Authentifizierung].
+Daneben führt es das xref:contexts[Konzept der _Kontexte_] ein.
+Dabei kann ein Gerät an derselben Stelle im SNMP-Baum unterschiedliche Informationen zeigen -- je nachdem, welche _Kontext-ID_ bei den Requests mitgegeben wird.
+
+[#security]
+===== Security
+
+SNMPv3 kennt verschiedene Stufen der Sicherheit:
+
+[cols="15,~"]
+|===
+|`noAuthNoPriv` |Keine echte Benutzer-basierte Authentifizierung, keine Verschlüsslung.
+Der Vorteil gegenüber v2c ist, dass das Passwort nicht mehr im Klartext, sondern gehasht übertragen wird.
+|`authNoPriv` |Benutzer-basierte Authentifizierung mit Name ([.guihint]#Security name#) und Passwort, trotzdem keine Verschlüsselung.
+|`authPriv` |Benutzer-basierte Authentifizierung wie bei `authNoPriv`.
+Zusätzlich werden alle Daten verschlüsselt.
+Hierzu müssen Sie manuell einen Schlüssel austauschen und ihn sowohl im Gerät als auch in {CMK} hinterlegen.
+|===
+
+Die Sicherheitsstufe konfigurieren Sie da, wo Sie auch die Community eingestellt haben, also entweder bei den Host-Eigenschaften oder in der Regel [.guihint]#SNMP credentials of monitored hosts#.
+Dort wählen Sie anstelle von [.guihint]#SNMP community# eine der drei Stufen von v3 aus und konfigurieren die notwendigen Werte:
+
+image::snmp_credentials_v3.png[alt="Konfiguration der SNMPv3 Sicherheitseinstellungen."]
+
+
+[#contexts]
+===== Kontexte
+
+Falls Sie ein Gerät haben, das mit Kontexten arbeitet, benötigen Sie in {CMK} zwei Einstellungen:
+
+* Zunächst muss das Gerät mit SNMPv3 abgefragt werden.
+* Dann benötigen Sie noch eine Regel im Regelsatz [.guihint]#SNMPv3 contexts to use in requests#.
+Hier wählen Sie das Check-Plugin aus, für das Kontexte aktiviert werden sollen, und dann die Liste der Kontexte, für die Monitoring-Daten eingeholt werden sollen.
+
+Zum Glück gibt es sehr selten Situationen, in denen man mit Kontexten arbeiten muss, denn es ist leider nicht möglich, dass das Monitoring diese automatisch erkennt.
+Eine manuelle Konfiguration der Kontexte ist immer notwendig.
+
+[TIP]
+====
+Die Verwendung mehrerer Kontexte auf den selben OID-Ästen hat zur Folge, dass nur Daten des ersten Kontextes eingeholt -- und dafür Dienste erzeugt -- werden.
+Werden die Daten derart überschneidender Kontexte vollständig im Monitoring benötigt, ist es erforderlich einen Host pro Kontext anzulegen.
+====
 
 
 [#diagnostics]
-=== Diagnostics
+=== Diagnose
 
-When you have finished with the settings, you can make a short detour via the diagnostics page.
-To do this save with the [.guihint]#Save & go to connection test# action bar button.
+Wenn Sie mit den Einstellungen fertig sind, bietet sich der kleine Umweg über die Diagnoseseite an.
+Dazu speichern Sie mit dem Aktionsknopf [.guihint]#Save & run connection tests#.
 
-Here is an example of the diagnostics for a switch.
-Various protocol versions of SNMP are tried simultaneously, namely:
+Hier ist ein Beispiel der Diagnose für einen Switch.
+Dabei werden verschiedene Protokollversionen von SNMP gleichzeitig ausprobiert, und zwar:
 
 * SNMPv1
 * SNMPv2c
-* SNMPv2c without bulk requests
+* SNMPv2c ohne Bulk-Requests
 * SNMPv3
 
-A normal, modern device should respond to all four variants with the same data – however this may be limited depending on the configuration.
-The result will look like this:
+Ein normales modernes Gerät sollte auf alle vier Varianten mit den gleichen Daten antworten, wobei das je nach Konfiguration eingeschränkt sein kann.
+Das sieht dann z.B. so aus:
 
-image::snmp_diagnostics.png[alt="Output of SNMPv2c diagnostics."]
+image::snmp_diagnostics.png[alt="Ausgabe der SNMPv2c Diagnose."]
 
-The four information outputs are described here:
+Die vier ausgegebenen Informationen bedeuten im Einzelnen:
 
 [cols="25,~"]
 |===
-|`sysDescr` |The description of the device as it is hard-coded in the device firmware by the manufacturer. This text is very important to {CMK} for automatic service discovery.
-|`sysContact` |This field is for specifying a contact person and is defined by you in the device configuration.
-|`sysName` |Here is the host name of the device. This field is also configured on the device. For the actual monitoring the name plays no further role and is only displayed for information. However, it makes sense and is helpful if the host name here matches the host name in {CMK}.
-|`sysLocation` |This is a field for a free text entry – purely for information – in which you can enter the location of the device.
+|`sysDescr` |Die Beschreibung des Geräts, wie sie vom Hersteller in der Firmware fest eingebrannt ist. Dieser Text ist für {CMK} sehr wichtig für die automatische Service-Erkennung.
+|`sysContact` |Dieses Feld ist vorgesehen für die Angabe einer Kontaktperson und wird in der Konfiguration des Gerätes von Ihnen festgelegt.
+|`sysName` |Hier steht der Host-Name des Gerätes. Auch dieses Feld wird im Gerät konfiguriert. Für das Monitoring spielt der Name keine weitere Rolle und wird nur informativ angezeigt. Es ist aber durchaus sinnvoll und hilfreich, wenn der Host-Name mit dem Host-Namen in {CMK} übereinstimmt.
+|`sysLocation` |Das ist ein Feld für eine rein informative Angabe, und Sie können einen frei wählbaren Text zum Standort des Gerätes eintragen.
 |===
 
 
 [#services]
-=== The service configuration
+=== Die Service-Konfiguration
 
-==== Special features of SNMP devices
+==== Besonderheiten bei SNMP-Geräten
 
-After saving the host properties (and optionally the diagnostics), the next step is usually the xref:wato_services#[configuration of services].
-There are some peculiarities with this, because internally the service discovery is done very differently in SNMP devices compared to hosts, which are monitored with the {CMK} agent. 
-{CMK} can simply look at the agent's output and find the items of interest using the individual check plug-ins.
-With SNMP a little more work is necessary.
-Although {CMK} could perform during the discovery a full dump of all SNMP data (SNMP walk), and in this look for interesting information, but there are devices for which a single detection would take several hours!
+Nach dem Speichern der Host-Eigenschaften (und optional der Diagnose) ist wie gewohnt der nächste Schritt die xref:wato_services#[Konfiguration der Services].
+Dort gibt es einige Besonderheiten, denn bei SNMP-Geräten erfolgt die Service-Erkennung intern ganz anders als bei Hosts, die mit dem {CMK}-Agenten überwacht werden.
+{CMK} kann bei letzteren einfach in die Ausgabe des Agenten schauen und darin -- mithilfe der einzelnen Check-Plugins -- die interessanten
+Punkte finden.
+Bei SNMP ist etwas mehr Arbeit notwendig.
+Zwar könnte {CMK} bei der Erkennung einen kompletten Dump aller SNMP-Daten (SNMP-Walk) machen und darin nach interessanten Informationen Ausschau halten.
+Aber es gibt Geräte, bei denen dann eine einzige Erkennung mehrere Stunden dauern würde!
 
-However {CMK} has a smarter approach.
-Initially, it only retrieves the very first two records (OIDs) from the device – the `sysDescr` and `sysObjectID`.
-Thereafter, as needed, further queries are invoked.
-Based on the results, each of the nearly 1000 supplied SNMP check plug-ins decides whether the device actually supports this plug-in.
-{CMK} calls this phase the _SNMP scan_, and as a result the software produces a list of check plug-ins that serve as candidates for the actual service discovery.
+Daher geht {CMK} intelligenter vor.
+Es ruft zunächst vom Gerät nur die allerersten beiden Datensätze (OIDs) auf: die `sysDescr` und `sysObjectID`.
+Danach folgen je nach Bedarf daraus resultierende weitere Requests.
+Anhand der Ergebnisse entscheidet dann jedes der um die 1000 mitgelieferten SNMP-Check-Plugins, ob das Gerät dieses Plugin überhaupt unterstützt.
+Diese Phase nennt {CMK} den _SNMP-Scan._
+Als Ergebnis gibt die Software eine Liste von Check-Plugins aus, die als  Kandidaten für die eigentliche Service-Erkennung dienen.
 
-In a second step the actual detection runs.
-The plug-ins found retrieve the exact data they need using local SNMP queries, and use this data to determine the services to be monitored.
-The data retrieved are precisely those which will later be fetched regularly for monitoring.
+In einem zweiten Schritt läuft dann die eigentliche Erkennung.
+Die gefundenen Plugins rufen per örtlich begrenzten SNMP-Requests gezielt genau die Daten ab, die sie benötigen, und ermitteln daraus die zu überwachenden Services.
+Die abgerufenen Daten sind genau die gleichen, die später auch regelmäßig für die Überwachung geholt werden.
 
-For devices in a LAN the whole process usually does not take very long – more than several seconds would be an exception.
-If you monitor devices over high-latency WAN links however, the entire scan may take several minutes.
-A scan also takes longer for switches with hundreds of ports of course.
-Now it would be very impractical if you had to wait so long every time you open the services’ page.
+Bei Geräten im LAN dauert der ganze Vorgang in der Regel nicht sehr lange -- mehrere Sekunden sind schon eher die Ausnahme.
+Wenn Sie aber Geräte über WAN-Strecken mit einer hohen Latenz überwachen, kann der komplette Scan einige Minuten dauern.
+Auch bei Switches mit Hunderten von Ports dauert der Scan natürlich länger.
+Nun wäre es sehr unpraktisch, wenn Sie jedes Mal, wenn Sie die Seite der Services öffnen, so lange warten müssten.
 
-Therefore the Setup normally skips the scan, and does the detection only with the check plug-ins already in use at the host.
-The SNMP walks are then already available as cache files through the normal monitoring, and detection does not take long.
-With this you will be able to find new items from _existing_ plug-ins (for example, new switch ports, hard disks, sensors, VPNs, etc.), but not find _brand new_ plug-ins.
+Daher überspringt das Setup den Scan im Normalfall und macht die Erkennung nur mit den Check-Plugins, die bei dem Host aktuell schon zum Einsatz
+kommen.
+Die SNMP-Walks liegen dann bereits durch das normale Monitoring als Cache-Dateien vor, und die Erkennung dauert nicht lange.
+Nun können Sie so zwar neue Einträge von bestehenden Plugins finden (z.B. neue Switch Ports, Festplatten, Sensoren, VPNs usw.), aber keine ganz _neuen_ Plugins.
 
-The [.guihint]#Full service scan# button forces an SNMP scan and fetches fresh data via SNMP.
-As a result services from completely new plug-ins are also found.
-It may be necessary to wait for slow-responding devices.
+Der Knopf [.guihint]#Rescan# erzwingt einen SNMP-Scan und anschließendes Holen von frischen Daten via SNMP.
+Dadurch werden dann auch Services von ganz neuen Plugins gefunden.
+Bei langsam antwortenden Geräten kann eine Wartezeit entstehen.
 
 
-==== Standard services
+==== Standard-Services
 
-No matter which device you monitor via SNMP – as a minimum the following three services should appear in the configuration:
+Egal, welches Gerät Sie per SNMP überwachen, es sollten zumindest die folgenden drei Services in der Konfiguration auftauchen:
 
-image::snmp_standard_services.png[alt="Display of the three standard services that every SNMP device should have."]
+image::snmp_standard_services.png[alt="Anzeige der drei Standard-Services, die jedes SNMP Gerät aufweisen sollte."]
 
-The first service is a check that monitors the network ports.
-At least one must have the device and be active – otherwise SNMP would not function.
-In general {CMK} is preset so that it includes all ports that are active at the time of a service discovery (operational status 'up') in the monitoring.
-You can influence this with the [.guihint]#Setup > Services > Service discovery rules > Network interface and switch port discovery# rule set.
+Der erste Service im Bild ist ein Check, der die Netzwerkports überwacht.
+Mindestens einen muss das Gerät haben (und der muss auch aktiv sein) -- sonst würde SNMP nicht funktionieren.
+Generell ist {CMK} dabei so voreingestellt, dass es alle Ports in die Überwachung aufnimmt, die zum Zeitpunkt der Service-Erkennung aktiv sind (operational status „up“).
+Sie können das mit dem Regelsatz [.guihint]#Setup > Services > Discovery rules > Network interface and switch port discovery# beeinflussen.
 
-By the way, in the Beginner's guide you will find a chapter on best practices when xref:intro_finetune#switchports[configuring switch ports].
+Im Leitfaden für Einsteiger finden Sie übrigens ein Kapitel mit Handlungsempfehlungen zum xref:intro_finetune#switchports[Konfigurieren von Switch Ports].
 
-The second is the [.guihint]#SNMP Info# service which displays the same four pieces of information that you saw in the diagnosis.
-This has a purely informational function and is always {OK}.
+Der zweite Service heißt [.guihint]#SNMP Info# und zeigt die wichtigsten vier Informationen über das Gerät an, nämlich die Werte der Felder `sysDescr`, `sysName`, `sysLocation` und `sysContact`.
+Er hat rein informative Funktion und ist immer {OK}.
 
-Finally there is the [.guihint]#Uptime# service, which shows you when the device was last restarted.
-This service is always {OK} by default, but you can set upper and lower thresholds for the uptime.
-
-
-[#cursedhardware]
-== When devices create problems
-
-[#defective]
-=== A defective SNMP implementation
-
-It actually seems as if any conceivable mistake that can theoretically be made when implementing SNMP has already been made by some manufacturer at some point.
-And so there are devices with which SNMP works reasonably well, but certain parts of the protocol do not, or have been incorrectly implemented.
-
-ifdef::onprem[]
-If the problems occur with the commercial editions, one reason may be
-endif::[]
-ifdef::saas[]
-One possible cause of problems is 
-endif::[]
-that the more performant xref:performance[inline SNMP] implementation, which is activated there by default, relies more heavily on compliance with standards than `snmpget`.
-If devices do not respond at all or not reliably, it sometimes helps to switch off inline SNMP for affected devices and thus activate the somewhat more robust and significantly slower `snmpget`.
-
-ifdef::onprem[]
-For tests on the command line, the command `cmk` has for some options the additional `--snmp-backend` option, which accepts `inline` (use of inline SNMP), `classic` (use of `snmpget`) or `stored-walk` (use of a stored xref:simulation[SNMP walk]) as parameters.
-If the test on the command line was successful, you can use the [.guihint]#Hosts not using inline SNMP# rule set to specify the hosts that should not use inline SNMP permanently.
-endif::[]
-
-
-==== No response for a request to `sysDescr`
-
-One possible error is when SNMP agents fail to respond to the request for standard information – no reply to the `sysDescr` for example.
-These devices are as good as dead in a diagnosis,
-and they will not deliver any results to a service discovery if you do not help them with a special configuration.
-To do this, for affected hosts create a rule under [.guihint]#Setup > Agents > SNMP rules > Hosts without system description OID# with the [.guihint]#Positive match (Add matching hosts to the set)# option.
-{CMK} then simply assumes that everything is fine and skip the test with the `sysDescr`.
-Although no check plug-ins will be detected that expect specific parts in this text, in practice this does not matter as the affected plug-ins are designed to accommodate such a condition.
-
-
-==== SNMPv2c works, but bulk requests fail
-
-Some devices support version v2c (and will provide an answer to this in the diagnostics), but the implementation of the `GetBulk` command is missing in the protocol.
-This is used by {CMK} to get as much information as possible with a single request and is very important for the performance.
-
-With such a host, some simple SNMP checks will work – such as [.guihint]#SNMP Info# or [.guihint]#SNMP Uptime#, but other services will be missing – especially the network interfaces that must be present on each device.
-
-If you actually have a host where this is the case, you can run it with v2c, but without bulk requests.
-Configure such a host as follows:
-
-. Set the SNMP version for the host properties to [.guihint]#SNMPv1#.
-. In the [.guihint]#Setup > Agents > SNMP rules > Disable bulk walks# rule set, create a rule for the host, and set the value to [.guihint]#Positive match (Add matching hosts to the set)#.
-
-This forces the host to use the SNMPv2c protocol – although version 1 has been set – however _without bulk walk_.
-Incidentally, we do not recommend the use of SNMPv1 – even if that is supported – because it does not support 64-bit counters.
-This can lead to missing or erroneous measurement data for network ports which are subject to heavy traffic.
-
-
-==== Devices which respond very slowly
-
-There are some devices with which some SNMP queries take a very long time.
-This is partly due to incorrect implementations.
-Here it can sometimes help to go back to SNMPv1 – which is usually much slower, but can still sometimes be faster than a broken SNMPv2c.
-Before you try this however, you should check whether the manufacturer provides a firmware upgrade that solves the problem.
-
-A second cause may be that the device has very many switch ports, and also a slow SNMP implementation.
-If you only want to monitor very few of the ports (only the first two ports, for example), you can manually limit {CMK} to retrieving data only for specified ports. Details on this can be found below in xref:snmp#performance[Performance].
-
-[#standard_services]
-=== Only the standard services are found
-
-You have included an SNMP device in the monitoring but {CMK} recognizes only the [.guihint]#SNMP Info# and [.guihint]#SNMP Uptime# services and the interfaces.
-This can be due to a number of causes:
-
-
-==== a) There are no plug-ins
-
-{CMK} provides nearly 1 000 check plug-ins for SNMP devices, but even this list is naturally never complete.
-Over and over again it is found that for certain devices {CMK} does not provide any specific plug-in, meaning you can only monitor the standard services as mentioned.
-ifdef::onprem[]
-Here you have the following options:
-
-* You might find a suitable plug-in on the link:https://exchange.checkmk.com[{CMK} Exchange^], where users can upload their own plug-ins.
-* You develop plug-ins yourself. You will find xref:devel_intro#[articles] in this User Guide.
-* You contact our support team or one of our partners and request that they develop suitable plug-ins.
-endif::[]
-ifdef::saas[]
-In that case, the only option is to suggest the development of a corresponding plug-in at link:https://ideas.checkmk.com/[ideas.checkmk.com^]. 
-endif::[]
-
-==== b) The plug-ins cannot be recognized
-
-It sometimes occurs that a new firmware version for a device results in {CMK} plug-ins no longer recognizing the device – e.g. because a text has changed in the system description for the device.
-In such a case the existing plug-ins must be adapted.
-Contact our support team for this.
-
-
-==== c) The device does not deliver the required data
-
-Some (few) devices have the ability to individually-configure access to specific information areas in their SNMP configuration.
-Your device may be set to deliver the default information, but not that for the device-specific services.
-
-On a few devices you must use SNMPv3 and xref:snmp#contexts[contexts] to get the data you want.
-
-
-[#no_response]
-===  Devices that do not respond at all to SNMP
-
-If none of the SNMP protocol versions work, there can be several possible causes:
-
-ifdef::onprem[]
-* The device is not reachable via IP at all.
-You can check this with the ping test.
-endif::[]
-* The device does not support SNMP at all.
-* The SNMP share is not configured correctly (activation, allowed addresses, community).
-* A firewall blocks SNMP.
-You need to open UDP port 161 for both outgoing and incoming traffic.
-
-
-[#v3]
-== SNMPv3
-
-[#security]
-=== Security
-
-By default SNMP is unencrypted and is therefore very poorly-authenticated by a community transmitted as plain-text over the network.
-This level may still be sufficient for a local, isolated environment, as here monitoring is limited to accessing read-only operations.
-
-If you still want a higher level of security you will need SNMP version 3.
-This provides the option of encryption and genuine authentication.
-For this however a corresponding configuration is also necessary.
-
-SNMPv3 recognizes various levels of security:
-
-[cols="15,~"]
-|===
-|`noAuthNoPriv` |No real, user-based authentication, no encryption.
-Nonetheless, the advantage over v2c is that the password is no longer transmitted in plain text, instead it is hashed.
-|`authNoPriv` |User-based authentication with a name ([.guihint]#Security name#) and a password, but no encryption.
-|`authPriv` |User-based authentication as with `authNoPriv`.
-Additionally all data is encrypted.
-Here you have to manually exchange a key – that is, deposit the key both in the device and in {CMK}.
-|===
-
-The required setting in {CMK} is made in the same place where you also defined the community – either under the host properties or the [.guihint]#SNMP credentials of monitored hosts# rule.
-There, instead of [.guihint]#SNMP Community#, select one of the three levels of v3 and configure the necessary values:
-
-image::snmp_credentials_v3.png[alt="Configuring SNMPv3 security settings."]
-
-
-[#contexts]
-=== Contexts
-
-SNMPv3 introduces the concept of _contexts_.
-A device can show different information at one and the same point in the SNMP tree – depending on which _context ID_ is transmitted with the request.
-
-If you have a device that works with such contexts, you will need two settings in {CMK}:
-
-* First, the device must be queried using SNMPv3 (as described in the previous section).
-* Then you need another rule in the [.guihint]#SNMPv3 contexts to use in requests# rule set.
-Here you select the check plug-in for which contexts are to be activated, and then the list of contexts for which monitoring data should be retrieved.
-
-Luckily there are very few situations in which you have to work with contexts, because unfortunately it is not possible for the monitoring to recognize them automatically.
-A manual configuration of the contexts is always necessary.
+Und schließlich gibt es den Service [.guihint]#Uptime#, der Ihnen zeigt, wann das Gerät zum letzten Mal neu gestartet wurde.
+Dieser Service ist in der Voreinstellung immer {OK}; Sie können aber untere und obere Schwellwerte für die Uptime setzen.
 
 
 [#performance]
-== Performance and timing
+== Performance und Timing
+
+Es ist nicht ungewöhnlich, dass ein größeres SNMP-Gerät die 20- oder 50-fache Fetcher-Auslastung eines mittels {CMK}-Agenten überwachten Hosts verursacht.
+Aus diesem Grund ist es wichtig, dass Sie sich mit der Performance überwachter Geräte vertraut machen, problematische Geräte identifizieren und proaktiv xref:core_tuning#[Optimierungen] durchführen.
+
 
 [#inline]
-=== Inline SNMP
-
-Performance always plays a role – especially in environments with many hosts – and monitoring with SNMP consumes more CPU and memory than with {CMK} agents.
+=== Inline-SNMP
 
 ifdef::onprem[]
 {cee-only}
-While {RE} makes SNMP requests in the classic way via the `snmpget` or `snmpbulkwalk` commands, the commercial editions have a built-in SNMP engine that performs SNMP queries very efficiently without generating any extra processes.
-With this, CPU load for SNMP processing is approximately halved.
-The shorter polling times also reduce the number of {CMK} processes needed concurrently, and thus the memory usage.
-The {CMK} Relay, which can be used in {UE}, also supports both query methods.
+Während {RE} SNMP-Abfragen auf klassische Weise über die Befehle `snmpget` bzw. `snmpbulkwalk` umsetzt, haben die kommerziellen Editionen eine eingebaute SNMP-Engine (_Inline-SNMP_), die SNMP-Abfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
+Die CPU-Last für die SNMP-Verarbeitung halbiert sich dadurch in etwa.
+Und durch die kürzeren Abfragezeiten reduziert sich auch die Anzahl der gleichzeitig benötigten {CMK}-Prozesse und damit auch der Speicherbedarf.
+Auch das in {UE} verwendbare {CMK} Relay unterstützt beide Abfragemöglichkeiten.
+
+Falls Ihre {CMK}-Installation mit einer sehr alten kommerziellen Version aufgesetzt wurde oder von {RE} zu einer kommerziellen Version migriert wurde, stellen Sie Ihre SNMP-Geräte auf Inline-SNMP um.
+Lediglich bei xref:defective[defekten Implementierungen] sollten Sie das robustere `snmpget` bzw. `snmpbulkwalk` verwenden.
 endif::[]
 ifdef::saas[]
-The {CMK} Relay supports two methods for querying SNMP:
-the `snmpget` and `snmpbulkwalk` commands, and a built-in SNMP engine that executes SNMP queries with high performance without spawning additional processes.
-With this engine, the CPU load for SNMP processing is about half as high, which is why it is used by default.
-endif::[]
+Das {CMK} Relay unterstützt zwei Abfragemöglichkeiten für SNMP:
+die Befehle `snmpget` bzw. `snmpbulkwalk` und eine eingebaute SNMP-Engine, die SNMP-Abfragen sehr performant durchführt, ohne weitere Prozesse zu erzeugen.
+Die CPU-Last für die SNMP-Verarbeitung ist mit dieser etwa halb so groß, weshalb sie als Standard verwendet wird.
 
-// MFS: This describes a deprecated feature, so I commented it out. We will clarify whether this might be helpful for debugging and then either completely remove or rewrite this passage:
-// If you are curious about the difference, you can use the [.guihint]#Hosts not using inline SNMP# rule set to turn off inline SNMP for all or even individual hosts.
+Lediglich bei xref:defective[defekten Implementierungen] sollten Sie das robustere `snmpget` bzw. `snmpbulkwalk` verwenden.
+endif::[]
 
 
 [#check_intervals]
 === Check intervals for SNMP checks
 
-If your resources reach their limits, or if it takes more than 60 seconds to poll a single device, you can reduce the interval at which {CMK} queries the host(s).
-With the [.guihint]#Normal check interval for service checks# rule set, which you apply specifically to the {CMK}-Services of hosts, you can extend the general interval of one minute to, for example, 2 or 5 minutes.
+Falls Sie mit Ihren Ressourcen an die Grenzen stoßen bzw. die Abfrage eines einzelnen Gerätes länger als 60 Sekunden dauert, können Sie das Intervall erhöhen, mit dem {CMK} den oder die Hosts kontaktiert.
+Mit dem Regelsatz [.guihint]#Normal check interval for service checks#, den Sie gezielt auf die {CMK}-Services von Hosts anwenden, können Sie das generelle Intervall von einer Minute auf beispielsweise zwei, fünf oder zehn Minuten verlängern.
 
-Especially for SNMP checks, there is also the [.guihint]#Fetch intervals for SNMP sections# rule set.
-This allows you to lower the interval for _individual_ check plug-ins.
-It is important to know that you can never set the interval to faster than the interval for general monitoring by the [.guihint]#Check_MK# service.
+Speziell für SNMP-Checks gibt es darüber hinaus noch den Regelsatz [.guihint]#Fetch intervals for SNMP sections#.
+Mit diesem können Sie das Intervall für _einzelne_ Check-Plugins herabsetzen.
+Wichtig ist, dass Sie es nie schneller einstellen können, als es das Intervall für die generelle Überwachung durch den Service [.guihint]#Check_MK# vorgibt.
 
-Overall, however, we recommend that the monitoring be designed so that the standard interval of one minute can be maintained, and only increased in exceptional cases for individual hosts or checks.
+Insgesamt empfehlen wir aber, das Monitoring so auszulegen, dass das Standardintervall von einer Minute beibehalten werden kann und das Abfrageintervall nur in Ausnahmefällen für einzelne Hosts oder Checks erhöht wird.
 
 
 [#timing_settings]
 === Timing settings for SNMP access
 
-By default {CMK} expects a response in less than one-second for an SNMP request.
-It also tries a total of three times before giving up.
-For devices that respond very slowly, or that can only be reached over a very slow network, it may be necessary to change these parameters.
-You do this through the [.guihint]#Timing settings for SNMP access# rule set:
+Standardmäßig erwartet {CMK} auf einen SNMP-Request eine Antwort innerhalb von einer Sekunde.
+Außerdem verschickt die Monitoring-Software jeden Request mehrfach, bevor sie aufgibt.
+Bei Geräten, die nur sehr langsam antworten oder über ein sehr langsames Netzwerk erreichbar sind, kann es notwendig sein, diese Parameter zu ändern.
+Das machen Sie über den Regelsatz [.guihint]#Timing settings for SNMP access#:
 
-image::snmp_timing_settings.png[alt="Increasing the response timeout."]
+image::snmp_timing_settings.png[alt="Erhöhen des Response Timeouts."]
 
-Please note that these settings apply to an _individual SNMP request_.
-The complete process of monitoring a host consists of many separate requests.
-The total timeout is therefore a multiple of the settings specified here.
+Beachten Sie, dass sich diese Einstellungen auf einen _einzelnen SNMP-Request_ beziehen.
+Der komplette Abfrage eines Hosts besteht aus vielen einzelnen Requests.
+Der gesamte Timeout ist daher ein Vielfaches der hier angegebenen Einstellungen.
 
 
 [#bulk_walk]
-=== Bulk walk: Number of OIDs per bulk
+=== Bulk-Walk: number of OIDs per bulk
 
-By default SNMP transmits 10 responses in one packet per `GetBulk` request.
-Try the [.guihint]#Bulk walk: Number of OIDs per bulk# rule set to see if a higher value performs better.
-However this will only be the case when large tables are transferred to the host – e.g., if it is a switch with many ports.
+SNMP überträgt pro `GetBulk`-Request in der Voreinstellung zehn Antworten in einem Paket.
+Mit dem Regelsatz [.guihint]#Bulk walk: number of OIDs per bulk# können Sie ausprobieren, ob ein höherer Wert (beispielsweise 20 oder 50) eine bessere Performance bringt.
+Das wird allerdings nur dann der Fall sein, wenn bei dem Host große Tabellen übertragen werden -- z.B. wenn es sich um einen Switch mit sehr vielen Ports handelt.
 
-SNMP always fills the packets up to the specified number, including any records following the actual required ones.
-And if only a few of these records are really needed, extra data is transferred uselessly and the overhead increases.
+In der Praxis kann es auch vereinzelt vorkommen, dass Geräte mit dem voreingestellten Wert von zehn OIDs per Bulk Probleme haben.
+Dann kann es sinnvoll sein, die Anzahl beispielsweise auf fünf zu senken.
 
-On the other hand, in practice it may occasionally occur that devices with the default value of 10 OIDs per bulk can have problems.
-In such a case it can be useful to reduce the number.
+.Nicht immer gilt: viel hilft viel!
+[%collapsible]
+====
+Dass die Performance von Bulk-Requests bei sehr hohen Zahlen von übertragenen OIDs einbricht, liegt auch daran, dass SNMP Pakete mit Dummy-Daten auffüllt.
+Wurden beispielsweise 20 OIDs angefragt, das Gerät hat aber nur 17 zu liefern, werden drei aufgefüllt.
+Bei 50 OID würden 33 aufgefüllt werden.
+Ein weiterer Aspekt ist der Arbeitsspeicherbedarf beim angefragten Gerät.
+Schwache Geräte wie einfache Netzwerkdrucker werden eher mit kleineren Bulk-Größen gut klar kommen.
+====
+
 
 [#limiting_ranges]
-=== Limiting SNMP OID ranges
+=== Limit SNMP OID Ranges
 
-{CMK} normally works by always getting the information on all switch ports, even though not all are actually being monitored.
-This is a good thing anyway, since this is normally faster because selective information cannot be retrieved with the efficient bulk requests.
-In addition, from our point of view, it is always advisable to monitor all ports in order to find faulty ports or cables with high error rates.
-If ports are not reliably {UP}, you can also flag the link status {DOWN} as being {OK}.
+ifdef::onprem[]
+{cee-only}
+endif::[]
+{CMK} arbeitet normalerweise so, dass es immer die Informationen zu allen Switch Ports holt, auch wenn nicht alle überwacht werden.
+Das ist auch gut so, denn im Normalfall ist das schneller -- punktuelle Informationen können nicht mit den effizienten Bulk-Requests eingeholt werden.
+Zudem ist es aus unserer Sicht sowieso empfehlenswert, grundsätzlich alle Ports zu überwachen, um defekte Ports oder Kabel mit hohen Fehlerraten zu finden.
+Wenn Ports nicht zuverlässig {UP} sind, können Sie auch den Linkstatus {DOWN} als {OK} werten lassen.
 
-However, there are isolated cases where switches have very many ports, and which for some reason respond very slowly, or process SNMP very inefficiently, so that it is no longer possible to monitor with complete retrieval of all port information.
+Nun gibt es aber Einzelfälle, wo Switches sehr viele Ports haben und aus irgendeinem Grund nur sehr langsam antworten oder SNMP sehr ineffizient verarbeiten, sodass eine Überwachung bei einem vollständigen Abrufen aller Port-Informationen nicht mehr möglich ist.
 
-For such cases, there is the [.guihint]#Bulk walk: Limit SNMP OID Ranges# rule set.
-This allows you to statically limit the list of queried data (e.g., ports).
-In the rule's value, for each particular check plug-in you specify which indexes of the respective table are to be retrieved.
+Für solche Fälle gibt es 
+ifdef::onprem[]
+in den kommerziellen Editionen
+endif::[]
+den Regelsatz [.guihint]#Bulk walk: limit SNMP OID Ranges#.
+Mit diesem können Sie die Liste der abgefragten Daten (z.B. Ports) statisch begrenzen.
+Im Wert der Regel legen Sie jeweils für einen bestimmten Ast des OID-Baumes ([.guihint]#Section name#) fest, welche Indizes eingeholt werden sollen.
 
-The usual check type for switch ports is called [.guihint]#SNMP interface check with 64 bit counters (using v2c)#.
-The following example shows a setting in which only the first two ports are retrieved via SNMP:
+Die Identifikation kann sich auf generische oder herstellerspezifische Äste beziehen.
+Die Standardeinstellung für Switch Ports ist generisch und heißt [.guihint]#SNMP interface check with 64-bit counters (using v2c)#.
+Folgendes Beispiel zeigt eine Einstellung, bei der nur Daten für die ersten beiden Ports per SNMP eingeholt werden:
 
 image::snmp_limit_oid_ranges.png[alt="Bulk walk: limit SNMP OID ranges."]
 
-*Note:* This filtering is then in effect _before_ the service discovery and monitoring.
-Depending on the [.guihint]#Network interface and switch port discovery# setting, this does not automatically mean that these two ports will actually be monitored.
+[TIP]
+====
+Diese Filterung findet  _vor_ der Service-Erkennung und dem Monitoring statt.
+Je nach Einstellung von [.guihint]#Network interface and switch port discovery# bedeutet das noch nicht automatisch, dass diese beiden Ports auch wirklich überwacht werden.
+====
+
+
+[#cursedhardware]
+== Problembehandlung
+
+Die ersten RFCs zu SNMP datieren auf 1988.
+Im breiten Einsatz ist SNMP seit Mitte/Ende der 1990er.
+Gerade in den Anfangsjahren haben viele Hersteller das Protokoll nur teilweise oder falsch implementiert, und bis heute ist die Einhaltung von Konventionen nicht bei jedem Gerät garantiert.
+{CMK} hält eine Reihe von Maßnahmen bereit, um dennoch Monitoring-Daten aus solchen Geräten herauszukitzeln.
+
+[#defective]
+=== Defekte SNMP-Implementierungen
+
+Es gibt Geräte, bei denen SNMP zwar einigermaßen funktioniert, aber bestimmte Teile des Protokolls nicht oder falsch umgesetzt wurden.
+Ein besonders häufig gesehenes Problem sind Implementierungen, die mit bestimmten Abfrage-Tools getestet wurden, nicht aber auf Konformität zur Spezifikation.
+
+ifdef::onprem[]
+Treten die Probleme mit den kommerziellen Editionen von {CMK} auf, kann ein Grund darin liegen, 
+endif::[]
+ifdef::saas[]
+Ein Grund bei Problemen kann sein,
+endif::[]
+dass die dort standardmäßig aktivierte, performantere xref:performance[Inline-SNMP-Implementierung] sich stärker auf die Einhaltung von Standards verlässt als `snmpget`.
+Antworten Geräte überhaupt nicht, oder nicht zuverlässig, hilft es mitunter, Inline-SNMP für betroffene Geräte abzuschalten und damit das etwas robustere und deutlich langsamere `snmpget` zu aktivieren.
+
+ifdef::onprem[]
+Hierfür steht für Tests auf der Befehlszeile dem Befehl `cmk` für einige Optionen die Zusatzoption `--snmp-backend` zur Verfügung, welche als Parameter `inline` (Verwendung von Inline-SNMP), `classic` (Verwendung von `snmpget`) oder `stored-walk` (Verwendung eines hinterlegten xref:simulation[SNMP-Walks]) akzeptiert.
+War der Test auf der Befehlszeile erfolgreich, können Sie mit dem Regelsatz [.guihint]#Hosts using a specific SNMP backend# die Einstellung [.guihint]#Use Classic backend# für Hosts setzen, welche dauerhaft kein Inline-SNMP nutzen sollen.
+endif::[]
+
+
+==== Keine Antwort auf Anfrage nach `sysDescr`
+
+Die wichtigste Identifikationsmöglichkeit von SNMP-Geräten ist der String im Feld `sysDescr`.
+Antwortet ein Gerät nicht auf die Abfrage dieser OID, ist ein solches Gerät wie tot.
+
+Auch in der Service-Erkennung wird es keine Resultate liefern, wenn Sie nicht durch eine spezielle Konfiguration nachhelfen:
+Legen Sie für die betroffenen Hosts eine Regel an unter [.guihint]#Setup > Agents > SNMP rules > Hosts without system description OID# mit der Option [.guihint]#Positive match (Add matching hosts to the set)#.
+{CMK} geht dann einfach davon aus, dass alles in Ordnung ist und überspringt den Test mit der `sysDescr`.
+Zwar werden dann auch keine Check-Plugins erkannt, die bestimmte Teile in diesem Text erwarten, aber das spielt in der Praxis keine Rolle, da die betroffenen Plugins so entwickelt wurden, dass sie diesen Fall berücksichtigen.
+
+
+==== SNMPv2c geht, aber Bulk-Requests scheitern
+
+Einige Geräte unterstützen zwar Version v2c (und werden in der Diagnose darauf auch eine Antwort liefern), allerdings fehlt im Protokoll die Umsetzung des Request-Befehls `GetBulk`.
+Dieser wird von {CMK} dazu verwendet, mit einer Anfrage möglichst viele Informationen auf einmal zu bekommen; er ist daher sehr wichtig für die Performance.
+
+Bei einem solchen Host werden auch einige einfache SNMP-Checks funktionieren, wie z.B [.guihint]#SNMP Info# oder [.guihint]#Uptime#.
+Aber andere Services fehlen -- insbesondere die Netzwerkschnittstellen, die eigentlich bei jedem Gerät vorhanden sein müssen.
+
+Falls Sie tatsächlich einen Host haben, bei dem das so ist, können Sie diesen mit v2c, aber ohne Bulk-Requests betreiben.
+Nutzen Sie für die betroffenen Hosts die Regel [.guihint]#Setup > Agents > SNMP rules > Disable bulk walks#.
+
+
+==== Geräte, die sehr langsam antworten
+
+Es gibt Geräte, bei denen manche SNMP-Abfragen sehr sehr lange brauchen.
+Teilweise liegt das an fehlerhaften Implementierungen.
+Hier kann es helfen, auf SNMPv1 zurück zu gehen (was normalerweise viel langsamer ist, aber manchmal immer noch schneller als ein kaputtes SNMPv2c).
+Bevor Sie das versuchen, sollten Sie jedoch prüfen, ob der Hersteller ein Firmware-Upgrade bereitstellt, welches das Problem löst.
+
+Eine zweite Ursache kann sein, dass das Gerät sehr viele Switch Ports hat und gleichzeitig eine langsame SNMP-Implementierung.
+Falls Sie von den Ports nur sehr wenige überwachen möchten (z.B. nur die ersten beiden), können Sie {CMK} manuell auf die Abfrage von Daten einzelner Ports begrenzen.
+Details finden Sie im Abschnitt zu xref:snmp#performance[Performance].
+
+
+[#standard_services]
+=== Es werden nur die Standard-Services gefunden
+
+Wenn Sie ein SNMP-Gerät in die Überwachung aufnehmen und {CMK} erkennt lediglich die Services [.guihint]#SNMP Info#, [.guihint]#Uptime# und die Interfaces, so kann das verschiedene Ursachen haben:
+
+
+==== Es gibt keine Plugins
+
+{CMK} liefert etwa 1000 Check-Plugins für SNMP-Geräte aus, aber natürlich ist selbst diese Liste nie vollständig.
+So kommt es immer wieder vor, dass {CMK} für bestimmte Geräte keine spezifischen Plugins mit ausliefert und Sie dann nur die besagten Standard-Services überwachen können.
+ifdef::onprem[]
+Hier haben Sie folgende Möglichkeiten:
+
+* Eventuell werden Sie auf der Website link:https://exchange.checkmk.com[{CMK} Exchange^] fündig, wo Anwender ihre eigenen Plugins veröffentlichen können.
+* Sie entwickeln selbst Plugins. Dazu finden Sie in diesem Handbuch xref:devel_intro#[Artikel].
+* Sie kontaktieren unseren Support oder einen unserer Partner und geben die Entwicklung der passenden Plugins in Auftrag.
+endif::[]
+ifdef::saas[]
+In diesem Fall bleibt als einzige Möglichkeit, unter link:https://ideas.checkmk.com/[ideas.checkmk.com^] die Entwicklung eines entsprechenden Plugins anzuregen. 
+endif::[]
+
+==== Die Erkennung der Plugins funktioniert nicht
+
+Manchmal kommt es vor, dass eine neuere Firmware von einem Gerät dazu führt, dass {CMK}-Plugins das Gerät nicht mehr erkennen -- zum Beispiel weil sich in der Systembeschreibung des Geräts ein Text geändert hat.
+In diesem Fall müssen die bestehenden Plugins angepasst werden.
+Erstellen Sie einen xref:simulation[SNMP-Walk] und kontaktieren Sie unseren Support.
+
+
+==== Das Gerät liefert die benötigten Daten nicht aus
+
+Manche Geräte haben in ihrer SNMP-Konfiguration die Möglichkeit, den Zugriff auf bestimmte Informationsbereiche einzeln zu konfigurieren.
+Eventuell ist Ihr Gerät so eingestellt, dass zwar die Standardinformationen geliefert werden, aber nicht die Bereiche für die gerätespezifischen Services.
+
+Bei einigen wenigen Geräten müssen Sie SNMPv3 und xref:snmp#contexts[Kontexte] verwenden, um an die gewünschten Daten zu kommen.
+
+
+[#no_response]
+=== Geräte, die gar nicht auf SNMP antworten
+
+Falls keine einzige SNMP-Protokollversion funktioniert, gibt es mehrere mögliche Ursachen:
+
+ifdef::onprem[]
+* Das Gerät ist überhaupt nicht per IP erreichbar.
+Das können Sie mit dem Ping-Test überprüfen.
+endif::[]
+* Das Gerät unterstützt überhaupt kein SNMP.
+* Die SNMP-Freigabe ist nicht korrekt konfiguriert (Aktivierung, erlaubte Adressen, Community).
+* Eine Firewall unterbindet SNMP.
+Sie benötigen die Freischaltung von UDP-Port 161 in beide Richtungen.
 
 
 ifdef::onprem[]
 [#simulation]
-== Simulation through SNMP walks
+== Simulation durch SNMP-Walks
 
 
 [#principle]
-=== Principle
+=== Prinzip des SNMP-Walks
 
-The {CMK} SNMP engine has a very handy feature
--- you can have a monitored device write a complete dump of all its SNMP data to a file, an _SNMP walk_.
-You can use this file later to simulate monitoring the device on another {CMK} server, even if this other server has no actual network connection to the device.
+In bestimmten Situationen kann es nützlich sein, einen kompletten Dump aller SNMP-Daten eines überwachten Geräts in eine Datei schreiben zu lassen (einen _SNMP-Walk_).
+Diese Datei können Sie später verwenden, um die Überwachung des Geräts auf einem anderen {CMK}-Server zu simulieren, auch wenn dieser überhaupt keine Netzwerkverbindung zu dem Gerät hat.
 
-We use this feature very intensively, for example, when our support team is developing new check plug-ins for our customers.
-Our developers therefore do not need access to your devices – just an SNMP walk.
+Wir verwenden diese Funktionalität intensiv in Support und Entwicklung, um bestehende Plugins zu verbessern und neue Check-Plugins zu entwickeln.
+So benötigen unsere Entwickler keinen Zugriff auf Ihre Geräte, sondern lediglich SNMP-Walks.
 
 
 [#snmpwalks]
-=== Creating a walk via the GUI
+=== Erstellen eines Walks über die GUI
 
-You can create an SNMP walk directly from the GUI.
-The function can be found in the action menu of the [.guihint]#Check_MK# service of the hosts and also in the action menu of the hosts ([.guihint]#Download SNMP walk# entry):
+Sie können einen SNMP-Walk direkt über die GUI erstellen.
+Die Funktion finden Sie im Aktionsmenü des Services [.guihint]#Check_MK# der Hosts und auch im Aktionsmenü der Hosts (Eintrag [.guihint]#Download SNMP walk#):
 
-image::snmp_download_walk.png[alt="Download SNMP walk in the action menu for the host in the monitoring overview."]
+image::snmp_download_walk.png[alt="Download des SNMP-Walks im Aktionsmenü des Hosts in der Monitoring-Übersicht."]
 
-The creation of the walk takes a few seconds in the best case, but a few minutes are not uncommon.
+Die Erstellung des Walks dauert im besten Fall einige Sekunden, ein paar Minuten sind aber auch nicht ungewöhnlich.
 
-To prevent the GUI from being blocked indefinitely by such a task, a 15-minute timeout is set by default.
-If necessary, you can increase this via [.guihint]#Setup > General > Global settings > Execution of checks > SNMP walk download timeout#.
+Um die GUI nicht ewig mit einem solchen Job zu blockieren, ist ein Timeout von 15 Minuten voreingestellt.
+Erhöhen können Sie dieses bei Bedarf über [.guihint]#Setup > General > Global settings > Execution of checks > SNMP walk download timeout#.
 
-Once the file has been generated, you can download it from the [.guihint]#Result# line.
+Sobald das Erstellen abgeschlossen ist, können Sie die Datei in der Zeile [.guihint]#Result# herunterladen.
 
 
 [#snmpwalk_cli]
-=== Creating a walk from the command line
+=== Erstellen eines Walks auf der Befehlszeile
 
-Alternatively, you can also create walks from the command line.
-Log on to the site from which the device is being monitored.
-The creation of the walk is simply done with the `cmk --snmpwalk` command and the specified host (which must be configured in monitoring):
+Alternativ können Sie Walks auch auf der Befehlszeile erzeugen.
+Melden Sie sich dazu auf der Instanz an, von der aus das Gerät überwacht wird.
+Das Erstellen des Walks geht dort einfach mit dem Befehl `cmk --snmpwalk` und der Angabe des überwachten Hosts (der dazu im Monitoring konfiguriert sein muss):
 
 [{shell}]
 ----
 {c-omd} cmk --snmpwalk switch23
 ----
 
-Also use the `-v` switch to see more detailed output on the progress:
+Verwenden Sie zusätzlich den Schalter `-v`, um ausführlichere Ausgaben über den Fortschritt zu sehen:
 
 [{shell}]
 ----
 {c-omd} cmk -v --snmpwalk switch23
 switch23:
-Walk on ".1.3.6.1.2.1"...3664 variables.
-Walk on ".1.3.6.1.4.1"...5791 variables.
+Walk on ".1.3.6.1.2.1"...
+3664 variables.
+Walk on ".1.3.6.1.4.1"...
+5791 variables.
 Wrote fetched data to /omd/sites/mysite/var/check_mk/snmpwalks/switch23.
 ----
 
-The file will be placed in the `var/check_mk/snmpwalks` directory, where it simply carries the name of the host.
-It is a text file.
-If you are curious you can view this – e.g., with `less`; quit the program with the kbd:[Q] key:
+Die Datei wird dann im Verzeichnis `var/check_mk/snmpwalks` abgelegt und trägt den Namen des Hosts.
+Es handelt sich dabei um eine Textdatei.
+Wenn Sie neugierig sind, können Sie diese z.B. mit `less` betrachten (Sie beenden das Programm mit der Taste kbd:[Q]):
 
 [{shell}]
 ----
@@ -672,39 +709,41 @@ If you are curious you can view this – e.g., with `less`; quit the program wit
 .1.3.6.1.2.1.2.1.0 27
 ----
 
-The command `cmk --snmpwalk` has some more useful options:
+Der Befehl `cmk --snmpwalk` kennt noch weitere nützliche Optionen:
 
 [cols="25,~",options="header"]
 |===
-|Option |Effect 
-|`--extraoid <OID>` | When {CMK} performs a walk on a host, it generally retrieves two subtrees from the SNMP data area. These are specified in the SNMP tree using so-called _OIDs_ (object identifiers). These are `MIB-2` and `enterprises` – that is, on the one hand a standard area that is normalized and the same for all SNMP devices, and on the other hand a manufacturer-specific area.  If SNMP is implemented correctly, this should cause the device to send _all_ data that it provides. If this is not the case and you are looking for a specific range, you can add its OID to the walk with this option, e.g. `cmk --snmpwalk --extraoid .1.2.3.4 switch23`. Don't forget the 'period' at the beginning of the OID.
-|`--oid` |This option is similar to `--extraoid`, but _only_ retrieves the specified OID. This is of interest for testing purposes. Note, however, that the walk will be incomplete.
-|`-v` |The `v` stands for _verbose_ and will output some interesting information during the walk.
-|`-vv` |The `vv` stands for _very verbose_ and outputs much more information.
+|Option |Wirkung 
+|`--extraoid <OID>` |Wenn {CMK} einen Walk auf einem Host ausführt, dann ruft es generell zwei Teilbäume aus dem SNMP-Datenbereich ab. Diese werden im SNMP-Baum über sogenannte _OIDs_ (object identifier) spezifiziert. Diese sind `MIB-2` und `enterprises` -- also zum einen ein Standardbereich, der für alle SNMP-Geräte normiert und gleich ist, und zum anderen ein herstellerspezifischer Bereich. Bei einer korrekten Implementierung von SNMP sollte das Gerät _alle_ Daten senden, die es bereitstellt. Falls das nicht der Fall ist und Sie nach einem bestimmten Bereich Ausschau halten, können Sie dessen OID mit dieser Option zum Walk hinzufügen, z.B. `cmk --snmpwalk --extraoid .1.2.3.4 switch23`. Vergessen Sie nicht den Punkt am Anfang der OID.
+|`--oid` |Diese Option arbeitet ähnlich wie `--extraoid`, ruft aber dann _nur_ die angegebene OID ab. Dies ist zu Testzwecken interessant. Beachten Sie, dass der Walk dann unvollständig ist.
+|`-v` |Das `v` steht für _verbose_ und sorgt für einige informative Ausgaben, während der Walk läuft.
+|`-vv` |Das `vv` steht hier für _very verbose_ und gibt noch deutlich mehr Informationen aus.
 |===
 
 
 [#use_saved_walks]
-=== Using saved walks for simulations
+=== Gespeicherte Walks zur Simulation verwenden
 
-If you want to use this walk on a different (or the same) {CMK} site for a simulation, then save the walk file with the name of the host on this site under `var/check_mk/snmpwalks`.
-Make sure that the site user is owner of the file and permissions are set to `0600` (only the owner is allowed to read and write).
+Wenn Sie nun auf einer anderen (oder auf derselben) {CMK}-Instanz diesen Walk für eine Simulation verwenden möchten, dann legen Sie die Walk-Datei auf dieser Instanz wieder unter `var/check_mk/snmpwalks` mit dem Namen des Hosts ab.
+Stellen Sie sicher, dass der Instanzbenutzer Eigentümer der Datei ist und die Berechtigungen auf `0600` (nur der Eigentümer darf lesen und schreiben) gesetzt sind.
 
-Now create a rule in the [.guihint]#Simulating SNMP by using a stored SNMP walk# rule set that accesses the affected host(s).
+Legen Sie jetzt eine Regel im Regelsatz [.guihint]#Simulating SNMP by using a stored SNMP walk# an, die für den betroffenen Host greift.
 
-From now on, only the saved file will be used to monitor the host.
-There is now no network access to the host – except the ping for the host check, and possibly any configured active checks.
-You can simply redirect these to the {CMK} server by giving the IP address `127.0.0.1` to the hosts.
+Ab sofort wird bei der Überwachung des Hosts nur noch die gespeicherte Datei verwendet.
+Es erfolgt kein Netzwerkzugriff auf den Host mehr -- außer dem Ping für den Host Check und eventuell konfigurierten aktiven Checks.
+Diese können Sie einfach auf den {CMK}-Server umbiegen, indem Sie dem Host die Einstellung [.guihint]#IP address family: No IP# geben.
 endif::[]
 
 
 ifdef::onprem[]
 [#files]
-== Files and directories
+== Dateien und Verzeichnisse
 
 [cols="25,~",options="header"]
 |===
-|File path |Description 
-|`var/check_mk/snmpwalks` |Here SNMP walk files are generated or also expected if you want to use them to simulate SNMP data.
+|Pfad |Bedeutung 
+|`var/check_mk/snmpwalks` |Hier werden SNMP-Walk-Dateien erzeugt bzw. auch erwartet, falls Sie diese zum Simulieren von SNMP-Daten verwenden möchten.
 |===
 endif::[]
+// End full translation
+////
