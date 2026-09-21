@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE Usb Lsusb
+// IGNORE agent_based Usb Lsusb Sortier
 // NONASCII
 include::global_attr.adoc[]
 = HW/SW-Inventur-Plugins entwickeln
@@ -50,7 +50,7 @@ Für den Zugriff auf die Dokumentation gilt dasselbe wie bei xref:devel_check_pl
 
 Sie können auf die mit Ihrer {CMK}-Instanz mitgelieferte Dokumentation zugreifen.
 Dazu navigieren Sie in der {CMK}-GUI zu [.guihint]#Help > Developer resources > Plug-in API references#.
-Wählen Sie im neuen Browserfenster in der linken Navigationsleiste [.guihint]#Agent based ("Check API") > Version 2# aus.
+Wählen Sie im neuen Browserfenster in der linken Navigationsleiste [.guihint]#Agent based ("Check API") > Version 2: cmk.agent_based.v2# aus.
 Auch ohne laufende {CMK}-Instanz können Sie sich die Plugin-API-Dokumentation als Kopie auf link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.agent_based/index.html#version-2-cmk-agent-based-v2[docs.checkmk.com/plugin-api^] ansehen.
 
 
@@ -92,6 +92,7 @@ Es folgt – durch einen Doppelpunkt getrennt – zuerst die Hersteller-ID, dann
 Der Rest der Zeile enthält beschreibenden Text.
 
 
+[#agentplugin_script]
 === Das resultierende Skript
 
 Da {CMK} mit zeilenweisen Ausgaben gut klarkommt, genügen für das benötigte Check-Plugin drei Zeilen:
@@ -287,6 +288,8 @@ def parse_lsusb_demo(string_table):
 === Die Inventurfunktion schreiben
 
 Hier können Sie ein wenig abkürzen: Im Gegensatz zu agentenbasierten Check-Plugins wird die Parse-Funktion nicht über die Erzeugung eines `AgentSection`-Objektes eingebunden, sondern muss aus der Inventurfunktion selbst aufgerufen werden.
+// ES: Offenbar können Inventur-Plugins problemlos geparsete Agentensektionen verarbeiten, es wird nur halt in diesem Beispiel nicht gemacht. Siehe Docstring für die Klasse InventoryPlugin in packages/cmk-plugin-apis/cmk/agent_based/v2/_plugins.py
+// ES: Der "Gegensatz" ist hier also eigentlich keiner, sondern nur ein Effekt vom Aufbau des Beispiels, das wir hier durchspielen.
 Das Prinzip des `yield` zur fortwährenden Übergabe von Elementen kennen Sie aus agentenbasierten Check-Plugins:
 
 .~/local/lib/python3/cmk_addons/plugins/lsusb_demo/agent_based/inventory_lsusb_demo.py
@@ -316,13 +319,15 @@ Hier wird pro Zeile der Ausgabe von `lsusb` ein Objekt des Typs `TableRow` zurü
 Dieses enthält drei Spalten: Vendor- und Device-ID dienen gemeinsam als Schlüssel.
 Die dritte, rein informative Spalte enthält die Beschreibung.
 
-Schlüsselspalten haben die Besonderheit, dass sie zur Erkennung von Änderungen herangezogen werden, die wiederum im Monitoring zu einem Statuswechsel des Services [.guihint]#HW/SW Inventory# führen können.
-Des weiteren müssen Schlüssel eindeutig sein.
+Schlüsselspalten haben die Besonderheit, dass sie zur Erkennung von Änderungen herangezogen werden, die wiederum im Monitoring zu einem Statuswechsel des Service [.guihint]#Check_MK HW/SW Inventory# führen können.
+Des Weiteren müssen Schlüssel eindeutig sein.
 Weitere Zeilen mit derselben Kombination aus Vendor- und Device-ID werden folglich ignoriert.
+// ES: Stimmt nicht, sie werden gemerget bzw. im Konfliktfall überschrieben, sodass die jeweils späteste Zeile mit den gleichen Schlüsseln gewinnt.
 
 Neben Schlüssel- und Inventarspalten können Sie die Einträge der Tabelle zusätzlich mit Statusspalten (`status_columns`) und analog Statusattributen (`status_attributes`) beschreiben, welche den _Zustand_ eines Objektes abbilden.
 Für den Wert des Zustands stehen die einfachen Datentypen (`int`, `float`, `str`, `bool` oder `None`) zur Verfügung.
 Wollen Sie beispielsweise eine Tabelle erstellen, in der verzeichnet ist, welcher Anschluss (`Bus/Device`) belegt ist, dann können Sie `key_columns` (`Bus` und `Device`) und `status_columns` (hier: `bool`) verwenden.
+// ES: Hier für das bessere Verständnis evtl. den relevanten Teil von Werk #19313 über status_columns und das Verhalten bei Abwesenheit von inventory_columns einflechten
 
 
 [#finished_plugin]
@@ -384,6 +389,7 @@ Da die Inventur-API Teil der Check-API ist, gestaltet sich die Erstellung und An
 Aus diesem Grund zeigen wir hier nur ein minimales Beispiel.
 
 
+[#rulesets_define]
 === Regelsatz definieren
 
 In der Ausgabe von `lsusb` tauchen einige Zeilen für Hubs (externe und Root-Hubs) auf.
@@ -506,6 +512,88 @@ def inventory_lsusb_demo(params, section):
 ----
 
 
+[#display]
+== Darstellung von Inventurdaten anpassen
+
+Beim Blick in die HW/SW-Inventur fällt auf, dass die Spalten in einer anderen Reihenfolge als im Plugin definiert dargestellt werden -- nämlich alphabetisch sortiert.
+Für die Verbesserung der Darstellung kommt die link:https://docs.checkmk.com/plugin-api/{current-major}/cmk.inventory_ui/index.html#module-cmk.inventory_ui.v1_unstable[UI-API der Inventur^] aus dem Namensraum `cmk.inventory_ui.v1_unstable` ins Spiel. 
+
+[TIP]
+====
+Wie der Import-Pfad bereits andeutet, handelt es sich hier um eine noch nicht als stabil markierte Programmierschnittstelle.
+Wir planen, diese in {CMK} {v30} als stabil zu veröffentlichen.
+Derzeit sind eher kleinere Erweiterungen als inkompatible Änderungen geplant.
+Dennoch sollten Sie für die Migration Ihrer Plugins von {v25} nach {v30} zumindest etwas Zeit zum Testen einplanen.
+====
+
+Dateien, welche die UI-API nutzen, liegen im Unterordner `inventory_ui` Ihrer Plugin-Familie:
+
+[{shell}]
+----
+{c-omd} mkdir -p ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/inventory_ui
+{c-omd} cd ~/local/lib/python3/cmk_addons/plugins/lsusb_demo/inventory_ui
+----
+
+Im vorgestellten Beispiel werden alle Daten als Textfelder gehandhabt.
+Damit genügt es, die Reihenfolge der Spalten zu ändern und die Spaltentitel zu setzen:
+Für den Dateinamen verwendet {CMK} als Konvention `hardware.py`, `software.py` oder `networking.py`.
+Von dieser Konvention darf abgewichen werden, wenn es der Übersichtlichkeit dient.
+
+.~/local/lib/python3/cmk_addons/plugins/lsusb_demo/inventory_ui/hardware.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.inventory_ui.v1_unstable import Node, Table, TextField, Title
+
+node_hardware_usb_devices = Node(
+    name = "hardware_usb_devices",
+    path = [ "hardware", "usb", "devices" ],
+    title = Title("Devices"),
+    table = Table(
+        columns = {
+            "vendor": TextField(Title("Vendor ID")),
+            "device": TextField(Title("Device ID")),
+            "description": TextField(Title("Description")),
+        },
+    ),
+)
+----
+
+.Nach Verwendung der UI-API erscheinen die Spalten in der gewünschten Reihenfolge
+image::devel_inventory_plugins_uiapi.png[alt="Inventory tree mit aufgeklapptem Hardware > USB > Devices."]
+// ES: Einheitliche Benennung des Inventurbaums/Inventory tree durch den ganzen Artikel, ich bevorzuge die deutsche Variante
+
+Angenommen, Sie haben ein Inventur-Plugin für einen Massenspeicher entwickelt, der bislang nicht unterstützt wurde, dann können Sie mit der UI-API die korrekte Zahlendarstellung erreichen:
+
+.~/local/lib/python3/cmk_addons/plugins/fictional_mass_storage/inventory_ui/hardware.py
+[{python}]
+----
+#!/usr/bin/env python3
+
+from cmk.inventory_ui.v1_unstable import Node, Table, TextField, NumberField, Title, IECNotation, AgeNotation, Unit
+
+UNIT_BYTES = Unit(IECNotation("B"))
+UNIT_AGE = Unit(AgeNotation())
+
+node_hardware_somebus_disks = Node(
+    name = "hardware_somebus_disks",
+    path = [ "hardware", "somebus", "disks" ],
+    title = Title("Mass storage devices"),
+    table = Table(
+        columns = {
+            "device": TextField(Title("Device ID")),
+            "total_space": NumberField(Title("Total disk space"), render = UNIT_BYTES),
+            "total_uptime": NumberField(Title("Uptime"), render = UNIT_AGE),
+        },
+    ),
+)
+----
+
+Neben verschiedenen Möglichkeiten, Text- und Zahlendarstellung zu beeinflussen, bringt die API auch Möglichkeiten zur Änderung der Hintergrundfarbe von Feldern -- üblicherweise in Kombination mit booleschen Werten.
+Darüber hinaus können Sie eigene Sortier- und Rendering-Funktionen definieren.
+
+
 [#extending]
 == Erweiterungsmöglichkeiten
 
@@ -513,7 +601,7 @@ def inventory_lsusb_demo(params, section):
 === Mehrere Sektionen abonnieren
 
 Im Beispiel haben Sie sich bisher an das Standardverhalten gehalten:
-Ein Inventur-Plugin abonniert eine Agentensektion, welche denselben Namen trägt, wie das Inventur-Plugin.
+Ein Inventur-Plugin abonniert eine Agentensektion, welche denselben Namen trägt wie das Inventur-Plugin.
 Aber was tun, wenn Sie vorhandene Agentensektionen mitverwenden wollen, die bereits von einem vorhandenen Inventur-Plugin ausgewertet werden?
 Hier ist die Wahrscheinlichkeit hoch, dass bereits ein Inventur-Plugin existiert, das eben diesen Namen der Agentensektion verwendet.
 So verschaffen Sie sich einen Überblick über bereits existierende Sektionen:
@@ -539,8 +627,6 @@ myhost:
  robotmk: skipped (no data)
  robotmk: skipped (no data)
 ----
-// TK: Schöne Ausgabe. Und jetzt herrscht Klarheit? Nicht für mich. Was lerne ich hier?
-// MFS: Einleitender Satz geändert.
 
 In diesem Fall und dem Fall, dass ein Inventur-Plugin mehrere Agentensektionen auswerten soll, können Sie die abonnierten Sektionen als Liste angeben.
 Gehen wir beispielsweise davon aus, dass Sie zwei Agentensektionen auswerten wollen, die sich auf fiktionale Dinge beziehen:
@@ -561,7 +647,7 @@ Der Name des Plugins muss mit den Agentensektionen nicht mehr übereinstimmen:
 .~/local/lib/python3/cmk_addons/plugins/fictional/agent_based/fictional.py
 [{python}]
 ----
-inventory_plugin_lsusb_demo = InventoryPlugin( 
+inventory_plugin_fictional = InventoryPlugin( 
     name = "fictional",
     sections = [ "yoyodyne", "zorg" ],
     inventory_function = inventory_fictional,
@@ -600,13 +686,14 @@ def inventory_fictional(section_yoyodyne, section_zorg):
         inventory_attributes = { "Zorg " + zorg[0][0]: zorg[0][1] },
     )
 
-inventory_plugin_lsusb_demo = InventoryPlugin( 
+inventory_plugin_fictional = InventoryPlugin( 
     name = "fictional",
     sections = [ "yoyodyne", "zorg" ],
     inventory_function = inventory_fictional,
 )
 ----
 
-// ES: Hier auch gerne noch einen Screenshot einfügen, der die fiktionalen Ergebnisse auf der HW/SW-Seite in der Weboberfläche zeigt
-// MFS: Problem siehe oben. Sieht doof aus, im 2.5er Artikel dann.
+In der Inventur von {CMK} sehen die entstandenen Knoten dann so aus:
 
+.Hier wertet eine einzige Inventurfunktion zwei Agentensektionen aus
+image::devel_inventory_plugins_multiple_sections.png[alt="Inventory tree mit den aufgeklappten Nodes für Software > Fictional > Example und Hardware > Fictional > Example."]

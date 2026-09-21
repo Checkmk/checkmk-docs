@@ -1,0 +1,372 @@
+// -*- coding: utf-8 -*-
+// IGNORE
+// NONASCII
+include::global_attr.adoc[]
+= Tuning des Monitoring-Kerns
+:title: Tuning des Monitoring-Kerns
+:description: Optimale Ausnutzung von CPU und RAM bei Minimierung von Lastspitzen erreichen Sie mit einigen grundlegenden Einstellungen des Monitoring-Cores.
+:experimental:
+
+{related-start}
+xref:cmc#[Der {CMK} Micro Core]
+xref:rrds#[Round-Robin-Datenbanken (RRDs)]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Egal, ob Sie {CRE} mit dem Nagios-Kern nutzen oder eine der kommerziellen Editionen mit {CMK} Micro Core (CMC):
+In beiden Fällen können Sie mit den richtigen Einstellungen für den Monitoring-Kern und die dem Kern nahen Prozesse den Arbeitsspeicherbedarf minimieren, Lastspitzen vermeiden und so vorhandene Hardware optimal ausnutzen.
+
+Die Einstellungen von {CMK} _out of the box_ funktionieren bei der größten Zahl der {CMK}-Installationen sehr gut.
+Ein Server mit vier Prozessorkernen, acht Gigabyte RAM und mehr als 20.000 Diensten ist nicht ungewöhnlich.
+Uns (insbesondere den im Support Mitarbeitenden bei {com}) sind jedoch auch schon Installationen begegnet, bei denen einige langsam antwortende Hosts und andere Umstände bereits mit weniger als 5.000 Diensten auf 16 GB RAM zu Performance-Problemen führten.
+
+In solchen Fällen ist das Tuning des Monitoring-Kerns dringend angeraten -- und führt meist sehr schnell zum Erfolg.
+Aber auch in Fällen, in denen {CMK} butterweich läuft, hilft dieser Artikel Ressourcen frei zu geben, die Sie anderen Aufgaben widmen können.
+Das kann beispielsweise der Betrieb einer Test-Instanz auf der gleichen Maschine neben einer Produktiv-Instanz sein.
+
+////
+{CMK} bringt einige Standardeinstellungen mit, die grob für den Betrieb auf acht bis 16 Gigabyte RAM mit 1000 bis 5000 Services (kommerzielle Editionen), beziehungsweise 1000 bis 3000 Services ({RE}) dimensioniert sind.
+Dieser Zahl liegt die Annahme zugrunde, dass der Großteil der Services durch das Monitoring mit xref:wato_monitoringagents#[Agenten] und xref:special_agents#[Spezialagenten] zustande kommt und nur wenige xref:active_checks#[aktive Checks] und xref:snmp#[SNMP-Checks] verwendet werden.
+////
+
+////
+Dieser Artikel ist insbesondere wichtig, wenn Ihre Monitoring-Umgebung von unserer Referenz-Umgebung abweicht, beispielsweise mit vielen aktiven Checks oder der Überwachung von Cloud-Infrastruktur mit vielen Spezialagenten.
+Er ist auch relevant, wenn Sie auf deutlich leistungsstärkerer Hardware eine sehr große Zahl von Hosts überwachen.
+
+Und schließlich:
+Monitoring-Admins, die genau wissen, was sie tun, können unter Umständen noch deutlich höhere Zahlen als oben genannt oder den Betrieb auf schwächerer Hardware erreichen.
+Garantien hierfür können wir keine geben, aber Sie erfahren hier die wichtigsten Kniffe, um alles aus Ihrer {CMK}-Installation herauszuholen.
+////
+
+Hier vorgestellte Einstellmöglichkeiten berücksichtigen auch, wie stark mit der GUI gearbeitet wird und ob andere Anwendungen neben {CMK} auf derselben Maschine laufen müssen:
+In solchen Fällen ist es oft erwünscht, auch nach einem Neustart Lastspitzen etwas abzufedern und dafür {CMK} etwas länger Zeit zu geben, bis alle Services wieder einen bekannten Zustand haben.
+Bei Instanzen dagegen, mit denen wenig direkt interagiert wird, kann es hilfreich sein, mit kurzer, hoher Last schnell wieder alle Dienste aktuell zu haben. 
+
+[#othertuning]
+== Andere Tuning-Möglichkeiten
+
+Lesen Sie den xref:cmk_processes#[Artikel zu Instanzdiensten], um zu erfahren, auf welche Dienste Sie möglicherweise verzichten können und wie Sie den Instanz-Apache optimal auf das Nutzungsverhalten auf Ihrem {CMK}-Server einstellen.
+Einen sehr guten Überblick über _alle_ Tuning-Möglichkeiten (inklusive der in diesem Artikel vorgestellten) liefert link:https://www.youtube.com/watch?v=UM7wsc3-QKU[dieser Vortrag bei der {CMK}-Konferenz pass:[#11] (auf YouTube)^].
+
+
+[#cmctuning]
+== Tuning des {CMK} Micro Core (CMC)
+
+{cee-only} Den Konzepten des CMC in {CSE} und {CUE} widmen wir xref:cmc#[einen eigenen Artikel], in diesem können Sie Architekturentscheidungen wie die starke Modularisierung nach Aufgaben wie das Einholen und die Auswertung von Daten nachlesen.
+Werfen Sie zunächst einen Blick in die xref:analyze_configuration#[Analyse der {CMK}-Konfiguration]:
+Diese statische Analyse weist direkt darauf hin, wenn Einstellungen sehr weit von empfohlenen Einstellungen sind, was _zukünftig_ zu Problemen führen könnte.
+
+Um immer im Blick zu haben, wie sich die aktuellen Performance-Einstellungen auf den gegenwärtigen Betrieb auswirken, sollten Sie in der {CMK} GUI das Sidebar-Snapin [.guihint]#Overview# aktiviert haben.
+Hier interessieren insbesondere [.guihint]#xref:monitoring_basics#stale[Stale services]#.
+Diese Dienste mit veralteten Daten können auf zwei Dinge hinweisen:
+Entweder liefert ein Agenten-Plugin keine (auswertbaren) Daten oder {CMK} kommt mit dem Einholen oder der Auswertung von Monitoring-Daten nicht hinterher.
+Ein Klick auf die Zahl der _Stale Services_ bringt Sie direkt zu einer Liste, welche bei der Beurteilung hilft, um welche Art es sich im Einzelfall handelt.
+
+.300 _Stale Services_ sind kurz nach Start der {CMK}-Instanz in Ordnung.
+image::core_tuning_overview.png[alt="Eine Tabellenansicht von Host, Services und deren Probleme.", width=44%]
+
+Ein weiteres sinnvolles Sidebar-Snapin ist [.guihint]#Core statistics#:
+Es zeigt Check-Raten, Latenzen und die Auslastung relevanter Prozesse.
+
+.Dieser Screenshot entstand zeitgleich mit dem letzten, die Auslastung von Checkern und Fetchern war einige Minuten später deutlich unter 50&nbsp;%.
+image::core_tuning_core_statistics.png[alt="Sidebar-Snapin Core statistics.", width=44%]
+
+Wollen Sie einen Einblick in diese Performance-Werte über die Zeit, werfen Sie einen Blick in die Metriken des Services [.guihint]#OMD mysite performance#.
+Hier sehen Sie insbesondere in der Metrik [.guihint]#Helper usage# schnell, wie sich vorgenommene Änderungen auf Leistung und Auslastung auswirken.
+
+.Kurze Spitzen in der Auslastung von Fetchern und Checkern sind in Ordnung, der Durchschnitt sollte um 50&nbsp;% liegen.
+image::core_tuning_performance.png[alt="Screenshot der Metrik OMD performance.",fullscreen=1]
+
+Die in den folgenden Abschnitten vorgestellten Einstellungen nehmen Sie in [.guihint]#Setup > Global settings# im Abschnitt [.guihint]#Monitoring core# vor.
+
+[#num_checkers]
+=== Zahl der Checker
+
+_Checker_ bezeichnet die Hilfsprozesse, die Monitoringdaten verarbeiten, bevor diese in den Monitoring-Kern geschrieben werden.
+Ihr Job ist praktisch nur CPU lastig:
+Zu verarbeitende Daten liegen meist bereits im Arbeitsspeicher, weshalb kein auf IO wartender Prozess ausgelagert werden muss.
+
+Die Auslastung der Checker hängt sehr stark von der Komplexität der ausgeführten Check-Plugins und der Menge der jeweils verarbeiteten Daten ab.
+Exakte Berechnungsgrundlagen sind daher schwer zu nennen.
+Auf aktueller Hardware kann ein Checker meist eine mittlere vierstellige bis deutlich fünfstellige Zahl von Checks bedienen.
+Eine grobe Kalkulation der Zahl der Checker kann daher zunächst einen Checker pro 5.000 Services vorsehen.
+Gehen Sie nicht unter zwei Checker und nicht über die Zahl der physikalischen Prozessorkerne.
+
+Da Checker ihre Konfiguration im Arbeitsspeicher halten müssen und die Prozessgröße daher einige hundert MB betragen kann, sollten Sie die Auslastung prüfen und die Zahl der Checker alsbald wieder in einen Bereich reduzieren, in dem die Auslastung um 50&nbsp;% liegt.
+Von dieser Auslastung ausgehend können Sie unter Beobachtung von Latenzen (insbesondere nach einem Neustart der {CMK}-Instanz) und Lastspitzen die Zahl der Checker weiter reduzieren (oder weitere Services ins Monitoring aufnehmen), bis die Auslastung um 80&nbsp;% liegt.
+
+[TIP]
+====
+Wahrscheinlich ahnen Sie es bereits:
+Die Auslastung der _Checker_ und der nachfolgend beschriebenen _Fetcher_ muss _irgendwie_ zusammen passen.
+Sind zu viele Fetcher konfiguriert, aber wenige Checker aktiv, entsteht ein Flaschenhals bei der Verarbeitung eingeholter Monitoring-Daten nach Neustarts, RAM wird unnötig durch Fetcher und Monitoring-Daten gebunden.
+Umgekehrt langweilen sich zu viele Checker nur und blockieren wertvollen Arbeitsspeicher.
+Streben Sie daher ähnliche Auslastungswerte an.
+====
+
+
+[#num_fetchers]
+=== Zahl der Fetcher
+
+_Fetcher_ sind die Hilfsprozesse, die Agentenausgabe einholen, Spezialagenten starten und SNMP-Geräte abfragen.
+Die Bestimmung ihrer Zahl ist etwas aufwendiger als die der Checker.
+Pauschale Aussagen zur Zahl können nicht getroffen werden, zu unterschiedlich sind die Anforderungen verschiedener Monitoring-Umgebungen.
+
+Prinzipiell gibt es zwei mögliche Herangehensweisen, die optimale Zahl zu bestimmen:
+
+* Sie ermitteln die Auswirkungen typischer und extremer Hosts auf die Fetcher-Auslastung und _errechnen_ daraus die optimale Zahl der Fetcher für die Zielmenge an Hosts.
+Diese Vorgehensweise bietet sich an, wenn eine Monitoring-Umgebung schnell hochskaliert werden soll.
+* Oder Sie _optimieren_ die Zahl der Fetcher auf die aktuelle Auslastungssituation.
+Dieser Weg dürfte in einer bereits etablierten Umgebung, in der immer wieder mal neue Checks und kleinere Zahlen von Hosts hinzukommen, der bevorzugte sein.
+
+In der Praxis werden Sie beide Wege miteinander kombinieren wollen.
+
+Zur Berechnung ermitteln Sie zunächst die Zahl der mit regulären Agenten, Spezialagenten und SNMP überwachten Hosts und deren durchschnittliche Ausführungsdauer.
+Bei der Ermittlung hilft der Blick ins Monitoring „typischer“ Hosts -- dort interessiert vor allem der Dienst [.guihint]#Check_MK#.
+Eine _Topliste_ liefert [.guihint]#Monitor > History > Service check durations#.
+
+.Die Identifikation (und Optimierung) besonders langsamer Hosts kann helfen, die Fetcher-Auslastung zu reduzieren.
+image::core_tuning_service_check_durations.png[alt="Screenshot der Liste der langsamsten Dienste.",fullscreen=1]
+
+Multiplizieren Sie die ermittelte Dauer der Checks mit der Zahl betroffener Hosts und addieren Sie die Teilergebnisse auf.
+Das könnte dann so aussehen.
+
+[#calculate_fetchers]
+[cols="10,65,15,10",options="header",grid="rows"]
+|===
+|Anzahl |Check |Ausführungszeit | Summe
+| 100 | Hosts mit {CMK}-Agent überwacht (normal schnell) | 3 s | 300 s
+| 10 | Hosts mit {CMK}-Agent überwacht (langsam) | 15 s | 150 s
+| 20 | SNMP-Geräte (ältere Hardware, nicht einmal besonders langsam) | 10 s | 200 s
+| 5 | Hosts ohne Agent, nur mit Spezialagent überwacht | 5 s | 25 s
+| 2 | Sehr aufwendige Spezialagenten (bspw. Cloud-Dienste) | 25 s | 50 s
+| | *Gesamtsumme* | | *725 s*
+|===
+
+Unser Beispiel benötigt 725 Sekunden Fetcher-Zeit pro Check-Intervall.
+Die Standardeinstellung von 13 Fetchern kann 780 Sekunden Fetcher-Zeit pro Check-Intervall abdecken, womit sich die Defaults unmittelbar nach der Installation schon am Limit bewegen.
+
+Für ein initiales Setup sollten Sie um 50&nbsp;% Fetcher-Auslastung anstreben.
+Bei dem gezeigten Beispiel böte es sich also an, die Zahl der Fetcher auf 25 bis 30 etwa zu verdoppeln.
+Feedback in der Praxis liefert Ihnen das oben erwähnte Snap-In.
+Ergeben Ihre Berechnungen nur eine sehr kleine Zahl benötigter Fetcher, gehen Sie nicht unter drei.
+
+Auch für Fetcher gilt langfristig:
+Von dieser Auslastung ausgehend können Sie unter Beobachtung von Latenzen (insbesondere nach einem Neustart der {CMK}-Instanz), dem Verhalten bei Netzwerkproblemen und Lastspitzen die Zahl der Fetcher weiter reduzieren (oder weitere Services ins Monitoring aufnehmen).
+Fetcher sind jedoch empfindlicher gegenüber externen Faktoren als Checker:
+Steigen Netzwerklatenzen oder es treten Paketverluste auf, wird die Fetcher-Auslastung deutlich steigen.
+Eine Obergrenze von 80&nbsp;% sollten Sie daher nur bei einem sehr zuverlässigen Netz anstreben.
+
+[#fetcher_execution_time]
+==== Laufzeiten der Fetcher-Aufgaben verringern
+
+Ein Fetcher benötigt nur 50 bis 100 MB Arbeitsspeicher, davon aber 30 bis 60 MB resident.
+Bei 30 Fetchern sind also bereits ein bis knapp zwei GB Arbeitsspeicher dauerhaft belegt.
+Es lohnt sich daher, nach Optimierungsmöglichkeiten zu suchen, mit denen die _Antwortzeiten_ der Hosts im Monitoring verbessert werden können.
+
+Der xref:glossar#push_mode[Push-Modus] in {CE} hilft in zwei Punkten, Fetcher-Nutzung zu optimieren -- stellen Sie daher wo möglich um:
+
+* Auf Festplatte vorhandene Agentenausgabe reduziert die benötigte Fetcher-Zeit für das Einholen der Agentenausgabe auf weit weniger als eine Sekunde.
+* Netzwerk-Probleme sind dann keine Fetcher-Probleme, sondern Probleme des Agent Controllers/Agent Receivers.
+
+Falls Sie {SE} nutzen, können Sie immer noch langsame Agenten-Plugins identifizieren und diese auf xref:agent_linux#async_plugins[asynchrone Ausführung] umstellen -- auch hier hilft [.guihint]#Monitor > History > Service check durations#.
+Wenn Sie nun noch Ihre xref:snmp#performance[SNMP-Zugriffe optimieren], haben Sie gute Chancen, die Summe der Fetcher-Zeiten im obigen Beispiel zu halbieren.
+So können Sie die Zahl der Fetcher und damit ebenso den Arbeitsspeicherbedarf der Fetcher halbieren.
+
+.Fetcher-Laufzeiten per Livestatus ermitteln
+[%collapsible]
+====
+[#collapsible_livestatus]
+Die Performance-Daten von Fetchern können Sie auch mittels xref:livestatus#[Livestatus] abfragen.
+Die Tabelle `services` enthält eine Spalte `perf_data`, welche die Ausführungsdauer verschiedener Aspekte enthält.
+Filtern Sie auf aktive Checks (das Einholen von Daten per Fetcher ist hierunter subsummiert).
+In der Spalte `perf_data` ist vor allem das letzte Feld -- entweder `cmk_time_agent` oder `cmk_time_smtp`  -- interessant.
+
+Das folgende Beispiel zeigt das Einholen dieser Daten für den letzten Check:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description perf_data\nFilter: description = Check_MK"
+hplaser;Check_MK; execution_time=0.470 user_time=0.010 system_time=0.000 children_user_time=0.060 children_system_time=0.050 cmk_time_agent=0.000 cmk_time_snmp=0.350
+slowhost;Check_MK; execution_time=13.760 user_time=0.030 system_time=0.000 children_user_time=0.000 children_system_time=0.000 cmk_time_agent=13.740
+...
+----
+
+Wollen Sie später auch die Ausführungsdauer von aktiven Checks ermitteln, ersetzen Sie den Filter `description = Check_MK` durch `active_checks_enabled = 1`.
+====
+
+
+[#cmc_active]
+=== Aktive Checks
+
+Für die Ausführung von aktiven Checks sind die _Active check helpers_ genannten Hilfsprozesse zuständig.
+Die Standardeinstellung für aktive Checks des CMC liegt bei maximal fünf gleichzeitigen.
+Bei der Abschätzung hilft wieder der Blick in die Hitliste [.guihint]#Monitor > History > Service check durations#.
+Hier werden Sie sehen, dass der (standardmäßig einmal pro Tag ausgeführte) Inventur-Check auch einmal eine Minute benötigen kann, ein `check_cert` oft in ein paar hundert Millisekunden fertig ist und die Werte bei `check_httpv2` -- abhängig von der Performance des überprüften Endpunktes -- erheblich schwanken.
+Letztlich können Sie eine xref:calculate_fetchers[Rechnung wie oben] anstellen -- bei fünf aktiven Checks stehen pro Intervall 300 Sekunden zur Verfügung.
+
+Oder Sie werfen zuerst einen Blick in den Dienst [.guihint]#OMD mysite performance#, konkret in die Metrik [.guihint]#Helper usage# und dort die Graph-Linie [.guihint]#Active check helper usage#.
+
+Für die Berechnung der Zahl gilt wie bei den Fetchern:
+Gehen Sie nicht unter drei und streben Sie in größeren Umgebungen eine initiale Auslastung um 50&nbsp;% an, die Sie später langsam erhöhen können.
+
+
+[#cmc_restart]
+=== Verhalten bei Neustarts
+
+Eine Besonderheit des CMC ist, dass bei Änderungen an der Konfiguration nicht der ganze Monitoring-Core neu gestartet werden muss.
+Der CMC kann eine neue Konfiguration während des Betriebs einlesen und arbeitet dann nach Sekundenbruchteilen weiter.
+Die Einstellungen für einen echten Neustart des Cores sind daher eher bei Updates und Reboots des Servers relevant.
+
+Hier sehen die Standardeinstellungen 150 Millisekunden Wartezeit zwischen aktiven Checks und 1200 Millisekunden zwischen dem Einholen der Agentenausgabe vor.
+Das ist weit entspannter als der Standardwert der Fetcher sonst zulässt.
+Grund ist die Erwartung, dass während des Neustarts des Servers auch andere Dienste noch hochfahren.
+Bei großzügig dimensionierten Servern mit vielen Hosts im Monitoring bedeutet dies möglicherweise, dass bereits wenige Minuten nach dem Neustart zwar die Last niedrig ist, aber {CMK} noch lange nicht alle Services aktualisiert hat.
+
+Vorausgesetzt, die Zahl der Fetcher ist bereits optimiert, können Sie in solchen Fällen diese Intervalle deutlich senken.
+
+
+[#nagiostuning]
+== Tuning des Nagios Cores
+
+{cre-only} Der von {RE} verwendete Nagios-Kern ist recht robust, hat aber das Problem einer sehr teuren Ausführung von aktiven Checks:
+Für jede Ausführung eines aktiven Checks kopiert Nagios seinen Speicher, um dann an den Kindprozess weiterzugeben.
+Das Geheimnis des Tunings von Nagios liegt daher darin, diese Forks optimal zu steuern.
+
+Die in den nächsten Abschnitten erklärten Einstellungen können Sie in der Datei `~/etc/nagios/nagios.d/timing.cfg` vornehmen.
+In dieser Datei und in `~/etc/nagios/nagios.d/tuning.cfg` finden Sie auch weitere -- weniger relevante -- Konfigurationsmöglichkeiten.
+Nach jeder Änderung ist es erforderlich, mittels `cmk -N && cmk -R` die Konfiguration neu zu erstellen und den Kern neu zu starten.
+
+
+[#do_not_fork]
+=== Teure Forks vermeiden
+
+Bevor Sie Forks optimieren sollten Sie Forks nach Möglichkeit vermeiden.
+Bedenken Sie, dass ein Aufruf des Services [.guihint]#Check_MK#, welcher die Agentenausgabe einholt -- und dann zig Check-Ergebnisse als _passive Checks_ direkt in den Monitoring-Kern schreibt -- denselben Overhead bei Prozesserstellung hat wie ein simpler aktiver Check, der genau einen Netzwerkdienst überwacht.
+Daher ist es sinnvoll, die Zahl der aktiven Checks nach Möglichkeit zu reduzieren.
+Mögliche Beispiele sind:
+
+* Sie wollen MySQL- oder MariaDB-Datenbanken überwachen? Anstatt den Datenbank-Port per Firewall für den {CMK}-Server freizugeben und einen aktiven Check zu benutzen, installieren Sie besser ein xref:monitoring_mysql#[lokales Check-Plugin].
+* Sie wollen sicherstellen, dass SMTP-Versand funktioniert, weil auf Ihren Mailservern immer mal wieder der SASL-Authentifizierungs-Daemon abstürzt?
+Klar, `check_smtp` ist schnell konfiguriert, aber diesen aktiven Check lokal mit xref:agent_linux#e2e_monitoring[MRPE wie ein Agenten-Plugin] ausführen zu lassen, ist performanter.
+* Sie haben die Wahl zwischen einem aktiven Check, um Daten zu Hosts einzuholen oder einem xref:specialagent#[Spezialagenten], der xref:piggyback#[Piggyback-Daten] für viele Hosts erzeugt?
+Wenn mit einem einzigen Start eines Python-Interpreters Daten für Dutzende Hosts eingeholt werden, sollte die Entscheidung klar für den Spezialagenten fallen -- selbst, wenn die aktiven Checks in einer performanteren Programmiersprache bereitgestellt werden.
+
+
+[#nagios_restart]
+=== Verhalten bei Neustarts
+
+Standardmäßig versucht Nagios eine smarte Berechnung des Abstandes, in dem Checks initial gestartet werden.
+In vielen Fällen führt dies zu viel zu optimistischen Annahmen, wie viele Checks CPU und Speicher verkraften.
+Daher kann es sinnvoll sein, einen fixen Wert einzutragen.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# SERVICE INTER-CHECK DELAY METHOD
+# This is the method that Nagios should use when initially
+# "spreading out" service checks when it starts monitoring.  The
+# default is to use smart delay calculation, which will try to
+# space all service checks out evenly to minimize CPU load.
+# Using the dumb setting will cause all checks to be scheduled
+# at the same time (with no delay between them)!  This is not a
+# good thing for production, but is useful when testing the
+# parallelization functionality.
+#       n       = None - don't use any delay between checks
+#       d       = Use a "dumb" delay of 1 second between checks
+#       s       = Use "smart" inter-check delay calculation
+#       x.xx    = Use an inter-check delay of x.xx seconds
+
+service_inter_check_delay_method=s
+----
+
+Wenn Sie einen fixen Wert eintragen, achten Sie darauf, dass alle Checks in ein Intervall passen.
+Angenommen, Sie haben 100 Hosts, die mit dem {CMK}-Agenten überwacht werden und im Schnitt einen weiteren aktiven Check verwenden.
+Dann sind 200 Checks gleichmäßig auf 60 Sekunden zu verteilen, was 0,3 Sekunden entspricht.
+Mit einem eingetragenen Wert von 0,2 bis 0,25 Sekunden sind Sie dann auf der sicheren Seite.
+
+Analog verhält es sich mit der Variable `host_inter_check_delay_method`, welche die gleiche Einstellung für Host-Checks vornimmt.
+In der Regel werden Sie `check_icmp` als Host-Check konfiguriert haben, dann ist die Rechnung einfach: ein Check pro Host.
+Bei den oben genannten Zahl von 100 Hosts würde als sinnvoller Wert 0,4 bis 0,5 Sekunden resultieren.
+
+
+[#nagios_sleep]
+=== Abstand zwischen Checks
+
+Schließlich können Sie für den Abstand zwischen Checks im regulären Betrieb den Abstand zwischen der Check-Ausführung setzen.
+Tragen Sie den kleinsten der beiden im letzten Abschnitt ermittelten Werte ein.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# SLEEP TIME
+# This is the number of seconds to sleep between checking for system
+# events and service checks that need to be run.
+
+sleep_time=0.25
+----
+
+Beobachten Sie den {CMK}-Server nach dem Neustart der Instanz und einigen Minuten danach.
+Eine [.guihint]#CPU load# von deutlich mehr als Eins pro Kern ist für einige Minuten in Ordnung, sollte sich aber bald normalisiert haben.
+Bleibt die Last auch beim Start der Instanz niedrig, können Sie `service_inter_check_delay_method` und `host_inter_check_delay_method` auf einen kleineren Wert als die `sleep_time` reduzieren.
+
+Treten immer wieder Peaks in Last und Speicherbedarf auf, hilft die nächste Einstellung.
+
+
+[#nagios_concurrency]
+=== Maximale Zahl gleichzeitiger Checks
+
+In der Standardkonfiguration sind beliebig viele parallele Checks möglich.
+Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgeführte Checks sich schnell wieder beenden und die folgenden Einstellungen daher die Last begrenzen.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# MAXIMUM CONCURRENT SERVICE CHECKS
+# This option allows you to specify the maximum number of
+# service checks that can be run in parallel at any given time.
+# Specifying a value of 1 for this variable essentially prevents
+# any service checks from being parallelized.  A value of 0
+# will not restrict the number of concurrent checks that are
+# being executed.
+
+max_concurrent_checks=0
+----
+
+Ist allerdings [.guihint]#Check_MK# der dominierende Dienst, kann es sinnvoll sein, hier harte Grenzen zu setzen, um den Arbeitsspeicherbedarf im Rahmen zu halten.
+Je nach Anteil der Ausführungszeit, welche die Agentenabfrage mit warten verbringt (aufs Netzwerk oder das Agentenskript), bieten sich Werte zwischen der doppelten und der achtfachen Zahl der CPUs an.
+Höhere Werte sorgen für schnellere Verfügbarkeit vieler Dienste nach einem Core-Neustart, aber auch größere Last in dieser Situation.
+
+Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihint]#Memory# im Blick behalten werden.
+
+[TIP]
+====
+Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
+Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste xref:monitoring_basics#stale[_stale_] werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
+In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
+Ändern Sie deren Ausführung zu asynchron.
+
+Helfen alle Optimierungen nicht, ermitteln Sie, bei welchen Checks eine Erhöhung des Check-Intervalls sinnvoll ist.
+Bei einer hohen Zahl von Checks auf vergleichsweise schwacher Hardware sollten Sie über ein Upgrade der Hardware oder den Wechsel zu einer der kommerziellen Editionen von {CMK} nachdenken.
+====
+
+
+[#community_distributed]
+=== Parallelisierung durch verteiltes Monitoring
+
+Der eigentliche Nagios-Kern (Scheduler, Statusberechnung) läuft Single-Threaded, kann also nicht von Mehrkernprozessoren profitieren.
+Da die als externe Prozesse geforkten Checks die Hauptarbeit leisten, ist zumindest bis vier Prozessorkerne meist der Monitoring-Kern nicht der Flaschenhals.
+Bei mehr Prozessorkernen _kann_ der Monitoring-Kern zum Flaschenhals werden.
+
+Mit dem Betrieb von {RE} erfahrene Admins verteilen daher die Arbeit oft auf mehrere Monitoring-Kerne, indem sie auf einer physikalischen Maschine ein xref:distributed_monitoring#[verteiltes Monitoring] einrichten.
+Wann dieser Schritt sinnvoll ist, variiert:
+Exakte Zahlen (beispielsweise Checks oder Services) sind schwer zu nennen.
+Meist ist zwischen 2000 und 3000 aktiven Checks eine Grenze erreicht, bei der Nagios mit Forking nicht mehr hinterherkommt.
+
+Beobachten Sie die Prozessorauslastung aller Prozessorkerne separat.
+Behalten Sie auch die Größe der Nagios-Prozesse im Blick:
+Je größer der Prozess (beispielsweise, weil viel Konfiguration geladen wurde), desto ineffizienter das Forking.
+Ist zu sehen, dass ein Kern häufiger voll ausgelastet ist, während die anderen das nicht sind, sollten Sie den Umbau auf verteiltes Monitoring in Betracht ziehen.

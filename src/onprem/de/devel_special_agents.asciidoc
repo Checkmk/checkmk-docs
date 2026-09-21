@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE
+// IGNORE 
 // NONASCII °
 include::global_attr.adoc[]
 = Spezialagenten entwickeln
@@ -116,7 +116,8 @@ Erstellt wird jetzt das absolute Minimum:
 # Shebang needed only for editors
 
 from cmk.rulesets.v1.form_specs import Dictionary
-from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic, Help, Title
+from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic
+from cmk.rulesets.v1 import Help, Title
 
 def _formspec():
     return Dictionary(
@@ -303,6 +304,13 @@ Ihre Ausgabe auf der Befehlszeile sollte nun in etwa so aussehen:
 {"latitude":48.14,"longitude":11.6,"generationtime_ms":0.022292137145996094,"utc_offset_seconds":0,"timezone":"GMT","timezone_abbreviation":"GMT","elevation":536.0,"current_units":{"time":"iso8601","interval":"seconds","temperature_2m":"°C"},"current":{"time":"2026-07-01T18:15","interval":900,"temperature_2m":18.4}}
 ----
 
+[TIP]
+====
+Im „echten Leben“ werden Sie immer wieder Phasen haben, in denen Sie intensiv mit Parametern und deren Übergabe experimentieren werden.
+Um nicht bei jeder noch so kleinen Änderung die Regel- und Aufrufkonfiguration nachziehen zu müssen, können Sie den Spezialagenten auch testweise als xref:datasource_programs#[klassisches Datenquellprogramm] aufrufen.
+Die benötigte Regel finden Sie unter [.guihint]#Setup > Agents > Other integrations > Individual program call instead of agent access#.
+====
+
 
 [#rule_config2]
 === Die Regelkonfiguration
@@ -324,7 +332,8 @@ Eine – nicht abschließende – Übersicht nutzbarer Gruppierungen finden Sie 
 # Shebang needed only for editors
 
 from cmk.rulesets.v1.form_specs import Dictionary, DictElement, Float
-from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic, Help, Title
+from cmk.rulesets.v1.rule_specs import SpecialAgent, Topic
+from cmk.rulesets.v1 import Help, Title
 
 def _formspec():
     return Dictionary(
@@ -378,7 +387,7 @@ Erweitern Sie die erste Zeile um die zusätzlichen Variablen und fügen Sie die 
 
 [{python}]
 ----
-from cmk.rulesets.v1.form_specs import Dictionary, DictElement, Float, String, Password, migrate_to_password
+from cmk.rulesets.v1.form_specs import DefaultValue, Dictionary, DictElement, Float, String, Password, migrate_to_password
 
 def _formspec():
     return Dictionary(
@@ -443,7 +452,7 @@ special_agent_ometemp = SpecialAgentConfig(
 ----
 
 
-[use_pwd2]
+[#use_pwd2]
 ==== Passwörter verwenden
 
 [IMPORTANT]
@@ -525,6 +534,7 @@ check_plugin_ometemp = CheckPlugin(
 ----
 
 
+[#final_tests]
 === Abschließende Tests
 
 Eine Validierung mit `cmk-validate-plugins` ist immer sinnvoll, wenn Sie Dinge geändert haben, die innerhalb von {CMK}-Prozessen ausgeführt werden.
@@ -551,13 +561,126 @@ Die in diesem Artikel beschriebenen Skripte für Spezialagent, Regelkonfiguratio
 image::devel_special_services.png[alt="Ansicht der Services inklusive ometemp."]
 
 
+[#helpers]
+== Hilfsfunktionen
+
+{CMK} stellt einige Hilfsfunktionen bereit, die im Namensraum link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#module-cmk.server_side_programs.v1_unstable[`cmk.server_side_programs.v1_unstable`^] verfügbar sind.
+Falls Sie einen Spezialagenten in Python 3 implementieren und dieser immer von einer {CMK}-Instanz ausgeführt wird (manche Spezialagenten sind so geschrieben, dass sie auch als Agentenplugin genutzt werden können), erhalten Sie mit der API einige interessante Erweiterungen.
+
+[TIP]
+====
+Wie der Import-Pfad bereits andeutet, handelt es sich hier um eine noch nicht als stabil markierte Programmierschnittstelle.
+Wir planen, diese in {CMK} {v30} als stabil zu veröffentlichen.
+Derzeit sind eher kleinere Erweiterungen als inkompatible Änderungen geplant.
+Dennoch sollten Sie für die Migration Ihrer Plugins von {v25} nach {v30} zumindest etwas Zeit zum Testen einplanen.
+====
+
+
+[#storage]
+=== Daten zwischenspeichern
+
+Einige REST-APIs verwenden _Rate Limiting_, um die Zahl der zu verarbeitenden eingehenden Anfragen zu reduzieren.
+Nicht immer ist das Rate Limiting statisch und verwendet immer exakt die gleiche zulässige Anzahl von Anfragen pro Zeiteinheit.
+Bei dynamischem Rate Limiting sollte die REST-API den link:https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429[HTTP-Status-Code 429^] und die Angabe einer Wartezeit im Header-Feld namens _Retry-After_ zurückliefern.
+Ist die Wartezeit für das Monitoring akzeptabel, kann es sinnvoll sein, auf zwischengespeicherte ältere Antworten zurückzugreifen.
+Hierfür steht die Klasse `Storage` zur Verfügung.
+
+Ein `Storage`-Objekt ist ein Schlüssel-Wert-Speicher, der ein Tupel aus zwei Strings als Schlüssel verwendet.
+Der erste String ist der Identifikator des Plugins, der zweite kann beispielsweise der Host-Name sein -- oder in Fällen, in denen ein `Storage`-Objekt zwischen Hosts geteilt werden kann, eine URL, bei der bestimmte Parameter eine bestimmte Antwort bedingen.
+Auch als Werte sind nur Strings zulässig.
+Zur Speicherung komplexerer Objekte ist die Verwendung von JSON meist ein pragmatischer Ansatz.
+
+Eine Erweiterung um die Storage-API könnte demnach so aussehen:
+
+.~/local/lib/python3/cmk_addons/plugins/ometemp/libexec/agent_ometemp
+[{python}]
+----
+#!/usr/bin/env python3
+# Shebang needed this time to find the interpreter!
+
+import requests
+import argparse
+import time
+from cmk.server_side_programs.v1_unstable import Storage
+
+url = "https://api.open-meteo.com/v1/forecast?latitude={lat:.4f}&longitude={long:.4f}&current=temperature_2m"
+
+parser = argparse.ArgumentParser("agent_ometemp")
+parser.add_argument(
+    "--latitude",
+    help="Specify the latitude in degrees (decimal notation).",
+    type=float,
+    default=0.0)
+parser.add_argument(
+    "--longitude",
+    help="Specify the longitude in degrees (decimal notation).",
+    type=float,
+    default=0.0)
+args = parser.parse_args()
+
+fullurl = url.format(lat=args.latitude, long=args.longitude)
+
+MAXAGE = 3600.0 # Consider data not refreshed for more than one hour as too old
+now = time.time()
+storage = Storage("ometemp", fullurl)
+nexttry = float(storage.read("nexttry", "0"))
+lastsuccess = float(storage.read("lastsuccess", "0"))
+data = None
+
+if now > nexttry:
+    response = requests.get(fullurl)
+    if response.status_code == 200:
+        data = response.text
+        lastsuccess = now
+        storage.write("data", data)
+        storage.write("nexttry", str(0))
+        storage.write("lastsuccess", str(lastsuccess))
+    elif response.status_code == 429:
+        data = storage.read("data", None)
+        nexttry = now + float(response.headers["retry-after"])
+        storage.write("nexttry", str(nexttry))
+else:
+    data = storage.read("data", None)
+    
+if lastsuccess + MAXAGE > now:
+    print('<<<ometemp:sep(0)>>>')
+    print(data)
+----
+// ES: print(None) (in dem Fall, dass wir keine Daten bekommen und auch im Storage-Objekt nichts für uns steht) gibt soweit ich weiß tatsächlich None aus. Kann der Agent damit in der Sektion was anfangen? Falls nicht, sollten wir vielleicht im else-Block als Fallback lieber einen leeren String zuweisen.
+
+Wird weiterhin der HTTP-Status-Code 429 zurückgeliefert, bedient sich der Spezialagent auch künftig im `Storage`-Objekt.
+Im erweiterten Spezialagenten wird daher zusätzlich der Zeitpunkt des letzten erfolgreichen REST-API-Zugriffs gespeichert.
+In Kombination mit einer Konstanten für ein maximal zulässiges Alter (`MAXAGE` ist im Beispiel eine Stunde) sorgt dies dafür, dass bei zu alten Daten schlicht keine Agentenausgabe erfolgt und der Zustand des Services damit nach dieser Stunde zu {UNKNOWN} wechselt.
+
+
+[#vcr]
+=== Aufrufe und Antworten aufnehmen und abspielen
+
+[TIP]
+====
+Der hier vorgestellte _Videokassettenrekorder (VCR) für REST-API-Aufrufe_ ist ausschließlich zu Debugging- und Testzwecken vorgesehen!
+// Möglicherweise wissen nur die älteren Lesenden, was so ein link:https://en.wikipedia.org/wiki/Videotape[Rekorder ist^]...
+Eine vergessene Trace-Datei im Produktiveinsatz wird ewig dieselbe Antwort -- und damit ganz sicher Haare raufen -- verursachen.
+Wenn Sie die hier beschriebene Funktionalität Nutzenden gegenüber in _Rule Specs_ sichtbar machen, weisen Sie in der Inline-Hilfe klar darauf hin, dass diese Option nur auf Support-Aufforderung gesetzt werden sollte.
+====
+
+Das im letzten Beispiel beschriebene Rate Limiting kann besonders bei der Entwicklung von Check-Plugins, welche die Ausgabe von Spezialagenten auswerten, stören.
+Tätigt man denselben Aufruf innerhalb kurzer Zeit immer wieder, ist nicht nur Rate Limiting problematisch, oft entstehen auch noch Kosten für REST-API-Aufrufe.
+
+Hier hilft die Bibliothek link:https://pypi.org/project/vcrpy/[`vcrpy` (_Video Cassette Recorder for Python_)^], welche es erlaubt, HTTP-Requests aufzuzeichnen und immer und immer wieder abzuspielen. Für die Einbindung stellt {CMK} link:https://docs.checkmk.com/plugin-api/{gitbranch}/cmk.server_side_programs/index.html#cmk.server_side_programs.v1_unstable.vcrtrace[eine Funktion bereit^], welche Sie über den Argument-Parser aktivieren.
+Wird mit dem Aufrufparameter `--vcrtrace` der Pfad zu einer Trace-Datei in `~/tmp/check_mk/debug` angegeben, wird der Spezialagent jeden HTTP-Request jeweils nur beim ersten Mal ausführen und die erhaltene Rückgabe aufzeichnen.
+Wenn später genau der gleiche HTTP-Request wieder gestellt werden soll, wird dieser bereits aufgezeichnete Request direkt aus der Datei bedient, ohne dass eine neue Anfrage an den Server stattfindet.
+
+Ohne Aufrufparameter `--vcrtrace` verhält sich auch der so angepasste Spezialagent weiterhin unauffällig.
+
+
 [#detect_errors]
 == Fehler beheben
 
-Auch bei der Entwicklung eigener Spezialagenten kann es (leider) zu Fehlern und Problemen kommen.
-Deren Ursachen zu lokalisieren ist dann ebenso wichtig wie die eigentliche Behebung.
+Auch bei der Entwicklung eigener Spezialagenten kann es immer wieder mal zu Fehlern und Problemen kommen.
+Deren Ursachen zu lokalisieren ist dann die Voraussetzung für die folgende Behebung.
 Für erste Hinweise auf mögliche Ursachen sollten Sie zunächst `cmk-validate-config` aufrufen.
-Die folgenden Abschnitte helfen, weiter einzugrenzen.
+Die nächsten Abschnitte helfen, weiter einzugrenzen.
 
 
 [#serv_warn]
@@ -570,7 +693,7 @@ image::devel_special_check_mk.png[alt="Fehlermeldung des Services Check_MK wegen
 Lässt die [.guihint]#Summary# auf einen Zusammenhang mit dem neuen Spezialagenten schließen, so prüfen Sie die Eigenschaften des Hosts.
 Für den Parameter [.guihint]#{CMK} agent / API integrations# muss der Wert [.guihint]#Configured API integrations and {CMK} agent# gewählt sein.
 
-image::devel_special_monitoring_agent.png[alt="Auswahl von "Configured API integrations and Checkmk agent"."]
+image::devel_special_monitoring_agent.png[alt="Auswahl von 'Configured API integrations and Checkmk agent'."]
 
 
 [#incompatibles]
@@ -611,10 +734,10 @@ Im Monitoring bestehender Services wird sich das Problem nicht auswirken.
 
 
 [#activate_changes]
-=== Fehlermeldung bei der Aktivierung von Änderungen
+=== Fehlermeldung bei der Aktivierung ausstehender Änderungen
 
 Möglicherweise gibt es auch ein Problem in der Aufrufkonfiguration oder am eigentlichen Spezialagenten.
-Dies wird zum Beispiel sichtbar, weil beim [.guihint]#Activate changes# ein gelber Warnhinweis angezeigt wird.
+Dies wird zum Beispiel sichtbar, weil beim [.guihint]#Activate pending changes# ein gelber Warnhinweis angezeigt wird.
 
 Überprüfen Sie dann die Datei `server_side_calls/special_agent.py` entsprechend der Angaben aus der Fehlermeldung.
 Behebt das den Fehler nicht, so können Sie wieder auf der Befehlszeile nach Fehlermeldungen suchen:
@@ -679,6 +802,7 @@ Erhalten Sie hier statt eines Strings mit den aktuellen Messdaten eine Fehlermel
 [#files]
 == Dateien und Verzeichnisse
 
+[#directories]
 === Verzeichnisse
 
 [cols="60,~",options="header"]
@@ -689,8 +813,6 @@ Erhalten Sie hier statt eines Strings mit den aktuellen Messdaten eine Fehlermel
 |`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/rulesets/` |Ablageort für Regelsatzdateien.
 |`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/server_side_calls/` |Ablageort für Dateien zur Aufrufkonfiguration.
 |`~/local/lib/python3/cmk_addons/plugins/<plug-in_family>/agent_based/` |Ablageort für agentenbasierte Check-Plugins.
-|`~/share/check_mk/agents/special/` |Hier sind die mitgelieferten Spezialagenten installiert.
-|`~/local/share/check_mk/agents/special/` |Ablage der von Ihnen modifizierten Spezialagenten.
 |`~/local/bin/` |Ablage von eigenen Programmen oder Skripten, die im Suchpfad sein sollen und ohne Pfadangabe direkt ausgeführt werden können. Ist ein Programm sowohl in `~/bin/` als auch in `~/local/bin/`, hat letzteres Vorrang.
 |===
 

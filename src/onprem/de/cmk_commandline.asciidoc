@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE % 
+// IGNORE SSHD
 // NONASCII ├ ─ └ │ …​ °
 include::global_attr.adoc[]
 = {CMK} auf der Befehlszeile
@@ -64,6 +64,22 @@ mysite@myserver123's password: *pass:[**********]*
 
 Beim ersten Login bekommen Sie wahrscheinlich eine Warnung wegen eines unbekannten Host-Schlüssels.
 Wenn Sie sicher sind, dass kein Angreifer in diesem Augenblick die IP-Adresse Ihres Monitoring-Systems übernommen hat, können Sie diese einfach mit `yes` bestätigen.
+
+.Feinheiten fürs SSH-Login mit öffentlichem Schlüssel
+[%collapsible]
+====
+Gründe, auch das Login mit einem öffentlichen Schlüssel (_Public Key Login_) in Erwägung zu ziehen, gibt es einige:
+Wer Erweiterungen für {CMK} entwickelt, wird mit `rsync` Verzeichnisstrukturen zur Test-Instanz kopieren und mit `ssh` Befehle direkt dort ausführen wollen.
+Bei produktiven Instanzen, ist es oft erwünscht, einem Personenkreis die Möglichkeit zur Arbeit auf der Befehlszeile zu geben, ohne diesen gleich Root-Rechte zu geben.
+
+Sie werden jedoch auf einigen Linux-Installationen feststellen, dass der SSH-Daemon Ihre `~/.ssh/authorized_keys` ignoriert und beim Login das Passwort abgefragt wird.
+Dies ist der Fall, wenn die SSHD-Konfiguration voraussetzt, dass das Home-Verzeichnis nicht _world-readable_ ist.
+Die Maßnahme mit den geringsten Sicherheitsimplikationen, ist mit `chmod 0700 $OMD_ROOT` dem Rest der Welt Leserechte zu entziehen.
+Denken Sie aber daran, dass dies Einfluss auf die Erstellung weiterer Instanzen haben kann:
+Beim xref:omd_basics#[Erstellen einer Instanz] liest `omd create` die xref:ports#[Ports] aller aktiven Instanzen aus, um die niedrigsten freien zu ermitteln.
+Kann `omd create` die benutzten Ports nicht auslesen, sind Konflikte -- die manuell behoben werden müssen -- prädestiniert.
+Daher ist der pragmatische Ansatz, vor der Erstellung von Instanzen die Rechte erneut zu vergeben (`chmod 0755 $OMD_ROOT`) und gleich danach wieder zu entziehen.
+====
 
 Auch bei der {CMK} Appliance können Sie auf die Befehlszeile zugreifen.
 Wie das geht, erklärt ein xref:appliance_usage#ssh[eigener Artikel].
@@ -147,9 +163,9 @@ Diese können Sie z.B. mit `ps ax`, `pstree -p` oder `top` ermitteln.
 Damit greifen Sie dann über das `/proc`-Dateisystem direkt auf die Datei `environ` des Prozesses zu.
 Hier ist ein passender Befehl für die Beispiel-PID `13222`:
 
-[{shell}]
+[{shell-raw}]
 ----
-{c-omd} tr \\0 \\n < /proc/13222/environ | sort
+{c-omd} tr '\0' '\n' < /proc/13222/environ | sort
 ----
 
 Wenn Sie für eigene Skripten oder andere Software, die in der Instanz laufen soll, eigene Variablen benötigen,
@@ -199,9 +215,8 @@ Folgendes Schaubild zeigt die wichtigsten Verzeichnisse einer {CMK}-Installation
 image::filesystem.png[alt="Illustration der Verzeichnisstruktur einer {CMK} Instanz."]
 
 Die Basis bildet das Verzeichnis `/omd`.
-Alle Dateien von {CMK} befinden sich ohne Ausnahme hier
-Zwar ist `/omd` ein symbolischer Link auf `/opt/omd`, womit die Daten _physikalisch_ eigentlich unterhalb von `/opt` liegen.
-Aber alle Pfadangaben in {CMK} verwenden immer `/omd`.
+Alle Dateien von {CMK} befinden sich ohne Ausnahme hier.
+Zwar ist `/omd` ein symbolischer Link auf `/opt/omd`, womit die Daten _physikalisch_ eigentlich unterhalb von `/opt` liegen, aber alle Pfadnamen in {CMK} verwenden immer `/omd`.
 
 Wichtig ist die Aufteilung in Daten (gelb dargestellt) und Software (blau).
 Die Daten der Instanzen liegen unterhalb von `/omd/sites/`, die installierte Software unter `/omd/versions/`.
@@ -324,22 +339,34 @@ Da dieses Verzeichnis im RAM liegt, ist der Platz begrenzt.
 Legen Sie eigene Dinge direkt in das Instanzverzeichnis oder in ein eigenes Unterverzeichnis davon.
 
 |`local/` |Eigene Erweiterungen. +
-Unter `local/` finden Sie eine „Schattenhierarchie“ der Softwareverzeichnisse `bin/`, `lib/` und `share/`.
-Diese sind für Ihre eigenen Änderungen oder Erweiterungen der Software vorgesehen.
-Auch hier gilt:
-Legen Sie unter `local/` auf keinen Fall Testdateien, Log-Dateien, Sicherheitskopien oder Sonstiges an, was dort nicht hingehört.
-{CMK} könnte versuchen, diese Dateien als Teil der Software auszuführen.
-Auch werden die Dateien beim xref:glossar#distributed_monitoring[verteilten Monitoring] auf alle Remote-Instanzen verteilt.
+Hier sind die Verzeichnisse `local/share/check_mk/agents/` und `local/lib/python3/cmk_addons/plugins/` für die xref:devel_intro#[Programmierung eigener Erweiterungen] relevant.
+Außerdem finden Sie hier eine „Schattenhierarchie“ der Softwareverzeichnisse `bin/`, `lib/` und `share/`.
+Hier abgelegte Dateien können gleichnamige, von {CMK} mitgelieferte Dateien _überschatten_.
+Beachten Sie, dass hier abgelegte Dateien im xref:glossar#distributed_monitoring[verteilten Monitoring] auf alle Remote-Instanzen verteilt werden.
+Falls Sie hier Dateien ablegen, um eigene Änderungen an {CMK} zu testen, tun Sie dies nur in einer Instanz, die Sie ausschließlich zum Testen nutzen.
 |===
 
 
 [#local]
 === {CMK} verändern und erweitern -- die lokalen Dateien
 
-[TIP]
+[IMPORTANT]
 ====
-Einige in diesem Abschnitt getroffenen Aussagen zum Vorrang von lokalen (instanzspezifischen) Dateien vor gleichnamigen Dateien im Software-Verzeichnis sind nicht mehr korrekt.
-Wir werden betroffene Stellen bald anpassen.
+Dateien innerhalb von `~/local/` abzulegen hat das Potenzial, Chaos zu schaffen, weil das Überschreiben von bei {CMK} mitgelieferten Funktionen nicht nur die Möglichkeit schafft, Korrekturen und Erweiterungen zu testen, sondern auch das Risiko, vorhandene Funktionalität zu beschädigen.
+Es gibt daher genau drei legitime Gründe, in diesem Verzeichnis zu arbeiten:
+
+* Sie entwickeln Erweiterungen für {CMK}, dann orientieren Sie sich an den in den xref:devel_intro#[Artikeln für Entwickelnde] beschriebenen Verzeichnissen.
+Wenn Sie darauf achten, Namenskollisionen zu vermeiden, sind keine Seiteneffekte zu erwarten.
+
+* Sie möchten zur Entwicklung beitragen, indem Sie beispielsweise mitgelieferte Plugins erweitern.
+In diesem Fall kopieren Sie _in einer Testinstanz_ die zu modifizierenden Dateien in ihren korrespondierenden Pfad in `~/local/` und editieren sie dort.
+
+* Sie haben einen Fehler gefunden und mit {CMK} Kontakt aufgenommen.
+In manchen Fällen erhalten Sie von Support-Personen bei {CMK} dann Dateien, die sie zum Testen in `~/local/` ablegen sollen.
+In der Regel ist solch ein Test mit dem Hinweis verbunden, in welcher der nächsten Patch-Versionen die geänderten Dateien in der `/omd/`-Verzeichnisstruktur ausgeliefert werden, damit Sie anschließend Dateien im `~/local/`-Verzeichnis löschen können.
+
+Im Idealfall packen Sie eigene Veränderungen nach jeder Anpassung als xref:devel_mkps#[MKP] und erhalten Anpassungen von Dritten ebenfalls als MKP.
+Dies erleichtert es, zusammen gehörende Anpassungen in einer einzigen Aktion zu aktivieren oder zu deaktivieren.
 ====
 
 Wie gerade in der obigen Tabelle gezeigt, ist das Verzeichnis `~/local/` mit seinen zahlreichen Unterverzeichnissen für Ihre eigenen Erweiterungen vorgesehen.
@@ -347,6 +374,8 @@ In einer neuen Instanz sind alle Verzeichnisse unter `~/local/` zunächst leer.
 
 Mit dem praktischen Befehl `tree` können Sie sich schnell einen Überblick über die Struktur unter `~/local/` verschaffen.
 Die Option `-L 3` begrenzt hier die Tiefe auf 3:
+
+// MFS: Nach dem Picking nach 2.5 und 2.4 ist die Baumdarstellung für 2.5 anzupassen.
 
 [{shell}]
 ----
@@ -391,6 +420,12 @@ Alle Verzeichnisse der _untersten_ Ebene sind aktiv in die Software eingebunden.
 Legen Sie hier eine Datei ab, so wird diese genauso behandelt, als läge sie im gleichnamigen Verzeichnis unterhalb von `/omd/versions/...` bzw. im logischen Pfad von der Instanz aus unter `~/bin/`, `~/lib/` oder `~/share/`).
 
 Beispiel: In der Instanz werden ausführbare Programme in `~/bin/` und in `~/local/bin/` gesucht.
+
+[TIP]
+====
+Für alle Verzeichnisse gilt:
+Nur solche mit einer Datei `pass:[__init__].py` können überschattet werden und auch dies nur, wenn im gleichnamigen Verzeichnis in `~/local/` ebenfalls eine Datei `pass:[__init__].py` liegt.
+====
 
 Dabei gilt, dass bei einer _exakten Namensgleichheit_ die Datei unter `~/local/` immer Vorrang hat.
 Das ermöglicht Ihnen, Dateien der Software zu modifizieren, ohne Installationsdateien unterhalb von `/omd/versions/` ändern zu müssen.
@@ -505,7 +540,7 @@ Hier folgt die Übersicht der Optionen, die wir in diesem Kapitel, aber auch an 
 2+|*Services*
 |`cmk -I myserver123` |xref:wato_services#commandline[Service-Erkennung ausführen]
 |`cmk --check-discovery myserver123` |Führt auf dem Host den xref:wato_services#discovery_check[Discovery Check] aus, der nach neuen und verschwundenen Services und nach neuen Host-Labels sucht.
-Bei einer Änderung wird der Host "markiert" indem eine Datei mit dem Host-Namen in `~/var/check_mk/autodiscovery` angelegt wird
+Bei einer Änderung wird der Host „markiert“ indem eine Datei mit dem Host-Namen in `~/var/check_mk/autodiscovery` angelegt wird
 -- allerdings nur dann, wenn in {CMK} die automatische Aktualisierung der Service-Konfiguration aktiviert ist (im Regelsatz [.guihint]#Periodic service discovery#).
 2+|*Agenten*
 |`cmk -d myserver123` |xref:dump_agent[Agentenausgabe holen]
@@ -525,7 +560,7 @@ Details zum DNS-Cache finden Sie im xref:hosts_setup#dns[Artikel über die Hosts
 Dieser Befehl wird in einer {CMK}-Instanz standardmäßig einmal am Tag per Cronjob durchgeführt.
 |`cmk --cleanup-piggyback` |Löscht alle veralteten xref:piggyback#[Piggyback-Daten] im Verzeichnis `~/tmp/check_mk/piggyback/`.
 Dieser Befehl wird in einer {CMK}-Instanz standardmäßig einmal am Tag per Cronjob durchgeführt.
-|`cmk -P` |xref:mkps#commandline[MKPs verwalten]
+// MFS: Deprecated! |`cmk -P` |xref:mkps#commandline[MKPs verwalten]
 |`cmk --snmpwalk myswitch` |xref:snmp#simulation[SNMP-Walk ziehen] vom Host `myswitch`
 |`cmk --snmptranslate` |xref:devel_check_plugins_snmp#locating_oids[SNMP-Walk übersetzen]
 |`cmk --create-diagnostics-dump` |xref:support_diagnostics#commandline[Support Diagnostics Dump erstellen]
@@ -585,7 +620,7 @@ Folgende Tabelle zeigt wichtige Unterschiede bei der Konfiguration der beiden Ke
 
 Das Neuerzeugen der Konfiguration ist immer dann notwendig,
 wenn sich Inhalte der Konfigurationsdateien unterhalb von `~/etc/check_mk/conf.d` oder automatisch erkannte Services unter `~/var/check_mk/autochecks` geändert haben.
-Das [.guihint]#Setup# führt Buch über solche Änderungen und zeigt diese in der GUI als zu xref:glossar#activate_changes[aktivierende Änderungen] an.
+Das [.guihint]#Setup# führt Buch über solche Änderungen und zeigt diese in der GUI als xref:glossar#activate_changes[ausstehende zu aktivierende Änderungen] an.
 Für das Aktivieren über die Befehlszeile  gibt es die folgenden Befehle:
 
 [cols="35,~",options=header]
