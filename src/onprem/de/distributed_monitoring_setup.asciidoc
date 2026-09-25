@@ -1,0 +1,536 @@
+// -*- coding: utf-8 -*-
+// IGNORE Umwidmung Dropdown Checkern Instanzzuordnung Instanzalias Instanzzertifikate
+// NONASCII 
+include::global_attr.adoc[]
+= Verteiltes Monitoring einrichten
+:title: Verteiltes Monitoring einrichten
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Nachdem Sie sich mit den xref:distributed_monitoring_basics#[Vor- und Nachteilen eines verteilten Monitorings vertraut gemacht] haben, wollen Sie eines einrichten. In diesem Artikel führen wir Sie durch diese Aufgabe.
+
+Die Einrichtung eines verteilten Monitorings mit zentralem Setup geschieht in folgenden Schritten:
+
+. Sie xref:setting_up_central_site[richten die Zentralinstanz] zunächst ganz normal wie eine Einzelinstanz ein.
+. Dann xref:create_remote[richten Sie die Remote-Instanzen ein] und xref:start_livestatus[geben Livestatus per Netzwerk frei].
+. Auf der Zentralinstanz xref:connect_remote_sites[binden Sie anschließend die Remote-Instanzen] über [.guihint]#Setup > General > Distributed monitoring# ein.
+. Bei xref:distribute_objects[Hosts und Ordnern legen Sie fest], von welcher Instanz aus diese überwacht werden sollen.
+. Für xref:move_hosts[umgezogene Hosts] führen Sie die Service-Erkennung neu durch.
+
+Bei Verwendung des zentralen Setups raten wir dazu, _frisch eingerichtete_ Remote Sites zu verwenden.
+Es werden sowieso alle Einstellungen überschrieben und die Zentralinstanz kümmert sich um die Zuweisung der überwachten Hosts.
+
+Wenn Sie entfernte Instanzen nur mittels Live-Status einbinden wollen und diese autonom administriert werden sollen, sollten diese natürlich bereits Hosts im Monitoring haben.
+Dann sind folgende Schritte durchzuführen:
+
+. Sie xref:create_remote[richten die Remote-Instanzen ein] und xref:start_livestatus[geben Livestatus per Netzwerk frei].
+. Auf der Zentralinstanz xref:connect_remote_sites[binden Sie die Remote-Instanzen] über [.guihint]#Setup > General > Distributed monitoring# ein.
+
+[#setting_up_central_site]
+== Zentralinstanz einrichten
+
+An die Zentralinstanz werden keine speziellen Anforderungen gestellt.
+Je nach Szenario werden Sie zwei optionale Einstellungen vornehmen wollen.
+Eine Umwidmung einer bereits länger betriebenen Solo-Instanz zu einer Zentralinstanz im verteilten Monitoring stellt kein Problem dar.
+
+Beide Einstellungen werden unter [.guihint]#Setup > General > Global settings# im Abschnitt [.guihint]#Site management# vorgenommen:
+
+* Wenn Sie ein verteiltes Monitoring von Grund auf neu aufbauen und die Zentralinstanz ausschließlich der Konfiguration und der Übersicht dient, aber keine Hosts direkt überwacht, können Sie die Einstellung [.guihint]#Monitoring core: No monitoring core# den Monitoring-Kern abschalten.
+Belassen Sie den Monitoring-Kern, wenn die Zentralinstanz selbst Hosts überwacht.
+* Für die korrekte xref:piggyback#distributed_piggyback[Verarbeitung von Piggyback-Daten] sollten Sie den Piggyback-Hub aktivieren.
+Da der Piggyback-Hub recht sparsam mit Systemressourcen umgeht, empfehlen wir die Aktivierung in jeder Instanz.
+
+.Den Piggyback-Hub können Sie komfortabel in den [.guihint]#Global settings# aktivieren.
+image::distributed_monitoring_site_management.png[alt="Die Option 'Enable piggyback-hub' in den globalen Einstellungen."]
+
+Anschließend xref:glossar#activate_changes[aktivieren Sie die ausstehenden Änderungen], da jede der beschriebenen Änderungen Neustarts von Diensten erfordert.
+
+[#create_remote]
+== Remote-Instanzen vorbereiten
+
+Die Remote-Instanzen werden zunächst als neue Instanzen wie üblich mit `omd create` erzeugt.
+Dies geschieht dann natürlich auf dem (entfernten) Server, der für die jeweilige Remote-Instanz vorgesehen ist.
+
+[TIP]
+====
+* Verwenden Sie für die Remote-Instanzen IDs, die in Ihrem verteilten Monitoring _eindeutig_ sind und die Identifizierung erleichtern.
+* Die {CMK}-Version (z.B. {current-major}) der Remote- und Zentralinstanz muss dieselbe sein -- ein xref:update#updatedistributed[Mischbetrieb] wird nur für die leichtere Durchführung von Updates unterstützt.
+* Da {CMK} mehrere Instanzen auf einem Server unterstützt, darf die Remote-Instanz auch auf dem selben Server laufen.
+====
+
+[#create_site]
+=== Remote-Instanzen einrichten
+
+Die Einrichtung der Remote-Instanz unterscheidet sich nicht von der einer Einzelinstanz.
+Hier ist ein Beispiel für das Anlegen einer Remote-Instanz mit dem Namen `myremote1` und dem Passwort `t0p53cr3t` für den Instanz-Administrator `cmkadmin`:
+
+[{shell}]
+----
+{c-root} omd create --admin-password t0p53cr3t myremote1
+Adding /opt/omd/sites/myremote1/tmp to /etc/fstab.
+Creating temporary filesystem /omd/sites/myremote1/tmp...[green]#OK#
+Updating core configuration...
+Generating configuration for core (type cmc)...
+Starting full compilation for all hosts
+ Creating global helper config...[green]#OK#
+ Creating cmc protobuf configuration...OK
+Executing post-create script "01_create-sample-config.py"...[green]#OK#
+Executing post-create script "02_cmk-compute-api-spec"...[green]#OK#
+Executing post-create script "03_message-broker-certs"...[green]#OK#
+Restarting Apache...[green]#OK#
+Created new site myremote1 with version {current}.pro.
+
+  The site can be started with pass:q[*omd start myremote1*].
+  The default web UI is available at pass:q[*http://myserver/myremote1/*]
+
+  The admin user for the web applications is *cmkadmin* with password: *t0p53cr3t*
+  For command line administration of the site, log in with *'omd su myremote1'*
+  After logging in, you can change the password for cmkadmin with *'cmk-passwd cmkadmin'*.
+----
+
+Merken Sie sich das Passwort für `cmkadmin`.
+Sie benötigen es mindestens einmal: um die Verbindung der Zentral- zur Remote-Instanz herzustellen.
+Sobald die Remote-Instanz der Zentralinstanz untergeordnet wurde,
+werden sowieso alle Benutzer durch die von der Zentralinstanz ausgetauscht.
+
+
+[#start_livestatus]
+=== Livestatus über TCP und Piggyback-Hub aktivieren
+
+[#livestatus_tcp]
+==== Livestatus über TCP aktivieren
+
+Livestatus stellt den Zugriff auf die Monitoring-Daten her.
+Dieses muss per TCP im Netzwerk freigegeben werden.
+
+[TIP]
+====
+Beachten Sie dabei, dass Livestatus zwar SSL verwendet, um Einblicke in übertragene Daten zu verhindern, aber keinen Zugriffsschutz bietet.
+Jeder Teilnehmer eines Netzwerkes, der den Livestatus-Port einer Remote-Instanz erreichen kann, hat die Möglichkeit, Monitoring-Daten abzufragen.
+Wir empfehlen daher zusätzliche Sicherheitsmaßnahmen wie entsprechende Firewall-Regeln und gegebenenfalls die Verwendung eines VPN.
+====
+
+Die Aktivierung der Netzwerkfreigabe von Livestatus geschieht als Instanzbenutzer bei noch gestoppter Instanz per `omd config`:
+
+[{shell}]
+----
+{c-root} omd su myremote1
+{c-myremote1} omd config set LIVESTATUS_TCP on
+{c-myremote1} omd config set LIVESTATUS_TCP_TLS on
+----
+
+Um sich zu vergewissern, dass alle Einstellungen korrekt angewandt wurden, können Sie sich die für Livestatus relevanten Einstellungen anzeigen lassen.
+Notieren Sie den angezeigten Port, Livestatus verwendet als Default 6557:
+
+[{shell}]
+----
+{c-myremote1} omd config show | grep LIVESTATUS
+LIVESTATUS_TCP: on
+LIVESTATUS_TCP_ONLY_FROM: 0.0.0.0
+LIVESTATUS_TCP_PORT: 6557
+LIVESTATUS_TCP_TLS: on
+----
+
+[TIP]
+====
+Wenn Sie die grafische Konfiguration bevorzugen, können Sie beide Einstellungen auch unter [.guihint]#Setup > General > Global settings > Site management# vornehmen.
+Aber wenn man schon in der Befehlszeile unterwegs ist...
+====
+
+[#activate_piggyback]
+==== Piggyback-Hub aktivieren
+
+Da der Piggyback-Hub recht sparsam mit Systemressourcen umgeht, empfehlen wir die Aktivierung in jeder Instanz.
+Die Aktivierung können Sie direkt in der Shell-Sitzung vornehmen, in der Sie eben Livestatus über TCP aktiviert haben:
+
+[{shell}]
+----
+{c-myremote1} omd config set PIGGYBACK_HUB on
+----
+
+Um sich zu vergewissern, dass alle Einstellungen korrekt angewandt wurden, können Sie sich die für den Piggyback-Hub relevanten Einstellungen anzeigen lassen.
+Notieren Sie den angezeigten Port, der Piggyback-Hub verwendet als Default 5672:
+
+[{shell}]
+----
+{c-myremote1} omd config show | grep 'PIGGYBACK_HUB\|RABBITMQ_PORT'
+PIGGYBACK_HUB: on
+RABBITMQ_PORT: 5672
+----
+
+[TIP]
+====
+Lassen Sie sich nicht verwirren: Der [.guihint]#Message Broker Port# ist hier als Variable `RABBITMQ_PORT` hinterlegt, weil RabbitMQ die von {CMK} konkret verwendete Message Broker Software ist.
+====
+
+
+==== Instanz starten
+
+Nach dem Speichern starten Sie die Instanz wie gewohnt mit `omd start`:
+
+[{shell}]
+----
+{c-myremote1} omd start
+Starting agent-receiver...OK
+Starting mkeventd...OK
+Starting liveproxyd...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting redis...OK
+Starting automation-helper...OK
+Starting ui-job-scheduler...OK
+Starting cmc...OK
+Starting apache...OK
+Starting dcd...OK
+Starting rabbitmq...OK
+Starting stunnel...OK
+Starting piggyback-hub...OK
+Starting xinetd...OK
+Starting crontab...OK
+----
+
+Die Instanz ist jetzt bereit.
+
+==== Kontrolle der Ports
+
+Eine Kontrolle mit `ss` zeigt, dass die Ports 6557 und 5672 geöffnet sind.
+Die Bindung an Port 6557 geschieht mit einer Instanz des Internet Superservers `xinetd`, welcher direkt in der Instanz läuft:
+
+[{shell-raw}]
+----
+{c-myremote1} ss -tulpn | grep ':6557\|:5672'
+tcp   LISTEN 0      128                      *:5672             *:*    users:(("beam.smp",pid=32639,fd=40))     
+tcp   LISTEN 0      64                       *:6557             *:*    users:(("xinetd",pid=33374,fd=6))
+----
+
+[#get_certificate]
+=== SSL-Zertifikat identifizieren
+
+Instanzzertifikate werden bei der Einrichtung einer Instanz erzeugt.
+Um sicherzustellen, dass Sie dem richtigen Zertifikat vertrauen, loggen Sie sich an der Remote-Instanz ein und gehen mittels [.guihint]#Setup > Maintenance > Certificate overview# zur xref:certificates#[Zertifikatsübersicht].
+Kopieren Sie die [.guihint]#Fingerprints# der Zertifikates, deren Verwendungszweck in der Spalte [.guihint]#Purpose# als [.guihint]#Signing the site certificate# (CA-Zertifikat) und [.guihint]#The site certificate# (Site-Zertifikat) bezeichnet wird.
+// MFS: Wer von unten zurück springt, wird glücklich sein, den Sprung nach unten wieder zu haben. Wetten?
+Sie benötigen diese [.guihint]#Fingerprints# xref:livestatus_tls[später] beim Verbinden der Instanz zur Kontrolle.
+
+
+[#connect_remote_sites]
+== Remote-Instanzen in die Zentralinstanz einbinden
+
+Die Konfiguration des verteilten Monitorings wird ab jetzt ausschließlich auf der Zentralinstanz in der Übersicht des verteilten Monitorings via [.guihint]#Setup > General > Distributed Monitoring# vorgenommen.
+Hier verwalten Sie die Verbindungen zu den einzelnen Instanzen.
+Dabei zählt die Zentrale selbst auch als Instanz und ist bereits in der Liste eingetragen:
+
+.In der Übersicht der Verbindungen ist immer die lokale Instanz gelistet.
+image::distributed_monitoring_central_site.png[alt="Ansicht der Zentralinstanz in den Verbindungen."]
+
+
+[#connect_status]
+=== Livestatus-Zugriff aktivieren
+
+Legen Sie jetzt mit icon:icon_new[] [.guihint]#Add connection# die Verbindung zur ersten Remote-Instanz an.
+Im Abschnitt [.guihint]#Basic settings# tragen Sie als [.guihint]#Site ID# den Namen ein -- exakt so, wie Sie diesen bei `omd create` vergeben haben.
+Den Alias können Sie frei vergeben und auch später ändern.
+
+.Die [.guihint]#Site ID# muss dem Namen der Remote-Instanz exakt entsprechen
+image::distributed_monitoring_basic_settings.png[alt="Die Basiseinstellungen für die Remote-Instanz."]
+
+Bei den Einstellungen der [.guihint]#Status connection# legen Sie fest,
+wie die Zentralinstanz den Status der Remote-Instanzen per Livestatus abfragt.
+Das Beispiel im Screenshot zeigt eine Verbindung mit der Methode [.guihint]#Connect via TCP (IPv4)#.
+Diese ist für stabile Verbindungen mit kurzen Latenzzeiten optimal (in einem LAN oder zwischen schnell angebundenen Standorten).
+Anpassungen für WAN-Verbindungen mit höheren Latenzen erklärt ein xref:distributed_monitoring_performance#[weiterführender Artikel].
+
+.Im Regelfall müssen Sie hier nur [.guihint]#Host# und [.guihint]#URL Prefix# eintragen, sowie den [.guihint]#Port# überprüfen.
+image::distributed_monitoring_status_connection.png[alt="Eingabe der Statusdaten."]
+
+// Der Eintrag bei [.guihint]#URL Prefix# _darf nicht_ auf `check_mk/` enden.
+Der Eintrag bei [.guihint]#URL Prefix# enthält die Basis-URL Ihrer Instanz: Protokoll, Hostname und Instanzname.
+Wenn Sie grundsätzlich per HTTPS auf {CMK} zugreifen, dann ersetzen Sie im Protokollteil `http` durch `https`.
+Weitere Details erfahren Sie in der Inline-Hilfe oder dem xref:omd_https#[Handbuchartikel zu HTTPS mit {CMK}].
+
+Falls Sie keine Setup-Verteilung aktivieren wollen, nehmen Sie im folgenden Abschnitt [.guihint]#Configuration connection# keine Änderungen vor, speichern und kommen dann wieder in die xref:overview_new[Übersichtsseite des verteilten Monitorings].
+
+[#connect_setup]
+=== Setup-Verteilung aktivieren
+
+Das Replizieren der Konfiguration und somit die Verwendung des xref:distributed_monitoring_basics#central_setup[zentralen Setups] ist, wie eingangs besprochen, optional.
+Aktivieren Sie die Replikation durch Auswahl von [.guihint]#Push configuration to this site#, wenn Sie die Remote-Instanz von der Zentralinstanz aus mitkonfigurieren möchten.
+In diesem Fall empfehlen wir die Einstellungen, die Sie in folgender Abbildung sehen.
+
+.Mit dem Dropdown-Eintrag [.guihint]#Push configuration to this site# aktivieren Sie die Setup-Verteilung.
+image::distributed_monitoring_configuration_connection.png[alt="Eingabe der Konfigurationsdaten."]
+
+Achten Sie auf die korrekte Einstellung für [.guihint]#URL of remote site#.
+Die URL _muss hier immer_ mit `check_mk/` enden.
+Eine Verbindung mit HTTPS ist empfehlenswert, setzt aber voraus, dass der Apache der Remote-Instanz HTTPS unterstützt.
+Dies muss auf Linux-Ebene des Servers Ihrer Remote-Instanz xref:omd_https#[konfiguriert werden].
+Bei der {CMK} Appliance kann xref:appliance_usage#ssl[HTTPS über die webbasierte Konfigurationsoberfläche eingerichtet] werden.
+Falls Sie eine interne _Certificate Authority_ (CA) verwenden, sollten Sie das CA-Zertifikat in [.guihint]#Global settings > Site management > Trusted certificate authorities for SSL# zu hinterlegen.
+Von der Verwendung der Checkbox [.guihint]#Ignore SSL certificate errors# raten wir ab.
+
+Als [.guihint]#Message broker port# geben Sie den nach Aktivierung des Piggyback-Hub ermittelten Port ein. 
+
+[#overview_new]
+Nachdem Sie die vorgenommenen Einstellungen gespeichert haben, sehen Sie in der Übersicht eine zweite Instanz:
+
+.Die neu eingebundene Instanz ist sichtbar, aber noch nicht verbunden. Klicken Sie in den Screenshot um Ihn zu vergrößern.
+image::distributed_monitoring_before_login.png[alt="Die Übersicht der Verbindungen vor der Eingabe des Passworts.",fullscreen=1]
+
+// Der Monitoring-Status der (noch leeren) Remote-Instanz ist jetzt schon korrekt eingebunden.
+
+[TIP]
+====
+Aktivieren Sie an dieser Stelle _noch nicht_ die ausstehenden Änderungen. Echt nicht.
+====
+
+[#livestatus_tls]
+=== SSL-Zertifikat prüfen und vertrauen
+
+Nachdem Sie die Remote-Instanz hinzugefügt haben, werden Sie in der Spalte [.guihint]#Status connection# zwei Dinge bemerken:
+
+Zum einen wird die Verbindung durch das Schildsymbol icon:icon_encrypted[] als verschlüsselt markiert.
+Und zum anderen wird {CMK} Ihnen mit einem weißen Kreuz auf rotem Grund icon:icon_cross[] anzeigen, dass der CA der Remote-Instanz (noch) nicht vertraut wird.
+Mit einem Klick auf das Schildsymbol icon:icon_encrypted[] gelangen Sie in die Details der benutzten Zertifikate.
+
+// MFS: Sprung nach oben, für alle, die sich jetzt unsicher sind, weil sie oben übersprungen haben...
+Vergleichen Sie die beiden xref:get_certificate[zuvor notierten Fingerprints] mit den angezeigten.
+Stimmen diese überein, klicken Sie auf den gehobenen Daumen icon:icon_trust[], um dem CA-Zertifikat zu vertrauen.
+Danach werden beide Zertifikate als vertrauenswürdig gelistet, was in der Übersicht durch ein Häkchen auf grünem Grund icon:icon_checkmark[] symbolisiert wird.
+
+.Um eine Verbindung zu Livestatus der Remote-Instanz herzustellen, müssen Sie dem CA-Zertifikat vertrauen.
+image::distributed_monitoring_certificate_details.png[]
+
+Wenn Sie nur ein verteiltes Monitoring ohne zentrales Setup aufbauen wollen, aktivieren Sie jetzt die ausstehenden Änderungen und sind fertig.
+Für das zentrale Setup aktivieren Sie diese noch nicht -- vorher ist noch ein weiterer Schritt nötig.
+
+
+[#remote_login]
+=== Login an der Remote-Instanz
+
+Auch in der Spalte [.guihint]#Configuration connection# zeigen zwei Icons, dass noch nicht alle nötigen Schritte abgeschlossen sind:
+
+Hier weist das weiße Kreuz auf rotem Grund icon:icon_cross[] darauf hin, dass noch kein [.guihint]#Login# auf der entfernten Instanz von {CMK} stattgefunden hat.
+Bei diesem Login tauscht die Zentralinstanz mit der Remote-Instanz ein Anmeldegeheimnis aus, über das dann in Zukunft alle weitere Kommunikation abläuft.
+Das Konto `cmkadmin` auf der Instanz wird dann deaktiviert.
+
+Klicken Sie auf das Schlüsselsymbol icon:icon_authok[] der anzubindenden Instanz.
+Im folgenden Formular verwenden Sie als [.guihint]#Login credentials# `cmkadmin` und das beim Anlegen der Remote-Instanz vergebene Passwort.
+Bestätigen Sie an dieser Stelle noch mit der Checkbox [.guihint]#Confirm overwrite#, dass Sie die Einstellungen wirklich überschreiben wollen.
+
+.Die erste Kontaktaufnahme zur Verteilung des Setups erfolgt mit Nutzername und Passwort.
+image::distributed_monitoring_login_credentials.png[alt="Eingabe des Logins für die Remote-Instanz."]
+
+Bei einem erfolgreichen Login werden Sie direkt in die Übersichtsseite weitergeleitet, wo ein Schlosssymbol icon:icon_autherr[] und das Häkchen auf grünem Grund icon:icon_checkmark[] den Erfolg anzeigen.
+
+
+[#troubleshooting]
+==== Fehlerbehandlung
+
+Sollte es zu einem Fehler bei der Anmeldung kommen, kann dies verschiedene Gründe haben, unter anderem:
+
+* Die Remote-Instanz ist gerade gestoppt
+* Die [.guihint]#URL of remote site# ist nicht korrekt eingestellt
+* Die Remote-Instanz ist unter dem in der URL eingestellten Hostnamen _von der Zentralinstanz aus_ nicht erreichbar (DNS- oder Routing-Probleme)
+* Zentralinstanz und Remote-Instanz haben inkompatible {CMK}-Versionen oder Editionen
+* Benutzer und/oder Passwort sind falsch
+
+Die ersten beiden Punkte können Sie einfach testen, indem Sie die URL der Remote-Instanz in Ihrem Browser aufrufen.
+
+
+[#finish_connection]
+=== Abschluss der Einbindung
+
+Wenn alles geklappt hat, xref:glossar#activate_changes[aktivieren Sie die ausstehenden Änderungen].
+Auf der Übersichtsseite der ausstehenden Änderungen sehen Sie auch eine Übersicht der Livestatus-Verbindungen sowie des Synchronisationszustands der einzelnen Instanzen im zentrale Setup:
+
+.Aktivieren Sie die ausstehenden Änderungen um die Einrichtung des verteilten Setups abzuschließen.
+image::distributed_monitoring_activate_pending_changes.png[alt="Die ausstehenden Änderungen nach dem Aufbau der Remote-Verbindung."]
+
+Die Spalte [.guihint]#Version# zeigt die Livestatus-Version der jeweiligen Instanz an.
+
+Ein Klick auf icon:icon_activate_changes[] [.guihint]#Activate on selected sites# synchronisiert nun alle Instanzen und aktiviert die ausstehenden Änderungen.
+Dies geschieht parallel, so dass sich die Gesamtzeit nach der Dauer bei der langsamsten Instanz richtet.
+In der Zeit enthalten sind die Erstellung eines Konfigurations-Snapshots für die jeweilige Instanz, das Übertragen per HTTP, das Auspacken des Snapshots auf der Instanz und das Aktivieren der Änderungen.
+
+.Bedeutung der verwendeten Symbole
+[%collapsible]
+====
+[#collapsible_changes]
+Folgende Symbole zeigen Ihnen den Replikationsstatus der Konfigurationsumgebung:
+
+[cols="25,75"]
+|===
+|icon:icon_need_restart[] |Diese Instanz hat ausstehende Änderungen und muss neu gestartet werden.
+Mit einem Klick auf den Knopf icon:icon_need_restart[] können Sie dies gezielt für diese Instanz durchführen.
+|icon:icon_need_replicate[] |Die Konfigurationsumgebung dieser Instanz ist nicht synchron und muss übertragen werden.
+Danach ist dann natürlich auch ein Neustart notwendig, um die Konfiguration zu aktivieren.
+Beides zusammen erreichen Sie mit einem Klick auf den Knopf icon:icon_need_replicate[].
+|===
+
+In der Spalte [.guihint]#Status# sehen Sie den Zustand der Livestatus-Verbindung zur jeweiligen Instanz.
+// Dieser wird rein informativ angezeigt, da die Konfiguration ja nicht per Livestatus, sondern per HTTP übertragen wird.
+Folgende Werte sind möglich:
+
+[cols="25,75"]
+|===
+|icon:icon_status_label_online[width=80px] |Die Instanz ist per Livestatus erreichbar.
+|icon:icon_status_label_dead[width=80px] |Die Instanz ist gerade nicht erreichbar.
+Livestatus-Anfragen laufen in einen _Timeout_.
+Dies verzögert den Seitenaufbau.
+Statusdaten dieser Instanz sind in der GUI nicht sichtbar.
+|icon:icon_status_label_down[width=80px] |Die Instanz ist gerade nicht erreichbar, aber das ist aufgrund der Einrichtung eines Status-Hosts oder durch den xref:distributed_monitoring_performance#livestatusproxy[Livestatus-Proxy] bekannt.
+Die Nichterreichbarkeit führt *nicht* zu Timeouts.
+Statusdaten dieser Instanz sind in der GUI nicht sichtbar.
+|icon:icon_status_label_disabled[width=80px] |Die Livestatus-Verbindung zu dieser Instanz ist vorübergehend durch den Administrator (der Zentralinstanz) deaktiviert worden.
+Die Einstellung entspricht der Checkbox [.guihint]#Temporarily disable this connection# in der Einstellung dieser Verbindung.
+|===
+====
+
+
+[#sitespecific]
+=== Instanzspezifische globale Einstellungen
+
+Ein xref:distributed_monitoring_basics#central_setup[zentrales Setup] bedeutet zunächst einmal, dass alle Instanzen eine gemeinsame und (bis auf die Hosts) gleiche Konfiguration haben.
+Allerdings werden Sie in vielen Fällen abweichende Einstellungen benötigen.
+Haben Sie das Monitoring beispielsweise nach Standorten gegliedert, werden Sie die kleinere Instanzen auf schwächerer Hardware betreiben wollen, größere Instanzen auf stärkerer Hardware.
+Beides erfordert unterschiedliche xref:core_tuning#[Einstellungen am Monitoring-Kern].
+
+Für solche Fälle gibt es instanzspezifische globale Einstellungen.
+Zu diesen gelangen Sie über das Zahnradsymbol icon:icon_configuration[] in der Instanzübersicht ihres verteilten Monitorings ([.guihint]#Setup > General > Distributed monitoring#):
+
+.Jede Remote-Instanz verfügt über eigene globale Einstellungen.
+image::distributed_monitoring_site_specific_global_configuration.png[]
+
+Alles, was Sie jetzt einstellen, gilt nur für die ausgewählte Instanz.
+Auch die optische Hinterlegung für eine Abweichung vom Standard bezieht sich hier nur auf diese Instanz:
+
+.Wenn Sie Einstellungen ändern, können Sie diese sowohl mit den Standards der Zentralinstanz als auch den Werkseinstellungen vergleichen.
+image::distributed_monitoring_site_specific_global_configuration_2.png[]
+
+
+[#distribute_objects]
+== Zuordnung von Objekten zu Instanzen
+
+Alle Zugriffe auf einen überwachten Host geschehen konsequent von der Instanz aus, der dieser Host zugeordnet ist.
+Das betrifft nicht nur die eigentliche Überwachung, sondern auch die xref:glossar#service_discovery[Service-Erkennung,] die xref:wato_monitoringagents#diagnosticpage[Diagnoseseite,] die xref:glossar#notification[Benachrichtigungen,] xref:alert_handlers#[Alert Handler] und alles andere.
+// MFS: Was will uns MK damit sagen?
+// Das ist sehr wichtig, denn es ist überhaupt nicht gesagt, dass die Zentralinstanz auf diese Hosts Zugriff hätte.
+
+[#hosts_and_folders]
+=== Hosts und Ordnern Instanzen zuordnen
+
+Nachdem Ihre verteilte Umgebung eingerichtet ist, können Sie beginnen, diese zu nutzen.
+Eigentlich müssen Sie jetzt nur noch für jeden Host festlegen, von welcher Instanz aus dieser überwacht werden soll.
+Als Standard ist immer die Zentralinstanz eingestellt.
+
+Das nötige Attribut dazu heißt [.guihint]#Monitored on site#.
+Dieses können Sie für jeden einzelnen Host individuell einstellen.
+Aber natürlich bietet es sich an, es auf Ordnerebene zu konfigurieren:
+
+.Die Instanzzuordnung können Sie wie hier auf Ordnerebene konfigurieren oder direkt in Einstellungen eines Hosts vornehmen.
+image::distributed_monitoring_monitored_on_site.png[alt="Auswahl der Instanz, auf der das Monitoring stattfinden soll."]
+
+
+[#add_move_hosts]
+=== Hosts neu aufnehmen oder umziehen
+
+[#add_hosts]
+==== Hosts aufnehmen
+
+Das Aufnehmen von Hosts funktioniert wie gewohnt.
+Bis auf die Tatsache, dass die Überwachung und auch die Service-Erkennung von der jeweiligen Remote-Instanz durchgeführt wird, gibt es nichts Spezielles zu beachten.
+
+[#move_hosts]
+==== Hosts umziehen
+
+Beim *Umziehen* von Hosts von einer zu einer anderen Instanz gibt es einige Dinge zu beachten.
+Denn es werden _weder aktuelle noch historische Statusdaten dieser Hosts übernommen._
+Lediglich die Konfiguration des Hosts bleibt erhalten.
+Es ist quasi, als würden Sie den Host auf einer Instanz entfernen und auf der anderen _neu anlegen_.
+Das bedeutet unter anderem:
+
+* Automatisch erkannte Services werden nicht übernommen.
+Führen Sie daher nach dem Umziehen eine xref:glossar#service_discovery[Service-Erkennung] durch.
+
+* Host und Services beginnen wieder bei {PEND}.
+Zu eventuell aktuell vorhandenen Problemen werden neue Benachrichtigungen erzeugt und gegebenenfalls versendet.
+
+* Historische xref:graphing#[Metriken] gehen verloren.
+Dies können Sie vermeiden, indem Sie betroffene RRD-Dateien von Hand kopieren.
+Die Lage der Dateien finden Sie im xref:rrds#[Artikel zu RRDs].
+
+* Daten zur Verfügbarkeit und zu historischen Ereignissen gehen verloren.
+Eine Migration dieser ist nicht möglich.
+
+Wenn die Kontinuität der Historie für Sie wichtig ist, sollten Sie schon beim Aufbau des Monitorings genau planen, welcher Host von wo aus überwacht werden soll.
+
+
+[#differences_monitoring]
+== Besonderheiten im Monitoring
+
+Ein verteiltes Monitoring verhält sich zwar fast wie ein einziges System, hat aber dennoch ein paar Besonderheiten:
+
+////
+[#access_host]
+=== Zugriff auf die überwachten Hosts
+
+Alle Zugriffe auf einen überwachten Host geschehen konsequent von der Instanz aus, der dieser Host zugeordnet ist.
+Das betrifft nicht nur die eigentliche Überwachung, sondern auch die xref:glossar#service_discovery[Service-Erkennung,] die xref:wato_monitoringagents#diagnosticpage[Diagnoseseite,] die xref:glossar#notification[Benachrichtigungen,] xref:alert_handlers#[Alert Handler] und alles andere.
+// MFS: Noch einmal "Das ist sehr wichtig..."
+// Das ist sehr wichtig, denn es ist überhaupt nicht gesagt, dass die Zentralinstanz auf diese Hosts Zugriff hätte.
+////
+
+
+[#site_in_views]
+=== Angabe der Instanz in den Ansichten
+
+Manche der mitgelieferten Standardansichten sind gruppiert nach der Instanz, von der ein Host überwacht wird.
+Das gilt z.B. auch für [.guihint]#All hosts#:
+
+.Die Ansicht [.guihint]#All hosts# gliedert nach Instanzen.
+image::distributed_monitoring_all_hosts.png[]
+
+Auch bei den Details eines Hosts oder Services wird die Instanz angezeigt:
+
+.Der Instanzalias ist prominent in den Servicedetails erkennbar.
+image::distributed_monitoring_service_check_mk.png[]
+
+Allgemein steht diese Information als Spalte beim Erzeugen von xref:views#edit[eigenen Ansichten] zur Verfügung.
+Und es gibt einen Filter, mit dem Sie eine Ansicht nach Hosts aus einer bestimmten Instanz filtern können:
+
+image::distributed_monitoring_filter_by_site.png[width=58%]
+
+
+[#site_status_snapin]
+=== Site status Snapin
+
+Es gibt für die Seitenleiste das Snapin [.guihint]#Site status#, welches Sie mit icon:button_sidebar_add_snapin[[alt="Symbol zum Anzeigen aller Snapins."] einbinden können.
+Dieses zeigt den Status der einzelnen Instanzen.
+Außerdem bietet es die Möglichkeit, vorübergehend eine einzelne Instanz durch einen Klick auf den Status zu deaktivieren und wieder zu aktivieren -- oder auch gleich alle Instanzen auf einmal durch Klick auf [.guihint]#Disable all# oder [.guihint]#Enable all#.
+
+image::distributed_monitoring_snapin_site_status.png[width=42%]
+
+Deaktivierte Instanzen werden mit dem Status icon:icon_status_label_disabled[width=70px] angezeigt.
+Sie können so auch eine Instanz, die icon:icon_status_label_dead[width=70px] ist und somit Timeouts erzeugt, deaktivieren und die Timeouts damit vermeiden.
+Diese Deaktivierung entspricht *nicht* dem Abschalten der Livestatus-Verbindung über die Verbindungskonfiguration im [.guihint]#Setup#.
+Das Abschalten hier ist lediglich für den aktuell angemeldeten Benutzer wirksam und hat eine rein optische Funktion.
+Ein Klick auf den Namen einer Instanz bringt Sie zur Ansicht aller Hosts dieser Instanz.
+
+[#master_control_snapin]
+=== Master control Snapin
+
+Im verteilten Monitoring ändert das Snapin [.guihint]#Master control# sein Aussehen.
+Die globalen Schalter gibt es immer _pro Instanz_:
+
+image::distributed_monitoring_master_control.png[width=42%]
+
+
