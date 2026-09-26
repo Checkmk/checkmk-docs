@@ -1,0 +1,295 @@
+// -*- coding: utf-8 -*-
+// IGNORE se kunde1 kunde2 kunde3 betreiber1
+// NONASCII 
+include::global_attr.adoc[]
+= Performance-Optimierungen im verteilten Monitoring
+:title: Performance-Optimierungen im verteilten Monitoring
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:distributed_monitoring_basics#[Verteiltes Monitoring]
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+xref:core_tuning#[Tuning des Monitoring-Kerns]
+xref:host_checks#[Host-Checks]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+////
+[#wan]
+== Instabile oder langsame Verbindungen
+////
+
+Die gemeinsame Statusansicht in der Benutzeroberfläche erfordert einen ständig verfügbaren und zuverlässigen Zugriff auf die angebundenen Instanzen.
+Eine Schwierigkeit dabei ist, dass eine Ansicht immer erst dann dargestellt werden kann, wenn _alle_ Instanzen geantwortet haben.
+Eine Livestatus-Anfrage  --  zum Beispiel „Gib mir alle Services, deren Zustand nicht {OK} ist!" -- wird immer an alle Instanzen geschickt.
+Erst wenn die letzte Instanz geantwortet hat, kann die Ansicht dargestellt werden.
+
+Ärgerlich wird es, wenn eine Instanz gar nicht antwortet.
+Um kurze Ausfälle zu tolerieren (z.B. durch einen Neustart einer Instanz oder verlorengegangene TCP-Pakete), wartet die GUI einen gewissen Timeout ab, bevor eine Instanz als icon:icon_status_label_dead[width=70px] deklariert wird und mit den Antworten der übrigen Instanzen fortgefahren wird.
+Das führt dann zu einer „hängenden“ GUI.
+Der Timeout ist per Default auf 10 Sekunden eingestellt.
+
+Wenn das in Ihrem Netzwerk gelegentlich passiert, sollten Sie entweder Status-Hosts oder (besser) den Livestatus-Proxy einrichten.
+
+
+[#status_hosts]
+== Status-Hosts
+
+{cre-only}
+Die Konfiguration von _Status-Hosts_ ist der bei {CRE} empfohlene Weg, defekte Verbindungen zuverlässig zu erkennen.
+Die Idee dazu ist einfach:
+Die Zentrale überwacht aktiv die Verbindung zu jeder einzelnen entfernten Instanz.
+Immerhin haben wir ein Monitoring-System zur Verfügung!
+Die GUI kennt dann nicht erreichbare Instanzen und kann diese sofort ausklammern und als icon:icon_status_label_down[width=70px] werten.
+Timeouts werden so vermieden.
+
+So richten Sie für eine Verbindung einen Status-Host ein:
+
+. Nehmen Sie den Host, auf dem die Remote-Instanz läuft, auf der Zentralinstanz ins Monitoring auf.
+Dies muss kein vollwertiges Monitoring mit einem Agenten sein, ein Host-Check, beispielsweise _Ping_ genügt.
+. Tragen Sie diesen bei der Verbindung zur Remote-Instanz als Status-Host ein:
+
+.Der eingetragene Status-Host bestimmt, ob überhaupt versucht wird, die dort laufende Remote-Instanz abzufragen.
+image::distributed_monitoring_status_host.png[]
+
+Eine ausgefallene Verbindung zur Remote-Instanz kann jetzt nur noch für kurze Zeit zu einem Hängen der GUI führen -- nämlich solange, bis das Monitoring das erkannt hat.
+
+[TIP]
+====
+Noch scheint nichts gewonnen:
+Das Standard-Check-Intervall von {RE} beträgt eine Minute und damit deutlich mehr als der Standard-Timeout der GUI.
+Sie müssen also selbst Hand anlegen und beispielsweise einen `check_icmp` oder `check_ping` als xref:host_checks#[Host-Check], so konfigurieren, dass beispielsweise alle fünf Sekunden mit zwei Paketen und einem Timeout von ein bis zwei Sekunden geprüft wird.
+====
+
+
+Falls Sie einen Status-Host eingerichtet haben, gibt es weitere xref:distributed_monitoring_setup#collapsible_changes[mögliche Zustände für Verbindungen]:
+
+[cols="25,75"]
+|===
+|icon:pill_site_status_unreach[width=70px] |Der Rechner, auf dem die Remote-Instanz läuft, ist für das Monitoring gerade nicht erreichbar, weil ein Router dazwischen down ist (Status-Host hat den Zustand {UNREACH}).
+|icon:pill_site_status_waiting[width=70px] |Der Status-Host, der die Verbindung zur Remote-Instanz überwacht, wurde noch nicht vom Monitoring geprüft (steht noch auf {PEND}).
+|icon:pill_site_status_unknown[width=70px] |Der Zustand des Status-Hosts hat einen ungültigen Wert (sollte nie auftreten).
+|===
+
+In allen drei Fällen wird die Verbindung zu der Instanz ausgeklammert, wodurch Timeouts vermieden werden.
+
+
+[#persistent]
+== Persistente Verbindungen
+
+{cre-only}
+Mit der Checkbox [.guihint]#Use persistent connections# können Sie die GUI dazu veranlassen, einmal aufgebaute Livestatus-Verbindungen zu Remote-Instanzen permanent aufrecht zu erhalten und für weitere Anfragen wieder zu verwenden.
+Gerade bei Verbindungen mit einer längeren Paketlaufzeit (z.B. interkontinentale) kann das die GUI deutlich reaktiver machen.
+
+Bei Verbindungen im LAN oder in schnellen WAN-Netzen empfehlen wir, die persistenten Verbindungen *nicht* zu verwenden -- sie binden hier unnötig Arbeitsspeicher.
+
+Da die GUI von Apache auf mehrere unabhängige Prozesse aufgeteilt wird, ist pro gleichzeitig laufendem Apache Client-Prozess eine Verbindung notwendig.
+Fall Sie viele gleichzeitige Benutzer haben, sorgen Sie bei der Konfiguration des Nagios-Kerns der Remote-Instanz für eine ausreichende Anzahl von Livestatus-Verbindungen.
+Diese werden in der Datei `~/etc/mk-livestatus/nagios.cfg` konfiguriert.
+Der Default ist 20 (`num_client_threads=20`).
+
+Die Standardeinstellung für Apache sind bis zu 64 gleichzeitige Benutzerverbindungen.
+Das bedeutet, dass unter hoher Last bis zu 64 Apache-Prozesse entstehen können, welche dann auch bis zu 64 Livestatus-Verbindungen erzeugen und halten können.
+Sind die `num_client_threads` nicht entsprechend hoch eingestellt, kommt es zu Fehlern oder sehr langsamen Antwortzeiten in der GUI.
+Es ist daher oft sinnvoll, die `num_client_threads` anzuheben und die Zahl der Apache-Prozesse zu reduzieren.
+
+Nehmen Sie diese Anpassungen in Abhängigkeit von Nutzungsverhalten und dem verfügbaren Arbeitsspeicher ein.
+Beim der Konfiguration der Apache-Prozesse hilft der xref:cmk_processes#apache[Handbuchartikel zu den Instanzdiensten].
+
+
+[#livestatusproxy]
+== Der Livestatus-Proxy
+
+{cee-only}
+Die kommerziellen Editionen verfügen mit dem _Livestatus-Proxy_ über einen ausgeklügelten Mechanismus, um tote Verbindungen zu erkennen.
+Außerdem optimiert er die Performance vor allem bei Verbindungen mit hohen Round-Trip-Zeiten.
+Vorteile des Livestatus-Proxys sind:
+
+* Sehr schnelle proaktive Erkennung von nicht antwortenden Instanzen
+* Lokales Zwischenspeichern von Anfragen, die statische Daten liefern
+* Stehende TCP-Verbindungen, dadurch weniger Roundtrips notwendig und somit viel schnellere Antworten von weit entfernten Instanzen (z.B. USA ⇄ China)
+* Genaue Kontrolle der maximal nötigen Livestatus-Verbindungen
+* Ermöglicht xref:inventory#[HW-/SW-Inventur] in verteilten Umgebungen
+
+
+[#configure_liveproxyd]
+=== Einrichtung
+
+In den kommerziellen Editionen ist der Livestatus-Proxy per Default aktiviert, auch wird er als Standardverbindungsmethode verwendet.
+Allerdings kann es erforderlich sein, die Standardeinstellungen auf Netzwerkeigenschaften und schlicht die Größe Ihrer Umgebung anzupassen.
+
+////
+, wie Sie beim Starten einer Instanz sehen können:
+
+[{shell}]
+----
+{c-local} omd start
+Starting agent-receiver...OK
+Starting mkeventd...OK
+Starting liveproxyd...OK
+Starting mknotifyd...OK
+Starting rrdcached...OK
+Starting redis...OK
+Starting automation-helper...OK
+Starting ui-job-scheduler...OK
+Starting cmc...OK
+Starting apache...OK
+Starting dcd...OK
+Starting rabbitmq...OK
+Starting stunnel...OK
+Starting piggyback-hub...OK
+Starting xinetd...OK
+Starting crontab...OK
+----
+////
+
+[#liveproxyd_global_settings]
+==== Via globaler Einstellung
+
+Prinzipiell empfehlen wir, Einstellungen zu finden, die für die Mehrheit der angebundenen Remote-Instanzen gültig sind und diese in den globalen Einstellungen zu hinterlegen.
+Die benötigte Einstellung ist unter [.guihint]#Setup > General > Global settings > Livestatus proxy > Livestatus proxy default connection parameters# auffindbar.
+
+
+image::distributed_monitoring_livestatus_proxy_global_settings.png[]
+
+
+////
+Wählen Sie nun bei den Verbindungen zu der Remote-Instanz anstelle von [.guihint]#Connect via TCP# die Einstellung [.guihint]#Use Livestatus Proxy-Daemon#:
+
+image::distributed_monitoring_livestatus_proxy_daemon.png[]
+
+Die Angaben zu Host und Port sind wie gehabt.
+Auf den Remote-Instanzen müssen Sie nichts ändern.
+Bei [.guihint]#Number of channels to keep open# geben Sie die Anzahl der parallelen TCP-Verbindungen an, die der Proxy zur Zielseite aufbauen _und aufrechterhalten_ soll.
+////
+
+===== Number of Channels to keep open
+
+Der TCP-Verbindungspool wird von allen Anfragen der GUI gemeinsam genutzt.
+Die Anzahl der Verbindungen begrenzt die maximale Anzahl von gleichzeitig in Bearbeitung befindlichen Anfragen.
+Dies beschränkt indirekt die Anzahl der Benutzer.
+In Situationen, in denen alle Kanäle belegt sind, kommt es nicht sofort zu einem Fehler.
+Die GUI wartet eine gewisse Zeit auf einen freien Kanal.
+Die meisten Anfragen benötigen nämlich nur wenige Millisekunden.
+
+===== Regular heartbeat
+
+Der [.guihint]#Regular heartbeat# sorgt für eine ständige aktive Überwachung der Verbindungen direkt auf Protokollebene.
+Dabei sendet der Proxy regelmäßig eine einfache Livestatus-Anfrage, welche von der Remote-Instanz in der eingestellten Zeit (Default: 2 Sekunden) beantwortet sein muss.
+So werden auch Situationen erkannt, wo der Zielserver und der TCP-Port zwar erreichbar sind, aber der Monitoring-Kern nicht mehr antwortet.
+
+===== Timeout waiting for a free channel
+
+Falls die GUI länger als [.guihint]#Timeout waiting for a free channel# auf so einen Kanal warten muss, wird mit einem Fehler abgebrochen und der Benutzer sieht eine Fehlermeldung.
+In so einem Fall sollten Sie die Anzahl der Verbindungen erhöhen.
+Beachten Sie dabei jedoch, dass auf der Gegenstelle (der Remote-Instanz) genügend gleichzeitige eingehende Verbindungen erlaubt sein müssen.
+Per Default ist das auf 20 eingestellt.
+Sie finden diese Einstellung in den globalen Optionen unter [.guihint]#Monitoring core > Maximum concurrent Livestatus connections#.
+
+===== Cooling period
+
+Bleibt die Antwort aus, so werden alle Verbindungen als tot deklariert und nach einer Cooldown-Zeit (Default: 4 Sekunden) wieder neu aufgebaut.
+Das Ganze geschieht proaktiv -- also _ohne_, dass ein Benutzer eine GUI-Seite abrufen muss.
+So werden Ausfälle schnell erkannt und bei einer Wiedergenesung die Verbindungen sofort wieder aufgebaut
+und stehen dann im besten Fall schon wieder zur Verfügung, bevor ein Benutzer den Ausfall mitbekommt.
+
+===== Enable caching
+
+Das [.guihint]#Caching# sorgt dafür, dass statische Anfragen nur einmal von der Remote-Instanz beantwortet werden müssen und ab dem Zeitpunkt direkt lokal ohne Verzögerung beantwortet werden können.
+Ein Beispiel dafür ist die Liste der überwachten Hosts, welche von [.guihint]#Quicksearch# gebraucht wird.
+
+
+[#per_connection]
+==== Via Verbindungseinstellung
+
+Selbstverständlich können Sie die globale Einstellung auch für einzelne Verbindungen abändern.
+Das kann beispielsweise sinnvoll sein, um eine kleine Remote-Instanz, auf deren Livestatus-Informationen seltener zugegriffen wird, zu entlasten.
+Wählen Sie in den Verbindungseinstellungen im Dropdown-Menü für [.guihint]#Parameters# den Wert [.guihint]#Use custom connection parameters#.
+Ihnen wird dann die Möglichkeit angeboten, jeden der oben beschriebenen globalen Einstellung individuell zu überschreiben.
+
+image::distributed_monitoring_livestatus_individual_settings.png[]
+
+
+=== Fehlerdiagnose
+
+Der Livestatus-Proxy hat eine eigene Log-Datei `~/var/log/liveproxyd.log`.
+Bei einer korrekt eingerichteten Remote-Instanz mit fünf Kanälen (Standard), sieht das etwa so aus:
+
+.~/var/log/liveproxyd.log
+[{file}]
+----
+2026-09-24 15:58:30,624 [20] ----------------------------------------------------------
+2026-09-24 15:58:30,627 [20] [cmk.liveproxyd] Livestatus Proxy-Daemon ({current}) starting...
+2026-09-24 15:58:30,638 [20] [cmk.liveproxyd] Configured 1 sites
+2026-09-24 15:58:36,690 [20] [cmk.liveproxyd.(3236831).Manager] Reload initiated. Checking if configuration changed.
+2026-09-24 15:58:36,692 [20] [cmk.liveproxyd.(3236831).Manager] No configuration changes found, continuing.
+2026-09-24 16:00:16,989 [20] [cmk.liveproxyd.(3236831).Manager] Reload initiated. Checking if configuration changed.
+2026-09-24 16:00:16,993 [20] [cmk.liveproxyd.(3236831).Manager] Found configuration changes, triggering restart.
+2026-09-24 16:00:17,000 [20] [cmk.liveproxyd.(3236831).Manager] Restart initiated. Terminating site processes...
+2026-09-24 16:00:17,028 [20] [cmk.liveproxyd.(3236831).Manager] Restart master process
+----
+
+In die Datei `~/var/log/liveproxyd.state` schreibt der Livestatus-Proxy regelmäßig seinen
+Status:
+
+.~/var/log/liveproxyd.state
+[{file}]
+----
+Current state:
+[myremote1]
+  State:                   ready
+  State dump time:         2026-09-24 15:01:15 (0:00:00)
+  Last reset:              2026-09-24 14:58:49 (0:02:25)
+  Site's last reload:      2026-09-24 14:26:00 (0:35:15)
+  Last failed connect:     Never
+  Last failed error:       None
+  Cached responses:        1
+  Channels:
+       9 - ready             -  client: none - since: 2026-09-24 15:01:00 (0:00:14)
+      10 - ready             -  client: none - since: 2026-09-24 15:01:10 (0:00:04)
+      11 - ready             -  client: none - since: 2026-09-24 15:00:55 (0:00:19)
+      12 - ready             -  client: none - since: 2026-09-24 15:01:05 (0:00:09)
+      13 - ready             -  client: none - since: 2026-09-24 15:00:50 (0:00:24)
+  Clients:
+  Heartbeat:
+    heartbeats received: 29
+    next in 0.2s
+  Inventory:
+    State: not running
+    Last update: 2026-09-24 14:58:50 (0:02:25)
+----
+
+Und so sieht der Status aus, wenn eine Instanz gerade gestoppt ist:
+
+.~/var/log/liveproxyd.state
+[{file}]
+----
+----------------------------------------------
+Current state:
+[myremote1]
+  State:                   starting
+  State dump time:         2026-09-24 16:11:35 (0:00:00)
+  Last reset:              2026-09-24 16:11:29 (0:00:06)
+  Site's last reload:      2026-09-24 16:11:29 (0:00:06)
+  Last failed connect:     2026-09-24 16:11:33 (0:00:01)
+  Last failed error:       [Errno 111] Connection refused
+  Cached responses:        0
+  Channels:
+  Clients:
+  Heartbeat:
+    heartbeats received: 0
+    next in -1.0s
+  Inventory:
+    State: not running
+    Last update: 2026-09-24 16:00:45 (0:10:50)
+----
+
+Der Zustand ist hier `starting`.
+Der Proxy ist also gerade beim Versuch, Verbindungen aufzubauen.
+Channels gibt es noch keine.
+Während dieses Zustands werden Anfragen an die Instanz sofort mit einem Fehler beantwortet.
