@@ -1,0 +1,341 @@
+// -*- coding: utf-8 -*-
+// IGNORE se kunde1 kunde2 kunde3 betreiber1
+// NONASCII 
+include::global_attr.adoc[]
+= Benachrichtigungen im verteilten Monitoring
+:title: Benachrichtigungen im verteilten Monitoring
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Ein wichtiger Punkt, den Sie beim Aufbau einer verteilten Monitoring-Umgebung berücksichtigen müssen, ist der Versand von Benachrichtigungen.
+Standardweg bei {CMK} ist, dass über Benachrichtigungen im Monitoring-Kern entschieden wird.
+Der wird lokal in jeder Instanz ausgeführt, was demnach dezentrale Benachrichtigungen zum Default macht.
+
+{cee-only}
+Die kommerziellen Editionen von {CMK} bringen neben dezentralen Benachrichtigungen noch die Möglichkeit mit, alle Benachrichtigungen an die Zentralinstanz zu weiterzuleiten.
+Dort wird dann der Versand durchgeführt.
+
+Beide Wege haben ihre Vor- und Nachteile.
+Für den dezentralen Versand spricht:
+
+* Dezentrale Benachrichtigungen sind einfach einzurichten.
+* Eine lokale Zustellung funktioniert auch, wenn gerade keine Verbindung zur Zentralinstanz möglich ist.
+
+Argumente für den Versand von der Zentralinstanz aus sind:
+
+* Benachrichtigungen können an einer zentralen Stelle verarbeitet werden (z.B. für Weiterleitung in Ticketsystem).
+* Remote-Instanzen benötigen kein Setup für E-Mail auf Systemebene.
+// MFS: Das ist doch ein Denkfehler, oder? Hardware-Modems nutzt man ja gerade, um Benachrichtigungen verschicken zu können, wenn der Uplink weg ist.
+* Bei Versand von SMS über ein Hardware-Modem ist dieses nur einmal notwendig: an der Zentralinstanz.
+
+
+[#decentralized_notifications]
+== Dezentrale Benachrichtigungen
+
+Für die Einrichtung dezentraler Benachrichtigungen sind keine besonderen Schritte notwendig, denn dies ist die Standardeinstellung.
+Jede Benachrichtigung, die auf einer Remote-Instanz entsteht, durchläuft dort die xref:notifications#rule_analysis[Kette der Benachrichtigungsregeln].
+Falls Sie ein xref:central_setup[zentrales Setup] einsetzen, sind diese Regeln auf allen Instanzen gleich.
+Aus den Regeln resultierende Benachrichtigungen werden wie üblich zugestellt, indem lokal die entsprechenden Benachrichtigungsskripte aufgerufen werden.
+
+Sie müssen allerdings sicherstellen, dass die entsprechenden Dienste auf allen Instanzen korrekt arbeiten.
+Das bedeutet:
+Auf jedem Server muss das E-Mail-System korrekt konfiguriert sein und gegebenenfalls muss der Mailserver den Adressen Ihrer Remote-Instanzen vertrauen.
+Bei der Verwendung der kommerziellen Editionen kann die xref:notifications#syncsmtp[nachvollziehbare Zustellung per SMTP] den Aufwand zumindest bezüglich der lokalen E-Mail-Systeme reduzieren.
+Wenn Sie andere Benachrichtigungen -- beispielsweise über Ticketsysteme –, verwenden, sind möglicherweise Firewall-Einstellungen dahingehend anzupassen, dass die Remote-Instanzen die zum Versand verwendeten Server erreichen können.
+
+
+[#centralized_notifications]
+== Zentrale Benachrichtigungen
+
+{cee-only}
+Die kommerziellen Editionen bieten einen eingebauten Mechanismus für zentralisierte Benachrichtigungen.
+Damit dieser zuverlässig funktioniert, muss die Verteilung des Setups aktiviert sein.
+Die Weiterleitung von Benachrichtigungen kann dann für jede Remote-Instanz individuell konfiguriert werden.
+Hieraus resultiert eine hohe Flexibilität, welche der Komplexität großer Monitoring-Umgebungen gerecht wird.
+
+Ist eine Remote-Instanz auf Weiterleitung eingestellt, so werden alle Benachrichtigungen direkt wie sie vom Kern kommen -- in _Rohform_ oder als _Rohbenachrichtigungen_ -- an die Zentralinstanz weitergereicht.
+Erst dort werden die Benachrichtigungsregeln ausgewertet, welche entscheiden, wer und wie überhaupt benachrichtigt werden soll.
+Die dazu notwendigen Benachrichtigungsskripte werden auf der Zentralinstanz aufgerufen.
+
+Nehmen Sie Einstellungen, welche die Mehrzahl Ihrer Instanzen betreffen in den [.guihint]#Global settings# im Abschnitt [.guihint]#Notifications# vor.
+Für die beteiligten Instanzen, die davon abweichen, bearbeiten Sie die jeweiligen xref:distributed_monitoring_setup#sitespecific[instanzspezifischen globalen Einstellungen].
+
+
+.[#collapsible_spooler_on_central]#Muss der zentrale Benachrichtigungs-Spooler auf der Zentralinstanz des Monitorings laufen?#
+[%collapsible]
+====
+Nein.
+
+Theoretisch kann der Benachrichtigungs-Spooler auf jeder Instanz in Ihrem verteilten Monitoring laufen.
+Es ist auch möglich (und in Einzelfällen sinnvoll), eine eigene Instanz nur für den Versand von Nachrichten vorzuhalten.
+Zudem ist es ist nicht zwingend erforderlich, dass genau eine Instanz den Versand für alle anderen vornimmt.
+In der Praxis ist es häufig so, dass verschiedene Remote-Instanzen einander nicht erreichen können, weswegen der Betrieb auf einer Remote-Instanz eher die Ausnahme ist.
+
+Wenn in weiteren Verlauf dieses Kapitels von Zentralinstanz die Rede ist, ist immer die Instanz gemeint, von der die Benachrichtigungen schließlich verschickt werden.
+====
+
+[#centralized_notifications_roles]
+=== Rollen zuweisen
+
+Zuerst muss jede am zentralisierten Benachrichtigungssystem beteiligte Instanz eine _Rolle_ erhalten.
+Die Rolle bestimmt, _welchen Weg_ die Benachrichtigungen nehmen.
+
+[#centralized_notifications_role_remote]
+==== Einstellungen für Remote-Instanzen
+
+Da alle Instanzen -- bis auf die eine, welche das zentrale Benachrichtigungssystem beherbergt -- ihre Benachrichtigungen zur Zentrale verschickt, sollten Sie in den globalen Einstellungen Ihrer Zentralinstanz die Einstellung für [.guihint]#Notification spooling# auf [.guihint]#Forward to remote site by notification spooler# setzen.
+Diese Einstellung wird später an alle Remote-Instanzen übertragen.
+
+image::distributed_monitoring_notification_spooling.png[alt="'Notification spooling' auf Einstellung 'Forward to remote site by notification spooler'",width=94%]
+
+[TIP]
+====
+Lassen Sie sich hier vom Wörtchen _remote_ nicht durcheinander bringen.
+Dieses bezieht sich darauf, wo die Verarbeitung der Benachrichtigungen durchgeführt wird.
+Aus Sicht der eine Nachricht verschickenden Instanz findet diese auf einer _entfernten_ Maschine statt.
+====
+
+[#centralized_notifications_role_central]
+==== Einstellungen für die Zentralinstanz
+
+Jetzt gehen Sie in der Übersicht des [.guihint]#Distributed monitoring# in die instanzspezifischen Einstellungen der Zentralinstanz.
+Dort stellen Sie [.guihint]#Notification spooling# wieder auf [.guihint]#Asynchronous local delivery by notification spooler#.
+Diese Einstellung betrifft dann nur die Zentralinstanz.
+
+image::distributed_monitoring_notification_spooling_central.png[alt="'Notification spooling' auf Standardeinstellung 'Asyncronous local delivery by notification spooler'",width=94%]
+
+
+[#centralized_notifications_connection]
+=== Verbindungsaufbau
+
+Nachdem die Rollen zugewiesen wurden, müssen Sie sich Gedanken machen, in welcher Richtung die Verbindung aufgebaut wird.
+Die Richtung des Verbindungsaufbaus für Livestatus und die Verteilung der Konfiguration ist immer von der Zentralinstanz zu den Remote-Instanzen.
+Da in vielen Fällen deshalb der verbundene Aufwand für die Firewall-Konfiguration kleiner ist, zeigen wir diese Richtung zuerst.
+
+Allerdings erfordert die umgekehrte Richtung etwas weniger Aufwand beim Hinzufügen weiterer Remote-Instanzen und bietet bei unzuverlässigen Netzen eine etwas schnellere Behandlung von Problemen.
+
+[#centralized_notifications_connection_cr]
+==== Zentralinstanz verbindet zu Remote-Instanzen
+
+===== Einstellungen für Remote-Instanzen
+
+Da alle Instanzen (bis auf die Zentralinstanz) eingehende Verbindungen akzeptieren müssen, nehmen Sie deren Einstellungen auf der Zentralinstanz in den globalen Einstellungen unter [.guihint]#Notification spooler configuration# vor.
+Setzen Sie dafür das Häkchen für [.guihint]#Accept incoming TCP connections#.
+Alle anderen Einstellungen belassen Sie zunächst auf den Defaults.
+Um die beteiligten TLS-Zertifikate kümmert sich die Setup-Verteilung.
+Diese Einstellung wird später an alle Remote-Instanzen übertragen.
+
+image::distributed_monitoring_notification_spooler_configuration.png[]
+
+===== Einstellungen für die Zentral-Instanz
+
+Jetzt gehen Sie in der Übersicht des [.guihint]#Distributed monitoring# in die instanzspezifischen Einstellungen der Zentralinstanz.
+Gehen Sie auch dort zu [.guihint]#Notification spooler configuration#.
+Dort nehmen Sie das Häkchen für [.guihint]#Accept incoming TCP connections# wieder heraus.
+Mit dem Button [.guihint]#Add connection# legen Sie _für jede Remote-Instanz_, die Benachrichtigungen über das zentrale Benachrichtigungssystem verschicken soll, eine Verbindung an.
+Tragen Sie in das Feld [.guihint]#DNS name or IP address of target notification spooler# den auflösbaren Hostnamen oder die IP-Adresse der jeweiligen Remote-Instanz ein.
+Diese Einstellung betrifft dann nur die Zentralinstanz.
+
+image::distributed_monitoring_notification_spooler_central_configuration.png[]
+
+[TIP]
+====
+Immer, wenn Sie eine neue Remote-Instanz in Ihr verteiltes Monitoring aufnehmen, müssen Sie mit dem Knopf [.guihint]#Add connection# die Notification-Spooler-Verbindung zu der neuen Remote-Instanz hinzufügen.
+====
+
+[#centralized_notifications_connection_rc]
+==== Remote-Instanzen verbinden zu Zentralinstanz
+
+===== Einstellungen für Remote-Instanzen
+
+Da alle hier alle Remote-Instanzen Verbindungen zur Zentralinstanz aufbauen müssen, nehmen Sie die folgende Einstellung in den globalen Einstellungen unter [.guihint]#Notification spooler configuration# vor:
+
+* Setzen Sie _kein_ Häkchen bei [.guihint]#Accept incoming TCP connections#.
+* Legen Sie mit dem Button [.guihint]#Add connection# eine Verbindung zur Zentralinstanz an:
+Tragen Sie unter [.guihint]#DNS name or IP address of target notification spooler# den auflösbaren Hostnamen oder die IP-Adresse der Zentralinstanz ein.
+
+Diese Einstellung wird später an alle Remote-Instanzen übertragen.
+
+[TIP]
+====
+Da beim Aufnehmen einer neuen Zentralinstanz diese Einstellung für den Notification-Spooler bereits aus den globalen Einstellungen zur Remote-Instanz übertragen wird, ist nichts weiter zu tun.
+====
+
+===== Einstellungen für die Zentral-Instanz
+
+Suchen Sie nun die instanzspezifischen Einstellungen der Zentralinstanz auf und passen Sie [.guihint]#Notification spooler configuration# an:
+
+* Setzen Sie das Häkchen bei [.guihint]#Accept incoming TCP connections#.
+Es sind keine weiteren Einstellungen nötig.
+
+Diese Einstellung betrifft dann nur die Zentralinstanz.
+
+////
+// === Einrichten der TCP-Verbindungen
+
+Die Benachrichtigung-Spooler von entfernter und zentraler (Benachrichtigungs-)Instanz tauschen sich untereinander per TCP aus.
+Benachrichtigungen werden von der Remote-Instanz zur Zentralinstanz gesendet.
+Die Zentrale quittiert empfangene Benachrichtigungen an die Remote-Instanz, was verhindert, dass Benachrichtigungen verloren gehen, selbst wenn die TCP-Verbindung abbrechen sollte.
+
+Für den _Aufbau_ der TCP-Verbindung haben Sie zwei Möglichkeiten:
+
+. TCP-Verbindung wird von Zentralinstanz zur Remote-Instanz aufgebaut.
+Hier ist die Remote-Instanz der _TCP-Server_.
+. TCP-Verbindung wird von Remote-Instanz zur Zentralinstanz aufgebaut.
+Hier ist die Zentralinstanz der _TCP-Server_.
+
+Somit steht dem Weiterleiten von Benachrichtigungen auch dann nichts im Wege, wenn aus Netzwerkgründen der Verbindungsaufbau nur in eine bestimmte Richtung möglich ist.
+Die TCP-Verbindungen werden vom Spooler mit einem Heartbeat-Signal überwacht und bei Bedarf sofort neu aufgebaut -- nicht erst im Falle einer Benachrichtigung.
+
+Da Remote-Instanz und Zentralinstanz für den Spooler unterschiedliche globale Einstellungen brauchen, müssen Sie diese für _alle_ Remote-Instanzen xref:sitespecific[instanzspezifische Einstellungen] machen.
+Die Konfiguration der Zentrale geschieht über die normalen globalen Einstellungen.
+Beachten Sie, dass diese automatisch an alle Remote-Instanzen vererbt wird, für die Sie _keine_ spezifischen Einstellungen definiert haben.
+
+Betrachten Sie zuerst den Fall, dass die Zentralinstanz die TCP-Verbindungen zu den Remote-Instanzen aufbauen soll.
+
+Schritt 1: Editieren Sie *bei der Remote-Instanz* die instanzspezifische globale Einstellung [.guihint]#Notifications > Notification Spooler Configuration# und aktivieren Sie [.guihint]#Accept incoming TCP connections#.
+Als TCP-Port wird 6555 vorgeschlagen.
+Sofern nichts dagegen spricht, übernehmen Sie diese Einstellung.
+
+image::distributed_monitoring_notification_spooler_configuration.png[]
+
+Schritt 2: Setzen Sie nun ebenfalls nur *auf der Remote-Instanz* die Einstellung [.guihint]#Notification Spooling# auf den Wert [.guihint]#Forward to remote site by notification spooler#.
+
+image::distributed_monitoring_notification_spooling.png[]
+
+Schritt 3: Auf der *Zentralinstanz* -- also in den normalen globalen Einstellungen -- richten Sie nun zu der Remote-Instanz (und später dann auch eventuell zu weiteren Remote-Instanzen) die Verbindungen ein:
+
+image::distributed_monitoring_notification_spooler_central_configuration.png[]
+
+Schritt 4: Setzen Sie die globale Einstellung [.guihint]#Notification Spooling# auf [.guihint]#Asynchronous local delivery by notification spooler#,
+damit auch die Meldungen der Zentrale über den gleichen zentralen Spooler abgewickelt werden.
+
+image::distributed_monitoring_notification_spooling_central.png[]
+
+Schritt 5: Aktivieren Sie die ausstehenden Änderungen.
+
+
+// === Verbindungsaufbau von der Remote-Instanz aus
+
+Soll die TCP-Verbindung von der Remote-Instanz aus aufgebaut werden, so ist das Vorgehen identisch,
+bis auf die Tatsache, dass Sie die oben gezeigten Einstellungen einfach zwischen Zentralinstanz und Remote-Instanz vertauschen.
+
+Auch eine Mischung ist möglich. In diesem Fall muss die Zentrale so aufgesetzt werden, dass sie sowohl auf eingehende Verbindungen lauscht, als auch Verbindungen zu entfernten Instanzen aufbaut.
+Für jede Beziehung zwischen Zentralinstanz und Remote-Instanz darf aber _nur einer von beiden_ die Verbindung aufbauen!
+////
+
+[#activate_changes]
+=== Änderungen aktivieren
+
+Aktivieren Sie jetzt die ausstehenden Änderungen.
+
+
+[#troubleshooting]
+=== Test und Diagnose
+
+Der Benachrichtigungs-Spooler loggt in die Datei `~/var/log/mknotifyd.log`.
+In den Spooler-Einstellungen können Sie das Loglevel erhöhen, so dass Sie mehr Meldungen kommen.
+Bei einem Standard-Loglevel sollten Sie auf der Zentralinstanz etwa Folgendes sehen:
+
+.central: ~/var/log/mknotifyd.log
+[{file}]
+----
+2026-09-30 19:13:27,081 [20] [cmk.mknotifyd] Log level: INFO
+2026-09-30 19:13:27,086 [20] [cmk.mknotifyd] Daemonized with PID 367380.
+2026-09-30 19:13:27,094 [20] [cmk.mknotifyd] Initializing stunnel
+2026-09-30 19:13:27,422 [20] [cmk.mknotifyd.outgoing(198.51.100.183:6555)] Establishing encrypted connection
+2026-09-30 19:13:27,422 [20] [cmk.mknotifyd.outgoing(198.51.100.183:6555)] Successfully connected to 198.51.100.183 at port 6555
+----
+
+Die Datei `~/var/log/mknotifyd.state` enthält stets einen aktuellen Zustand des Spoolers und aller seiner Verbindungen:
+
+.central: ~/var/log/mknotifyd.state (Auszug)
+[{file}]
+----
+# mknotifyd - current state
+Version:         {current}
+Updated:         1790795707 (2026-09-30 19:15:07)
+Started:         1790795607 (2026-09-30 19:13:27, 100 sec ago)
+Configuration:   1790795607 (2026-09-30 19:13:27, 100 sec ago)
+Listening FD:    None
+
+Site:                     myremote1 (198.51.100.183:6555)
+Connection:               198.51.100.183:6555
+Type:                     outgoing
+State:                    established
+Status Message:           Successfully connected to 198.51.100.183 at port 6555
+Since:                    1790795607 (2026-09-30 19:13:27, 100 sec ago)
+Connect Time:             0.000 sec
+----
+
+Die gleiche Datei gibt es auch auf der Remote-Instanz.
+Dort sieht die Verbindung
+// (ein paar Minuten später)
+etwa so aus:
+
+.myremote1: ~/var/log/mknotifyd.state (Auszug)
+[{file}]
+----
+# mknotifyd - current state
+Version:         {current}
+Updated:         1790796205 (2026-09-30 19:23:25)
+Started:         1790750227 (2026-09-30 06:37:07, 45977 sec ago)
+Configuration:   1790775976 (2026-09-30 13:46:16, 20228 sec ago)
+Listening FD:    4
+Encryption:      encrypted
+
+Site:                     central
+Connection:               127.0.0.1:6555
+Type:                     incoming
+State:                    established
+Since:                    1790795607 (2026-09-30 19:13:27, 597 sec ago)
+----
+
+Zum Testen wählen Sie z.B. einen beliebigen Service, der auf der Remote-Instanz überwacht wird, und setzen diesen per Kommando [.guihint]#Fake check results# auf {CRIT}.
+// Der Autor hat zwischendurch andere Dinge geschrieben und musste dann auch noch Bier holen.
+// Konsum hat nur bis 22:00 offen.
+
+Auf der Remote-Instanz, wo das Ereignis stattfand, sehen Sie diese Hinweise auf Event und Weitertransport:
+
+.myremote1: ~/var/log/notify.log
+[{file}]
+----
+2026-09-30 20:12:17,126 [20] [cmk.events.log_to_history] sending command LOG;SERVICE NOTIFICATION PROGRESS: check-mk-notify;mainserver.evilcorp.test;CPU utilization;OK;;spooled to remote site
+2026-09-30 20:12:17,137 [20] [cmk.events.log_to_history] sending command LOG;SERVICE NOTIFICATION PROGRESS: check-mk-notify;mainserver.evilcorp.test;CPU utilization;OK;;received by remote site
+2026-09-30 20:12:18,139 [20] [cmk.events.log_to_history] sending command LOG;SERVICE NOTIFICATION PROGRESS: check-mk-notify;mainserver.evilcorp.test;CPU utilization;OK;;spooled to remote site
+2026-09-30 20:12:18,142 [20] [cmk.events.log_to_history] sending command LOG;SERVICE NOTIFICATION PROGRESS: check-mk-notify;mainserver.evilcorp.test;CPU utilization;OK;;received by remote site
+----
+
+Auf der _Zentrale_ tauchen wenige Sekunden später Hinweise auf die eingehenden Benachrichtigung auf:
+
+.central: ~/var/log/notify.log
+[{file}]
+----
+2026-09-30 20:12:20,186 [20] [cmk.mknotifyd] running cmk --notify --log-to-stdout spoolfile /omd/sites/central/var/check_mk/notify/spool/5df56fea-d2c2-4395-8df0-561275ee1aed
+2026-09-30 20:12:20,896 [20] [cmk.mknotifyd] got exit code 0
+2026-09-30 20:12:20,897 [20] [cmk.mknotifyd] processing spoolfile 5df56fea-d2c2-4395-8df0-561275ee1aed successful: 
+2026-09-30 20:12:21,899 [20] [cmk.mknotifyd] running cmk --notify --log-to-stdout spoolfile /omd/sites/central/var/check_mk/notify/spool/1151c7d1-0797-41f9-a8f0-5f3441268669
+2026-09-30 20:12:22,642 [20] [cmk.mknotifyd] got exit code 0
+2026-09-30 20:12:22,643 [20] [cmk.mknotifyd] processing spoolfile 1151c7d1-0797-41f9-a8f0-5f3441268669 successful:
+----
+
+In den globalen Einstellungen können Sie sowohl die normale Log-Datei für Benachrichtigungen (`notify.log`) als auch die Log-Datei des Benachrichtigungs-Spoolers auf ein höheres Loglevel umstellen wenn es erforderlich ist.
+
+
+[#monitor_spooling]
+=== Überwachung des Spoolings
+
+Nachdem Sie alles wie beschrieben aufgesetzt haben, werden Sie feststellen, dass sowohl auf der Zentralinstanz, als auch auf den Remote-Instanzen jeweils ein neuer Service gefunden wird, den Sie unbedingt in die Überwachung aufnehmen sollten.
+Dieser überwacht den Benachrichtigungs-Spooler und dessen TCP-Verbindungen.
+Dabei wird jede Verbindung zweimal überwacht: einmal durch die Zentralinstanz und einmal durch die Remote-Instanz:
+
+image::distributed_monitoring_notification_services.png[]
