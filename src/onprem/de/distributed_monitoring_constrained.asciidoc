@@ -1,0 +1,409 @@
+// -*- coding: utf-8 -*-
+// IGNORE se kunde1 kunde2 kunde3 betreiber1
+// NONASCII 
+include::global_attr.adoc[]
+= Verteiltes Monitoring bei eingeschränkter Netzwerkverfügbarkeit
+:title: Verteiltes Monitoring bei eingeschränkter Netzwerkverfügbarkeit
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+////
+[#livedump]
+== Livedump und CMCDump
+
+[#motivation]
+=== Motivation
+////
+
+Das Konzept des xref:distributed_monitoring_basics#[verteilten Monitorings] mit Livestatus und optional verteiltem Setup ist in den meisten Fällen eine passende und gut umzusetzende Lösung.
+Allerdings gibt es Situationen, in denen ein kontinuierlicher Zugriff von außen auf die Remote-Instanzen nicht möglich oder nicht erwünscht ist.
+
+Beispiele für derartige Situationen sind:
+
+* Die Remote-Instanzen befinden sich in Netzwerken, die strikt keinen eingehenden Netzwerkverkehr zulassen (_zero inbound traffic_) -- und ein VPN sowie eine konsequente Firewall-Konfiguration, um nur der Zentralinstanz Zugriff auf die benötigten xref:ports#remote_incoming_cmk_outgoing[Ports der Remote-Instanzen] zu geben, ist keine Option
+* Die Remote-Instanzen haben keine _dauerhafte_ Netzwerkverbindung, beispielsweise weil sie sich auf einem Schiff befinden, das nicht ständig in Küstennähe unterwegs ist
+* Die Remote-Instanzen verfügen nur über eine extrem schmalbandige oder teure Internetverbindung (beispielsweise Satellit) oder es ist nur Versand ohne Rückkanal und ohne _Internet Protocol_ (beispielsweise über link:https://en.wikipedia.org/wiki/LoRa[LoRa^]) möglich
+
+Das verteilte Monitoring mit Livedump ({RE}) oder CMCDump (kommerzielle Editionen) geht daher einen anderen Weg:
+Ein Schnappschuss der Zustände im Monitoring-Kern wird regelmäßig oder immer wenn eine Netzwerkverbindung verfügbar wird, zur Zentralinstanz übertragen und dort eingelesen.
+
+[TIP]
+====
+In Fällen, in denen überwachte Hosts in Netzwerken mit _zero inbound traffic_ stehen und _meistens_ eine stabile Internetverbindung vorhanden ist, lohnt ein Blick auf xref:glossar#push_mode[Agenten im Push-Modus] und xref:relay#[das Relay] von {CE}, um mit weniger Aufwand ähnliche Resultate zu erzielen.
+Allerdings ist der Traffic höher als bei Livedump oder CMCDump, weil nicht nur resultierende Zustände, sondern rohe Monitoringdaten (Agentendaten, Antworten auf SNMP-Requests) übertragen werden.
+
+Soll in solchen Netzen eine interne Sichtbarkeit hergestellt werden für den Fall, dass der Uplink ausfällt, können Sie eine rein interne, separate Instanz betreiben, welche dieselben Hosts überwacht.
+====
+ 
+////
+Das bisher beschriebene Konzept für ein verteiltes Monitoring mit {CMK} ist in den meisten Fällen eine gute und einfache Lösung.
+Es erfordert allerdings Netzwerkzugriff _von der Zentralinstanz auf die Remote-Instanzen_.
+Es gibt Situationen, in denen das entweder nicht möglich oder nicht gewünscht ist, z.B. weil
+
+* die Instanzen in den Netzen Ihrer Kunden stehen, auf die Sie keinen Zugriff haben,
+* die Instanzen in einem Sicherheitsbereich stehen, auf den ein Zugriff strikt verboten ist oder
+* die Instanzen keine permanente Netzwerkverbindung oder keine festen IP-Adressen haben und Techniken wie link:https://de.wikipedia.org/wiki/Dynamisches_DNS[Dynamisches DNS^] keine Option sind.
+
+Das verteilte Monitoring mit Livedump bzw. CMCDump geht einen ganz anderen Weg.
+Zunächst einmal sind die Remote-Instanzen so aufgesetzt, dass sie völlig unabhängig von der Zentralinstanz arbeiten und _dezentral administriert_ werden.
+Auf ein xref:central_setup[zentrales Setup] wird verzichtet.
+
+Dann werden in der Zentralinstanz alle Hosts und Services der Remote-Instanzen als _Kopie_ angelegt.
+Dazu kann Livedump/CMCDump einen Dump der Konfiguration der Remote-Instanzen erstellen, der bei der Zentralinstanz eingespielt wird.
+
+Während des Monitorings wird nun auf jeder Remote-Instanz einmal pro definiertem Intervall (z.B. jede Minute) ein Dump des aktuellen Status in eine Datei geschrieben.
+Diese wird auf einem beliebigen Weg auf die Zentrale übertragen und dort als Statusupdate eingespielt.
+Für die Übertragung ist kein bestimmtes Protokoll vorgesehen oder vorbestimmt.
+Alle automatisierbaren Übertragungsprotokolle kommen in Frage.
+Es muss nicht unbedingt `scp` sein -- auch eine Übertragung per E-Mail ist denkbar!
+////
+
+[#specialties]
+=== Besonderheiten
+
+Die Verwendung von Livedump oder CMCDump weist gegenüber dem „normalen“ verteilten Monitoring folgende Besonderheiten auf:
+
+Zeitverzögerung::
+Die Aktualisierung der Zustände und Messdaten in der Zentrale geschieht verzögert -- selbstverständlich bestimmt das Intervall und die Regelmäßigkeit der Synchronisation die Verzögerung.
+Verfügbarkeitsberechnung::
+Aus dieser Verzögerung resultieren mehr oder weniger stark abweichende Verfügbarkeitsberechnungen zwischen Zentral- und Remote-Instanz.
+Kurzzeitige Probleme::
+Wechselt ein Zustand zwischen zwei Synchronisationen in die eine und wieder in die andere Richtung, ist dieser Zustandswechsel auf der Zentralinstanz unsichtbar.
+Benachrichtigungen::
+Je nachdem, wie häufig bei Ihrem Synchronisationsschema durch schnelle Wechsel Zustandsänderungen unbemerkt bleiben, sollten Sie über Benachrichtigungen von der Remote-Instanz statt der Zentrale nachdenken. 
+Kommandos::
+Kommandos wie [.guihint]#Schedule downtimes# und [.guihint]#Acknowledge problems# auf der Zentralinstanz können _nicht_ auf die Remote-Instanzen übertragen werden.
+Logdateien::
+Ein Zugriff auf Details der von Logwatch überwachten Log-Dateien ist nicht möglich.
+
+////
+// MFS: Ist dieser Punkt relevant? IMHO eigentlich selbstverständlich?
+* Ist eine Remote-Instanz „tot“, so veralten die Zustände auf der Zentralinstanz, die Services werden „stale“, sind aber immer noch sichtbar.
+Messdaten und Verfügbarkeitsdaten gehen für diesen Zeitraum verloren (auf der Remote-Instanz sind sie noch vorhanden).
+// MFS: Der auch:
+* Zu keiner Zeit erfolgt ein Zugriff von der Zentralinstanz auf die Remote-Instanz.
+// MFS: Ebenso, zudem können ja 
+* Die Event Console wird von Livedump/CMCDump nicht unterstützt.
+////
+
+// Da kurze Zustandswechsel bedingt durch das gewählte Intervall für die Zentralinstanz eventuell nicht sichtbar sind, ist eine xref:glossar#notification[Benachrichtigung] durch die Zentrale nicht ideal.
+// Wird die Zentrale jedoch als reine _Anzeigeinstanz_ verwendet -- z.B. für einen zentralen Überblick über alle Kunden -- hat die Methode durchaus ihre Vorteile.
+
+[TIP]
+====
+Livedump/CMCDump kann mit dem verteilten Monitoring über Livestatus kombiniert werden.
+Manche Instanzen sind dann einfach direkt über Livestatus angebunden -- andere verwenden Livedump.
+Je nach Aufbau Ihrer Monitoring-Umgebung kann der Import der von Livedump erzeugten Daten auch auf per Livestatus angebundenen Instanzen stattfinden.
+====
+
+
+[#data_transfer]
+=== Übertragung der Daten
+
+_Wie_ Sie die Daten von der Remote-Instanz zur Zentralinstanz übertragen ist nicht Teil dieses Artikels.
+Unsere Beispiele verwenden `ssh` und `scp` -- aber nur, weil diese im Labornetz gut einsetzbar sind.
+In der Praxis werden Sie vielleicht ein Netzlaufwerk nutzen wollen, auf das beide Instanzen zugreifen können (die Remote-Instanz schreibend und die Zentralinstanz lesend).
+Oder E-Mail und zusätzliche Verschlüsselung.
+Oder, aber Sie verwenden link:https://www.rfc-editor.org/info/rfc1149/[_IP over Avian Carrier_]...
+
+Auf link:https://github.com/Checkmk/checkmk/tree/master/doc/treasures/livedump[GitHub^] finden Sie im `treasures`-Verzeichnis von {CMK} einige Skripte.
+Betrachten Sie diese vor allem als Inspiration für eigene Übertragungswege.
+
+include::include_treasures_admonition.asciidoc[]
+
+
+[#livedump]
+== Konfiguration von Livedump
+
+{cre-only}
+Wenn Sie {RE} einsetzen, dann verwenden Sie das Werkzeug `livedump`.
+Der Name leitet sich ab von _Livestatus_ und _Status-Dump._
+`livedump` befindet sich direkt im Suchpfad Ihres {CMK}-Instanzbenutzers und ist daher direkt als Befehl verfügbar.
+
+Die folgende Anleitung setzt einige Dinge voraus:
+
+* Die Zentralinstanz läuft.
+* Die Zentralinstanz überwacht selbst mindestens einen Host (zum Beispiel sich selbst).
+* Ihre Remote-Instanz ist vollständig eingerichtet und überwacht bereits Hosts und Services.
+
+
+[#livedump_sync_config]
+=== Übertragung der Konfiguration
+
+Als Erstes erzeugen Sie auf der Remote-Instanz einen Dump der Konfiguration Ihrer Hosts und Services in dem von {RE} erwarteten Konfigurationsformat.
+Leiten Sie dazu die Ausgabe von `livedump -TC` in eine Datei um:
+
+[{shell}]
+----
+{c-myremote1} livedump -TC > config-myremote1.cfg
+----
+
+Der Anfang der Datei sieht in etwa wie folgt aus:
+
+.config-myremote1.cfg
+[{file}]
+----
+define host {
+    name                    livedump-host
+    use                     check_mk_default
+    register                0
+    active_checks_enabled   0
+    passive_checks_enabled  1
+}
+
+define service {
+    name                    livedump-service
+    register                0
+    active_checks_enabled   0
+    passive_checks_enabled  1
+    check_period            0x0
+}
+----
+
+[TIP]
+====
+Verwenden Sie die Option `-TC` nur bei der ersten Remote-Instanz deren Konfiguration Sie übertragen.
+Nutzen Sie bei allen weiteren alleine `-C`.
+Die mit `-T` zusätzlich zur Konfiguration erzeugten Template-Definitionen dürfen nur einmal vorhanden sein.
+====
+
+Übertragen Sie die Datei zu der Zentralinstanz (z.B. mit `scp`) und legen Sie sie dort in das Verzeichnis `~/etc/nagios/conf.d/`.
+In diesem erwartet Nagios die Konfiguration für Hosts und Services.
+Wählen Sie einen Dateinamen, der auf `.cfg` endet, z.B. `~/etc/nagios/conf.d/config-myremote1.cfg`.
+Wenn ein SSH-Zugang von der Remote-Instanz auf die Zentralinstanz möglich ist, geht das z.B. so:
+
+[{shell}]
+----
+{c-myremote1} scp config-myremote1.cfg central@mycentral.mydomain.test:etc/nagios/conf.d/
+central@mycentral.mydomain.test's password:
+config-myremote1.cfg                                             100% 8071     7.9KB/s   00:00
+----
+
+Loggen Sie sich jetzt auf der Zentralinstanz ein und aktivieren Sie die ausstehenden Änderungen:
+
+[{shell}]
+----
+{c-local} cmk -R
+Generating configuration for core (type nagios)...OK
+Validating Nagios configuration...OK
+Precompiling host checks...OK
+Restarting monitoring core...OK
+----
+
+Nun sollten alle Hosts und Services der Remote-Instanz in der Zentralinstanz auftauchen -- und zwar im Zustand {PEND}, in dem sie bis auf Weiteres auch bleiben:
+
+.Die Spinnennetze symbolisieren veraltete (oder nie vorhandene) Daten, aber alle konfigurierten Dienste sind nun sichtbar.
+image::distributed_monitoring_livedump_pending.png[alt="Screenshot der Services eines Hosts 'myremote1' mit fünf ausgegrauten Services im Zustand 'PEND': 'Check_MK', 'Check_MK Agent','Check_MK Discovery','Check_MK HW/SW Inventory' und 'CPU load'"]
+
+[TIP]
+====
+Das Erstellen des Dumps der Konfiguration mit `livedump -C` und das Übertragen dieser Konfiguration müssen Sie nach jeder Änderung von Hosts oder Services auf der Remote-Instanz wiederholen.
+====
+
+////
+Hinweise:
+
+* Durch die Option `-T` bei `livedump` erzeugt Livedump Template-Definitionen, auf die sich die Konfiguration bezieht.
+Ohne diese kann Nagios nicht gestartet werden.
+Sie dürfen jedoch _nur einmal_ vorhanden sein.
+Falls Sie auch von einer zweiten Remote-Instanz eine Konfiguration übertragen, so dürfen Sie die Option `-T` dort *nicht* verwenden!
+
+* Der Dump der Konfiguration ist auch auf einem xref:cmc#[{CMK} Micro Core (CMC)] möglich, das Einspielen benötigt Nagios.
+Wenn auf Ihrer Zentralinstanz der CMC läuft, dann verwenden Sie xref:cmcdump[CMCDump].
+
+* Das Erstellen des Dumps und das Übertragen der Konfiguration müssen Sie nach jeder Änderung von Hosts oder Services auf der Remote-Instanz wiederholen.
+////
+
+
+[#livedump_sync_status]
+=== Übertragung des Status
+
+Nachdem die Hosts in der Zentralinstanz sichtbar sind, geht es jetzt an die (regelmäßige) Übertragung des Monitoring-Status der Remote-Instanz.
+Wieder erzeugen Sie mit `livedump` eine Datei, allerdings diesmal ohne weitere Optionen:
+
+[{shell}]
+----
+{c-myremote1} livedump > state
+----
+
+Diese Datei enthält den Zustand aller Hosts und Services in einem Format, welches Nagios direkt aus dem Check-Ergebnis einlesen kann.
+Der Anfang mit dem ersten Host und seinem ersten Service sieht etwa so aus:
+
+.state
+[{file}]
+----
+host_name=myremote1
+check_type=1
+check_options=0
+reschedule_check
+latency=0.01
+start_time=1791292694.3
+finish_time=1791292694.3
+return_code=0
+output=OK - 198.51.100.188 rta 0.013ms lost 0%|rta=0.013ms;200.000;500.000;0; rtmax=0.043ms;;;; rtmin=0.000ms;;;; pl=0%;80;100;0;100
+
+host_name=myremote1
+service_description=Uptime
+check_type=1
+check_options=0
+reschedule_check
+latency=0.00
+start_time=1791292694.3
+finish_time=1791292694.3
+return_code=0
+output=Up since 2026-10-06 12:08:28, Uptime: 1 hour 9 minutes|uptime=4155.06;;;;
+----
+
+Übertragen Sie diese Datei auf die Zentralinstanz in das Verzeichnis `~/tmp/nagios/checkresults`.
+Mit `scp` würde das etwa so aussehen:
+
+[{shell}]
+----
+{c-myremote1} scp state central@mycentral.mydomain.test:tmp/nagios/checkresults/c234567
+central@mycentral.mydomain.test's password:
+state                                                  100%   12KB  12.5KB/s   00:00
+----
+
+[TIP]
+====
+*Wichtig:* Der Name der Datei muss mit `c` beginnen und sieben Zeichen lang sein (Vorgabe des Nagios Monitoring-Kerns von {RE}).
+====
+
+Anschließend erzeugen Sie auf der Zentralinstanz eine leere Datei mit dem gleichen Namen und der Endung `.ok`.
+Dadurch weiß Nagios, dass die Statusdatei komplett übertragen ist und eingelesen werden kann:
+
+[{shell}]
+----
+{c-local} touch tmp/nagios/checkresults/c234567.ok
+----
+
+Das Anlegen der Bestätigungsdatei kann auch per `ssh` erfolgen:
+
+[{shell}]
+----
+{c-myremote1} ssh central@mycentral.mydomain.test 'touch tmp/nagios/checkresults/c234567.ok'
+central@mycentral.mydomain.test's password:
+----
+
+{CMK} liest die Statusdatei sofort ein und löscht sowohl die Statusdatei als auch die Datei mit Endung `.ok` unmittelbar.
+Der Zustand der Hosts/Services der Remote-Instanz wird jetzt auf der Zentralinstanz sofort
+aktualisiert:
+
+.Mit importierten Daten ist fast kein Unterschied zu lokal überwachten Services sichtbar.
+image::distributed_monitoring_livedump_status.png[alt="Screenshot der Services eines Hosts 'myremote1' mit fünf gelb und grün markierten Services im Zustand 'OK' und 'WARN': 'Check_MK', 'Check_MK Agent','Check_MK Discovery','Check_MK HW/SW Inventory' und 'CPU load', der letzte Check fand vorgeblich vor 20,4s statt"]
+
+Die Übertragung des Status muss ab jetzt natürlich regelmäßig vorgenommen werden.
+Mit einem Skript können Sie die eben beschriebenen Schritte in selbst gewählten Zeitintervallen durchführen.
+
+////
+Dabei können Sie auf die Übertragung der Daten via `scp` verzichten und Ihr Skript stattdessen direkt von der Zentralinstanz regelmäßig ausführen, um die Statusdaten oder Konfigurationsdaten von der Remote-Instanz via `ssh` zu empfangen.
+
+Auf link:https://github.com/Checkmk/checkmk/tree/master/doc/treasures/livedump[GitHub^] finden Sie im `treasures`-Verzeichnis von {CMK} das Skript `livedump-ssh-recv`, das genau das tut. 
+
+include::include_treasures_admonition.asciidoc[]
+
+Sie können den Dump von Konfiguration und Status auch durch die Angabe von Livestatus-Filtern einschränken,
+z.B. die Hosts auf die Mitglieder der Host-Gruppe `mygroup`:
+
+[{shell}]
+----
+{c-myremote1} livedump -H "Filter: host_groups >= mygroup" > state
+----
+////
+
+[#cmcdump]
+== Konfiguration von CMCDump
+
+Was xref:livedump[Livedump] für den Nagios-Kern ist, ist CMCDump für den xref:cmc#[{CMK} Micro Core] -- und damit das Tool der Wahl für die kommerziellen Editionen.
+Im Gegensatz zu Livedump kann CMCDump den _vollständigen_ Status von Hosts und Services replizieren (Nagios bietet hier nicht die notwendigen Schnittstellen).
+
+Zum Vergleich: Bei Livedump werden folgende Daten übertragen:
+
+* Der aktuelle Zustand, also {PEND}, {OK}, {WARN}, {CRIT}, {UNKNOWN}, {UP}, {DOWN} oder {UNREACH}
+* Die Ausgabe des Check-Plugins
+* Die Messdaten
+
+Zusätzlich synchronisiert CMCDump auch noch
+
+* Die _lange_ Ausgabe des Plugins,
+* Ob das Objekte gerade unstetig icon:icon_flapping[] ist
+* Zeitpunkt der letzten Check-Ausführung und des letzten Statuswechsels
+* Dauer der Check-Ausführung
+* Latenz der Check-Ausführung
+* Die Nummer des aktuellen Check-Versuchs und ob der aktuelle Zustand hart oder weich ist
+* Die xref:basics_ackn#[Quittierung] icon:icon_ack[], falls vorhanden
+* Ob das Objekt gerade in einer xref:glossar#scheduled_downtime[Wartungszeit] icon:icon_downtime[alt="Symbol einer Wartungszeit."] ist.
+
+Das Abbild des Monitorings ist hier also viel genauer.
+Der CMC simuliert beim Import des Status nicht einfach eine Check-Ausführung, sondern überträgt mittels einer dafür bestimmten Schnittstelle einen korrekten Status.
+Das bedeutet unter anderem, dass Sie in der Zentrale jederzeit sehen können, ob Probleme quittiert oder Wartungszeiten eingetragen wurden.
+
+Die Einrichtung ist sehr ähnlich wie bei Livedump, allerdings etwas einfacher, da keine Rücksicht auf Templates genommen werden muss.
+
+
+[#cmcdump_sync_config]
+=== Übertragung der Konfiguration
+
+Der Dump der Konfiguration geschieht mit `cmcdump -C`.
+Legen Sie diese Datei auf der Zentralinstanz unterhalb von `~/etc/check_mk/conf.d/` ab.
+Die Endung muss `.mk` heißen:
+
+[{shell}]
+----
+{c-myremote1} cmcdump -C > config.mk
+{c-myremote1} scp config.mk central@mycentral.mydomain.test:etc/check_mk/conf.d/myremote1.mk
+----
+
+Aktivieren Sie auf der Zentralinstanz die Konfiguration:
+
+[{shell}]
+----
+{c-local} cmk -O
+----
+
+Wie bei Livedump erscheinen jetzt die Hosts und Services auf der Zentrale im Zustand {PEND}.
+Allerdings sehen Sie gleich am Kopierersymbol icon:icon_shadow[], dass es sich um _kopierte Objekte_ oder _Schattenobjekte_ handelt.
+So können Sie diese von direkt auf der Zentralinstanz oder einer „normalen“ Remote-Instanz überwachten Objekte unterscheiden:
+
+.Die Spinnennetze symbolisieren veraltete (oder nie vorhandene) Daten, aber alle konfigurierten Dienste sind nun sichtbar.
+image::distributed_monitoring_cmcdump_pending.png[alt="Screenshot der Services eines Hosts 'myremote1' mit fünf ausgegrauten Services im Zustand 'PEND': 'Check_MK', 'Check_MK Agent','Check_MK Discovery','Check_MK HW/SW Inventory' und 'CPU load'"]
+
+
+[#cmcdump_sync_status]
+=== Übertragung des Status
+
+Das regelmäßige Erzeugen des Status geschieht mit `cmcdump` ohne weitere Argumente:
+
+[{shell}]
+----
+{c-myremote1} cmcdump > state
+{c-myremote1} scp state central@mycentral.mydomain.test:tmp/state_myremote1
+----
+
+Zum Einspielen des Status auf der Zentralinstanz muss der Inhalt der Datei mithilfe des Tools `unixcat` in das Unix-Socket `~/tmp/run/live` geschrieben werden:
+
+[{shell}]
+----
+{c-local} unixcat tmp/run/live < tmp/state_myremote1
+----
+
+Falls Sie per SSH einen passwortlosen Zugang von der Remote-Instanz zur Zentralinstanz haben, können Sie alle drei Befehle zu einem einzigen zusammenfassen
+-- wobei nicht mal eine temporäre Datei entsteht:
+
+[{shell}]
+----
+{c-myremote1} cmcdump | ssh central@mycentral.mydomain.test "unixcat tmp/run/live"
+----
+
+// MFS: Brauchen wir diesen Enthusiasmus?
+Es ist wirklich so einfach!
+Aber wie schon erwähnt, ist `ssh`/`scp` nicht die einzige Methode, um Dateien zu übertragen und genauso gut können Sie Konfiguration oder Status per E-Mail oder einem beliebigen anderen Protokoll übertragen.
