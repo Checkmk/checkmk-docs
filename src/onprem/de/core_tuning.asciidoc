@@ -232,17 +232,24 @@ Vorausgesetzt, die Zahl der Fetcher ist bereits optimiert, können Sie in solche
 [#nagiostuning]
 == Tuning des Nagios Cores
 
-{cre-only} Der von {RE} verwendete Nagios-Kern ist recht robust, hat aber das Problem einer sehr teuren Ausführung von aktiven Checks:
-Für jede Ausführung eines aktiven Checks kopiert Nagios seinen Speicher, um dann an den Kindprozess weiterzugeben.
+{cre-only} Der von {RE} verwendete Nagios-Kern ist recht robust, hat aber Nachteile bei der Ausführung aktiver Checks.
+Für jede Ausführung eines aktiven Checks startet Nagios einen Kindprozess.
+Der Start dieser Kindprozesse erfolgt sequentiell, die eigentliche Ausführung kann parallel erfolgen.
 Das Geheimnis des Tunings von Nagios liegt daher darin, diese Forks optimal zu steuern.
 
 Die in den nächsten Abschnitten erklärten Einstellungen können Sie in der Datei `~/etc/nagios/nagios.d/timing.cfg` vornehmen.
 In dieser Datei und in `~/etc/nagios/nagios.d/tuning.cfg` finden Sie auch weitere -- weniger relevante -- Konfigurationsmöglichkeiten.
-Nach jeder Änderung ist es erforderlich, mittels `cmk -N && cmk -R` die Konfiguration neu zu erstellen und den Kern neu zu starten.
+Nach jeder Änderung ist es erforderlich, mittels `cmk -O && cmk -R` die Konfiguration neu zu erstellen und den Kern neu zu starten.
+
+Allerdings kann es zusätzlich erforderlich sein, Parameter des Linux-Kernels zu ändern.
+Grund dafür ist, dass Nagios viel Speicher anfordert, den er nie benutzt.
+Prinzipiell erlaubt Linux, dass alle laufenden Prozesse in der Summe mehr Speicher angefordert haben, als vorhanden.
+Die Standardeinstellung des Kernels ist hier jedoch sehr konservativ.
+Anpassungen erklärt der Abschnitt xref:kernel_tuning#[Kernel-Tuning].
 
 
 [#do_not_fork]
-=== Teure Forks vermeiden
+=== Forks vermeiden
 
 Bevor Sie Forks optimieren sollten Sie Forks nach Möglichkeit vermeiden.
 Bedenken Sie, dass ein Aufruf des Services [.guihint]#Check_MK#, welcher die Agentenausgabe einholt -- und dann zig Check-Ergebnisse als _passive Checks_ direkt in den Monitoring-Kern schreibt -- denselben Overhead bei Prozesserstellung hat wie ein simpler aktiver Check, der genau einen Netzwerkdienst überwacht.
@@ -255,9 +262,189 @@ Klar, `check_smtp` ist schnell konfiguriert, aber diesen aktiven Check lokal mit
 * Sie haben die Wahl zwischen einem aktiven Check, um Daten zu Hosts einzuholen oder einem xref:specialagent#[Spezialagenten], der xref:piggyback#[Piggyback-Daten] für viele Hosts erzeugt?
 Wenn mit einem einzigen Start eines Python-Interpreters Daten für Dutzende Hosts eingeholt werden, sollte die Entscheidung klar für den Spezialagenten fallen -- selbst, wenn die aktiven Checks in einer performanteren Programmiersprache bereitgestellt werden.
 
+[#retrieve_time]
+=== Zeit, Daten einzuholen
+
+_Hier fehlt noch Text._
+
+
+[#nagios_concurrency]
+=== Maximale Zahl gleichzeitiger Checks
+
+In der Standardkonfiguration sind beliebig viele parallele Checks möglich.
+Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgeführte Checks sich schnell wieder beenden und die folgenden Einstellungen daher die Last begrenzen.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# MAXIMUM CONCURRENT SERVICE CHECKS
+# This option allows you to specify the maximum number of
+# service checks that can be run in parallel at any given time.
+# Specifying a value of 1 for this variable essentially prevents
+# any service checks from being parallelized.  A value of 0
+# will not restrict the number of concurrent checks that are
+# being executed.
+
+max_concurrent_checks=0
+----
+
+Ist allerdings [.guihint]#Check_MK# der dominierende Dienst, kann es sinnvoll sein, hier harte Grenzen zu setzen, um den Arbeitsspeicherbedarf im Rahmen zu halten.
+Je nach Anteil der Ausführungszeit, welche die Agentenabfrage mit warten verbringt (aufs Netzwerk oder das Agentenskript), bieten sich Werte zwischen der 1,5-fachen und der dreifachen Zahl der CPUs an.
+
+Für eine theoretische Kalkulation des Wertes müssen Sie die Gesamtzeit der kompletten Ausführung aller Checks eines Check-Intervalls (Daten einholen und Ergebnisse berechnen) teilen durch die CPU-Zeit der Checks (nur Ergebnis berechnen).
+Wenn Sie die oben beschriebenen Maßnahmen zur Reduzierung der Ausführungszeit umgesetzt haben, wird ein Faktor von zwei meist ein guter Startpunkt sein.
+Bei sechs CPU-Cores ist also 12 einzutragen.
+
+////
+Etwas höhere Werte sorgen für schnellere Verfügbarkeit vieler Dienste nach einem Core-Neustart, aber auch größere Last in dieser Situation.
+Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihint]#Memory# im Blick behalten werden.
+
+Nun gilt es, das Overcommitment des Linux-Kernels zu berechnen.
+////
+
+Nun gilt es, auch sicherzustellen, dass Ihr Linux-Kern diese Zahl an Prozessen zulässt.
+////
+Ermitteln Sie den virtuellen Speicher Ihrer Nagios-Prozesse -- meist sind dies ein bis anderthalb Gigabyte.
+Ist das Produkt aus Zahl der `max_concurrent_checks` und dem tatsächlichen virtuellen Speicher eines Nagios-Prozesses größer als die Hälfte Ihres Arbeitsspeichers, passen Sie -- wie im nächsten Kapitel beschrieben -- das Overcommit-Ratio Ihres Linux-Kernels an.
+////
+
+[#kernel_tuning]
+=== Kernel-Tuning
+
+[IMPORTANT]
+====
+Nehmen Sie die hier beschriebenen Einstellungen nur vor, wenn Sie auch die Zahl der Apache-Prozesse auf einen sinnvollen Wert gesenkt haben und Sie `max_concurrent_checks` tatsächlich limitiert haben.
+====
+
+Bereits seit vielen Jahren lässt der Linux-Kernel _Memory Overcommitment_ zu.
+Das bedeutet, Linux erlaubt es Prozessen in der Summe mehr Arbeitsspeicher anzufordern, als ein Gerät physikalisch vorhanden hat.
+Die Standardeinstellung (`vm.overcommit_memory=0`) dabei ist, eine Heuristik zu verwenden, die aus in der Vergangenheit gestarteten und beendeten Prozessen versucht auf zukünftige zu schließen.
+Allerdings ist bei Nagios das Verhältnis zwischen virtuellem und tatsächlich resident genutztem Speicher so groß, dass der Linux-Kernel oft ohne Not die Erzeugung neuer Prozesse verweigert.
+
+Wenn auf dem zu tunenden Server nur {CMK} läuft, können Sie aus den gesetzten Limits grob berechnen, wieviel Speicher tatsächlich resident genutzt wird:
+
+[#calculate_overcommit]
+[cols="10,40,15,10,15,10",options="header",grid="rows"]
+|===
+|Anzahl |Prozess | Speicher resident | total | Summe resident | total
+|12 | Nagios | 30 MB | 1000 MB | 360 MB | 12000 MB
+|12 | Python (für [.guihint]#Check_MK#) | 100 MB | 150 MB | 1200 MB | 1800 MB
+|10 | Apache | 250 MB | 500 MB | 2500 MB | 5000 MB
+| | *Gesamtsumme* | | | *3060 MB* | *18800 MB*
+|===
+
+Bei einem Server mit 8 GB RAM scheint es auch unter Berücksichtigung anderer Prozesse von {CMK} zumindest plausibel, dass Sie bei 3060 MB residenten Speichers auf keine harten Grenzen stoßen werden.
+
+In diesem Fall können Sie die folgende `sysctl`-Einstellung vornehmen.
+
+./etc/sysctl.conf
+[{file}]
+----
+# Always accept each overcommit!
+vm.overcommit_memory=1
+----
+
+Aktivieren Sie die Einstellung:
+
+[{shell}]
+----
+{c-root} sysctl -p
+----
+
+Nun gilt es, die tatsächliche Speichernutzung zu beobachten und insbesondere herauszufinden, ob OOM-Konditionen auftreten.
+
+Teilt sich Ihr {CMK} Ihren Server mit anderen Anwendungen, kann es sinnvoll sein, deren Speicherbedarf ähnlich zu ermitteln und Prozesszahlen ebenso zu limitieren.
+Ist dies nicht möglich, haben Sie die Möglichkeit, harte Grenzen festzulegen:
+
+./etc/sysctl.conf
+[{file}]
+----
+# Setting to 2 means hard boundaries are respected:
+vm.overcommit_memory=2
+# Either specify as calculation ratio or fix value kilobytes
+vm.overcommit_kbytes = 0
+# The calculation is:
+# Swap + vm.overcommit_ratio / 100 * RAM
+# So, you'll most likely set this to something between 100 and 300
+vm.overcommit_ratio = 50
+----
+
+
+
+////
+Wie im letzten Kapitel erwähnt, fordert ein Nagios-Prozess beim Start etwa ein bis anderthalb Gigabyte Arbeitsspeicher an.
+In der Regel wird es diesen nicht belegen.
+Typisch sind für die Kindprozesse meist 25 bis 50 Megabyte.
+Allerdings verweigert Linux den Start neuer Prozesse schon alleine auf Basis ihres _möglichen_ Speicherbedarfs.
+Die Standardeinstellung hierfür ist:
+Wäre der gesamte virtuelle Speicher aller laufenden Prozesse größer als die Summe aus Swap und 50% des Arbeitsspeichers, dann wird die Erzeugung eines neuen Prozesses verweigert.
+
+Dem liegen zwei sehr pessimistische (oder einfach vorsichtige) Annahmen zugrunde:
+
+* Es könnte der Moment eintreten, dass jeder laufende Prozess den gesamten angeforderten Speicher auch nutzen möchte
+* Hintergrundspeicher ist so langsam, dass es wichtig ist, dass ein Teil des Arbeitsspeichers für Caching verwendet werden kann
+
+Nun kennen wir jedoch Nagios und _wissen_, dass Forks die zur Ausführung des Services [.guihint]#Check_MK# oder eines aktiven Checks eben in den seltensten Fällen mehr als 50 von den angeforderten 1000&nnbsp;MB auch benutzen.
+Ebenso wissen wir, dass der Python-Prozess beim Aufruf von  [.guihint]#Check_MK# meist unter 150&nnbsp;MB resident benötigt.
+Wenn wir jetzt davon ausgehen, dass Sie oben `max_concurrent_checks` auf 12 gesetzt haben, folgt daraus, dass die Nagios-Forks und der Python-Interpreter zusammen unter 2400&nnbsp;MB benutzen werden.
+
+Allerdings bedeuten 12 parallele Nagios-Forks bereits die Anforderung von 12 bis 18 Gigabyte RAM.
+Auf einem Server mit 8 Gigabyte RAM und 4 Gigabyte Swap verweigert der Linux-Kern aber bereits bei der Anforderung von insgesamt 8 Gigabyte virtuellem Speicher die Erstellung weiterer Prozesse.
+////
+
+
+////
+OMD[my1stcheckmk]:~$ pstree 2586
+nagios─┬─nagios───sh───python3───sh───ssh
+       └─22*[{nagios}]
+////
+
+////
+[TIP]
+====
+Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
+Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste xref:monitoring_basics#stale[_stale_] werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
+In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
+Ändern Sie deren Ausführung zu asynchron.
+
+Helfen alle Optimierungen nicht, ermitteln Sie, bei welchen Checks eine Erhöhung des Check-Intervalls sinnvoll ist.
+Bei einer hohen Zahl von Checks auf vergleichsweise schwacher Hardware sollten Sie über ein Upgrade der Hardware oder den Wechsel zu einer der kommerziellen Editionen von {CMK} nachdenken.
+====
+////
+
+
+
+
+
+
+
+[#nagios_sleep]
+=== Abstand zwischen Checks
+
+[#nagios_sleep_regular]
+==== Im regulären Betrieb
+
+Schließlich können Sie für den Abstand zwischen Checks im regulären Betrieb den Abstand zwischen der Check-Ausführung setzen.
+Tragen Sie den kleinsten der beiden im letzten Abschnitt ermittelten Werte ein.
+
+.~/etc/nagios/nagios.d/timing.cfg
+[{file}]
+----
+# SLEEP TIME
+# This is the number of seconds to sleep between checking for system
+# events and service checks that need to be run.
+
+sleep_time=0.25
+----
+
+Beobachten Sie den {CMK}-Server nach dem Neustart der Instanz und einigen Minuten danach.
+Eine [.guihint]#CPU load# von deutlich mehr als Eins pro Kern ist für einige Minuten in Ordnung, sollte sich aber bald normalisiert haben.
+Bleibt die Last auch beim Start der Instanz niedrig, können Sie `service_inter_check_delay_method` und `host_inter_check_delay_method` auf einen kleineren Wert als die `sleep_time` reduzieren.
+
+//Treten immer wieder Peaks in Last und Speicherbedarf auf, hilft die nächste Einstellung.
 
 [#nagios_restart]
-=== Verhalten bei Neustarts
+==== Bei Neustarts
 
 Standardmäßig versucht Nagios eine smarte Berechnung des Abstandes, in dem Checks initial gestartet werden.
 In vielen Fällen führt dies zu viel zu optimistischen Annahmen, wie viele Checks CPU und Speicher verkraften.
@@ -291,67 +478,6 @@ Mit einem eingetragenen Wert von 0,2 bis 0,25 Sekunden sind Sie dann auf der sic
 Analog verhält es sich mit der Variable `host_inter_check_delay_method`, welche die gleiche Einstellung für Host-Checks vornimmt.
 In der Regel werden Sie `check_icmp` als Host-Check konfiguriert haben, dann ist die Rechnung einfach: ein Check pro Host.
 Bei den oben genannten Zahl von 100 Hosts würde als sinnvoller Wert 0,4 bis 0,5 Sekunden resultieren.
-
-
-[#nagios_sleep]
-=== Abstand zwischen Checks
-
-Schließlich können Sie für den Abstand zwischen Checks im regulären Betrieb den Abstand zwischen der Check-Ausführung setzen.
-Tragen Sie den kleinsten der beiden im letzten Abschnitt ermittelten Werte ein.
-
-.~/etc/nagios/nagios.d/timing.cfg
-[{file}]
-----
-# SLEEP TIME
-# This is the number of seconds to sleep between checking for system
-# events and service checks that need to be run.
-
-sleep_time=0.25
-----
-
-Beobachten Sie den {CMK}-Server nach dem Neustart der Instanz und einigen Minuten danach.
-Eine [.guihint]#CPU load# von deutlich mehr als Eins pro Kern ist für einige Minuten in Ordnung, sollte sich aber bald normalisiert haben.
-Bleibt die Last auch beim Start der Instanz niedrig, können Sie `service_inter_check_delay_method` und `host_inter_check_delay_method` auf einen kleineren Wert als die `sleep_time` reduzieren.
-
-Treten immer wieder Peaks in Last und Speicherbedarf auf, hilft die nächste Einstellung.
-
-
-[#nagios_concurrency]
-=== Maximale Zahl gleichzeitiger Checks
-
-In der Standardkonfiguration sind beliebig viele parallele Checks möglich.
-Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgeführte Checks sich schnell wieder beenden und die folgenden Einstellungen daher die Last begrenzen.
-
-.~/etc/nagios/nagios.d/timing.cfg
-[{file}]
-----
-# MAXIMUM CONCURRENT SERVICE CHECKS
-# This option allows you to specify the maximum number of
-# service checks that can be run in parallel at any given time.
-# Specifying a value of 1 for this variable essentially prevents
-# any service checks from being parallelized.  A value of 0
-# will not restrict the number of concurrent checks that are
-# being executed.
-
-max_concurrent_checks=0
-----
-
-Ist allerdings [.guihint]#Check_MK# der dominierende Dienst, kann es sinnvoll sein, hier harte Grenzen zu setzen, um den Arbeitsspeicherbedarf im Rahmen zu halten.
-Je nach Anteil der Ausführungszeit, welche die Agentenabfrage mit warten verbringt (aufs Netzwerk oder das Agentenskript), bieten sich Werte zwischen der doppelten und der achtfachen Zahl der CPUs an.
-Höhere Werte sorgen für schnellere Verfügbarkeit vieler Dienste nach einem Core-Neustart, aber auch größere Last in dieser Situation.
-
-Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihint]#Memory# im Blick behalten werden.
-
-[TIP]
-====
-Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
-Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste xref:monitoring_basics#stale[_stale_] werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
-In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
-Ändern Sie deren Ausführung zu asynchron.
-
-Helfen alle Optimierungen nicht, ermitteln Sie, bei welchen Checks eine Erhöhung des Check-Intervalls sinnvoll ist.
-Bei einer hohen Zahl von Checks auf vergleichsweise schwacher Hardware sollten Sie über ein Upgrade der Hardware oder den Wechsel zu einer der kommerziellen Editionen von {CMK} nachdenken.
-====
 
 
 [#community_distributed]
