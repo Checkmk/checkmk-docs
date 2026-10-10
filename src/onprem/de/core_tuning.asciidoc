@@ -46,10 +46,120 @@ In solchen Fällen ist es oft erwünscht, auch nach einem Neustart Lastspitzen e
 Bei Instanzen dagegen, mit denen wenig direkt interagiert wird, kann es hilfreich sein, mit kurzer, hoher Last schnell wieder alle Dienste aktuell zu haben. 
 
 [#othertuning]
-== Andere Tuning-Möglichkeiten
+== Zuerst: andere Tuning-Möglichkeiten ausschöpfen
+
+Einen sehr guten Überblick über _alle_ Tuning-Möglichkeiten (inklusive der in diesem Artikel vorgestellten) liefert link:https://www.youtube.com/watch?v=UM7wsc3-QKU[dieser Vortrag bei der {CMK}-Konferenz pass:[#11] (auf YouTube)^].
+
+
+[#cmk_services]
+=== Apache und andere Instanzdienste
 
 Lesen Sie den xref:cmk_processes#[Artikel zu Instanzdiensten], um zu erfahren, auf welche Dienste Sie möglicherweise verzichten können und wie Sie den Instanz-Apache optimal auf das Nutzungsverhalten auf Ihrem {CMK}-Server einstellen.
-Einen sehr guten Überblick über _alle_ Tuning-Möglichkeiten (inklusive der in diesem Artikel vorgestellten) liefert link:https://www.youtube.com/watch?v=UM7wsc3-QKU[dieser Vortrag bei der {CMK}-Konferenz pass:[#11] (auf YouTube)^].
+Falls Sie wegen akuten Performance-Problemen auf diesen Artikel gestoßen sind, reduzieren Sie die Zahl der Apache-Prozesse vor der Anwendung der hier vorgestellten Maßnahmen auf das absolute Minimum.
+Sie können diese dann später -- wenn genügend RAM und CPU freigeräumt wurden -- wieder auf ein sinnvolles Maß anheben.
+
+
+[#io_time]
+=== Agenten-Laufzeiten
+
+Ein Punkt, an dem Sie ansetzen sollten, bevor Sie Monitoring-Kern und kernnahe Prozesse optimieren, ist die Laufzeit von Agenten.
+Zwischen dem Kontakt mit dem Agenten und dem Eingang der vollständigen Agentenausgabe wartet ein Prozess lediglich.
+Bei {RE} ist das ein einziger Python-Prozess, der Agentenausgabe einholt und anschließend verarbeitet.
+Meist benötigt dieser 80 bis 100 MB Speicher resident.
+Bei den kommerziellen Editionen ist das ein sogenannter _Fetcher_, der nichts anderes tut als Agentenausgaben weiterzugeben.
+Auch diese benötigen in der Regel 30 bis 60 MB Speicher resident.
+
+Für die Optimierung ermitteln Sie zunächst die Zahl der mit regulären Agenten, Spezialagenten und SNMP überwachten Hosts und deren durchschnittliche Ausführungsdauer.
+Bei der Ermittlung hilft der Blick ins Monitoring „typischer“ Hosts -- dort interessiert vor allem der Dienst [.guihint]#Check_MK#.
+Eine _Topliste_ liefert [.guihint]#Monitor > History > Service check durations#, eine vollständige Liste kann per Livestatus eingeholt werden.
+
+.[#agent_duration_livestatus]#Agenten-Laufzeiten per Livestatus ermitteln#
+[%collapsible]
+====
+[#collapsible_livestatus]
+Die Performance-Daten für die Einholung von Agentendaten können Sie auch mittels xref:livestatus#[Livestatus] abfragen.
+Die Tabelle `services` enthält eine Spalte `perf_data`, welche die Ausführungsdauer verschiedener Aspekte enthält.
+Filtern Sie auf aktive Checks (das Einholen von Daten per Fetcher ist hierunter subsummiert).
+In der Spalte `perf_data` ist die Summe aus `user_time` und `system_time` die CPU-Zeit.
+Der letzte Wert -- `cmk_time_agent` oder `cmk_time_smtp` -- ist die Zeit, welche benötigt wurde, Agentendaten einzuholen.
+
+Das folgende Beispiel zeigt das Einholen dieser Daten für den letzten Check:
+
+[{shell}]
+----
+{c-omd} lq "GET services\nColumns: host_name description perf_data\nFilter: description = Check_MK"
+hplaser;Check_MK; execution_time=0.470 user_time=0.010 system_time=0.000 children_user_time=0.060 children_system_time=0.050 cmk_time_agent=0.000 cmk_time_snmp=0.350
+slowhost;Check_MK; execution_time=13.760 user_time=0.030 system_time=0.000 children_user_time=0.000 children_system_time=0.000 cmk_time_agent=13.740
+...
+----
+
+Wollen Sie später auch die Ausführungsdauer von aktiven Checks ermitteln, ersetzen Sie den Filter `description = Check_MK` durch `active_checks_enabled = 1`.
+====
+
+
+.Die Identifikation (und Optimierung) besonders langsamer Hosts kann helfen, die Fetcher-Auslastung zu reduzieren.
+image::core_tuning_service_check_durations.png[alt="Screenshot der Liste der langsamsten Dienste.",fullscreen=1]
+
+Die folgende Tabelle zeigt die Wartezeit auf Agentenausgaben und die Dauer der folgenden Verarbeitung in einer fiktiven Umgebung (mit eher pessimistischen Annahmen der CPU-Zeit), aufsummiert für ein Check-Intervall von einer Minute.
+Die angenommenen Zahlen resultieren in der Praxis meist in 3000 bis 5000 Services.
+
+[#io_cpu_time_table]
+[cols="10,~,>10,>10,>10,>10",options="header",grid="rows"]
+|===
+|Anzahl |Check |Wartezeit | Summe |CPU-Zeit |Summe
+| 100 | Hosts mit {CMK}-Agent überwacht (normal schnell) | 2 s | 200 s | 0,3 s | 30 s 
+| 10 | Hosts mit {CMK}-Agent überwacht (langsam) | 15 s | 150 s | 2 s | 20 s
+| 20 | SNMP-Geräte (ältere Hardware, nicht einmal besonders langsam) | 10 s | 200 s | 1 s | 20 s 
+| 5 | Hosts ohne Agent, nur mit Spezialagent überwacht | 5 s | 25 s | 2 s | 10 s 
+| 2 | Sehr aufwendige Spezialagenten (bspw. Cloud-Dienste) | 25 s | 50 s | 5 s | 10 s 
+| | *Gesamtsumme* | | *625 s* | | *90 s*
+|===
+
+Auf diese Tabelle werden wir im weiteren Verlauf dieses Artikels noch einige Male -- bei der Berechnung der xref:num_checkers[Checker] und xref:num_fetchers[Fetcher] und der xref:nagios_concurrency[gleichzeitigen Nagios-Checks] -- Bezug nehmen.
+
+Da eine Minute nur 60 Sekunden hat, resultiert aus der Tabelle, dass wenigstens 11 parallele Prozesse benötigt werden, die nur warten.
+Zwischen 330 und 1100 MB RAM sind in dieser Zeit zwar belegt, werden aber nicht sinnvoll genutzt.
+Offensichtlich ist, dass bereits ein Tuning der langsamsten Hosts positive Auswirkungen auf die Performance Ihrer {CMK}-Instanz haben kann.
+
+Auf die CPU-Zeit wollen wir an dieser Stelle noch nicht eingehen.
+Da aber andere Prozesse und der Overhead für die Erstellung von Prozessen noch nicht berücksichtigt sind, ergibt eine grobe Schätzung, dass zwei CPU-Kerne hier nicht reichen werden.
+Auf drei Kernen sollte ein brauchbarer Betrieb möglich sein und auf vier Kernen dürfte noch Luft für die Aufnahme weiterer Hosts bleiben.
+
+Mögliche Maßnahmen zur Optimierung der Wartezeiten sind:
+
+==== Asynchrone Ausführung von Plugins
+
+Identifizieren Sie besonders langsame Agenten-Plugins und stellen Sie diese auf asynchrone Ausführung um.
+
+==== Erhöhung der Check-Intervalle
+
+Bei einigen SNMP-Geräten und vielen APIs, auf die mit Spezialagenten zugegriffen wird, liegt das tatsächliche Aktualisierungsintervall über dem regulären Check-Intervall.
+In solchen Fällen kann das Check-Intervall angehoben werden, ohne dass sich die Sichtbarkeit verschlechtert.
+
+==== Umstellung auf Push-Modus
+
+{cee-only}
+In {CE} steht Push-Modus für Agenten zur Verfügung.
+Wird dieser genutzt, führt der Agent erst seine Plugins aus und überträgt dann die gesamte Agentenausgabe an den Server.
+Dort wird sie im temporären Dateisystem abgelegt, von wo sie in Sekundenbruchteilen eingelesen wird.
+Effektiv kann die Wartezeit in der obigen Tabelle dann mit 0 angesetzt werden.
+
+.[#community_push]#Push-Modus für {SE} und {RE} selbst bauen#
+[%collapsible]
+====
+In Editionen ohne Push-Modus können Sie selbst für Optimierungen sorgen, indem Sie die Agentenausgabe in einem Cronjob im gewünschten Intervall zunächst in eine Datei schreiben und dann zum {CMK}-Server übertragen.
+Dort lesen Sie die Agentenausgabe mit einem Datenquellprogramm ein, das ein simples `cat` des Dateiinhaltes macht.
+
+Das einfachst mögliche Skript, das die Agentenausgabe ablegt und zum Server hochlädt, könnte so aussehen:
+
+./usr/local/bin/communitypush
+[{file}]
+----
+#!/bin/bash
+cmk-agent-ctl dump > /tmp/${HOSTNAME}.txt
+scp /tmp/${HOSTNAME}.txt mysite@myserver.test:/tmp/communitypush/
+----
+====
 
 
 [#cmctuning]
@@ -91,9 +201,17 @@ Zu verarbeitende Daten liegen meist bereits im Arbeitsspeicher, weshalb kein auf
 
 Die Auslastung der Checker hängt sehr stark von der Komplexität der ausgeführten Check-Plugins und der Menge der jeweils verarbeiteten Daten ab.
 Exakte Berechnungsgrundlagen sind daher schwer zu nennen.
+Im Idealfall haben Sie xref:agent_duration_livestatus[per Livestatus eine Liste der CPU-Zeiten] erstellt und diese aufsummiert.
+In diesem Fall müssen Sie nur das Ergebnis durch 60 teilen (das reguläre Check-Intervall) und zunächst grob verdoppeln.
+
+Wenn Sie nicht gerechnet haben, sondern lieber schätzen und optimieren:
 Auf aktueller Hardware kann ein Checker meist eine mittlere vierstellige bis deutlich fünfstellige Zahl von Checks bedienen.
 Eine grobe Kalkulation der Zahl der Checker kann daher zunächst einen Checker pro 5.000 Services vorsehen.
-Gehen Sie nicht unter zwei Checker und nicht über die Zahl der physikalischen Prozessorkerne.
+
+[TIP]
+====
+Gehen Sie nicht unter zwei Checker und nie über die Zahl der physikalischen Prozessorkerne.
+====
 
 Da Checker ihre Konfiguration im Arbeitsspeicher halten müssen und die Prozessgröße daher einige hundert MB betragen kann, sollten Sie die Auslastung prüfen und die Zahl der Checker alsbald wieder in einen Bereich reduzieren, in dem die Auslastung um 50&nbsp;% liegt.
 Von dieser Auslastung ausgehend können Sie unter Beobachtung von Latenzen (insbesondere nach einem Neustart der {CMK}-Instanz) und Lastspitzen die Zahl der Checker weiter reduzieren (oder weitere Services ins Monitoring aufnehmen), bis die Auslastung um 80&nbsp;% liegt.
@@ -115,98 +233,32 @@ _Fetcher_ sind die Hilfsprozesse, die Agentenausgabe einholen, Spezialagenten st
 Die Bestimmung ihrer Zahl ist etwas aufwendiger als die der Checker.
 Pauschale Aussagen zur Zahl können nicht getroffen werden, zu unterschiedlich sind die Anforderungen verschiedener Monitoring-Umgebungen.
 
-Prinzipiell gibt es zwei mögliche Herangehensweisen, die optimale Zahl zu bestimmen:
+Im Kontext der xref:io_cpu_time_table[Tabelle der Agentenausführung] haben wir bereits angedeutet, dass Sie aus der Wartezeit auf Agenten recht gut die Zahl der benötigten Fetcher bestimmen können.
+Neben dieser eher theoretischen Herangehensweise können Sie auch die aktuelle Auslastung identifizieren, und die Zahl der Fetcher auf die aktuelle Auslastungssituation optimieren.
 
-* Sie ermitteln die Auswirkungen typischer und extremer Hosts auf die Fetcher-Auslastung und _errechnen_ daraus die optimale Zahl der Fetcher für die Zielmenge an Hosts.
-Diese Vorgehensweise bietet sich an, wenn eine Monitoring-Umgebung schnell hochskaliert werden soll.
-* Oder Sie _optimieren_ die Zahl der Fetcher auf die aktuelle Auslastungssituation.
-Dieser Weg dürfte in einer bereits etablierten Umgebung, in der immer wieder mal neue Checks und kleinere Zahlen von Hosts hinzukommen, der bevorzugte sein.
-
-In der Praxis werden Sie beide Wege miteinander kombinieren wollen.
-
-Zur Berechnung ermitteln Sie zunächst die Zahl der mit regulären Agenten, Spezialagenten und SNMP überwachten Hosts und deren durchschnittliche Ausführungsdauer.
-Bei der Ermittlung hilft der Blick ins Monitoring „typischer“ Hosts -- dort interessiert vor allem der Dienst [.guihint]#Check_MK#.
-Eine _Topliste_ liefert [.guihint]#Monitor > History > Service check durations#.
-
-.Die Identifikation (und Optimierung) besonders langsamer Hosts kann helfen, die Fetcher-Auslastung zu reduzieren.
-image::core_tuning_service_check_durations.png[alt="Screenshot der Liste der langsamsten Dienste.",fullscreen=1]
-
-Multiplizieren Sie die ermittelte Dauer der Checks mit der Zahl betroffener Hosts und addieren Sie die Teilergebnisse auf.
-Das könnte dann so aussehen.
-
-[#calculate_fetchers]
-[cols="10,65,15,10",options="header",grid="rows"]
-|===
-|Anzahl |Check |Ausführungszeit | Summe
-| 100 | Hosts mit {CMK}-Agent überwacht (normal schnell) | 3 s | 300 s
-| 10 | Hosts mit {CMK}-Agent überwacht (langsam) | 15 s | 150 s
-| 20 | SNMP-Geräte (ältere Hardware, nicht einmal besonders langsam) | 10 s | 200 s
-| 5 | Hosts ohne Agent, nur mit Spezialagent überwacht | 5 s | 25 s
-| 2 | Sehr aufwendige Spezialagenten (bspw. Cloud-Dienste) | 25 s | 50 s
-| | *Gesamtsumme* | | *725 s*
-|===
-
-Unser Beispiel benötigt 725 Sekunden Fetcher-Zeit pro Check-Intervall.
-Die Standardeinstellung von 13 Fetchern kann 780 Sekunden Fetcher-Zeit pro Check-Intervall abdecken, womit sich die Defaults unmittelbar nach der Installation schon am Limit bewegen.
+In der Praxis werden Sie beide Wege miteinander kombinieren wollen: Kalkulation und Optimierung.
 
 Für ein initiales Setup sollten Sie um 50&nbsp;% Fetcher-Auslastung anstreben.
-Bei dem gezeigten Beispiel böte es sich also an, die Zahl der Fetcher auf 25 bis 30 etwa zu verdoppeln.
-Feedback in der Praxis liefert Ihnen das oben erwähnte Snap-In.
+Bei dem xref:io_cpu_time_table[oben gezeigten Beispiel] wären Sie mit elf benötigten, aber nur 13 vorhandenen deutlich über 80&nbsp;% Auslastung.
+Hier böte es sich also an, zunächst die Zahl der Fetcher in den Bereich von etwa 20 zu erhöhen.
+Feedback in der Praxis liefert Ihnen das erwähnte Snap-In.
 Ergeben Ihre Berechnungen nur eine sehr kleine Zahl benötigter Fetcher, gehen Sie nicht unter drei.
 
 Auch für Fetcher gilt langfristig:
 Von dieser Auslastung ausgehend können Sie unter Beobachtung von Latenzen (insbesondere nach einem Neustart der {CMK}-Instanz), dem Verhalten bei Netzwerkproblemen und Lastspitzen die Zahl der Fetcher weiter reduzieren (oder weitere Services ins Monitoring aufnehmen).
 Fetcher sind jedoch empfindlicher gegenüber externen Faktoren als Checker:
 Steigen Netzwerklatenzen oder es treten Paketverluste auf, wird die Fetcher-Auslastung deutlich steigen.
-Eine Obergrenze von 80&nbsp;% sollten Sie daher nur bei einem sehr zuverlässigen Netz anstreben.
-
-[#fetcher_execution_time]
-==== Laufzeiten der Fetcher-Aufgaben verringern
-
-Ein Fetcher benötigt nur 50 bis 100 MB Arbeitsspeicher, davon aber 30 bis 60 MB resident.
-Bei 30 Fetchern sind also bereits ein bis knapp zwei GB Arbeitsspeicher dauerhaft belegt.
-Es lohnt sich daher, nach Optimierungsmöglichkeiten zu suchen, mit denen die _Antwortzeiten_ der Hosts im Monitoring verbessert werden können.
-
-Der xref:glossar#push_mode[Push-Modus] in {CE} hilft in zwei Punkten, Fetcher-Nutzung zu optimieren -- stellen Sie daher wo möglich um:
-
-* Auf Festplatte vorhandene Agentenausgabe reduziert die benötigte Fetcher-Zeit für das Einholen der Agentenausgabe auf weit weniger als eine Sekunde.
-* Netzwerk-Probleme sind dann keine Fetcher-Probleme, sondern Probleme des Agent Controllers/Agent Receivers.
-
-Falls Sie {SE} nutzen, können Sie immer noch langsame Agenten-Plugins identifizieren und diese auf xref:agent_linux#async_plugins[asynchrone Ausführung] umstellen -- auch hier hilft [.guihint]#Monitor > History > Service check durations#.
-Wenn Sie nun noch Ihre xref:snmp#performance[SNMP-Zugriffe optimieren], haben Sie gute Chancen, die Summe der Fetcher-Zeiten im obigen Beispiel zu halbieren.
-So können Sie die Zahl der Fetcher und damit ebenso den Arbeitsspeicherbedarf der Fetcher halbieren.
-
-.Fetcher-Laufzeiten per Livestatus ermitteln
-[%collapsible]
-====
-[#collapsible_livestatus]
-Die Performance-Daten von Fetchern können Sie auch mittels xref:livestatus#[Livestatus] abfragen.
-Die Tabelle `services` enthält eine Spalte `perf_data`, welche die Ausführungsdauer verschiedener Aspekte enthält.
-Filtern Sie auf aktive Checks (das Einholen von Daten per Fetcher ist hierunter subsummiert).
-In der Spalte `perf_data` ist vor allem das letzte Feld -- entweder `cmk_time_agent` oder `cmk_time_smtp`  -- interessant.
-
-Das folgende Beispiel zeigt das Einholen dieser Daten für den letzten Check:
-
-[{shell}]
-----
-{c-omd} lq "GET services\nColumns: host_name description perf_data\nFilter: description = Check_MK"
-hplaser;Check_MK; execution_time=0.470 user_time=0.010 system_time=0.000 children_user_time=0.060 children_system_time=0.050 cmk_time_agent=0.000 cmk_time_snmp=0.350
-slowhost;Check_MK; execution_time=13.760 user_time=0.030 system_time=0.000 children_user_time=0.000 children_system_time=0.000 cmk_time_agent=13.740
-...
-----
-
-Wollen Sie später auch die Ausführungsdauer von aktiven Checks ermitteln, ersetzen Sie den Filter `description = Check_MK` durch `active_checks_enabled = 1`.
-====
+Eine Obergrenze von 75–80&nbsp;% sollten Sie daher nur bei einem sehr zuverlässigen Netz anstreben.
 
 
 [#cmc_active]
 === Aktive Checks
 
-Für die Ausführung von aktiven Checks sind die _Active check helpers_ genannten Hilfsprozesse zuständig.
+Für die Ausführung von aktiven Checks sind die [.guihint]#Active check helpers# genannten Hilfsprozesse zuständig.
 Die Standardeinstellung für aktive Checks des CMC liegt bei maximal fünf gleichzeitigen.
 Bei der Abschätzung hilft wieder der Blick in die Hitliste [.guihint]#Monitor > History > Service check durations#.
 Hier werden Sie sehen, dass der (standardmäßig einmal pro Tag ausgeführte) Inventur-Check auch einmal eine Minute benötigen kann, ein `check_cert` oft in ein paar hundert Millisekunden fertig ist und die Werte bei `check_httpv2` -- abhängig von der Performance des überprüften Endpunktes -- erheblich schwanken.
-Letztlich können Sie eine xref:calculate_fetchers[Rechnung wie oben] anstellen -- bei fünf aktiven Checks stehen pro Intervall 300 Sekunden zur Verfügung.
+Letztlich können Sie eine xref:io_cpu_time_table[Rechnung wie oben] anstellen -- bei fünf [.guihint]#Active check helpers# stehen pro Intervall 300 Sekunden zur Verfügung.
 
 Oder Sie werfen zuerst einen Blick in den Dienst [.guihint]#OMD mysite performance#, konkret in die Metrik [.guihint]#Helper usage# und dort die Graph-Linie [.guihint]#Active check helper usage#.
 
@@ -226,7 +278,7 @@ Das ist weit entspannter als der Standardwert der Fetcher sonst zulässt.
 Grund ist die Erwartung, dass während des Neustarts des Servers auch andere Dienste noch hochfahren.
 Bei großzügig dimensionierten Servern mit vielen Hosts im Monitoring bedeutet dies möglicherweise, dass bereits wenige Minuten nach dem Neustart zwar die Last niedrig ist, aber {CMK} noch lange nicht alle Services aktualisiert hat.
 
-Vorausgesetzt, die Zahl der Fetcher ist bereits optimiert, können Sie in solchen Fällen diese Intervalle deutlich senken.
+Vorausgesetzt, die Zahl der Fetcher und Checker ist bereits optimiert, können Sie in solchen Fällen diese Intervalle deutlich senken.
 
 
 [#nagiostuning]
@@ -235,44 +287,47 @@ Vorausgesetzt, die Zahl der Fetcher ist bereits optimiert, können Sie in solche
 {cre-only} Der von {RE} verwendete Nagios-Kern ist recht robust, hat aber Nachteile bei der Ausführung aktiver Checks.
 Für jede Ausführung eines aktiven Checks startet Nagios einen Kindprozess.
 Der Start dieser Kindprozesse erfolgt sequentiell, die eigentliche Ausführung kann parallel erfolgen.
-Das Geheimnis des Tunings von Nagios liegt daher darin, diese Forks optimal zu steuern.
+Das Geheimnis des Tunings von Nagios liegt daher darin, diese Forks in Zahl und Abstand optimal zu steuern.
 
 Die in den nächsten Abschnitten erklärten Einstellungen können Sie in der Datei `~/etc/nagios/nagios.d/timing.cfg` vornehmen.
 In dieser Datei und in `~/etc/nagios/nagios.d/tuning.cfg` finden Sie auch weitere -- weniger relevante -- Konfigurationsmöglichkeiten.
-Nach jeder Änderung ist es erforderlich, mittels `cmk -O && cmk -R` die Konfiguration neu zu erstellen und den Kern neu zu starten.
+Nach jeder Änderung ist es erforderlich, mittels `cmk -R` die Konfiguration neu zu erstellen und den Kern neu zu starten.
 
 Allerdings kann es zusätzlich erforderlich sein, Parameter des Linux-Kernels zu ändern.
 Grund dafür ist, dass Nagios viel Speicher anfordert, den er nie benutzt.
 Prinzipiell erlaubt Linux, dass alle laufenden Prozesse in der Summe mehr Speicher angefordert haben, als vorhanden.
 Die Standardeinstellung des Kernels ist hier jedoch sehr konservativ.
-Anpassungen erklärt der Abschnitt xref:kernel_tuning#[Kernel-Tuning].
+Anpassungen erklärt das folgende Kapitel xref:kernel_tuning[Kernel-Tuning].
 
 
 [#do_not_fork]
 === Forks vermeiden
 
-Bevor Sie Forks optimieren sollten Sie Forks nach Möglichkeit vermeiden.
-Bedenken Sie, dass ein Aufruf des Services [.guihint]#Check_MK#, welcher die Agentenausgabe einholt -- und dann zig Check-Ergebnisse als _passive Checks_ direkt in den Monitoring-Kern schreibt -- denselben Overhead bei Prozesserstellung hat wie ein simpler aktiver Check, der genau einen Netzwerkdienst überwacht.
+Bevor Sie Forks optimieren, sollten Sie Forks nach Möglichkeit vermeiden.
+Bedenken Sie, dass ein Aufruf des Services [.guihint]#Check_MK#, welcher die Agentenausgabe einholt -- und dann zig Check-Ergebnisse als _passive Checks_ direkt an den Monitoring-Kern übergibt -- denselben Overhead bei Prozesserstellung und 
+Übergabe der Ergebnisse hat wie ein simpler aktiver Check, der genau einen Netzwerkdienst überwacht.
 Daher ist es sinnvoll, die Zahl der aktiven Checks nach Möglichkeit zu reduzieren.
 Mögliche Beispiele sind:
 
 * Sie wollen MySQL- oder MariaDB-Datenbanken überwachen? Anstatt den Datenbank-Port per Firewall für den {CMK}-Server freizugeben und einen aktiven Check zu benutzen, installieren Sie besser ein xref:monitoring_mysql#[lokales Check-Plugin].
 * Sie wollen sicherstellen, dass SMTP-Versand funktioniert, weil auf Ihren Mailservern immer mal wieder der SASL-Authentifizierungs-Daemon abstürzt?
-Klar, `check_smtp` ist schnell konfiguriert, aber diesen aktiven Check lokal mit xref:agent_linux#e2e_monitoring[MRPE wie ein Agenten-Plugin] ausführen zu lassen, ist performanter.
-* Sie haben die Wahl zwischen einem aktiven Check, um Daten zu Hosts einzuholen oder einem xref:specialagent#[Spezialagenten], der xref:piggyback#[Piggyback-Daten] für viele Hosts erzeugt?
+Klar, `check_smtp` ist schnell konfiguriert, aber diesen aktiven Check lokal auf den überwachten Hosts mit xref:agent_linux#e2e_monitoring[MRPE wie ein Agenten-Plugin] ausführen zu lassen, ist performanter.
+* Sie haben die Wahl zwischen einem aktiven Check, um Daten zu Hosts einzuholen oder einem xref:special_agents#[Spezialagenten], der xref:piggyback#[Piggyback-Daten] für viele Hosts erzeugt?
 Wenn mit einem einzigen Start eines Python-Interpreters Daten für Dutzende Hosts eingeholt werden, sollte die Entscheidung klar für den Spezialagenten fallen -- selbst, wenn die aktiven Checks in einer performanteren Programmiersprache bereitgestellt werden.
-
-[#retrieve_time]
-=== Zeit, Daten einzuholen
-
-_Hier fehlt noch Text._
 
 
 [#nagios_concurrency]
 === Maximale Zahl gleichzeitiger Checks
 
 In der Standardkonfiguration sind beliebig viele parallele Checks möglich.
-Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgeführte Checks sich schnell wieder beenden und die folgenden Einstellungen daher die Last begrenzen.
+Dieser Einstellung funktioniert bei niedriger Last von sehr kleinen bis sehr großen Systemen.
+Allerdings lohnt es sich, die Zahl konsequent auf das eigene Monitoring anzupassen und so Speicherauslastung und CPU-Nutzung in ein bestmögliches Verhältnis zu bringen.
+
+[TIP]
+====
+Möglicherweise ermitteln Sie mit den Berechnungsgrundlagen und Optimierungsvorschlägen in diesem Unterkapitel Zahlen, die Anpassungen an der Konfiguration des Linux-Kernels erfordern, um wirksam zu sein.
+Lesen Sie daher dieses und xref:kernel_tuning[das nächste Unterkapitel] durch bevor Sie Änderungen vornehmen. 
+====
 
 .~/etc/nagios/nagios.d/timing.cfg
 [{file}]
@@ -288,21 +343,33 @@ Dieser Einstellung liegt die Annahme zugrunde, dass vom Monitoring-Kern ausgefü
 max_concurrent_checks=0
 ----
 
-Ist allerdings [.guihint]#Check_MK# der dominierende Dienst, kann es sinnvoll sein, hier harte Grenzen zu setzen, um den Arbeitsspeicherbedarf im Rahmen zu halten.
-Je nach Anteil der Ausführungszeit, welche die Agentenabfrage mit warten verbringt (aufs Netzwerk oder das Agentenskript), bieten sich Werte zwischen der 1,5-fachen und der dreifachen Zahl der CPUs an.
+Für die theoretische Berechnung des Wertes teilen Sie die gesamte Ausführungszeit der xref:io_cpu_time_table[Tabelle oben] durch das Check-Intervall (Standard 60 Sekunden) und schlagen noch einmal 30 bis 50&nbsp;% oben drauf.
+Bei der oben errechneten Gesamtzeit von 715 Sekunden, wäre demnach ein Wert zwischen 16 und 18 ein passabler Startpunkt, von dem aus Sie weiter optimieren können.
 
-Für eine theoretische Kalkulation des Wertes müssen Sie die Gesamtzeit der kompletten Ausführung aller Checks eines Check-Intervalls (Daten einholen und Ergebnisse berechnen) teilen durch die CPU-Zeit der Checks (nur Ergebnis berechnen).
-Wenn Sie die oben beschriebenen Maßnahmen zur Reduzierung der Ausführungszeit umgesetzt haben, wird ein Faktor von zwei meist ein guter Startpunkt sein.
-Bei sechs CPU-Cores ist also 12 einzutragen.
+Sollen nach dem Start des Kernes möglichst viele Dienste möglichst schnell wieder aktuell sein, muss ein Wert gefunden werden, der zwei Dinge sicherstellt:
 
-////
-Etwas höhere Werte sorgen für schnellere Verfügbarkeit vieler Dienste nach einem Core-Neustart, aber auch größere Last in dieser Situation.
-Für die Korrektur sollten Spitzen der Dienste [.guihint]#CPU load# und [.guihint]#Memory# im Blick behalten werden.
+* Es werden genügend Daten eingesammelt, dass alle CPU-Kerne fast voll ausgelastet werden können
+* Es werden nicht zu viele Daten eingesammelt, damit nicht Prozesse, die Daten verarbeiten, um CPU konkurrieren müssen
 
-Nun gilt es, das Overcommitment des Linux-Kernels zu berechnen.
-////
+Bei dem oben erwähnten Verhältnis von 8:1 (715 Sekunden insgesamt zu 90 Sekunden CPU-Zeit) würde bei vier Kernen ein Wert von 32 `max_concurrent_checks` beide Bedingungen erfüllen.
 
-Nun gilt es, auch sicherzustellen, dass Ihr Linux-Kern diese Zahl an Prozessen zulässt.
+[TIP]
+====
+An dieser Stelle sollte klar sein:
+Liegt der erste berechnete Wert über dem zweiten, haben Sie höhere Anforderungen als Ihre Hardware erfüllen kann.
+In diesem Fall müssen Sie Checks reduzieren oder Check-Intervalle erhöhen.
+====
+
+Wenn Sie nicht initial rechnen wollen, sondern eine Faustregel für die Zahl der `max_concurrent_checks` suchen:
+Starten sie -- nach Gefühl -- mit einem Wert zwischen der zwei- und vierfachen Zahl der CPU-Kerne und optimieren Sie von dort aus.
+
+Wenn Sie auch gut fünf Minuten nach dem Neustart des Monitoring-Kernes noch Services haben, die [.guihint]#stale# sind, müssen Sie die `max_concurrent_checks` erhöhen.
+Umgekehrt gilt: Sind bereits nach weniger als einer Minute _keine_ Services mehr [.guihint]#stale#, halten Sie mit `htop` danach Ausschau, ob am Anfang eines Check-Intervalls Spitzen auftreten.
+Wir empfehlen bei `htop`, mit der Taste kbd:[U] (_User_) die Anzeige auf den Instanznutzer zu beschränken und dann mit kbd:[T] (_Tree_) in die Baumansicht zu wechseln.
+Gegebenenfalls senken Sie die Zahl maximaler gleichzeitiger Checks dann weiter.
+Gehen Sie aber auch in kleinen Installationen nicht unter zwei.
+
+Nun gilt es, auch sicherzustellen, dass Ihr _Linux_-Kern den Start all dieser Prozesse auch zulässt.
 ////
 Ermitteln Sie den virtuellen Speicher Ihrer Nagios-Prozesse -- meist sind dies ein bis anderthalb Gigabyte.
 Ist das Produkt aus Zahl der `max_concurrent_checks` und dem tatsächlichen virtuellen Speicher eines Nagios-Prozesses größer als die Hälfte Ihres Arbeitsspeichers, passen Sie -- wie im nächsten Kapitel beschrieben -- das Overcommit-Ratio Ihres Linux-Kernels an.
@@ -316,26 +383,62 @@ Ist das Produkt aus Zahl der `max_concurrent_checks` und dem tatsächlichen virt
 Nehmen Sie die hier beschriebenen Einstellungen nur vor, wenn Sie auch die Zahl der Apache-Prozesse auf einen sinnvollen Wert gesenkt haben und Sie `max_concurrent_checks` tatsächlich limitiert haben.
 ====
 
-Bereits seit vielen Jahren lässt der Linux-Kernel _Memory Overcommitment_ zu.
+// MFS: Seit 1998 oder 1999, bitte für künftige Schreibende diesen Kommentar drinlassen.
+// MFS: So stellen wir sicher, dass bald "seit fast 50 Jahren" drinsteht.
+Seit mehr als einem Vierteljahrhundert lässt der Linux-Kernel _Memory Overcommitment_ zu.
 Das bedeutet, Linux erlaubt es Prozessen in der Summe mehr Arbeitsspeicher anzufordern, als ein Gerät physikalisch vorhanden hat.
-Die Standardeinstellung (`vm.overcommit_memory=0`) dabei ist, eine Heuristik zu verwenden, die aus in der Vergangenheit gestarteten und beendeten Prozessen versucht auf zukünftige zu schließen.
-Allerdings ist bei Nagios das Verhältnis zwischen virtuellem und tatsächlich resident genutztem Speicher so groß, dass der Linux-Kernel oft ohne Not die Erzeugung neuer Prozesse verweigert.
+Die Standardeinstellung dabei ist, eine Heuristik zu verwenden, die aus in der Vergangenheit gestarteten und beendeten Prozessen versucht auf zukünftige zu schließen.
+Allerdings ist bei Nagios das Verhältnis zwischen einfach mal so angefordertem („könnte ich vielleicht mal brauchen...“) und tatsächlich resident genutztem Speicher so groß, dass der Linux-Kernel oft ohne Not die Erzeugung neuer Prozesse verweigert.
 
-Wenn auf dem zu tunenden Server nur {CMK} läuft, können Sie aus den gesetzten Limits grob berechnen, wieviel Speicher tatsächlich resident genutzt wird:
+Sie müssen also ermitteln, ob der für Nagios-Prozesse benutzte virtuelle Speicher plausibel beim Linux-Kernel angefordert werden kann.
+Ist das nicht der Fall, müssen Sie Änderungen an den Einstellungen für das Memory Overcommitment vornehmen.
+
+==== Berechnung des angeforderten Speichers
+
+Wenn auf dem zu tunenden Server nur {CMK} läuft, können Sie aus den gesetzten maximalen Prozessen grob berechnen, wie viel Speicher tatsächlich resident genutzt wird.
+Wir rechnen mit den eben ermittelten 18 `max_concurrent_checks`:
 
 [#calculate_overcommit]
-[cols="10,40,15,10,15,10",options="header",grid="rows"]
+[cols=">10,40,>15,>10,>15,>10",options="header",grid="rows"]
 |===
-|Anzahl |Prozess | Speicher resident | total | Summe resident | total
-|12 | Nagios | 30 MB | 1000 MB | 360 MB | 12000 MB
-|12 | Python (für [.guihint]#Check_MK#) | 100 MB | 150 MB | 1200 MB | 1800 MB
+|Anzahl |Prozess | Speicher resident | virtuell | Summe resident | virtuell
+|18 | Nagios | 30 MB | 1000 MB | 540 MB | 18000 MB
+|18 | Python (für [.guihint]#Check_MK#) | 100 MB | 150 MB | 1800 MB | 2400 MB
 |10 | Apache | 250 MB | 500 MB | 2500 MB | 5000 MB
-| | *Gesamtsumme* | | | *3060 MB* | *18800 MB*
+| | *Gesamtsumme* | | | *4840 MB* | *25400 MB*
 |===
 
-Bei einem Server mit 8 GB RAM scheint es auch unter Berücksichtigung anderer Prozesse von {CMK} zumindest plausibel, dass Sie bei 3060 MB residenten Speichers auf keine harten Grenzen stoßen werden.
+Bei einem Server mit 8 GB RAM scheint es auch unter Berücksichtigung anderer Prozesse von {CMK} zumindest plausibel, dass Sie bei 4840 MB residenten Speichers auf keine harten Grenzen stoßen werden.
 
-In diesem Fall können Sie die folgende `sysctl`-Einstellung vornehmen.
+==== Aktuelle Overcommitment-Einstellung ermitteln
+
+Ermitteln Sie zunächst die aktuelle Einstellung:
+
+[{shell}]
+----
+{c-root} sysctl vm.overcommit_memory
+vm.overcommit_memory = 0
+----
+
+Der hier angezeigte Wert `0` zeigt, dass die heuristische Zuweisung aktiv ist.
+Hat Ihre Berechnung einen virtuellen Speicherbedarf von weniger als des doppelten des vorhandenen Arbeitsspeichers ergeben, sind meist keine Anpassungen erforderlich.
+
+==== Anpassungen durchführen
+
+Unsere Berechnung hat jedoch mehr als das dreifache ergeben.
+Eine Anpassung ist also erforderlich.
+Die folgenden Einstellungen sind möglich:
+
+[#settings_overcommit]
+[cols="10,~,20",options="header"]
+|===
+| Einstellung | Auswirkung | Bemerkungen 
+| 0 | Eine Heuristik bestimmt, ob ein Prozess noch zu sehr viel virtuellen Speicher anfordern darf | Standard
+| 1 | Es findet keine Prüfung statt, solange überhaupt freier Speicher vorhanden ist, darf ein neuer Prozess beliebig vielen virtuellen anfordern | kann gefährlich sein
+| 2 | Innerhalb bestimmter Schranken, die Sie mit `vm.overcommit_ratio` oder `vm.overcommit_kbytes` angeben, werden Overcommits zugelassen | guter Kompromiss aus Sicherheit und Flexibilität
+|===
+
+Wenn {CMK} die einzige Anwendung auf Ihrem Server ist, können Sie die folgende `sysctl`-Einstellung vornehmen:
 
 ./etc/sysctl.conf
 [{file}]
@@ -353,8 +456,8 @@ Aktivieren Sie die Einstellung:
 
 Nun gilt es, die tatsächliche Speichernutzung zu beobachten und insbesondere herauszufinden, ob OOM-Konditionen auftreten.
 
-Teilt sich Ihr {CMK} Ihren Server mit anderen Anwendungen, kann es sinnvoll sein, deren Speicherbedarf ähnlich zu ermitteln und Prozesszahlen ebenso zu limitieren.
-Ist dies nicht möglich, haben Sie die Möglichkeit, harte Grenzen festzulegen:
+Teilt sich Ihr {CMK} Ihren Server mit anderen Anwendungen, kann es sinnvoll sein, deren Speicherbedarf ähnlich zu ermitteln und Prozesszahlen ebenso zu limitieren -- nur dann ist `vm.overcommit_memory=1` sicher.
+Ist dies nicht möglich, haben Sie die Möglichkeit, mit `vm.overcommit_memory=2` harte Grenzen festzulegen:
 
 ./etc/sysctl.conf
 [{file}]
@@ -364,91 +467,21 @@ vm.overcommit_memory=2
 # Either specify as calculation ratio or fix value kilobytes
 vm.overcommit_kbytes = 0
 # The calculation is:
-# Swap + vm.overcommit_ratio / 100 * RAM
-# So, you'll most likely set this to something between 100 and 300
+# CommitLimit = SwapTotal + vm.overcommit_ratio / 100 * MemTotal
+# So, you'll most likely set this to something between 150 and 300
 vm.overcommit_ratio = 50
 ----
 
 
-
-////
-Wie im letzten Kapitel erwähnt, fordert ein Nagios-Prozess beim Start etwa ein bis anderthalb Gigabyte Arbeitsspeicher an.
-In der Regel wird es diesen nicht belegen.
-Typisch sind für die Kindprozesse meist 25 bis 50 Megabyte.
-Allerdings verweigert Linux den Start neuer Prozesse schon alleine auf Basis ihres _möglichen_ Speicherbedarfs.
-Die Standardeinstellung hierfür ist:
-Wäre der gesamte virtuelle Speicher aller laufenden Prozesse größer als die Summe aus Swap und 50% des Arbeitsspeichers, dann wird die Erzeugung eines neuen Prozesses verweigert.
-
-Dem liegen zwei sehr pessimistische (oder einfach vorsichtige) Annahmen zugrunde:
-
-* Es könnte der Moment eintreten, dass jeder laufende Prozess den gesamten angeforderten Speicher auch nutzen möchte
-* Hintergrundspeicher ist so langsam, dass es wichtig ist, dass ein Teil des Arbeitsspeichers für Caching verwendet werden kann
-
-Nun kennen wir jedoch Nagios und _wissen_, dass Forks die zur Ausführung des Services [.guihint]#Check_MK# oder eines aktiven Checks eben in den seltensten Fällen mehr als 50 von den angeforderten 1000&nnbsp;MB auch benutzen.
-Ebenso wissen wir, dass der Python-Prozess beim Aufruf von  [.guihint]#Check_MK# meist unter 150&nnbsp;MB resident benötigt.
-Wenn wir jetzt davon ausgehen, dass Sie oben `max_concurrent_checks` auf 12 gesetzt haben, folgt daraus, dass die Nagios-Forks und der Python-Interpreter zusammen unter 2400&nnbsp;MB benutzen werden.
-
-Allerdings bedeuten 12 parallele Nagios-Forks bereits die Anforderung von 12 bis 18 Gigabyte RAM.
-Auf einem Server mit 8 Gigabyte RAM und 4 Gigabyte Swap verweigert der Linux-Kern aber bereits bei der Anforderung von insgesamt 8 Gigabyte virtuellem Speicher die Erstellung weiterer Prozesse.
-////
-
-
-////
-OMD[my1stcheckmk]:~$ pstree 2586
-nagios─┬─nagios───sh───python3───sh───ssh
-       └─22*[{nagios}]
-////
-
-////
-[TIP]
-====
-Leider ist bei Nagios die Berechnung etwas schwieriger als bei der Checker- und Fetcher-Auslastung des CMC.
-Unter Umständen kommt es vor, dass nach Reduzierung immer wieder Dienste xref:monitoring_basics#stale[_stale_] werden, weil nicht genügend Kapazitäten bereitstehen, alle nötigen Checks auszuführen.
-In solchen Fällen raten wir, zunächst Ihre Agenten zu optimieren, beispielsweise durch Identifikation von Plugins, die sehr lange benötigen.
-Ändern Sie deren Ausführung zu asynchron.
-
-Helfen alle Optimierungen nicht, ermitteln Sie, bei welchen Checks eine Erhöhung des Check-Intervalls sinnvoll ist.
-Bei einer hohen Zahl von Checks auf vergleichsweise schwacher Hardware sollten Sie über ein Upgrade der Hardware oder den Wechsel zu einer der kommerziellen Editionen von {CMK} nachdenken.
-====
-////
-
-
-
-
-
-
-
-[#nagios_sleep]
-=== Abstand zwischen Checks
-
-[#nagios_sleep_regular]
-==== Im regulären Betrieb
-
-Schließlich können Sie für den Abstand zwischen Checks im regulären Betrieb den Abstand zwischen der Check-Ausführung setzen.
-Tragen Sie den kleinsten der beiden im letzten Abschnitt ermittelten Werte ein.
-
-.~/etc/nagios/nagios.d/timing.cfg
-[{file}]
-----
-# SLEEP TIME
-# This is the number of seconds to sleep between checking for system
-# events and service checks that need to be run.
-
-sleep_time=0.25
-----
-
-Beobachten Sie den {CMK}-Server nach dem Neustart der Instanz und einigen Minuten danach.
-Eine [.guihint]#CPU load# von deutlich mehr als Eins pro Kern ist für einige Minuten in Ordnung, sollte sich aber bald normalisiert haben.
-Bleibt die Last auch beim Start der Instanz niedrig, können Sie `service_inter_check_delay_method` und `host_inter_check_delay_method` auf einen kleineren Wert als die `sleep_time` reduzieren.
-
-//Treten immer wieder Peaks in Last und Speicherbedarf auf, hilft die nächste Einstellung.
-
 [#nagios_restart]
-==== Bei Neustarts
+=== Verhalten bei Neustarts
+
+Hier gezeigte Einstellungen sind vor allem relevant, wenn Sie die `max_concurrent_host_checks` unlimitiert oder auf einen recht hohen Wert konfiguriert haben.
 
 Standardmäßig versucht Nagios eine smarte Berechnung des Abstandes, in dem Checks initial gestartet werden.
-In vielen Fällen führt dies zu viel zu optimistischen Annahmen, wie viele Checks CPU und Speicher verkraften.
-Daher kann es sinnvoll sein, einen fixen Wert einzutragen.
+Das kann aber zu Spitzen am Anfang der ersten Check-Intervalle führen, die auch viele Minuten nach dem Start der {CMK}-Instanz bestehen.
+In solchen Fällen können Sie initiale Checks künstlich über mehr als ein Check-Intervall verteilen.
+Oder aber, Sie wollen bereits deutlich unter einer Minute volle Sichtbarkeit erreichen, dann können Sie ein aggressives Startverhalten erzwingen.
 
 .~/etc/nagios/nagios.d/timing.cfg
 [{file}]
@@ -470,29 +503,37 @@ Daher kann es sinnvoll sein, einen fixen Wert einzutragen.
 service_inter_check_delay_method=s
 ----
 
-Wenn Sie einen fixen Wert eintragen, achten Sie darauf, dass alle Checks in ein Intervall passen.
-Angenommen, Sie haben 100 Hosts, die mit dem {CMK}-Agenten überwacht werden und im Schnitt einen weiteren aktiven Check verwenden.
-Dann sind 200 Checks gleichmäßig auf 60 Sekunden zu verteilen, was 0,3 Sekunden entspricht.
-Mit einem eingetragenen Wert von 0,2 bis 0,25 Sekunden sind Sie dann auf der sicheren Seite.
+Angenommen, Sie ermitteln bei den oben angenommenen 130 Hosts 400 aktive Checks (inclusive [.guihint]#Check_MK#, dann sorgt ein Wert von `0.15` dafür, dass diese exakt in das 60-Sekunden-Intervall passen.
+Für einen sanfteren Start und besseres Spreading können Sie den Start auch über zwei oder drei Check-Intervalle verteilen.
 
 Analog verhält es sich mit der Variable `host_inter_check_delay_method`, welche die gleiche Einstellung für Host-Checks vornimmt.
-In der Regel werden Sie `check_icmp` als Host-Check konfiguriert haben, dann ist die Rechnung einfach: ein Check pro Host.
-Bei den oben genannten Zahl von 100 Hosts würde als sinnvoller Wert 0,4 bis 0,5 Sekunden resultieren.
+Hier ist die Rechnung einfach: ein Check pro Host.
+Bei den oben genannten Zahl von 130 Hosts würde als sinnvoller Wert 0,4 Sekunden resultieren.
 
 
 [#community_distributed]
 === Parallelisierung durch verteiltes Monitoring
 
 Der eigentliche Nagios-Kern (Scheduler, Statusberechnung) läuft Single-Threaded, kann also nicht von Mehrkernprozessoren profitieren.
-Da die als externe Prozesse geforkten Checks die Hauptarbeit leisten, ist zumindest bis vier Prozessorkerne meist der Monitoring-Kern nicht der Flaschenhals.
-Bei mehr Prozessorkernen _kann_ der Monitoring-Kern zum Flaschenhals werden.
+Im Haupt-Thread passiert relativ viel und alles muss sequentiell stattfinden.
+Für {CMK} relevant ist:
+
+* es wird das Scheduling vorgenommen
+* Kindprozesse werden geforkt
+* der Reaper muss die Ergebnisse aktiver und passiver Checks aus dem Dateisystem einlesen
+* aus Zustandsänderungen muss der Bedarf von Benachrichtigungen ermittelt werden
+
+Bei {CMK} leisten die als aktive Checks gestarteten Python-Prozesse zur Einholung und Verarbeitung der Agentendaten die Hauptarbeit.
+Sie schreiben die Check-Ergebnisse in das Nagios-Spool-Verzeichnis, wo sie vom Reaper in Sekundenintervallen eingelesen werden.
+
+// MFS: Hier hatte mir LM eine Zahl genannt, die allerdings schon älter war, ich möchte keine harten Grenzen nennen
+Mögliche Flaschenhälse sind uns zwei bekannt: 
+
+* bei einer sehr hohen Zahl aktiver Checks kommt Nagios mit Forking nicht hinterher
+* wenn {CMK} sehr viele Check-Ergebnisse in das Nagios-Spool-Verzeichnis schreibt, schafft es der Reaper mitunter nicht, die Daten schnell genug einzulesen und zu verarbeiten
+
+Der erste genannte kann durchaus auf Instanzen auftreten, die ein hohes Verhältnis aktiver zu passiven Checks nutzen.
+Der zweite eher auf größer dimensionierter Hardware mit vielen Prozessorkernen und sehr vielen passiven Checks.
 
 Mit dem Betrieb von {RE} erfahrene Admins verteilen daher die Arbeit oft auf mehrere Monitoring-Kerne, indem sie auf einer physikalischen Maschine ein xref:distributed_monitoring#[verteiltes Monitoring] einrichten.
-Wann dieser Schritt sinnvoll ist, variiert:
-Exakte Zahlen (beispielsweise Checks oder Services) sind schwer zu nennen.
-Meist ist zwischen 2000 und 3000 aktiven Checks eine Grenze erreicht, bei der Nagios mit Forking nicht mehr hinterherkommt.
-
-Beobachten Sie die Prozessorauslastung aller Prozessorkerne separat.
-Behalten Sie auch die Größe der Nagios-Prozesse im Blick:
-Je größer der Prozess (beispielsweise, weil viel Konfiguration geladen wurde), desto ineffizienter das Forking.
-Ist zu sehen, dass ein Kern häufiger voll ausgelastet ist, während die anderen das nicht sind, sollten Sie den Umbau auf verteiltes Monitoring in Betracht ziehen.
+Eine sinnvolle Obergrenze für solch ein verteiltes Monitoring ist in der Regel eine {CMK}-Instanz pro Prozessorkern.
