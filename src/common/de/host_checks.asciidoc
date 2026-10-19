@@ -12,28 +12,40 @@ xref:notifications#[Grundlagen zu Benachrichtigungen]
 xref:cmc#[Der {CMK} Micro Core]
 ifdef::onprem[]
 xref:upgrade#[Upgrades]
+xref:core_tuning#[Tuning des Monitoring-Kerns]
 endif::[]
 {related-end}
 
-// ES: Wo soll dieser Artikel im TOC eingehängt werden? Welchen User Need bedient er vorrangig?
+// ES: Welchen User Need bedient dieser Artikel vorrangig?
+// -> Diataxis: Explanation
+// ES: Wo soll dieser Artikel im TOC eingehängt werden?
+// MFS: ¯\_(ツ)_/¯
+// eingehende Querverweise von:
+// * wato_services
+// * notifications
+// * intro_notifications
 
 [#intro]
 == Einleitung
 
-Zustandsänderungen von Diensten können im Monitoring unterschiedliche Relevanz haben.
-Um zu beurteilen, welche Relevanz die Zustandsänderung eines Dienstes hat, ist es zunächst erforderlich, zu wissen, ob der dazugehörige Host überhaupt aktiv und erreichbar ist.
-Gerade wenn man einen Host auch mit xref:active_checks#[aktiven Checks] überwacht, würde die xref:notifications#state_host[Benachrichtigung] über einen nicht erreichbaren HTTP-Server womöglich auf die falsche Fährte schicken.
-Aus diesem Grund sollte der Zustand des Hosts vor den Zuständen der Dienste bekannt sein, und ein Zustand {DOWN} des Hosts sollte (dann irrelevante) Benachrichtigungen über Zustände von Diensten unterdrücken.
+Zustandsänderungen von Diensten im Monitoring können irreführend sein, wenn der dazugehörige Host inaktiv oder nicht erreichbar ist.
+Aus diesem Grund sollte der Zustand des Hosts _vor_ den Zuständen der Dienste bekannt sein, und ein Zustand {DOWN} des Hosts sollte (dann irrelevante) Benachrichtigungen über Zustände von Diensten unterdrücken.
+Überwacht man beispielsweise einen Host auch mit xref:active_checks#[aktiven Checks], würde die xref:notifications#state_host[Benachrichtigung] über einen nicht erreichbaren HTTP-Server womöglich auf die falsche Fährte schicken.
 
 Leider ist in einer modernen IT-Umgebung nicht jeder Host direkt vom {CMK}-Server aus erreichbar.
 {CMK} bietet auch für diese Hosts eine Reihe von Möglichkeiten, ihren Zustand sinnvoll zu bestimmen.
 Dieser Artikel erklärt sie und ordnet sie ein.
 
 Hier vorgestellte Einstellungen betreffen -- wenn nicht abweichend beschrieben -- die Regel [.guihint]#Setup > Hosts > Host monitoring rules > Host check command#.
-// ES: Ein Screenshot mit ausgeklapptem Dropdown würde mir persönlich an dieser Stelle helfen, mich zu orientieren und schon hier den Überblick zu gewinnen, was mich im restlichen Artikel erwartet.
 
+ifdef::onprem[]
 .Mit der Regel [.guihint]#Host check command# legen Sie fest, wie bestimmt werden soll, ob ein Host als erreichbar gilt.
 image::host_checks_host_check_command.png[alt="Screenshot der Regelkonfiguration 'Setup > Hosts > Host monitoring rules > Host check command' mit ausgeklapptem Dropdown."]
+endif::[]
+ifdef::saas[]
+.Mit der Regel [.guihint]#Host check command# legen Sie fest, wie bestimmt werden soll, ob ein Host als erreichbar gilt.
+image::host_checks_host_check_command_saas.png[alt="Screenshot der Regelkonfiguration 'Setup > Hosts > Host monitoring rules > Host check command' mit ausgeklapptem Dropdown."]
+endif::[]
 
 
 [#overview]
@@ -52,17 +64,17 @@ Das Verfahren ist relativ simpel und erfordert geringe Ressourcen:
 Zur Prüfung, ob ein Host {UP} ist, werden einige ICMP-Pakete verschickt.
 Die Hosts beantworten die Pakete mit ICMP-Echo-Replies, welche {CMK} empfängt.
 
-Für Ping existieren in {CMK} zwei Implementierungen:
+Für die Umsetzung eines Pings existieren in {CMK} zwei Implementierungen:
 
 [#check_icmp]
 ==== Klassischer Ping
 
 ifdef::onprem[]
 {cre-only}
-Standardweg bei {RE} und optional bei den kommerziellen Editionen
+Der Standardweg bei {RE} und optional bei den kommerziellen Editionen
 endif::[]
 ifdef::saas[]
-Optional bei {CE}
+Ein möglicher Weg bei {CE}
 endif::[]
 ist die Prüfung über einen separaten Subprozess.
 Sie kann über die Einstellung [.guihint]#Ping (active check with ICMP echo request)# aktiviert werden.
@@ -96,11 +108,11 @@ Der xref:cmc#[{CMK} Micro Core] (CMC)
 endif::[]
 führt Host-Checks standardmäßig mit einem Verfahren namens _Smart Ping_ aus.
 Smart Ping basiert auf einer internen Komponente namens `icmpsender`, die ihre eigene Ping-Implementierung verwendet.
-Da {CMK} mit CMC nicht auf ein externes gestartetes Programm angewiesen ist, muss nicht für jede Prüfung per Ping ein neuer Prozess gestartet werden,
-Das Standardverhalten von `icmpsender` unterscheidet sich deutlich vom Verfahren in {RE}.
+Da {CMK} mit CMC nicht auf ein externes gestartetes Programm angewiesen ist, muss nicht für jede Prüfung per Ping ein neuer Prozess gestartet werden.
+
+Das Standardverhalten von `icmpsender` unterscheidet sich deutlich vom Verhalten eines klassischen Ping.
 Anstelle mehrerer Pakete in schneller Folge, auf die gewartet wird, sendet `icmpsender` nur _ein_ ICMP-Paket pro Host alle sechs Sekunden (das Intervall ist mit dem Regelsatz [.guihint]#Normal check interval for host checks# konfigurierbar).
-Dieses Verhalten reduziert die Ressourcennutzung deutlich.
-// und den Datenverkehr deutlich.
+Dieses Verhalten reduziert Ressourcennutzung und Datenverkehr deutlich.
 
 Für den Empfang ist die CMC-Komponente `icmpreceiver` zuständig.
 Sie entscheidet anhand eingehender Antworten (_Echo Replies_), ob ein Host {UP} oder {DOWN} ist.
@@ -108,11 +120,8 @@ Kommt ein Paket an, gilt der Host als {UP}.
 Wurde länger als 15  Sekunden kein Paket von einem Host empfangen, wird dieser Host als {DOWN} markiert.
 Das Timeout können Sie mit dem Regelsatz [.guihint]#Settings for host checks via Smart PING# ändern -- die erwähnten 15 Sekunden ergeben sich aus zweieinhalb Check-Intervallen zu je sechs Sekunden.
 
-
-
 Die Komponente `icmpreceiver` wertet auch eingehende TCP-Pakete mit den Flags SYN (_synchronization_) und RST (_reset_, Zurücksetzen einer Verbindung) aus.
 Wenn sie solche Pakete empfängt, wird der betreffende Host als {UP} betrachtet.
-// Dieser Mechanismus kann zu schwankenden (_flapping_) Zuständen von Hosts in Infrastrukturen führen, in denen ICMP-Verkehr nicht erlaubt ist, TCP-Verkehr aber schon.
 
 ifdef::onprem[]
 [TIP]
@@ -125,7 +134,7 @@ endif::[]
 ==== Metriken für Ping
 
 Eine Besonderheit klassischer Checks über ICMP mit der Einstellung [.guihint]#Ping (active check with ICMP echo request)# ist, dass sie in einer dem Host zugeordneten Metrik resultiert, die Paketverlust und Zeitdauer des _Roundtrips_ abbildet.
-Das Vorhandensein dieser Daten kann in einigen Fällen auch den Nutzern der kommerziellen Editionen wertvolle Einblicke in die Qualität einer Netzwerkanbindung liefern.
+Das Vorhandensein dieser Daten kann in einigen Fällen zusätzliche wertvolle Einblicke in die Qualität einer Netzwerkanbindung liefern.
 
 Da Smart Ping zur Reduzierung des Overheads keine _Sequence Number_ auswertet, kann mit dieser Methode keine Messung der Laufzeit eines ICMP-Requests und keine Bestimmung verlorener Pakete stattfinden.
 Falls Sie auf diese Daten angewiesen sind, aktivieren Sie für betreffende Hosts [.guihint]#Ping (active check with ICMP echo request)# oder konfigurieren Sie _zusätzlich_ zu Smart Ping den aktiven Check [.guihint]#Check hosts with ping (ICMP echo request)#.
@@ -134,11 +143,12 @@ Falls Sie auf diese Daten angewiesen sind, aktivieren Sie für betreffende Hosts
 [#check_mk]
 === Zustand des Dienstes Check_MK
 
-Mittels Einstellung [.guihint]#Use the state of the Check_MK service# legen Sie fest, dass ein Host {UP} sein soll, wenn [.guihint]#Check_MK# auf {OK} ist und {DOWN} in allen anderen Fällen.
+Mit der Einstellung [.guihint]#Use the state of the Check_MK service# legen Sie fest, dass ein Host {UP} sein soll, wenn [.guihint]#Check_MK# auf {OK} ist und {DOWN} in allen anderen Fällen.
 Diese Einstellung sollten Sie verwenden, wenn überwachte Hosts in einem Netzwerk mit _Zero Inbound Traffic_ liegen und Monitoring-Daten per xref:glossar#push_mode[Push-Modus] zum {CMK}-Server schicken.
 
+ifdef::onprem[]
 Bei Nutzung von {RE} kann diese Einstellung die Leistung durch ausbleibende Host-Checks vor Versand von Notifications verbessern, allerdings steigt möglicherweise die Zahl von _falsch positiven_ Host-Notifications etwas.
-
+endif::[]
 
 [#other_service]
 === Zustand eines anderen Dienstes
@@ -151,9 +161,9 @@ Schlägt dieser fehl, mag ein Host zwar theoretisch erreichbar sein, erfordert a
 [#tcp_connect]
 === Verbindung zu einem TCP-Port
 
-Einen ähnlichen Weg wie die letzte vorgestellte Einstellung schlägt [.guihint]#TCP connect# ein.
-// ES: Möglichst kein sequenzielles Lesen voraussetzen, besser explizit via Anker zu einem konkreten Abschnitt querverweisen oder den Bezug inhaltlich ausbuchstabieren
-Allerdings wird hier nur die Möglichkeit einer TCP-Verbindung selbst geprüft.
+Eine generische Variante der zuletzt vorgestellten Herangehensweise xref:other_service[Zustand eines anderen Dienstes] stellt [.guihint]#TCP connect# dar.
+Hier wird nur die Möglichkeit einer TCP-Verbindung selbst geprüft.
+Handshakes oder ähnliches bleiben unberücksichtigt.
 Beachten Sie, dass im Falle von Paketverlust und ähnlichen Netzwerkproblemen ähnliche Performance-Einbußen drohen wie beim regulären Ping-Check.
 
 
@@ -187,7 +197,10 @@ Performance und Zuverlässigkeit unterscheiden sich dabei zwischen xref:reschedu
 [#reschedule]
 === Aktiver Host-Check
 
+// ES: Hier fehlen ifdefs für den ganzen Abschnitt. Trennung sauberer beschreiben, Abhängigkeit vom Monitoring-Kern explizit machen
+
 Das Standardverhalten ist, nach einem fehlgeschlagenen aktiven Check einen Host-Check auszulösen und dann zu entscheiden, ob über Host- oder Service-Zustand benachrichtigt wird.
+ifdef::onprem[]
 
 Das Verfahren unterscheidet sich hierbei im Detail zwischen {RE} und den kommerziellen Editionen (bei Verwendung des {CMK} Micro Core, aka CMC):
 
@@ -197,11 +210,18 @@ Sie kann jedoch zu fehlerhaften Benachrichtigungen führen, wenn der Host beim H
 Ist das zwischengespeicherte Resultat veraltet, wird unmittelbar ein neuer Host-Check durchgeführt, was Ressourcen bindet (Erstellung eines Prozesses).
 * Die kommerziellen Editionen starten sofort einen Prozess.
 Da hierfür ein _Active Check Helper_ verwendet wird, ist der Ressourcenbedarf geringer als bei {RE}.
+endif::[]
+ifdef::saas[]
+Es wird sofort ein neuer Prozess für den Host-Check gestartet.
+Da der Ressourcenbedarf hierfür relativ gering ist, sollte der Einfluss auf die Performance Ihrer {CMK}-Instanz vernachlässigbar sein.
+endif::[]
 
 [#passive_alive]
 === Passiver Host-Check per Smart Ping
 
+ifdef::saas[]
 {cce-only}
+endif::[]
 Ist Smart Ping konfiguriert, kann der Monitoring-Kern sich passiv verhalten und muss keinen Check aktiv auslösen.
 Der `icmpsender` sendet kontinuierlich im Intervall von sechs Sekunden und der `icmpreceiver` lauscht dauerhaft auf ICMP-Echo-Replies und TCP-RST-Pakete.
 
@@ -210,7 +230,7 @@ Hier eben mit 15 Sekunden Verzögerung, aber ohne, dass ein neuer Prozess gestar
 
 Gehen jedoch Lebenszeichen des Hosts ein, kann sofort zum Service benachrichtigt werden.
 Ein Beispiel aus der Praxis: Sie haben einen aktiven Check für SSL-Zertifikate konfiguriert.
-Schlägt dieser fehl, weil der Webserver nicht aktiv ist, dann geht einige Millisekunden _nach_ Start des aktiven Checks ein TCP-RST-Paket ein.
+Schlägt dieser fehl, weil der Webserver überlastet oder nicht aktiv ist, dann geht einige Millisekunden _nach_ Start des aktiven Checks ein TCP-RST-Paket ein.
 Dieses Paket signalisiert {CMK}, dass der Host zwar eine Verbindung auf Port 443 verweigert hat, dies aber nur kann, weil er {UP} ist.
 In diesem Fall kann sofort zum Service-Zustand benachrichtigt werden.
 
@@ -232,7 +252,7 @@ endif::[]
 
 ifdef::onprem[]
 [#troubleshooting]
-== Problembehandlung
+== Troubleshooting
 
 Wie bei Service-Checks können auch bei Host-Checks Feinheiten Ihrer Systemumgebung oder Firewall-Konfiguration Anpassungen erforderlich machen.
 endif::[]
@@ -261,9 +281,7 @@ Es gibt Firewalls, die TCP-Verbindungspakete an nicht erreichbare Hosts nicht ve
 In solch einem Fall darf die Firewall als _Absender_ dieser Pakete nicht sich selbst eintragen, sondern muss die IP-Adresse des Ziel-Hosts angeben. 
 Smart Ping wird dieses Paket als Lebenszeichen werten und somit zu Unrecht annehmen, dass der Ziel-Host erreichbar ist.
 
-In solchen Situation haben Sie die Möglichkeit, mit [.guihint]#Global settings > Monitoring core > Tuning of Smart PING# die Option [.guihint]#Ignore TCP RST packets when determining host state# zu aktivieren.
-// ES: Spricht irgendwas dagegen, _immer_ alle TCP-RST-Pakete zu ignorieren? Wundert mich, dass das kein Standardverhalten ist.
-// Oder Sie wählen für die betroffenen Hosts als Host-Check einen klassischen Ping mit `check_icmp`.
+In dieser Situation haben Sie die Möglichkeit, mit [.guihint]#Global settings > Monitoring core > Tuning of Smart PING# die Option [.guihint]#Ignore TCP RST packets when determining host state# zu aktivieren.
 
 [#icmp_blocked]
 ==== Umgebungen ohne ICMP
