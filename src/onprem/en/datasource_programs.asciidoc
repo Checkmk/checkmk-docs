@@ -17,48 +17,61 @@ xref:piggyback#[The piggyback mechanism]
 [#intro]
 == Introduction
 
-{CMK} usually accesses monitored hosts in the xref:glossar#pull_mode[pull mode] via a TCP connection to port 6556.
-Starting with version {v21}, in most cases the Agent Controller listens on this port, which forwards the agent output over a TLS encrypted connection.
-{CMK} {v22} introduced the alternative option for selecting the transmission direction with the xref:glossar#push_mode[push mode].
+The {CMK} server typically contacts hosts in xref:glossar#pull_mode[pull mode] via a TCP connection on port 6556.
+On Linux and Windows, the Agent Controller typically listens on this port and forwards the agent output via a TLS-encrypted connection.
+In {CE}, the xref:glossar#push_mode[push mode] provides an additional option for selecting the transmission direction.
 
-There are environments however -- for example, stripped-down containers, legacy or embedded systems -- in which the Agent Controller cannot be used.
-In such cases the _legacy mode_ is applied in which `(x)inetd` executes the agent script after establishing a connection, the agent output is transferred as plain text and the connection is closed immediately after.
+However, there are environments in which the Agent Controller cannot be used.
+In _legacy mode_ an `inetd` is used instead, which executes the agent script for each request, transmits the output in plain text, and then closes the connection.
+In many cases, security policies require that data not be transmitted in plain text or that existing communication channels be used.
+While an attacker usually cannot do much with file system usage statistics, process tables or lists of pending security updates can help them prepare targeted attacks.
 
-In many situations security policies could require that actions such as the transmission of data as plain text must be avoided.
-For example, the fill levels of file systems might be of little use to an attacker, but process tables or lists of missing updates could help in targeting an attack.
-Moreover the practice of opening additional ports should be avoided in favor of using existing communication channels.
-
-The universal methods for connecting such transfer procedures to {CMK} are the _data source programs_.
+The universal method for connecting any transport paths to {CMK} is through data source programs.
 The idea is very simple:
-you pass a command to {CMK}.
-Instead of connecting to port 6556, {CMK} executes this command.
-This produces the agent data on the _standard output_, which is then processed by {CMK} in exactly the same way as if it had come from a ‘normal’ agent.
-Since changes to data sources usually only affect transports, it is important that you leave the host to [.guihint]#API integrations if configured, else {CMK} agent# in the xref:hosts_setup#monitoring_agents[Setup GUI].
+You pass a command to the {CMK} server that is used to retrieve agent data.
+Instead of contacting the host to be monitored on port 6556, {CMK} executes this command.
+When executing the command, {CMK} expects agent data on the _standard output_.
+Further processing proceeds as if the agent data came from a 'normal' agent.
+Since data sources are treated like agent calls, it is important that you configure hosts that are monitored via data source programs in the xref:hosts_setup#monitoring_agents[Setup GUI] with the setting [.guihint]#API integrations if configured, else {CMK} agent# or [.guihint]#Configured API integrations and {CMK} agent#.
 
-The modularity of {CMK} helps you to fulfill these requirements by transmitting the plain text agent output over arbitrary means of transport.
-Ultimately, the plain text output of the agent script can be transported by any means -- direct or indirect, pull or push.
-Here are a few examples on how to get agent data to the {CMK} server:
+Ultimately, the plain text output from the agent script can be transferred in any way—directly or indirectly, via pull or push.
+Here are some examples of how {CMK} users can retrieve data from the agent to the {CMK} server:
 
 * via email
-* via HTTP-access from the server
-* via HTTP-upload from the host
-* via access to a file that has been copied to the server using `rsync` or `scp`
-* via a script that uses HTTP to retrieve the data from a web service
+* via HTTP access from the server
+* via HTTP upload from the host
+* by accessing a file that was copied from the host to the server using `rsync` or `scp`
+* via a script that retrieves the data via HTTP from a web service
+* via an xref:agent_linux_legacy#ssh[Agent call using an SSH tunnel]
 
-Another area of application for data source programs are systems that do not allow agent installation but issue status data via REST API or a Telnet interface.
-In such cases, you can write a data source program that queries the existing interface and generates agent output from the data obtained.
+.When should I use data source programs, and when should I use special agents?
+[%collapsible]
+====
+Data source programs and xref:special_agents#[special agents] are closely related.
+Ultimately, special agents can be viewed as an evolution of data source programs.
+Special agents were initially used to make data source programs more configurable.
+
+Today, special agents typically provide their own agent sections and are combined with their own check plug-ins.
+In practice, it is important to note that only one data source program can be assigned to a host, but since {CMK} {v24}, any number of special agents can be assigned.
+Special agents can also supplement the regular agent output; a data source program, on the other hand, replaces it.
+
+So, for example, if you can retrieve data via a REST API that is useful for monitoring in addition to the regular agent output, you must use a special agent.
+If you simply want to transmit regular agent output via other means, data source programs are the right choice.
+And finally, you can convert any data source program—should greater configurability ever be required—into a xref:devel_special_agents#[special agent].
+====
 
 
 [#writing]
 == Writing data source programs
 
+[#minimalexample]
 === The simplest possible program
 
 The writing and installation of a data source program is not difficult.
 Any Linux-supported script and program language can be used.
 The program is best stored in the `~/local/bin/` directory, where it will always be found automatically without the need to specify a data path.
 
-The following first very basic example is called `myds` and it generates simple, fictional monitoring data.
+The following first, very basic example is called `myds` and it generates simple, fictional monitoring data.
 Instead of integrating a new transport path, it generates the monitoring data itself. 
 These consist of one section `+<<<df>>>+`, which contains the
 information for a single file system, and which has a size of 100 kB and the name `My_Disk`.
@@ -81,7 +94,7 @@ Don't forget to make the program executable:
 
 Now create a test host in the Setup – e.g., `myserver125`.
 This does not require an IP address.
-In order to avoid {CMK} attempting to resolve `myserver125` via DNS, enter this name as an explicit ‘IP address’.
+In order to avoid {CMK} attempting to resolve `myserver125` via DNS, set [.guihint]#IP address family# to [.guihint]#No IP#.
 
 Next add a rule in the [.guihint]#Setup > Agents > Other integrations > Individual program call instead of agent access# rule set which applies to this host, and enter `myds` as an executable program:
 
@@ -91,13 +104,14 @@ When you now go to the host's service configuration in the Setup GUI, exactly on
 
 image::ds_program_discovery.png[alt="The new service has been detected."]
 
-Add this service into the monitoring, activate the changes, and your first data source program will be running.
+Add this service into the monitoring, xref:glossar#activate_changes[activate the pending changes], and your first data source program will be running.
 For a test, as soon as you alter the data being generated by the program the `My_Disk` file system's next check will immediately show this.
 
 
+[#diagnosis]
 === Error diagnosis
 
-If something is not functioning correctly, the host's configuration can be checked by entering `cmk -D` in the command line and see if your rule takes effect:
+If something is not functioning correctly, the host's configuration can be checked by entering `cmk -D` in the command line and see if your rule has taken effect:
 
 [{shell}]
 ----
@@ -132,6 +146,7 @@ My_Disk  foobar  100 70 30  70% /my_disk
 ----
 
 
+[#passhostname]
 === Transferring a host's name
 
 The program in our example actually works, but is not very useful as it always produces the same data, regardless of which host it is invoked for.
@@ -183,7 +198,7 @@ If you have a dual-monitoring using IPv4 and IPv6, the following macros may be i
 [#error_handling]
 === Error handling
 
-Regardless of your actual occupation in IT -- much of your time will be spent dealing with errors and problems.
+Regardless of your actual occupation in IT--much of your time will be spent dealing with errors and problems.
 Data source programs are not spared these.
 Especially for programs that provide data over networks it is unrealistic to expect them to be error-free.
 
@@ -214,7 +229,7 @@ echo "This didn't work out" >&2
 exit 1
 ----
 
-As [.guihint]#Check_MK# service it will look like this:
+As a [.guihint]#Check_MK# service it will look like this:
 
 image::ds_program_error.png[alt="If a script returns exit codes different from 0, the 'Check_MK' service will immediately CRIT (red)."]
 
@@ -229,13 +244,6 @@ set -e
 
 As soon as an instruction produces an error (i.e., exit code not `0`), the shell immediately stops and issues the exit code `1`.
 You have thus a generic error handling and must not check every single instruction for success.
-
-
-[#specialagents]
-== Special agents
-
-A number of often-required data source programs are delivered with {CMK}.
-These _special agents_ are presented in a xref:special_agents#[separate article].
 
 
 [#files]

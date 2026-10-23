@@ -212,7 +212,7 @@ This is only visible in the metadata of the baked package.
 From {CMK} {v23}, this function is deactivated by default to prevent baked agents from losing their valid signature.
 If you still want to activate the bake revision, for example for unique processing in a package manager, enable the [.guihint]#Setup > Global settings > Setup > Apply bake revision# option.
 And if activated: For agents baked automatically later via the [.guihint]#Automatically create monitoring agents# rule, the previous revision remains in any case and is not incremented further -- again, so as not to lose the signature.
-If you require automatically baked agents _with_ consecutive revisions, you should use the xref:rest_api#[REST API] instead of the rule, for example.
+If you require automatically baked agents _with_ consecutive revisions, you should use the xref:rest_api_bakery[REST API] instead of the rule, for example.
 ====
 endif::[]
 
@@ -359,6 +359,263 @@ image::wato_monitoringagents_bakery_logging.png[alt="Option to enable bakery log
 Without logging enabled, you will only see this information if you bake agents with `cmk --bake-agents -v` xref:cmk_commandline#bake_agents[on the command line].
 endif::[]
 
+// start translation
+////
+
+[#rest_api_bakery]
+=== Agenten über die REST-API verwalten
+
+Alle Funktionen der Agentenbäckerei stehen auch über die xref:rest_api#[REST-API] zur Verfügung.
+Das ermöglicht die Einbindung in automatisierte Deployment-Pipelines und CI/CD-Systeme sowie den skriptgesteuerten Download von Agentenpaketen.
+Dieser Abschnitt zeigt einige Beispiel-Anfragen mit Bash und Curl.
+
+Bei allen API-Anfragen müssen Sie Informationen zu Ihrer {CMK}-Instanz und geeignete xref:rest_api#auth[Zugangsdaten] angeben.
+Der verwendete Benutzer benötigt für alle hier gezeigten Aufgaben die Berechtigung [.guihint]#Manage monitoring agents#.
+Zusätzlich benötigte Berechtigungen für bestimmte Aufgaben werden im jeweiligen Abschnitt genannt.
+Hinweise zum Anlegen von Benutzern mit den richtigen Berechtigungen finden Sie im Artikel über die xref:rest_api#bearerauth[REST-API].
+
+Legen Sie zunächst Werte für die Variablen fest, die für jedes der folgenden Skripte benötigt werden.
+Hier wird mit den folgenden Beispielwerten gearbeitet:
+
+[{bash}]
+----
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+----
+
+Diesen Block mit den von Ihnen gesetzten Werten können Sie in allen Beispielen in den folgenden Abschnitten einfügen, um die vorgegebenen Werte aus dem Beispiel-Code zu ersetzen.
+
+==== Agentenpakete auflisten
+
+Der REST-API-Endpunkt [.guihint]#Show all agents# gibt eine Liste aller vorhandenen Agentenpakete mit ihren Hashes zurück.
+// ES-blocked by KNW-1719: Direkten Link an diesen Abschnitt der API-Doku einfügen
+Kopieren Sie den Beispiel-Code aus der Dokumentation der REST-API und ersetzen Sie den Block mit den Variablen durch den oben vorbereiteten Block:
+
+.show_all_agents.sh
+[{bash},highlight=7-14]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/json" \
+  "$API_URL/domain-types/agent/collections/all"
+----
+
+Als Rückgabe erhalten Sie ein JSON-Objekt mit allen verfügbaren Agentenpaketen.
+Jeder Agent ist an mehreren Stellen mit seinem Hash gekennzeichnet, den Sie auch in der xref:bakery_download[Weboberfläche der Agentenbäckerei] finden.
+Anhand der Hash-Werte können Sie zuordnen, welche Konfiguration jedem Agentenpaket zugrunde liegt.
+
+
+==== Agentenpakete herunterladen
+
+Sie können ein Agentenpaket entweder direkt über seinen Hash oder über einen Hostnamen herunterladen.
+
+Um Agentenpakete herunterzuladen, braucht der verwendete Benutzer eine zusätzliche Berechtigung.
+Zur Auswahl stehen die folgenden Möglichkeiten:
+
+* [.guihint]#Enable agent updates on hosts & download monitoring agents# (nur für Hosts, für die der Benutzer ein Kontakt ist; nur für das Herunterladen anhand des Hostnamens oder Ordnernamens nutzbar)
+* [.guihint]#Enable agent updates on all hosts & download all monitoring agents# (ohne Einschränkung; zusätzlich auch für das Herunterladen via Hash nutzbar)
+
+Für den Download anhand des Hash-Wertes verwenden Sie den REST-API-Endpunkt [.guihint]#Download an agent by agent hash and operating system#.
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der API-Doku einfügen
+Kopieren Sie den Beispiel-Code aus der REST-API-Dokumentation und ersetzen Sie sowohl den Block mit den Variablen als auch den Hash durch Ihre Werte:
+
+.download_agent_by_hash.sh
+[{bash},highlight=7-14;22]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --get \
+  -JO \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/octet-stream" \
+  --data-urlencode 'agent_hash=40dbb28a816134d4' \
+  --data-urlencode 'os_type=linux_tgz' \
+  "$API_URL/domain-types/agent/actions/download_by_hash/invoke"
+----
+
+Alternativ können Sie mit dem REST-API-Endpunkt [.guihint]#Download an agent by host or folder name and operating system# ein Agentenpaket über den Hostnamen herunterladen, ohne den Hash zu kennen.
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der API-Doku einfügen
+Passen Sie den kopierten Code aus der REST-API-Dokumentation so an, dass genau die benötigten Felder für den gewünschten Agenten angegeben werden.
+
+Im Beispiel wird der Agent für den Linux-Host `myhost` heruntergeladen:
+
+.download_agent_by_host.sh
+[{bash},highlight=7-14;22-24]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --get \
+  -JO \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/octet-stream" \
+  --data-urlencode 'agent_type=host_name' \
+  --data-urlencode 'host_name=myhost' \
+  --data-urlencode 'os_type=linux_tgz' \
+  "$API_URL/domain-types/agent/actions/download_by_host/invoke"
+----
+
+
+==== Agenten backen
+
+Um Agenten zu backen, benötigt der im Skript verwendete Benutzer die zusätzliche Berechtigung [.guihint]#Bake agents#.
+
+Zum Auslösen eines Backvorgangs nutzen Sie den Endpunkt [.guihint]#Bake all agents#:
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der REST-API-Doku einfügen
+
+.bake_all_agents.sh
+[{bash},highlight=7-14]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --request POST \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/json" \
+  "$API_URL/domain-types/agent/actions/bake/invoke"
+----
+
+Da der Backvorgang asynchron abläuft, können Sie über den Endpunkt [.guihint]#Show the baking status# den aktuellen Status abrufen:
+// ES-blocked by KNW-1719: Direkten Link zu diesem Endpunkt in der API-Doku einfügen
+
+.show_baking_status.sh
+[{bash},highlight=7-14;20]
+----
+#!/bin/bash
+
+# NOTE: We recommend all shell users to use the "httpie" examples instead.
+#       `curl` should not be used for writing large scripts.
+#       This code is provided for debugging purposes only.
+
+HOST_NAME="myserver"
+SITE_NAME="mysite"
+API_VERSION="v1"
+PROTO="http" #[http|https]
+API_URL="$PROTO://$HOST_NAME/$SITE_NAME/check_mk/api/$API_VERSION"
+
+USERNAME="automation"
+PASSWORD="theautomationsecret"
+
+curl \
+  --write-out "\nxxx-status_code=%{http_code}\n" \
+  --header "Authorization: Bearer $USERNAME $PASSWORD" \
+  --header "Accept: application/json" \
+  "$API_URL/domain-types/agent/actions/baking_status/invoke"
+----
+
+Die Ausgabe sieht etwa so aus:
+
+[{json},highlight=15]
+----
+{
+  "links": [
+    {
+      "domainType": "link",
+      "rel": "self",
+      "href": "http://myserver/mysite/check_mk/api/1.0/domain-types/agent/actions/baking_status/invoke",
+      "method": "GET",
+      "type": "application/json"
+    }
+  ],
+  "resultType": "object",
+  "result": {
+    "links": [],
+    "value": {
+      "state": "finished",
+      "started": 1777361208.7000515,
+      "pid": 483352,
+      "loginfo": {
+        "JobProgressUpdate": [],
+        "JobResult": [
+          "Baking successful"
+        ],
+        "JobException": []
+      },
+      "is_active": false,
+      "duration": 0.12719297409057617,
+      "title": "Baking agents...",
+      "stoppable": false,
+      "deletable": true,
+      "user": "automation",
+      "estimated_duration": 0.3183622360229492,
+      "ppid": 269419,
+      "logfile_path": "~/var/log/web.log",
+      "acknowledged_by": null,
+      "lock_wato": false,
+      "host_name": ""
+    }
+  }
+}
+----
+
+Sobald Sie in diesem Ergebnis den Status `finished` entdecken, können Sie die fertig gebackenen Agentenpakete herunterladen.
+////
+// end translation
 
 [#agent_update]
 == When should an agent be updated?
