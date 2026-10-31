@@ -1,0 +1,248 @@
+// -*- coding: utf-8 -*-
+// IGNORE Umwidmung Checkern
+// NONASCII 
+include::global_attr.adoc[]
+= Verteiltes Monitoring schauend einrichten
+:title: Verteiltes Monitoring schauend einrichten
+:description: Bestimmte Szenarien erfordern verteiltes Monitoring mit mehreren {CMK}-Instanzen. Lesen Sie hier, wie Sie ein solches Monitoring einrichten und nutzen.
+
+{related-start}
+xref:livestatus#[Statusdaten abrufen via Livestatus]
+xref:cmc#[Der {CMK} Micro Core]
+xref:omd_basics#[Instanzen (Sites) mit omd verwalten]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+Nachdem Sie sich mit den xref:distributed_monitoring_basics#[verschiedenen Formen eines verteilten Monitorings vertraut gemacht] haben, wollen Sie eines einrichten.
+In diesem Artikel führen wir Sie Schritt für Schritt durch die Einrichtung eines _verteilten Monitorings mit autonomem Setup_.
+Bei diesem greift eine entweder neu eingerichtete oder schon länger solo betriebene {CMK}-Instanz als Zentralinstanz auf bereits Hosts überwachende Instanzen zu.
+Diese werden von solo betriebenen Instanzen zu Remote-Instanzen.
+
+[TIP]
+====
+Mischformen zwischen _autonomem Setup_ und xref:distributed_monitoring_setup#[_zentralem Setup_] sind möglich und in der Praxis oft anzutreffen.
+Sie können vorhandene Solo-Instanzen wie hier beschrieben mit wenigen Handgriffen zu einem verteilten Monitoring zusammenführen.
+Wenn später neu erstellte Remote-Instanzen dazu kommen, haben Sie die Möglichkeit, für diese auch die Verteilung der Konfiguration zu aktivieren.
+====
+
+
+[#principles]
+== Prinzip
+
+Das verteilte Monitoring ohne zentrales Setup ist die Urform des verteilten Monitoring mit {CMK}.
+Die bereits lokal zur Kommunikation zwischen Monitoring-Kern und GUI verwendete Schnittstelle xref:livestatus#[Livestatus] wird hier über das Netzwerk freigegeben.
+Statt der lokalen GUI verbindet dann die GUI der Zentralinstanz zu Livestatus -- und damit direkt zum Monitoring-Kern -- der Remote-Instanz.
+
+// Die kommerziellen Editionen verfügen zudem über einen Mechanismus, um beliebig tief zu kaskadieren.
+// Hier kann auch eine Zentralinstanz als 
+
+[#setup_distributed]
+== Einrichtung des verteilten Monitorings
+
+Dieses Kapitel zeigt die Einrichtung eines verteilten Monitorings mit Zentral- und Remote-Instanz.
+Die vorgehensweise ist bei {RE} und den kommerziellen Editionen gleich.
+
+[#create_remote]
+=== Remote-Instanzen vorbereiten
+
+Wir gehen davon aus, dass Sie diesem Tutorial folgen, weil Ihre Remote-Instanzen bereits Hosts überwachen und der Aufwand der Neukonfiguration mit zentralem Setup zu groß wäre.
+Die xref:omd_basics#omd_create[Erstellung einer Instanz] zeigen wir daher an dieser Stelle nicht.
+
+[#livestatus_tcp]
+==== Livestatus über TCP freigeben
+
+Der wichtigste Schritt ist die Freigabe von Livestatus via TCP im Netzwerk.
+Beachten Sie, dass die Standardeinstellung Livestatus zwar verschlüsselt freigibt, aber keinerlei Authentifizierung vorgesehen ist.
+Sie sollten daher zusätzliche Maßnahmen treffen, um den Zugriff auf berechtigte Hosts einzuschränken, beispielsweise per Konfiguration der Firewall.
+Das Freigeben geschieht als Instanzbenutzer bei noch gestoppter Instanz mit `omd config`:
+
+[{shell}]
+----
+{c-root} su - myremote1
+{c-myremote1} omd config
+----
+
+Wählen Sie jetzt [.guihint]#Distributed Monitoring#:
+
+++++
+include::distributed_monitoring_omd_config.xml[]
+++++
+
+Setzen Sie `LIVESTATUS_TCP` auf `on` und tragen Sie für `LIVESTATUS_TCP_PORT` eine freie Portnummer ein, die auf diesem Server eindeutig ist.
+Der Default dafür ist 6557:
+
+++++
+include::distributed_monitoring_livestatus_tcp_activated.xml[]
+++++
+
+Achten Sie darauf, dass `LIVESTATUS_TCP_TLS` auf `on` ist.
+Nach dem Speichern starten Sie die Instanz wie gewohnt mit `omd start`:
+
+// MFS: Checkmk Community verwendet, kürzere Ausgabe...
+[{shell}]
+----
+{c-myremote1} omd start
+Starting agent-receiver...OK
+Starting rrdcached...OK
+Starting redis...OK
+Starting automation-helper...OK
+Starting ui-job-scheduler...OK
+Starting nagios...OK
+Starting apache...OK
+Starting dcd...OK
+Starting stunnel...OK
+Starting xinetd...OK
+Starting crontab...OK
+----
+
+Lassen Sie die Shell als Instanzbenutzer noch offen, Sie benötigen diese später noch, um die Fingerprints der SSL-Zertifikate auszulesen.
+
+[#connect_remote_sites]
+=== Remote-Instanzen in die Zentralinstanz einbinden
+
+Die Konfiguration des verteilten Monitorings wird ab jetzt  auf der Zentralinstanz in der Übersicht des verteilten Monitorings via [.guihint]#Setup > General > Distributed Monitoring# vorgenommen.
+Hier verwalten Sie die Verbindungen zu den einzelnen Instanzen.
+Dabei zählt die Zentralinstanz selbst auch als Instanz und ist bereits in der Liste eingetragen:
+
+.In der Übersicht der Verbindungen ist immer die lokale Instanz gelistet.
+image::distributed_monitoring_central_site.png[alt="Ansicht der Zentralinstanz in den Verbindungen."]
+
+
+[#connect_status]
+==== Livestatus-Zugriff aktivieren
+
+Legen Sie jetzt mit icon:icon_new[] [.guihint]#Add connection# die Verbindung zu Ihrer Remote-Instanz an.
+Im Abschnitt [.guihint]#Basic settings# tragen Sie als [.guihint]#Site ID# den Namen ein -- exakt so, wie Sie diesen bei `omd create` vergeben haben.
+Den Alias können Sie frei vergeben und auch später ändern.
+
+.Die [.guihint]#Site ID# muss dem Namen der Remote-Instanz exakt entsprechen
+image::distributed_monitoring_basic_settings.png[alt="Die Basiseinstellungen für die Remote-Instanz."]
+
+Bei den Einstellungen der [.guihint]#Status connection# legen Sie fest,
+wie die Zentralinstanz den Status der Remote-Instanzen per Livestatus abfragt.
+Wichtig ist der Livestatus-Port, der dem auf der Remote-Instanz eingestellten entsprechen muss.
+Das Beispiel im Screenshot zeigt eine Verbindung mit dem Livestatus-Proxy-Daemon (Standard bei den kommerziellen Editionen).
+Bei {RE} ist die direkte Verbindung Standard.
+Direktverbindungen sind für stabile Verbindungen mit kurzen Latenzzeiten sehr gut geeignet (in einem LAN oder zwischen schnell angebundenen Standorten).
+Anpassungen für WAN-Verbindungen mit höheren Latenzen und Tuning des Livestatus-Proxy-Daemons erklärt ein xref:distributed_monitoring_performance#[weiterführender Artikel].
+
+.Im Regelfall müssen Sie hier nur [.guihint]#Host# und [.guihint]#URL Prefix# eintragen und den [.guihint]#Port# überprüfen.
+image::distributed_monitoring_status_connection.png[alt="Eingabe der Statusdaten."]
+
+// Der Eintrag bei [.guihint]#URL Prefix# _darf nicht_ auf `check_mk/` enden.
+Der Eintrag bei [.guihint]#URL Prefix# enthält die Basis-URL Ihrer Instanz: Protokoll, Hostname und Instanzname.
+Wenn Sie grundsätzlich per [#https_inline]#HTTPS# auf {CMK} zugreifen, dann ersetzen Sie im Protokollteil `http` durch `https`.
+Eine Verbindung mit HTTPS ist empfehlenswert, setzt aber voraus, dass der Webserver der Remote-Instanz HTTPS unterstützt.
+Dies muss auf Linux-Ebene des Servers Ihrer Remote-Instanz xref:omd_https#[konfiguriert werden].
+Bei der {CMK} Appliance kann xref:appliance_usage#ssl[HTTPS über die webbasierte Konfigurationsoberfläche eingerichtet] werden.
+
+[#livestatus_tls]
+==== SSL-Zertifikat prüfen und vertrauen
+
+Nachdem Sie die Remote-Instanz hinzugefügt haben, werden Sie in der Spalte, welche Details zur [.guihint]#Status connection# zeigt, zwei Dinge bemerken:
+
+Zum einen wird die Verbindung durch das Schildsymbol icon:icon_encrypted[] als verschlüsselt markiert.
+Und zum anderen wird {CMK} Ihnen mit einem weißen Kreuz auf rotem Grund icon:icon_cross[] anzeigen, dass der CA der Remote-Instanz (noch) nicht vertraut wird.
+Instanzzertifikate werden bei der Einrichtung einer Instanz erzeugt.
+Um dem Zertifikat der Remote-Instanz wirklich vertrauen zu können, müssen Sie sicherstellen, dass die der Zentral-Instanz präsentierten Zertifikate den in der Remote-Instanz hinterlegten entsprechen.
+Hierfür vergleichen Sie die Fingerprints der Zertifikate.
+
+
+[#get_certificate]
+===== SSL-Zertifikate auslesen (Remote-Instanz)
+
+Die Fingerprints können Sie auf zwei Arten auslesen:
+Auf der Befehlszeile als Instanzbenutzer oder in der GUI.
+
+Besonders schnell geht es in der offen gelassenen Shell als Instanzbenutzer mit dem Befehl `openssl`:
+
+[{shell-raw}]
+----
+{c-myremote1} openssl x509 -noout -fingerprint -sha256 -inform pem -in etc/ssl/sites/*.pem
+sha256 Fingerprint=D3:CA:FB:AD:23:42:F8:62:09:FA:B3:22:08:48:58:AC:9A:12:0C:03:F1:19:84:C0:76:3F:50:6D:36:1D:D7:EC
+{c-myremote1} openssl x509 -noout -fingerprint -sha256 -inform pem -in etc/ssl/ca.pem
+sha256 Fingerprint=DE:AD:B3:3F:01:61:55:0B:F2:E5:EC:C9:93:71:76:49:7A:6B:20:67:89:72:29:02:D5:CC:52:5A:D9:79:F0:F2
+----
+
+Alternativ können Sie die GUI nutzen:
+Loggen Sie sich an der Remote-Instanz ein und gehen mittels [.guihint]#Setup > Maintenance > Certificate overview# zur xref:certificates#[Zertifikatsübersicht].
+Achten Sie dort auf die [.guihint]#Fingerprints# der Zertifikate, deren Verwendungszweck in der Spalte [.guihint]#Purpose# als [.guihint]#Signing the site certificate# (CA-Zertifikat) und [.guihint]#The site certificate# (Site-Zertifikat) bezeichnet werden.
+
+
+[#trust_certificates]
+===== SSL-Zertifikaten vertrauen (Zentralinstanz)
+
+Mit einem Klick auf das Schildsymbol icon:icon_encrypted[] der einzubindenden Remote-Instanz gelangen Sie zu den Details der benutzten Zertifikate.
+
+Vergleichen Sie die beiden auf der Remote-Instanz ausgelesenen Fingerprints mit den angezeigten.
+Stimmen diese überein, klicken Sie auf den gehobenen Daumen icon:icon_trust[], um dem CA-Zertifikat zu vertrauen.
+
+.Um eine Verbindung zu Livestatus der Remote-Instanz herzustellen, müssen Sie dem CA-Zertifikat vertrauen.
+image::distributed_monitoring_certificate_details.png[]
+
+Danach werden beide Zertifikate als vertrauenswürdig gelistet, was in der Übersicht durch ein Häkchen auf grünem Grund icon:icon_checkmark[] symbolisiert wird.
+
+[#activate_changes]
+=== Änderungen aktivieren
+
+Aktivieren Sie nun die Änderungen.
+Anschließend sind die hinzugefügte Remote-Instanz und die von ihr überwachten Objekte im Monitoring sichtbar.
+
+
+[#cascading_livestatus]
+== Viewer-Instanzen
+
+// MFS: Wird komplett überarbeitet
+
+{cee-only}
+Bei den kommerziellen Editionen ist es zudem möglich, das verteilte Monitoring um reine {CMK}-Viewer-Instanzen zu erweitern.
+// Wie in der Einleitung bereits erwähnt, ist es möglich, das verteilte Monitoring um reine {CMK}-Viewer-Instanzen zu erweitern, die die Monitoring-Daten von Remote-Instanzen anzeigen, die selbst nicht direkt erreichbar sind.
+// Einzige Voraussetzung dafür: Die Zentralinstanz muss natürlich erreichbar sein.
+Technisch wird dies über den Livestatus-Proxy umgesetzt:
+Die Zentralinstanz bekommt via Livestatus Daten von der Remote-Instanz und fungiert selbst als Proxy -- kann die Daten also an dritte Instanzen durchreichen.
+Diese Kette können Sie beliebig erweitern, also zum Beispiel eine zweite Viewer-Instanz an die erste anbinden.
+
+////
+Praktisch ist dies beispielsweise für ein Szenario wie folgendes:
+Die Zentralinstanz kümmert sich um drei unabhängige Netze _kunde1,_ _kunde2_ und _kunde3_ und wird selbst im Netz _betreiber1_ betrieben.
+Möchte nun etwa das Management des Betreibers aus dem Netz _betreiber1_ den Monitoring-Status der Kundeninstanzen sehen, könnte dies natürlich über einen Zugang auf der Zentralinstanz selbst geregelt werden.
+Aus technischen wie rechtlichen Gründen könnte die Zentralinstanz jedoch ausschließlich den zuständigen Mitarbeitern vorbehalten sein.
+Über eine rein zur Ansicht von entfernten Instanzen aufgesetzte Viewer-Instanz lässt sich der direkte Zugriff umgehen.
+Die Viewer-Instanz zeigt dann zwar Hosts und Services verbundener Instanzen, die eigene Konfiguration bleibt jedoch komplett leer.
+////
+
+Stellen Sie sich beispielsweise folgendes Szenario vor:
+In einem großen Unternehmen haben verschiedene Abteilungen eigene verteilte Monitoring-Umgebungen, die in ihrer jeweiligen Verantwortung liegen.
+Die Zentralinstanzen sind beispielsweise `development`, `production` und `administration`.
+Nun möchte die firmenweite IT-Abteilung einen Überblick über das gesamte Monitoring erhalten, ohne die Autonomie der Abteilungs-Admins in Frage zu stellen.
+Hierfür bietet sich die Einrichtung einer reinen Viewer-Instanz an.
+
+Das Aufsetzen erfolgt in den Verbindungseinstellungen des verteilten Monitorings, zunächst auf der Zentralinstanz, dann auf der Viewer-Instanz (welche noch nicht existieren muss).
+
+[#central_proxy]
+=== Zentralinstanz vorbereiten
+
+Öffnen Sie auf der Zentralinstanz die Verbindungseinstellungen der gewünschten Remote-Instanz über [.guihint]#Setup > General > Distributed monitoring#.
+Unter [.guihint]#Use Livestatus Proxy Daemon# aktivieren Sie die Option [.guihint]#Allow access via TCP# und geben einen freien Port an (hier `6560`).
+So verbindet sich der Livestatus-Proxy der Zentralinstanz mit der Remote-Instanz und öffnet einen Port für Anfragen der Viewer-Instanz -- welche dann an die Remote-Instanz weitergeleitet werden.
+
+image::distributed_livestatus_cascading_master.png[alt="Verbindungseinstellungen im verteilten Monitoring mit aktiviertem TCP-Zugriff für Viewer-Instanzen."]
+
+[#viewer]
+=== Viewer-Instanz verbinden
+
+Erstellen Sie nun eine Viewer-Instanz und öffnen Sie auch dort wieder die Verbindungseinstellungen über [.guihint]#Setup > General > Distributed monitoring#.
+In den [.guihint]#Basic settings# geben Sie -- wie immer bei Verbindungen im verteilten Monitoring -- als [.guihint]#Site ID# den exakten Namen der Zentralinstanz an.
+
+image::distributed_livestatus_cascading_viewer_01.png[alt="Instanz-ID in den Verbindungseinstellungen."]
+
+Im Bereich [.guihint]#Status connection# geben Sie als Host die Zentralinstanz an -- sowie den manuell vergebenen freien Port (hier `6560`).
+
+image::distributed_livestatus_cascading_viewer_02.png[alt="Verbindungseinstellungen mit Zentralinstanz und freiem Port für Livestatus."]
+
+Sobald die Verbindung steht, sehen Sie die gewünschten Hosts und Services der Remote-Instanz in den Monitoring-Ansichten der Viewer-Instanz.
+
+Möchten Sie weiter kaskadieren, müssen Sie auf der Viewer-Instanz, wie zuvor auf der Zentralinstanz, ebenfalls den TCP-Zugriff auf den Livestatus-Proxy erlauben, erneut mit einem anderen, freien Port.
