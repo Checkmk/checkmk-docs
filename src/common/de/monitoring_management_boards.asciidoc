@@ -1,0 +1,239 @@
+// -*- coding: utf-8 -*-
+// IGNORE iLO DMTF Freeipmi IPMItool
+// NONASCII
+include::global_attr.adoc[]
+= Management-Boards überwachen
+:title: Management-Boards überwachen
+:description: !!!Mit {CMK} können Sie auch die Virtualisierungsumgebung Proxmox überwachen. Lesen Sie hier grundlegende Informationen zur Einrichtung.
+
+{related-start}
+xref:hosts_setup#[Verwaltung der Hosts]
+xref:special_agents#[Spezialagenten]
+link:https://checkmk.com/integrations[Katalog der Check-Plugins^]
+{related-end}
+
+
+[#intro]
+== Einleitung
+
+[#mgmt_board]
+=== Management-Boards
+
+In der Welt der Rechenzentren und der Server-Hardware ist das _Management-Board_ die Komponente, mit der der reibungslose Betrieb und die Zuverlässigkeit der kritischen Infrastruktur sichergestellt werden kann.
+Die Bezeichnung _Management-Board_ steht dabei für einen speziellen, eigenständigen Mikroprozessor auf der Hauptplatine eines Servers, der die physische Überwachung und Fernsteuerung der Hardware ermöglicht.
+Das Management-Board liefert Informationen über die wesentlichen Hardware-Komponenten und Peripheriegeräte, darunter CPU, Speichermodule, Netzwerkanschlüsse, Festplatten, Lüfter, Temperatursensoren und vieles mehr.
+Es funktioniert unabhängig vom installierten Betriebssystem und läuft selbst dann weiter, wenn der Server ausgeschaltet ist, solange dieser am Stromnetz hängt.
+
+// iLO (Integrated Lights-Out) von Hewlett Packard Enterprise, iDRAC (integrated Dell Remote Access Controller) von Dell, ME oder IME (Intel Management Engine) von Intel
+Damit es nicht zu übersichtlich bleibt, sind für diese Komponente der Server-Hardware verschiedene Begriffe im Umlauf wie Baseboard Management Controller (BMC), Lights Out Management (LOM) oder herstellerspezifische Markennamen wie iLO, iDRAC oder ME.
+Bei {CMK} heißt das Ding einfach Management-Board.
+
+Bis {CMK} {v25} konnten Management-Boards auf zwei Arten konfiguriert werden: 
+Als Eigenschaft eines Hosts oder als separater Host.
+Die Konfiguration als Eigenschaft eines Hosts hat allerdings diverse Nachteile.
+Zum Beispiel sind Management-Board und Betriebssystem so unabhängig voneinander, dass beide separat neu gestartet werden können, so dass aus Sicht des Monitorings die eine Komponente {DOWN} und die andere {UP} sein kann.
+Diese Unabhängigkeit lässt sich aber nicht abbilden, wenn es nur einen Host und damit auch nur einen Zustand für Management-Board und Betriebssystem gibt.
+Daher ist die Konfiguration des Management-Boards als Eigenschaft eines Hosts seit {CMK} {v30} nicht mehr möglich.
+
+Bereits seit Version {v23} raten wir, für das Management-Board einen eigenen Host zu erstellen.
+Seit {CMK} {v30} ist es nun möglich, die Beziehung zwischen beiden Hosts -- dem OS-Host und dem Management-Board-Host -- in der Konfiguration von {CMK} abzubilden und im Monitoring anzuzeigen.
+
+
+[#monitor_mgmt_board]
+=== Überwachung
+// TK: Für diesen und den folgenden Abschnitt hab ich mich von Robert Sander inspirieren lassen: https://www.heinlein-support.de/blog/redfish-statt-hersteller-spezifischem-snmp-oder-ipmi
+
+Management-Boards können über verschiedene Wege überwacht werden: über die Redfish Scalable Platforms Management API (kurz: _Redfish_), über das Intelligent Platform Management Interface (IPMI) oder über das Simple Network Management Protocol (SNMP) -- und alle diese Schnittstellen können in {CMK} genutzt werden.
+
+SNMP hat den Nachteil, dass Monitoring-Systeme ganz unterschiedliche Anfragen stellen und in Checks verarbeiten müssen, um die herstellerspezifischen Object IDs (OID) abzufragen.
+Mit IPMI gibt es seit 1998 eine standardisierte Schnittstelle für das Hardware-Management, die allerdings seit 2015 nicht mehr weiterentwickelt wird.
+// https://www.dmtf.org/standards/ipmi
+Die an diesem Standard beteiligten Hersteller (unter anderem Dell, Hewlett Packard und Intel) raten, statt IPMI eine modernere Schnittstelle zu verwenden, die mehr Sicherheit, Skalierbarkeit und einen erweiterten Funktionsumfang bietet.
+Diese Alternative steht seit 2015 mit Redfish bereit.
+
+Redfish ist eine von der link:https://www.dmtf.org/standards/redfish[DMTF^] standardisierte, REST-basierte Management-Schnittstelle für die Fernwartung und Überwachung von Server-Hardware.
+Es bietet vor allem Standardisierung, Herstellerunabhängigkeit, bessere Sicherheit und eine moderne API im Vergleich zu herstellerspezifischem SNMP und klassischem IPMI.
+Redfish ist REST-basiert, das heißt, es kommuniziert über HTTPS und damit TCP und nicht wie SNMP oder IPMI über UDP.
+Alle namhaften Hardware-Hersteller sind bei der Standardisierung in der DMTF dabei, und jeder aktuelle Server hat Redfish als API implementiert.
+Das gewährleistet eine hohe Kompatibilität und vereinfacht die Konfiguration, da sie mit nur einer Regel alle Server überwachen können.
+
+In diesem Artikel erfahren Sie, wie Sie einen Management-Board-Host einrichten, wie Sie die Beziehung zum OS-Host erstellen, und wie Sie diese Beziehung im Monitoring sehen können.
+
+
+[#setup_mgmt_board_host]
+== Management-Board-Host einrichten
+
+In diesem Kapitel wird die Einrichtung eines Management-Board-Hosts für Redfish vorgestellt.
+
+Bevor es losgeht, sollten Sie sich für einen der Wege in {CMK} entscheiden, um all Ihre Management-Board-Hosts gemeinsam ansprechen zu können.
+Sie können zum Beispiel die Hosts in einem Ordner erstellen oder ein xref:glossar#host_tag[Host-Merkmal] beziehungsweise ein xref:glossar#label[Label] erstellen, um die Hosts zu kennzeichnen.
+Mehr zu den verschiedenen Möglichkeiten erfahren Sie im Artikel zur xref:hosts_structure#[Strukturierung der Hosts].
+
+Außerdem sollten Sie in jedem Management-Board ein Konto mit nur lesendem Zugriff erstellen, zum Beispiel mit dem Namen `monitoring`.
+Wenn Sie für dieses Konto dasselbe Passwort vergeben, können Sie dieses im xref:password_store#[Passwortspeicher] von {CMK} hinterlegen und später in der Regel für Redfish auswählen.
+
+Starten Sie mit [.guihint]#Setup > Hosts > Hosts# und erstellen Sie mit [.guihint]#Add host# einen neuen Host für ein Management-Board.
+Da der Host mit einem Spezialagenten über die Redfish-API abgefragt werden soll, wählen Sie unter [.guihint]#Monitoring agents# die Option [.guihint]#API integrations if configured, else Checkmk agent#.
+
+Nach dem Host erstellen Sie die xref:glossar#rule[Regel] [.guihint]#Redfish compatible management controller#.
+// TK: Es gibt eine Extra-Regel für die PDU: Redfish compatible power equipment (PDU). Weiß nicht warum. Soll/muss ich die erwähnen?
+Den zugehörigen Regelsatz finden Sie am schnellsten, wenn Sie in der {CMK}-Oberfläche nach `Redfish` xref:user_interface.html#search[suchen].
+
+// TK: Sollen im Screenshot die Optionen Username/Password und Host tags gehilighted werden?
+.Mit [.guihint]#Fetching setting for individual sections# kann die Überwachung aktiviert und die Komponenten ausgewählt werden
+image::monitoring_management_boards_rule_redfish.png[alt="Die Regel zur Überwachung eines Management-Boards mit Redfish."]
+
+Im hier gezeigten Beispiel wird das Konto `monitoring` des Management-Boards verwendet und das Passwort aus dem Passwortspeicher abgerufen.
+In der Box [.guihint]#Conditions# wird festgelegt, dass diese Regel nur für Hosts mit dem Host-Merkmal `Redfish management board` angewendet wird.
+
+[TIP]
+====
+Falls Sie den Management-Board-Host nicht für Redfish, sondern für IPMI oder SNMP konfigurieren möchten, müssen Sie etwas anders vorgehen.
+Für SNMP konfigurieren Sie den Host als SNMP-Host, wie es im Artikel zur xref:snmp#snmphost[Überwachung mit SNMP] beschrieben ist.
+Für IPMI erstellen Sie statt der Redfish-Regel, die Regel [.guihint]#IPMI sensors via Freeipmi or IPMItool#.
+====
+
+
+[#setup_relation]
+== Beziehung zwischen Management-Board-Host und OS-Host herstellen
+
+Die Beziehung zwischen zwei Hosts richten Sie sehr einfach in den Eigenschaften eines Hosts ein.
+Wir gehen davon aus, dass der zum Management-Board-Host gehörende OS-Host bereits existiert.
+
+Starten Sie wieder mit [.guihint]#Setup > Hosts > Hosts# und klicken Sie den Management-Board-Host an, um dessen Eigenschaften anzuzeigen:
+
+.In der Box [.guihint]#Related hosts# wird die Beziehung zu einem anderen Host erstellt
+image::monitoring_management_boards_host_properties_relations.png[alt="Die Eigenschaften eines Hosts mit der Box 'Related hosts'."]
+
+In der Box [.guihint]#Related hosts# klicken Sie [.guihint]#Add new relation#.
+Der [.guihint]#Type# ist [.guihint]#Management board#.
+Mit [.guihint]#Direction# legen Sie die Richtung fest (im Beispiel [.guihint]#is management board of#) und in der Liste [.guihint]#Host# wählen Sie den OS-Host aus.
+Nach dem Sichern des Hosts ist diese Beziehung gesetzt -- und zwar auf beiden beteiligten Hosts.
+Nach der xref:glossar#activate_changes[Aktivierung ausstehender Änderungen] ist die neue Beziehung dann auch im xref:show_monitoring[Monitoring] sichtbar.
+
+Im Beispiel wurde die Beziehung vom Management-Board-Host aus aufgebaut.
+Sie können aber genau gut vom OS-Host aus starten.
+Mit der Auswahl der [.guihint]#Direction# legen Sie fest, in welcher Beziehung die beiden Hosts zueinander stehen.
+Außerdem ist es möglich, mehrere Beziehungen von und zu einem Host zu erstellen, zum Beispiel wenn ein Management-Board für mehrere OS-Hosts zuständig ist.
+
+Wenn Sie eine bestehende Beziehung wieder entfernen, werden beide Hosts aktualisiert und die Eigenschaften auf beiden Seiten entfernt.
+
+
+[#setup_relations_bulk]
+== Viele Beziehungen auf einmal herstellen
+
+Falls Sie bereits separate Management-Board-Hosts eingerichtet haben, bietet Ihnen {CMK} die komfortable Möglichkeit, diese Management-Board-Hosts auf einen Schlag mit den zugehörigen OS-Hosts zu verbinden.
+Ein Assistent hilft Ihnen dabei, der Eigenschaften der Hosts auswertet, daraus Beziehungen ableitet und vorschlägt.
+
+Welche Host-Eigenschaften werden ausgewertet?
+
+* Wörter in Host-Namen, die eine Beziehung zwischen Hosts herstellen, zum Beispiel `ilo`, `idrac`, `bmc` oder `mgmt` als Begriffe zur Kennzeichnung von Management-Board-Hosts.
+* Gemeinsame Werte in Labels und benutzerdefinierten Host-Attributen, zum Beispiel eine Seriennummer oder eine Gehäuse-ID, sofern solche Werte nur bei einigen, wenigen Hosts vorkommen.
+
+Sie behalten die volle Kontrolle, denn nur vorgeschlagene Beziehungen, die Sie akzeptieren und bestätigen, werden auch umgesetzt.
+
+Starten Sie mit [.guihint]#Setup > Hosts > Hosts#, um sich den Inhalt des Ordners [.guihint]#Main# anzuzeigen.
+Klicken Sie im Menü [.guihint]#Related > Relation detection#:
+
+.Der Assistent zum Finden und Erstellen der Beziehungen zwischen Hosts umfasst 4 Schritte
+image::monitoring_management_boards_relation_detection.png[alt="Die erste Schritt des Assistenten 'Relation detection'."]
+
+. Im ersten Schritt entscheiden Sie, welche Attribute ausgewertet werden sollen und welcher Ordner gescannt werden soll.
+
+. Im zweiten Schritt werden die Vorschläge von {CMK} zu möglichen Beziehungen zwischen Management-Board-Hosts und OS-Hosts angezeigt.
+Aus den angezeigten Vorschlägen wählen Sie diejenigen aus, für die eine Beziehung eingerichtet werden soll.
+Zumindest einen Vorschlag müssen Sie auswählen, um zum nächsten Schritt zu kommen.
+
+. Im dritten Schritt können Sie sich in Ruhe ansehen, welche Beziehungen aus welchem Grund eingerichtet werden sollen.
+
+. Im vierten und letzten Schritt erhalten Sie noch eine Zusammenfassung.
+
+Erst wenn Sie nach dem letzten Schritt den Knopf [.guihint]#Store ...# anklicken, wird die Umsetzung gestartet.
+Sie erhalten die Rückmeldung über den Erfolg und können anschließend gleich die ausstehenden Änderungen für das Monitoring aktivieren.
+
+
+[#show_monitoring]
+== Beziehungen im Monitoring anzeigen
+
+Im Monitoring werden die Beziehungen in der Ansicht [.guihint]#All hosts# angezeigt, die Sie mit [.guihint]#Monitor > Overview > All hosts# aufrufen können:
+
+.In dieser Ansicht wurden alle für die Beziehung nicht relevanten Spalten ausgeblendet
+image::monitoring_management_boards_all_hosts.png[alt="Die Ansicht 'All hosts' zeigt die Beziehung in der Spalte 'Relations'."]
+
+Die Spalte [.guihint]#Relations# zeigt an, ob und wie viele Beziehungen für einen Host existieren.
+Diese Spalte wird nur dann gezeigt, wenn mindestens eine Beziehung für einen Host eingerichtet ist.
+
+Die Zahl in der Spalte [.guihint]#Relations# ist ein Link.
+Wenn Sie diesen anklicken, wird das Slideout [.guihint]#Host details# eingeblendet.
+Dort zeigt der Abschnitt [.guihint]#Relations#, um welchen Host es sich handelt und welche Beziehung er zum ausgewählten Host hat.
+
+
+
+////
+// Handbuchtexte zu Management-Boards
+https://docs.checkmk.com/master/de/hosts_setup.html#management_board
+[#management_board]
+=== Management Board
+
+Die Bezeichnung _Management Board_ steht für separate Steckkarten oder erweiterte BIOS-Funktionalität (Baseboard Management Controller/BMC, Management Engine/ME, Lights Out Management/LOM) zur Überwachung und Verwaltung der Hardware neben dem installierten Betriebssystem.
+Derartige Hardware bringt neben Fernsteuerungs- und Fernwartungsfunktionen (bspw. für das Deployment von Betriebssystemen) meist auch eine IPMI- oder SNMP-Schnittstelle mit, über die „Gesundheitswerte“ (Temperaturen und Lüfterdrehzahlen) ausgelesen werden können.
+// MFS: Einziger Vorteil bei vielen Nachteilen auskommentiert:
+// Da Management Boards über eine eigene IP-Adresse verfügen, würde ein separates Monitoring die Zuordnung für {CMK}-Benutzer erschweren.
+
+Tragen Sie hier IP-Adresse und Zugriffsmethode ein, wenn der zu überwachende Host über ein Management Board verfügt:
+
+.Ankündigung zur Abkündigung
+image::hosts_setup_management_board.png[alt="Einrichtung eines Management Boards."]
+
+[IMPORTANT]
+====
+Management Boards werden in einer zukünftigen {CMK}-Version nicht mehr als Eigenschaft eines Hosts unterstützt werden.
+Wir raten daher, Management Boards als separate SNMP-Hosts anzulegen oder – wenn vorhanden – mit Spezialagenten zu überwachen.
+====
+
+
+https://docs.checkmk.com/master/de/agent_linux.html#hw_monitoring
+[#hw_monitoring]
+== Hardware überwachen
+...
+Außerdem gibt es noch Fälle, in denen man per SNMP oder sogar über ein separates Managementboard eine Überwachung umsetzen kann.
+
+
+https://docs.checkmk.com/master/de/agent_linux.html#_zus%C3%A4tzliche_%C3%BCberwachung_%C3%BCber_das_management_board
+ifdef::onprem[]
+=== Zusätzliche Überwachung über das Management Board
+
+Man kann zu jedem Host ein Management Board konfigurieren und zusätzliche Daten per SNMP holen.
+Die dadurch erkannten Services werden dann ebenfalls dem Host zugeordnet.
+
+Die Einrichtung des Management Boards ist dabei sehr einfach.
+Geben Sie in den Eigenschaften des Hosts lediglich das Protokoll, die IP-Adresse und die Zugangsdaten für SNMP an und speichern Sie die neuen Einstellungen ab:
+
+.In den Eigenschaften des Hosts im Setup wird das Management Board für SNMP konfiguriert 
+image::agent_linux_snmp_management_board.png[alt="Die Konfiguration des Management Boards für SNMP in den Eigenschaften des Hosts."]
+
+In der Service-Erkennung werden die neu erkannten Services dann wie gewohnt aktiviert.
+endif::[]
+
+
+https://docs.checkmk.com/master/de/update_major.html#management_board
+[#management_board]
+=== Management Boards
+
+Die Bezeichnung _Management Board_ steht für separate Steckkarten oder erweiterte BIOS-Funktionalität (Baseboard Management Controller/BMC, Management Engine/ME, Lights Out Management/LOM) zur Überwachung und Verwaltung der Hardware neben dem installierten Betriebssystem.
+
+Bis {CMK} {v24} können Management Boards auf zwei Arten konfiguriert werden: 
+Als Eigenschaft eines Hosts oder als separater Host.
+Da die Konfigurierbarkeit als Eigenschaft eines Hosts sehr limitiert ist, wird diese Möglichkeit künftig wegfallen.
+
+// Die Unterstützung von Redfish-kompatiblen Management Boards wurde in {CMK} {v23} eingebaut und kontinuierlich verbessert,
+// zunächst  als optional zu aktivierendes MKP (link:https://checkmk.com/werk/16589[Werk pass:q[#]16589^]).
+Seit {CMK} {v24} ist Redfish-Monitoring fester Bestandteil der Software (link:https://checkmk.com/werk/17404[Werk pass:q[#]17404^]).
+Hintergründe und Alternativen erläutern wir im Blog-Artikel link:https://checkmk.com/blog/monitoring-management-boards[Monitoring management boards^].
+
+
+Sonst:
+src/onprem/de/self_monitoring.asciidoc:82:Checkmk: Retrieval of Information |Ruft Statusinformationen aus den konfigurierten Datenquellen ab, z.B. von konfigurierten Agenten, Spezialagenten, SNMP, Piggyback-Daten und Management-Boards. Der von den Ergebnissen abhängige Gesamtstatus des Services kann mit dem Regelsatz [.guihint]#Status of the {CMK} services# konfiguriert werden. Aktualisiert auch alle passiven Services und eventuelle Piggyback-Daten des Hosts. |n/a |n/a
+src/common/de/cmc_differences.asciidoc:176:Unter bestimmten Umständen (z.B. bei der Konfiguration von IPMI im xref:hosts_setup#management_board[Management board]) kann der Wert auch höher sein.
+////
+
