@@ -1,5 +1,5 @@
 // -*- coding: utf-8 -*-
-// IGNORE ARM64 OIC SQL*Plus pipelined oracle_sql Multitenant
+// IGNORE ARM64 OIC SQL*Plus pipelined oracle_sql Multitenant PMON
 // NONASCII │ ├ └ ─ …​
 include::global_attr.adoc[]
 = Monitoring Oracle databases
@@ -484,13 +484,13 @@ If `wget` is available on the host, you could proceed as follows:
 {c-root} wget -O /tmp/mk-oracle-v2_async "http://myserver/mysite/check_mk/download_agent_plugin.py?path=/omd/sites/mysite/lib/python3/cmk/plugins/oracle/agents/oracle_unified_async"
 ----
 
-[IMPORTANT]
-====
+[.admonition-important]
+****
 Attentive readers may notice here that the target files have different names than the source files.
 This renaming is absolutely necessary and will be assumed as we proceed with this article.
 Even if you transferred the files from your {CMK} server using a different method, you must rename them.
 In future versions, the files we ship with {CMK} will already be named `mk-oracle-v2`, `mk-oracle-v2_sync`, and `mk-oracle-v2_async`.
-====
+****
 
 Here, the three files get downloaded to the `/tmp` directory on the Oracle host.
 The following steps will assume this storage location.
@@ -569,11 +569,11 @@ Be sure to rename the files as specified:
 |`oracle_unified_async.ps1` |`%ProgramData%\checkmk\agent\plugins\`|`mk-oracle-v2_async.ps1`
 |===
 
-[IMPORTANT]
-====
+[.admonition-important]
+****
 This renaming is absolutely necessary and will be assumed throughout the rest of this article.
 In future versions, the files we provide with {CMK} will be named `mk-oracle-v2.exe`, `mk-oracle-v2_sync.ps1`, and `mk-oracle-v2_async.ps1`.
-====
+****
 
 Once the files are in place, you will need to provide the appropriate configuration to the file responsible for executing the asynchronous sections—that is, `mk-oracle-v2_async.ps1`.
 
@@ -1093,6 +1093,131 @@ The number of dashboards for Oracle will continue to grow in the coming weeks.
 Feel free to keep an eye on our link:https://checkmk.com/werks?search=oracle&product=cmk&cmk_version%5B%5D=2.5&level%5B%5D=1&level%5B%5D=2&level%5B%5D=3&class%5B%5D=feature&edition=all[Werks resource for any references to   Oracle^].
 
 You can always access this via the [.guihint]#Oracle databases# dashboard, which you can reach via [.guihint]#Monitor > Applications > Oracle databases#.
+
+
+[#diagnostic]
+== Diagnostic options
+
+The `mk-oracle-v2` or `mk-oracle-v2.exe` agent plug-in provides you with various options for error diagnosis.
+On Linux, Solaris, AIX and Windows, you call the respective binary with the same options.
+The following sections explain how to run the agent plug-in manually, how to check which Oracle Instant Client and which Oracle instances it finds, and how to use logging.
+
+[#manual_call]
+=== Running the agent plug-in manually
+
+During normal operation, the {CMK} agent does not call the binary itself, but the two helper programs for the synchronous and the asynchronous mode.
+For diagnosis, you call the binary directly.
+The agent plug-in then requires the same environment variables that the {CMK} agent otherwise provides:
+`MK_CONFDIR` for the configuration directory, `MK_LIBDIR` for the directory that contains, among other things, the Oracle Instant Client provided with the agent plug-in, and `MK_LOGDIR` for the log file.
+
+[.tabs]
+====
+[#tab_diagnostic_linux]#Linux, Solaris, AIX#::
++
+--
+Run the following commands as `root`.
+In the example, we use the default paths of the {CMK} agent on Linux:
+
+[{shell}]
+----
+{c-root} export MK_CONFDIR=/etc/check_mk MK_LIBDIR=/usr/lib/check_mk_agent MK_LOGDIR=/var/log/check_mk_agent
+{c-root} $MK_LIBDIR/plugins/libexec/mk-oracle-v2/mk-oracle-v2 -c $MK_CONFDIR/mk-oracle.yml --no-spool
+----
+--
+
+[#tab_diagnostic_windows]#Windows#::
++
+--
+Run the following commands in a PowerShell with administrator privileges:
+
+[{powershell}]
+----
+PS C:\> $env:MK_CONFDIR="C:\ProgramData\checkmk\agent\config"; $env:MK_LIBDIR="C:\ProgramData\checkmk\agent"; $env:MK_LOGDIR="C:\ProgramData\checkmk\agent\log"
+PS C:\> & "$env:MK_LIBDIR\plugins\libexec\mk-oracle-v2\mk-oracle-v2.exe" -c "$env:MK_CONFDIR\mk-oracle.yml" --no-spool
+----
+--
+====
+
+With the `--no-spool` option, the agent plug-in outputs all sections--both the synchronous and the asynchronous ones--without marking any data as cached.
+You therefore receive the complete, current output.
+
+If the agent plug-in cannot connect to an Oracle instance, you will find a line of the form `<SID>|FAILURE|<error message>` in the `+<<<oracle_instance:sep(124)>>>+` section.
+If, on the other hand, only a single query fails, such a line replaces the result in the section concerned.
+In both cases, the error message contains the Oracle error code (`ORA-xxxxx`), which helps you to quickly identify simple configuration problems, such as incorrect credentials or an unknown instance.
+
+
+[#find_runtime]
+=== Checking the Oracle Instant Client and instances
+
+If the agent plug-in does not deliver any data at all, this is often because it cannot find a usable Oracle Instant Client.
+With the `--find-runtime` option, the agent plug-in shows you which client library and which `ORACLE_HOME` it would use, without connecting to an Oracle instance:
+
+[{shell}]
+----
+{c-root} $MK_LIBDIR/plugins/libexec/mk-oracle-v2/mk-oracle-v2 -c $MK_CONFDIR/mk-oracle.yml --find-runtime
+----
+
+The output consists of lines of the form `VARIABLE=value`: `LD_LIBRARY_PATH` (`PATH` on Windows) with the directory of the client library, `ORACLE_HOME` if applicable, and `RUN_AS` if applicable.
+
+The `RUN_AS` line appears if the agent plug-in runs as `root` on Linux, Solaris or AIX and the client library belongs to another user--for example, `oracle` in a regular Oracle installation.
+The agent plug-in then switches to this user before the first connection.
+This user must therefore be able to read all files that the Oracle client accesses afterwards: `sqlnet.ora`, `tnsnames.ora`, the xref:oracle_wallet[Oracle Wallet] and your files with xref:custom_sqls[custom SQL queries].
+
+Before loading the client library, the agent plug-in also checks its access rights.
+If an unauthorized user can modify the library or one of its parent directories, the agent plug-in refuses to use it and states the reason in its output and in the log file.
+In this case, correct the access rights.
+With the `permissions_safe_entries` and `permissions_check` options in the configuration file, you can adjust this check or, as a last resort, disable it.
+
+The `--detect-sids` option shows you which Oracle instances the agent plug-in finds on the local host:
+
+[{shell}]
+----
+{c-root} $MK_LIBDIR/plugins/libexec/mk-oracle-v2/mk-oracle-v2 -c $MK_CONFDIR/mk-oracle.yml --detect-sids
+----
+
+The agent plug-in then lists the instances from the `oratab` file (from the registry on Windows) with SID, state, `ORACLE_HOME` and `ORACLE_BASE`.
+On Linux, Solaris and AIX, the state also shows whether a PMON process is running for the instance.
+On Windows, the state is not determined.
+
+
+[#logging]
+=== Logging
+
+Each time it runs, the agent plug-in writes to the `mk-oracle.log` log file in the agent's log directory (`MK_LOGDIR`), which by default is `/var/log/check_mk_agent` on Linux and `C:\ProgramData\checkmk\agent\log` on Windows.
+The log file is rotated as soon as it reaches 500,000 bytes. By default, 5 log files are kept.
+
+By default, the agent plug-in logs at the `info` level.
+You can set the level, the file size and the number of log files in the `system` section of the configuration file:
+
+.mk-oracle.yml
+[{yaml}]
+----
+system:
+  logging:
+    level: 'debug'
+    max_size: 1000000
+    max_count: 5
+----
+
+If you distribute the configuration via the agent bakery, `mk-oracle.yml` will be overwritten during the next agent update.
+In this case, add the `system` section to the `mk-oracle.user.yml` file in the agent plug-in's directory (on Linux `/usr/lib/check_mk_agent/plugins/libexec/mk-oracle-v2/`).
+The agent plug-in merges both files at startup, with your settings in `mk-oracle.user.yml` taking precedence.
+
+
+[#debugging]
+=== Debugging
+
+For a single manual run, you can also set the logging level when xref:manual_call[calling] the agent plug-in and have the log messages output directly in the terminal:
+
+[{shell}]
+----
+{c-root} $MK_LIBDIR/plugins/libexec/mk-oracle-v2/mk-oracle-v2 -c $MK_CONFDIR/mk-oracle.yml --no-spool -l -v
+----
+
+The `-l` option outputs the log messages to standard error instead of to the log file.
+With `-v` you set the level to `debug`, with `-vv` to `trace`.
+At the `debug` level, for example, the log names every SQL file used and every SQL query executed, and measures the duration of connections, sections and queries.
+The `trace` level provides the most comprehensive output and should therefore only be used as a last resort.
 
 
 [#reference]
