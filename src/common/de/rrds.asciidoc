@@ -19,17 +19,24 @@ xref:metric_backend#[Das Metrik-Backend]
 {CMK} speichert Messwerte in eigens für Monitoring-Daten entwickelten Datenbanken, sogenannten _Round-Robin-Datenbanken_ (RRDs).
 Hierfür kommt das link:https://oss.oetiker.ch/rrdtool/[RRDtool von Tobi Oetiker] zum Einsatz, welches bei Open-Source-Projekten sehr beliebt und weit verbreitet ist.
 
-RRDs bieten gegenüber klassischen SQL-Datenbanken wichtige Vorteile für die Speicherung von Messwerten:
+RRDs als Dateiformat für die Speicherung von Messwerten haben einige für Monitoring-Systeme ganz praktische Eigenschaften:
 
 * RRDs speichern die Messdaten sehr kompakt und effizient.
-* Der Platzbedarf pro Metrik ist statisch. RRDs können weder wachsen noch schrumpfen. Der benötigte Speicherplatz auf Festplatte, SSD oder SAN kann gut geplant werden.
+* Der Platzbedarf pro Metrik ist statisch.
+RRDs können weder wachsen noch schrumpfen.
+Der benötigte Speicherplatz auf Festplatte, SSD oder SAN kann gut geplant werden.
 // MFS: Das folgende ist auf SSDs nicht mehr relevant und dank COW-Dateisystemen sind einige Vorteile weniger mittlerweile Nachteile, immerhin durch rrcached abgemildert.
 // MFS: Zudem ist es spaltenbasierten Datenbanken gegenüber unfair, Reorganisation und räumliche Nähe (im selben oder benachbarten Blöcken) zu erwähnen.
 // * Die benötigte CPU- und Disk-Zeit pro Update ist immer gleich. RRDs sind (nahezu) echtzeitfähig, da es nicht zu Staus aufgrund von Reorganisationen kommen kann.
+// MFS: Etwas umformuliert:
+* Die benötigte CPU-Zeit und der Disk-IO ist für jeden Speichervorgang gleich.
+Unerwartete Bottlenecks durch Reorganisation der internen Speicherstruktur bleiben aus.
 
 //SK: Ja, dass ist ein Ausklapper, aber mir ist das hier zu früh und zu ablenkend. Wie und warum bin ich denn überhaupt in diesem Artikel gelandet?
 //SK: Mir würde es besser gefallen, wenn der Artikel über RRDs eben diese beschreiben könnte, und es zu den verschiedenen Möglichkeiten Messwerte abzulegen, eine Übersicht gäbe.
 //SK: Der Inhalt des Ausklappers beantwortet meines Erachtens die Frage nicht.
+// MFS: Kommt hier weg. Ich werde noch einen Artikel "Datenhaltung in Checkmk erstellen, der einen Überblick über RRDs, Data Backend und SQLite (ja, EC) gibt. Da ist die Einordnung besser aufgehoben. Bitte als Kommentar erstmal drinlassen.
+////
 .Sind RRDs noch zeitgemäß?
 [%collapsible]
 ====
@@ -49,7 +56,7 @@ Angenommen, Sie haben einen Cluster aus Backend-Servern:
 Kurzfristig interessieren die Zugriffsraten jedes einzelnen Servers, langfristig ist nur die Aggregation aller Zugriffe und die Zahl der gerade aktiven Backend-Server interessant.
 Per Spezialagent werden diese Werte ermittelt und dann in RRDs geschrieben, wo sie wiederum über den Lauf der Zeit konsolidiert und so Platz sparend langfristig vorgehalten werden.
 ====
-
+////
 
 [#data_rrds]
 == Organisation der Daten in den RRDs
@@ -63,8 +70,9 @@ zwei Jahren
 endif::[]
 aufgezeichnet wird.
 //SK: Was ist eine Basisauflösung? Der Begriff könnte hier eingeführt und dann weiter verwendet werden. So muss ich mir aus einem Abschnitt in 2.2 selber herleiten, was mit "Basisauflösung" gemeint ist.
-Die Basisauflösung ist dabei eine Minute.
-Dieser Wert ist sinnvoll, weil das Check-Intervall auf eine Minute voreingestellt ist und so von jedem Service genau einmal pro Minute neue Messwerte eintreffen.
+// MFS: Besser so?
+Die Basisauflösung -- also das kürzeste Intervall zwischen zwei Messwerten in der detailliertesten Speicherphase -- ist dabei eine Minute.
+Dieser Wert ist sinnvoll, weil auch das Check-Intervall auf eine Minute voreingestellt ist und so von jedem Service genau einmal pro Minute neue Messwerte eintreffen.
 
 [#rrd_resolution]
 === Konsolidierung älterer Datenpunkte
@@ -88,6 +96,7 @@ Ich fände das als Beispiel einfach schön, damit mensch auf mal sieht, was das 
 
 Allgemein und wie besprochen fände ich es sinnvoller, wenn wir hier mehr auf die Größen der eigentlichen .rrd-Dateien eingehen.
 ////
+// MFS: Siehe weiter unten, auch neue Admonition.
 Aus diesem Grund werden die Daten mit der Zeit _konsolidiert_.
 
 Die erste Konsolidierung findet nach 
@@ -162,6 +171,15 @@ So kommen Sie auf 365 &times; 24 &times; 60 Messwerte zu je 8 Bytes, was ziemlic
 Auch wenn die RRDs in der Folge mehr als den zehnfachen Platz benötigen, ist die nötige _Disk IO_ sogar reduziert.
 Der Grund: Ein Update muss nicht mehr in 12 verschiedene RRAs geschrieben werden, sondern nur noch in eines.
 Wann solch ein Tausch von Speicherplatz gegen IO-Last lohnt, müssen Sie entscheiden.
+
+[TIP]
+====
+Beachten Sie, dass unser Rechenbeispiel _eine_ Metrik behandelt.
+Nun verfügen zwar viele Services über nur eine oder wenige Metriken, doch deutliche Abweichungen sind durchaus die Regel:
+So hat der Service [.guihint]#Linux memory# auf den meisten Hosts um die 40 Metriken.
+Daraus ergibt sich bereits in den Standardeinstellungen ein Platzbedarf von rund 15 MB, bei Verzicht auf Konsolidierung resultierten 160 MB.
+====
+
 endif::[]
 
 
@@ -170,7 +188,9 @@ ifdef::onprem[]
 === Anpassung der Konsolidierung
 
 {cee-only}
-Wenn Ihnen das voreingestellte Speicherschema nicht zusagt, können Sie dieses über xref:glossar#rule_set[Regelsätze] ändern -- sogar für Hosts oder Services unterschiedlich.
+Wenn Ihnen das voreingestellte Speicherschema nicht zusagt, können Sie dieses in den kommerziellen Editionen über xref:glossar#rule_set[Regelsätze] ändern -- sogar für Hosts oder Services unterschiedlich.
+In {RE} ist lediglich die Anpassung für alle neu erstellten RRDs über die Konfigurationsdatei `~/etc/pnp4nagios/rra.cfg` möglich.
+
 Den zuständigen Regelsatz finden Sie am einfachsten über die Suche im [.guihint]#Setup#.
 Geben Sie dort einfach _RRD_ in das Suchfeld ein.
 So finden Sie den Regelsatz [.guihint]#Configuration of RRD databases of services#.
@@ -186,27 +206,32 @@ image::graphing_rrd_configuration.png[alt="Regeleinstellungen für eine RRD."]
 Das [.guihint]#RRD storage format# werden Sie in der Regel nicht ändern wollen, wir überspringen es daher in diesem Abschnitt, greifen es aber xref:rrdformat[später noch einmal auf].
 
 Im Abschnitt [.guihint]#Consolidation functions# legen Sie fest, nach welcher Strategie {CMK} ältere Daten konsolidieren soll: _Minimum_, _Maximum_ oder _Durchschnitt_.
-//SK: Verglichen womit? Ich würde das Wort "vergleichsweise" hier streichen.
-Als Standard sind zunächst alle drei aktiv, was eine vergleichsweise große Flexibilität bei späteren Auswertungen ermöglicht.
+Als Standard sind zunächst alle drei aktiv, was eine große Flexibilität bei späteren Auswertungen ermöglicht.
 //SK: Wäre hier ein Hinweis legitim, dass man hier nur dann Optionen abwählen sollte, wenn man entweder eh keine Konsolidierung möchte (so wie oben in dem 1-Jahr-Beispiel beschrieben oder wenn man sehe genau weiß, was man hier tut.)
+// MFS: So formuliert, um dann festzustellen, dass das oben ja schon erwähnt wird...
+////
+Falls Sie mit dem Gedanken spielen, hier Optionen abzuwählen, sollten Sie sich gut überlegen, ob dies der Sichtbarkeit schadet:
+Für die Auslastung eines Prozessors mag der Durchschnitt fünf Minuten noch aussagekräftig genug sein.
+Über einen Zeitraum von sechs Stunden dagegen können keine brauchbaren Aussagen mehr zu möglichen Überlatungssituationen mehr getroffen werden.
+Hier ist es dann sinnvoll, das Maximum zusätzlich aufzunehmen -- die Entscheidung, welche Konsolidierungsfunktionen verwendet werden, ist dann für jede Metrik einzeln zu treffen.
+////
 
 Mit [.guihint]#Step (precision)# bestimmen Sie die _Basisauflösung_.
 In der Regel beträgt sie 60 Sekunden (eine Minute), was dem Standard-Check-Intervall entspricht.
 Für Services mit einem größeren oder kleineren Check-Intervall ist es meist sinnvoll, diese Zahl dem Check-Intervall anzugleichen.
 
-//SK: "Datenpunkte zu einem aggregiert werden sollen" Aggregiert? Ich denke konsolidiert, oder? Ja, der Text in der GUI widerspricht hier.
-Im Abschnitt [.guihint]#RRA configuration# bestimmen Sie, wie viele Datenpunkte zu einem aggregiert werden sollen.
+Im Abschnitt [.guihint]#RRA configuration# bestimmen Sie, wie viele Datenpunkte zu einem konsolidiert werden sollen.
 Der Prozentwert gibt eine Mindestzahl an Datenpunkten an, die erforderlich ist, damit die Konsolidierung stattfinden kann.
 Die voreingestellten 50 % dürften meist keine Anpassung erfordern.
 
-Mit [.guihint]#Number of steps aggregated into one data point# bestimmen Sie, wie viele Datenpunkte (der _Basisauflösung_) zu einem aggregiert werden.
+Mit [.guihint]#Number of steps aggregated into one data point# bestimmen Sie, wie viele Datenpunkte (der _Basisauflösung_) zu einem konsolidiert werden.
 Bei einer _Basisauflösung_ von einer Minute entspricht demnach eine [.guihint]#Number of steps aggregated into one data point# von 30 einer _resultierenden_ Auflösung von einer halben Stunde.
 
 [#rrd_consolidation_admonition]
 [TIP]
 ====
 Achten Sie darauf, dass jeder zusätzliche Wert für [.guihint]#Number of steps aggregated into one data point# ein ganzzahliges Vielfaches des vorhergegangenen Wertes sein sollte.
-Ist dies nicht der Fall, werden mal mehr, mal weniger Datenpunkte aggregiert, was die Aussagekraft der Daten negativ beeinflussen wird.
+Ist dies nicht der Fall, werden mal mehr, mal weniger Datenpunkte konsolidiert, was die Aussagekraft der Daten negativ beeinflussen wird.
 ====
 
 Schließlich legen Sie mit [.guihint]#Number of data points# fest, wie viele Datenpunkte _mit dieser_ Auflösung vorgehalten werden sollen.
@@ -292,25 +317,25 @@ ifdef::onprem[]
 [#rrdformat]
 === RRD-Speicherformat
 
-//SK: Hier bitte zusätzlich noch im Wort einen Hinweis auf die kommerziellen Editionen einbauen.
 {cee-only}
 Die oben gezeigte Regel hat noch eine weitere Einstellung:
-[.guihint]#RRD storage format#. Mit dieser können Sie zwischen zwei Methoden wählen, wie
-{CMK} die RRDs erzeugt. 
+[.guihint]#RRD storage format#.
+Mit dieser können Sie in den kommerziellen Editionen zwischen zwei Methoden wählen, wie {CMK} die RRDs erzeugt. 
 
 // MFS: Ich würde hier eher CMC-Format schreiben wollen.
 // SK: Tja, Checkmk-Format ergibt nicht so viel Sinn. Aber da wir das kaum irgendwo verwenden, bin ich da emotionslos. Wenn das jetzt schon seit 8 Jahren so im Handbuch steht würde ich es erstmal so lassen.
-Das Format [.guihint]#One RRD per host/service# (oder kurz {CMK}-Format) speichert dabei alle Metriken eines Hosts bzw. Services in einer einzigen RRD-Datei.
+// MFS: Ich schreibe jetzt einfach CMC-Format weil nirgendwo anders benutzt.
+Das Format [.guihint]#One RRD per host/service# (oder kurz CMC-Format, weil es Verwendung des {CMK} Micro Core voraussetzt) speichert dabei alle Metriken eines Hosts bzw. Services in einer einzigen RRD-Datei.
 Dies sorgt für ein effizienteres Schreiben der Daten, da so immer ein kompletter Satz an Metriken in einer einzigen Operation geschrieben werden kann.
 Diese Metriken liegen dann in benachbarten Speicherbereichen, was die Anzahl der Blöcke reduziert, die geschrieben werden müssen.
 
 Die Alternative [.guihint]#Multiple RRDs per host/service# ist mit {RE} kompatibel.
 Die Verwendung dieses Formates ist nur dann sinnvoll, wenn unklar ist, ob in Zukunft von der verwendeten kommerziellen Edition auf {RE} gewechselt werden soll, ohne historische Daten zu verlieren.
 
-.Wie groß ist der Vorteil des {CMK}-Formates?
+.Wie groß ist der Vorteil des CMC-Formates?
 [%collapsible]
 ====
-Wie groß der Vorteil des {CMK}-Formates ist, hängt von vielen Faktoren ab, weshalb wir keine exakten Zahlen nennen können.
+Wie groß der Vorteil des CMC-Formates ist, hängt von vielen Faktoren ab, weshalb wir keine exakten Zahlen nennen können.
 Bei genügend Caching auf Block- oder Dateisystemebene, passend konfiguriertem xref:rrdcached[`rrdcached`] und schnellen Speichermedien kann der Performance-Unterschied minimal ausfallen.
 Bei Verwendung rotierender Datenträger mit stark fragmentierten Dateien werden Sie deutlich spüren, wenn bei einem Update ein Block oder deren zehn geschrieben werden müssen.
 Und selbst bei schnellem NVME-Speicher ist es meist ein Performance-Vorteil, wenn alle Daten eines Schreibzugriffes innerhalb eines logischen Blockes (typischerweise 4096 Bytes) liegen.
